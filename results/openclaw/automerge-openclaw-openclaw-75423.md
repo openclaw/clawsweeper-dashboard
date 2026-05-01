@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-75423"
 mode: "autonomous"
-run_id: "25206618452"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25206618452"
-head_sha: "e864cc15bd0f14d32e186e6e2405cb18828a5462"
+run_id: "25207031652"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25207031652"
+head_sha: "4962a4bc359dc56af714ea5eba0849ed589bc335"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-01T07:35:42.010Z"
+published_at: "2026-05-01T08:04:05.008Z"
 canonical: "https://github.com/openclaw/openclaw/pull/75423"
 canonical_issue: null
 canonical_pr: "https://github.com/openclaw/openclaw/pull/75423"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25206618452](https://github.com/openclaw/clawsweeper/actions/runs/25206618452)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25207031652](https://github.com/openclaw/clawsweeper/actions/runs/25207031652)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/75423
 
 ## Summary
 
-PR #75423 is the canonical automerge repair target. The hydrated preflight shows it is open, non-security-sensitive, same-repo branch-writable, and CI is green, but ClawSweeper review requires one narrow repair before merge: add the missing Unreleased Fixes changelog entry. Merge and close actions are blocked by job policy, so the executable path is to repair the contributor branch and re-run review/checks.
+#75423 is the canonical automerge repair target. The hydrated preflight shows it is open, non-security-sensitive, same-repo branch-writable, and CI is green for head 869764e4fe530822a9a216758c3c533445b6049e, but it is not merge-ready: GitHub reports mergeable_state dirty, the prior executor hit rebase conflicts, and ClawSweeper review requires the missing Unreleased Fixes changelog entry. Merge and close are blocked by job policy, so the planned path is to repair the contributor branch and rerun review/checks.
 
 ## Impact
 
@@ -54,8 +54,8 @@ PR #75423 is the canonical automerge repair target. The hydrated preflight shows
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | failed |  |  | rebase conflicts remain unresolved: extensions/kilocode/provider-models.ts, extensions/voice-call/src/providers/twilio/api.ts, src/cli/gateway-cli/run.option-collisions.test.ts |
-| execute_fix | blocked |  |  | rebase conflicts remain unresolved: extensions/kilocode/provider-models.ts, extensions/voice-call/src/providers/twilio/api.ts, src/cli/gateway-cli/run.option-collisions.test.ts |
+| repair_contributor_branch | failed |  |  | Codex /review did not pass after 2 attempt(s): Changed-surface validation passed, but the branch is not merge-ready against current origin/main because CHANGELOG.md conflicts during a merge-tree check. |
+| execute_fix | blocked |  |  | Codex /review did not pass after 2 attempt(s): Changed-surface validation passed, but the branch is not merge-ready against current origin/main because CHANGELOG.md conflicts during a merge-tree check. |
 | automerge_repair_outcome_comment | updated | #75423 |  |  |
 
 ## Apply Actions
@@ -68,8 +68,8 @@ PR #75423 is the canonical automerge repair target. The hydrated preflight shows
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #75423 | fix_needed | planned | canonical | Canonical PR is useful and branch-writable but not merge-ready until the changelog blocker and branch freshness/mergeability are repaired. |
-| cluster:automerge-openclaw-openclaw-75423 | build_fix_artifact | planned |  | Build a narrow repair artifact so the executor can update PR #75423 rather than replace or merge it. |
+| #75423 | fix_needed | planned | canonical | Canonical PR is useful and writable but needs branch repair, conflict resolution, changelog repair, fresh ClawSweeper review, and changed-surface validation before any merge-capable applicator can proceed. |
+| cluster:automerge-openclaw-openclaw-75423 | build_fix_artifact | planned |  | Build a bounded repair artifact for the existing contributor branch instead of opening a replacement PR. |
 
 ## Needs Human
 
