@@ -2,19 +2,19 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-75552"
 mode: "autonomous"
-run_id: "25214506665"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25214506665"
-head_sha: "df20b9a6303d40b1149054180a017e06e722c7f4"
-workflow_conclusion: "failure"
+run_id: "25215985022"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25215985022"
+head_sha: "fbf0dbca34cdfd429dc812240fef5e2b939780a2"
+workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-01T13:10:58.893Z"
+published_at: "2026-05-01T13:45:03.467Z"
 canonical: "https://github.com/openclaw/openclaw/pull/75552"
 canonical_issue: null
 canonical_pr: "https://github.com/openclaw/openclaw/pull/75552"
 actions_total: 2
 fix_executed: 0
-fix_failed: 0
-fix_blocked: 0
+fix_failed: 1
+fix_blocked: 1
 apply_executed: 0
 apply_blocked: 0
 apply_skipped: 0
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25214506665](https://github.com/openclaw/clawsweeper/actions/runs/25214506665)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25215985022](https://github.com/openclaw/clawsweeper/actions/runs/25215985022)
 
-Workflow conclusion: failure
+Workflow conclusion: success
 
 Worker result: planned
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/75552
 
 ## Summary
 
-#75552 is the canonical maintainer-opted automerge PR, but it is not merge-ready. The hydrated ClawSweeper review requests a narrow repair on the writable same-repo branch: remove remaining unbounded full-transcript reads from bounded parent-linked gateway transcript hot paths while preserving SessionManager parentId writes for chat.inject. Emit a repair-contributor-branch fix artifact; no close or merge action is allowed by this job.
+PR #75552 is the canonical repair path, but it is not merge-ready. The branch is same-repo and writable, ClawSweeper review has an actionable P2 transcript hot-path finding, and relevant CI checks are failing, so the executor should repair the contributor branch and rerun review/gates.
 
 ## Impact
 
@@ -43,8 +43,8 @@ Canonical: https://github.com/openclaw/openclaw/pull/75552
 | --- | ---: |
 | Worker actions | 2 |
 | Fix executed | 0 |
-| Fix failed | 0 |
-| Fix blocked | 0 |
+| Fix failed | 1 |
+| Fix blocked | 1 |
 | Applied executions | 0 |
 | Apply blocked | 0 |
 | Apply skipped | 0 |
@@ -54,7 +54,9 @@ Canonical: https://github.com/openclaw/openclaw/pull/75552
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| repair_contributor_branch | failed |  |  | Codex /review did not pass after 2 attempt(s): Merge blocked: the diff reintroduces raw Pi transcript message appends in a scoped area that explicitly requires SessionManager-backed parentId writes. Security-sensitive issues were otherwise not apparent in the reviewed diff, and the changed-lane validation scope is appropriate, but this safety/policy regression must be fixed first. |
+| execute_fix | blocked |  |  | Codex /review did not pass after 2 attempt(s): Merge blocked: the diff reintroduces raw Pi transcript message appends in a scoped area that explicitly requires SessionManager-backed parentId writes. Security-sensitive issues were otherwise not apparent in the reviewed diff, and the changed-lane validation scope is appropriate, but this safety/policy regression must be fixed first. |
+| automerge_repair_outcome_comment | updated | #75552 |  |  |
 
 ## Apply Actions
 
@@ -66,8 +68,8 @@ Canonical: https://github.com/openclaw/openclaw/pull/75552
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #75552 | fix_needed | planned | canonical | Canonical PR is useful and writable, but ClawSweeper review and relevant CI failures require repair before any merge-capable applicator can proceed. |
-| cluster:automerge-openclaw-openclaw-75552 | build_fix_artifact | planned |  | A repair artifact is required so the executor can patch #75552, rerun review, and validate without mutating GitHub from this worker. |
+| #75552 | fix_needed | planned | canonical | Automerge is allowed only after the repair loop. Merge and close are blocked by job frontmatter, and missing merge readiness should become branch repair work rather than keep_canonical. |
+| cluster:automerge-openclaw-openclaw-75552 | build_fix_artifact | planned |  | The executor needs a concrete branch-repair artifact before ClawSweeper can rerun review and gates. |
 
 ## Needs Human
 
