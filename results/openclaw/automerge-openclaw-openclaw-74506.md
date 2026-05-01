@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-74506"
 mode: "autonomous"
-run_id: "25202544672"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25202544672"
-head_sha: "608eef4eb86affcd1125009b55c54a58305a6b51"
+run_id: "25218749482"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25218749482"
+head_sha: "f1bb916a329faa6fdadc8549b12d2dd5453c7f91"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-01T04:47:43.131Z"
+published_at: "2026-05-01T15:02:46.724Z"
 canonical: "https://github.com/openclaw/openclaw/pull/75173"
 canonical_issue: null
 canonical_pr: "https://github.com/openclaw/openclaw/pull/75173"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25202544672](https://github.com/openclaw/clawsweeper/actions/runs/25202544672)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25218749482](https://github.com/openclaw/clawsweeper/actions/runs/25218749482)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/75173
 
 ## Summary
 
-Replacement PR #75173 is the canonical open repair path. It is same-repo branch-writable, has passing checks and a clean ClawSweeper review, but ClawSweeper explicitly requested a focused changelog repair before automerge. Source PR #74506 is already closed in favor of #75173, so no close/merge mutation is planned.
+Closed source PR #74506 is historical context only. Open replacement PR #75173 is the canonical repair path, but it is dirty/behind current main and needs a same-branch rebase/repair before the comment router can re-review and automerge it.
 
 ## Impact
 
@@ -66,9 +66,9 @@ Replacement PR #75173 is the canonical open repair path. It is same-repo branch-
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #74506 | keep_closed | skipped | superseded | Already closed source PR; keep as historical source/credit evidence for replacement PR #75173. |
-| #75173 | fix_needed | planned | canonical | The only actionable blocker is the required changelog entry; repair the existing writable replacement PR branch rather than opening another replacement. |
-| cluster:automerge-openclaw-openclaw-74506 | build_fix_artifact | planned |  | Emit a narrow repair artifact for the deterministic executor to update the existing PR branch. |
+| #74506 | keep_closed | skipped | superseded | Already closed source PR; keep as superseded context and preserve credit through #75173. |
+| #75173 | fix_needed | planned | canonical | Repair the writable canonical PR branch by rebasing/resolving conflicts against current main, then rerun focused validation and ClawSweeper review. |
+| cluster:automerge-openclaw-openclaw-74506 | build_fix_artifact | planned |  | Provide an executable repair artifact for the deterministic executor. |
 
 ## Needs Human
 
