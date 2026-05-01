@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "clawsweeper-commit-openclaw-openclaw-82ca6ecdde80"
 mode: "autonomous"
-run_id: "25176627885"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25176627885"
-head_sha: "ccf445256b0567653d93b1af9dc2ee7092faaa98"
+run_id: "25217890512"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25217890512"
+head_sha: "f1bb916a329faa6fdadc8549b12d2dd5453c7f91"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-04-30T16:23:17.070Z"
+published_at: "2026-05-01T14:27:20.972Z"
 canonical: null
 canonical_issue: null
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25176627885](https://github.com/openclaw/clawsweeper/actions/runs/25176627885)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25217890512](https://github.com/openclaw/clawsweeper/actions/runs/25217890512)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: unknown
 
 ## Summary
 
-Verified the ClawSweeper commit finding against current main adc20fed0d15c370cc36b8648636112a3c0efcf0. The pre-resolved requested-mode fallback is already fixed on main, but the dispatch-time message tool availability check still omits group, sandbox, subagent, and runtime allowlist policy inputs, so a narrow fix PR is still needed.
+Verified the ClawSweeper commit report against current main efe6b37407a2b24cd44cbb74da4a399adcbfbeac. The pre-resolved requested-mode finding is already fixed on main, but the message-tool availability check still omits sandbox tool policy, so sandboxed group/channel turns can still stay in message_tool_only mode when the real tool pipeline removes message. A narrow non-security fix PR is still warranted.
 
 ## Impact
 
@@ -66,8 +66,8 @@ Verified the ClawSweeper commit finding against current main adc20fed0d15c370cc3
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| cluster:clawsweeper-commit-openclaw-openclaw-82ca6ecdde80 | fix_needed | planned |  | No viable canonical PR exists in the hydrated artifact; allow_fix_pr is true, and the remaining bug can be fixed narrowly. |
-| cluster:clawsweeper-commit-openclaw-openclaw-82ca6ecdde80 | build_fix_artifact | planned |  | A cluster-scoped fix artifact is the correct autonomous output for a valid ClawSweeper commit finding with no hydrated issue/PR refs. |
+| cluster:clawsweeper-commit-openclaw-openclaw-82ca6ecdde80 | fix_needed | planned |  | The remaining bug is narrow, non-security, and fixable by aligning dispatch availability with sandbox runtime tool policy before resolving source reply visibility. |
+| cluster:clawsweeper-commit-openclaw-openclaw-82ca6ecdde80 | build_fix_artifact | planned |  | No viable canonical PR exists in the preflight artifact; source is a ClawSweeper commit finding, and allow_fix_pr=true. |
 
 ## Needs Human
 
