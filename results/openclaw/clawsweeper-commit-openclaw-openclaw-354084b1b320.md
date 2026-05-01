@@ -2,16 +2,16 @@
 repo: "openclaw/openclaw"
 cluster_id: "clawsweeper-commit-openclaw-openclaw-354084b1b320"
 mode: "autonomous"
-run_id: "25200785151"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25200785151"
-head_sha: "32acaf47f27fd897d90b6186a2ca6365d99a9689"
+run_id: "25230037102"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25230037102"
+head_sha: "2adcf6015a4cdb05370cca2e3cf02502e4e76f6b"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-01T03:31:03.256Z"
+published_at: "2026-05-01T19:55:29.286Z"
 canonical: null
 canonical_issue: null
 canonical_pr: null
-actions_total: 1
+actions_total: 2
 fix_executed: 0
 fix_failed: 0
 fix_blocked: 0
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25200785151](https://github.com/openclaw/clawsweeper/actions/runs/25200785151)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25230037102](https://github.com/openclaw/clawsweeper/actions/runs/25230037102)
 
 Workflow conclusion: success
 
@@ -35,13 +35,13 @@ Canonical: unknown
 
 ## Summary
 
-Found two provider-runtime regressions in the new targeted hook resolution/cache path.
+The ClawSweeper commit finding is still valid on current main from source inspection. No issue or PR refs are hydrated for this commit-sourced cluster, and no viable canonical PR exists, so the narrow path is a new credited fix PR for provider-runtime alias ownership and in-flight negative-cache suppression.
 
 ## Impact
 
 | Metric | Count |
 | --- | ---: |
-| Worker actions | 1 |
+| Worker actions | 2 |
 | Fix executed | 0 |
 | Fix failed | 0 |
 | Fix blocked | 0 |
@@ -66,7 +66,8 @@ Found two provider-runtime regressions in the new targeted hook resolution/cache
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| cluster:clawsweeper-commit-openclaw-openclaw-354084b1b320 | build_fix_artifact | planned |  | ClawSweeper found an actionable commit-level bug/regression candidate. |
+| cluster:clawsweeper-commit-openclaw-openclaw-354084b1b320 | fix_needed | planned |  | No hydrated canonical PR exists, and both reported regressions are still present in current main source. |
+| cluster:clawsweeper-commit-openclaw-openclaw-354084b1b320 | build_fix_artifact | planned |  | The fix is narrow and non-security-sensitive; allow_fix_pr is true and allow_merge is false. |
 
 ## Needs Human
 
