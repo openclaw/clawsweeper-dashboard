@@ -2,19 +2,19 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-75423"
 mode: "autonomous"
-run_id: "25206189521"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25206189521"
-head_sha: "6bce49c0e878fc1910c8b78a67bc5fc5abbf4acc"
-workflow_conclusion: "cancelled"
+run_id: "25206618452"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25206618452"
+head_sha: "e864cc15bd0f14d32e186e6e2405cb18828a5462"
+workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-01T07:31:59.262Z"
+published_at: "2026-05-01T07:35:42.010Z"
 canonical: "https://github.com/openclaw/openclaw/pull/75423"
 canonical_issue: null
 canonical_pr: "https://github.com/openclaw/openclaw/pull/75423"
 actions_total: 2
 fix_executed: 0
-fix_failed: 0
-fix_blocked: 0
+fix_failed: 1
+fix_blocked: 1
 apply_executed: 0
 apply_blocked: 0
 apply_skipped: 0
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25206189521](https://github.com/openclaw/clawsweeper/actions/runs/25206189521)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25206618452](https://github.com/openclaw/clawsweeper/actions/runs/25206618452)
 
-Workflow conclusion: cancelled
+Workflow conclusion: success
 
 Worker result: planned
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/75423
 
 ## Summary
 
-Canonical PR #75423 is open, non-security-sensitive, same-repo branch-writable, and still the repair path. Merge and close are blocked by job policy. The hydrated ClawSweeper comments show a required changelog repair and a later failed repair attempt blocked by a changed-surface fast-mode regression, so this run should repair the contributor branch rather than replace it.
+PR #75423 is the canonical automerge repair target. The hydrated preflight shows it is open, non-security-sensitive, same-repo branch-writable, and CI is green, but ClawSweeper review requires one narrow repair before merge: add the missing Unreleased Fixes changelog entry. Merge and close actions are blocked by job policy, so the executable path is to repair the contributor branch and re-run review/checks.
 
 ## Impact
 
@@ -43,8 +43,8 @@ Canonical PR #75423 is open, non-security-sensitive, same-repo branch-writable, 
 | --- | ---: |
 | Worker actions | 2 |
 | Fix executed | 0 |
-| Fix failed | 0 |
-| Fix blocked | 0 |
+| Fix failed | 1 |
+| Fix blocked | 1 |
 | Applied executions | 0 |
 | Apply blocked | 0 |
 | Apply skipped | 0 |
@@ -54,7 +54,9 @@ Canonical PR #75423 is open, non-security-sensitive, same-repo branch-writable, 
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| repair_contributor_branch | failed |  |  | rebase conflicts remain unresolved: extensions/kilocode/provider-models.ts, extensions/voice-call/src/providers/twilio/api.ts, src/cli/gateway-cli/run.option-collisions.test.ts |
+| execute_fix | blocked |  |  | rebase conflicts remain unresolved: extensions/kilocode/provider-models.ts, extensions/voice-call/src/providers/twilio/api.ts, src/cli/gateway-cli/run.option-collisions.test.ts |
+| automerge_repair_outcome_comment | updated | #75423 |  |  |
 
 ## Apply Actions
 
@@ -66,8 +68,8 @@ Canonical PR #75423 is open, non-security-sensitive, same-repo branch-writable, 
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #75423 | fix_needed | planned | canonical | Canonical PR is useful and branch-writable but not merge-ready because ClawSweeper review feedback remains unresolved. |
-| cluster:automerge-openclaw-openclaw-75423 | build_fix_artifact | planned |  | A narrow branch repair artifact is the executable outcome allowed by this automerge job. |
+| #75423 | fix_needed | planned | canonical | Canonical PR is useful and branch-writable but not merge-ready until the changelog blocker and branch freshness/mergeability are repaired. |
+| cluster:automerge-openclaw-openclaw-75423 | build_fix_artifact | planned |  | Build a narrow repair artifact so the executor can update PR #75423 rather than replace or merge it. |
 
 ## Needs Human
 
