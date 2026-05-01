@@ -1,0 +1,123 @@
+---
+repo: openclaw/openclaw
+cluster_id: clawsweeper-commit-openclaw-openclaw-955a0e9c0f7d
+mode: autonomous
+allowed_actions:
+  - comment
+  - label
+  - fix
+  - raise_pr
+blocked_actions:
+  - close
+  - merge
+require_human_for:
+  - close
+  - merge
+canonical: []
+candidates: []
+cluster_refs: []
+allow_instant_close: false
+allow_fix_pr: true
+allow_merge: false
+allow_unmerged_fix_close: false
+allow_post_merge_close: false
+require_fix_before_close: false
+security_policy: central_security_only
+security_sensitive: false
+target_branch: clawsweeper/clawsweeper-commit-openclaw-openclaw-955a0e9c0f7d
+source: clawsweeper_commit
+commit_sha: 955a0e9c0f7d969e7d96cade7b383b3306aadf98
+clawsweeper_report_repo: openclaw/clawsweeper
+clawsweeper_report_path: records/openclaw-openclaw/commits/955a0e9c0f7d969e7d96cade7b383b3306aadf98.md
+---
+
+# ClawSweeper commit finding repair
+
+ClawSweeper Repair should create or update one implementation PR from `clawsweeper/clawsweeper-commit-openclaw-openclaw-955a0e9c0f7d`
+if the finding is still valid on latest `openclaw/openclaw@main`.
+
+## Operator Prompt
+
+Use the ClawSweeper commit report below as the source finding. Do not redo a
+broad audit of the commit. Check latest `main`, verify the reported problem is
+still present, and make the narrowest safe fix. If latest `main` already fixed
+it, make no code changes and report that outcome.
+
+Do not merge. Do not close issues. Do not handle security-sensitive findings in
+this lane.
+
+## Commit Finding
+
+- Commit: https://github.com/openclaw/openclaw/commit/955a0e9c0f7d969e7d96cade7b383b3306aadf98
+- Report: https://github.com/openclaw/clawsweeper/blob/main/records/openclaw-openclaw/commits/955a0e9c0f7d969e7d96cade7b383b3306aadf98.md
+- Latest main at intake: 7340c0322fc3f7b1279729663f3ae37bd4bf978f
+
+## ClawSweeper Report
+
+```md
+---
+sha: 955a0e9c0f7d969e7d96cade7b383b3306aadf98
+parent: 173f959613b35195c8e4e662b9e0138831cfb4d2
+repository: openclaw/openclaw
+author: "clawsweeper[bot]"
+committer: "GitHub"
+github_author: clawsweeper[bot]
+github_committer: web-flow
+co_authors: ["openclaw-clawsweeper[bot]"]
+commit_authored_at: "2026-04-30T22:44:24-07:00"
+commit_committed_at: "2026-04-30T22:44:24-07:00"
+result: findings
+confidence: high
+highest_severity: medium
+check_conclusion: neutral
+reviewed_at: 2026-05-01T06:06:03Z
+---
+
+# Commit 955a0e9c
+
+## Summary
+
+Found one regression risk: same-session inferred commitments can be starved indefinitely when a normal `HEARTBEAT.md` task is due on every heartbeat tick.
+
+## Findings
+
+### Medium: recurring due heartbeat tasks can prevent same-session commitments from ever delivering
+
+- Kind: regression
+- File: `src/infra/heartbeat-runner.ts`
+- Line: 1024
+- Evidence: `firstDueCommitment` is now only selected when `dueHeartbeatTasks.length === 0` (`src/infra/heartbeat-runner.ts:1024`). When any task is due, `resolveHeartbeatRunPrompt` returns the task prompt with `hasDueCommitments: false` (`src/infra/heartbeat-runner.ts:870`), so `dueCommitmentIds` is empty and the commitment is neither attempted nor delivered. The scheduler’s follow-up pass explicitly skips the default session key (`src/infra/heartbeat-runner.ts:1866`), so same-session commitments depend on a later default heartbeat run with no due tasks. For a documented/common setup like `heartbeat.every: "5m"` and a `tasks:` entry with `interval: 5m`, `isTaskDue` is true again on every cadence tick because it uses `nowMs - lastRunMs >= intervalMs` (`src/auto-reply/heartbeat.ts:288`). The new test covers the first half of this state by asserting the due commitment stays `pending` with `attempts: 0` when a 5-minute task is due (`src/infra/heartbeat-runner.commitments.test.ts:156`), but it does not cover the next tick where the same task is due again.
+- Impact: users with opt-in inferred commitments and an every-heartbeat task can stop receiving natural follow-up check-ins for that session until the commitment expires, despite docs saying due commitments are delivered through heartbeat for the same agent/channel scope.
+- Suggested fix: keep task turns tool-capable, but process same-session commitments in a separate no-tools turn after the task run, or add a commitment-only wake/path that bypasses task selection without mixing untrusted commitment metadata into the tool-capable task prompt.
+- Confidence: high
+
+## Details
+
+- Do we have a high-confidence way to reproduce the issue? yes. Configure heartbeat every 5 minutes, add a `HEARTBEAT.md` task with `interval: 5m`, seed a due commitment for the same session, and run heartbeat at `t` and `t + 5m`; the task branch wins both times and the default-session commitment pass is skipped.
+- Is this the best way to solve the issue? unclear. A separate no-tools commitment turn is safest for the trust boundary, but the exact scheduling shape should avoid immediately rerunning the same due task.
+
+## Reviewed
+
+- Diff: `173f959613b35195c8e4e662b9e0138831cfb4d2..955a0e9c0f7d969e7d96cade7b383b3306aadf98`
+- Changed files: `src/infra/heartbeat-runner.ts`, `src/infra/heartbeat-runner.commitments.test.ts`
+- Code read: changed files in full, task parsing/due logic, commitment store selection/status updates, heartbeat wake/scheduler loop, heartbeat and commitment docs.
+- PR metadata: associated PR `75344` reviewed via `gh`.
+
+## Tests / Live Checks
+
+- `pnpm docs:list` completed.
+- `git diff --check 173f959613b35195c8e4e662b9e0138831cfb4d2..955a0e9c0f7d969e7d96cade7b383b3306aadf98` passed.
+- Initial focused test run failed because `node_modules` was missing; `pnpm install` succeeded.
+- `pnpm test src/infra/heartbeat-runner.commitments.test.ts src/infra/heartbeat-runner.returns-default-unset.test.ts` passed: 41 tests.
+
+## Dependency / Web Checks
+
+- No dependency files changed; no external web lookup needed.
+
+## Limitations
+
+- I did not run the broad changed gate.
+- An inline `tsx` smoke attempt was stopped because importing the runner staged bundled plugin runtime dependencies and did not reach scenario output quickly enough.
+
+https://github.com/openclaw/openclaw/commit/955a0e9c0f7d969e7d96cade7b383b3306aadf98
+```
