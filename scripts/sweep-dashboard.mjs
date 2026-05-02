@@ -161,7 +161,10 @@ function sweepSnapshot(root, profile) {
       .filter((item) => item.reviewedAt)
       .sort((a, b) => Date.parse(b.reviewedAt) - Date.parse(a.reviewedAt))
       .slice(0, 15),
-    closed: closedItems.filter((item) => item.closedAt).slice(0, 15),
+    closed: closedItems
+      .filter((item) => item.closedAt)
+      .sort((a, b) => Date.parse(b.closedAt) - Date.parse(a.closedAt))
+      .slice(0, 15),
     work,
   };
 }
