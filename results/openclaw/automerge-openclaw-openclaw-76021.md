@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-76021"
 mode: "autonomous"
-run_id: "25260994989"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25260994989"
+run_id: "25261475944"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25261475944"
 head_sha: "08cd9dbda14b57deec64cf4cefce1b0844246d4e"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-02T20:45:22.440Z"
+published_at: "2026-05-02T21:13:29.475Z"
 canonical: "https://github.com/openclaw/openclaw/pull/76021"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/47311"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/76021"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25260994989](https://github.com/openclaw/clawsweeper/actions/runs/25260994989)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25261475944](https://github.com/openclaw/clawsweeper/actions/runs/25261475944)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/76021
 
 ## Summary
 
-Canonical PR #76021 is the right repair path for #47311, but it is not merge-ready. The same-repo branch is writable, so ClawSweeper should repair the contributor branch by addressing the MediaRecorder error path, clearing dictation buffers after stop, rebasing/resolving the dirty merge state, and rerunning exact-head review/changed checks. #47311 should stay open until the canonical PR lands.
+Canonical path is open PR #76021. It is a same-repo writable automerge PR, but it is not merge-ready because hydrated review state includes actionable ClawSweeper/Codex findings and relevant CI failures. Plan a bounded repair of the contributor branch; keep linked issue #47311 open until the PR lands.
 
 ## Impact
 
@@ -66,9 +66,9 @@ Canonical PR #76021 is the right repair path for #47311, but it is not merge-rea
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #76021 | fix_needed | planned | canonical | The PR is useful and repairable, but merge is blocked by dirty merge state, failing checks, and unresolved actionable bot/ClawSweeper review findings. |
-| #47311 | keep_related | planned | fixed_by_candidate | The issue is covered by the canonical PR path but must remain open until the repaired PR lands. |
-| cluster:automerge-openclaw-openclaw-76021 | build_fix_artifact | planned |  | A bounded branch repair artifact is needed so the executor can update #76021 and rerun review/validation. |
+| #76021 | fix_needed | planned | canonical | Repair the writable PR branch before any re-review or merge decision. |
+| #47311 | keep_related | planned | fixed_by_candidate | Keep the linked feature request open until the canonical PR is repaired and merged. |
+| cluster:automerge-openclaw-openclaw-76021 | build_fix_artifact | planned |  | A fix artifact is needed for a writable canonical PR that is useful but not merge-ready. |
 
 ## Needs Human
 
