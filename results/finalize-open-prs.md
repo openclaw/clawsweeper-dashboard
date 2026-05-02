@@ -1,19 +1,19 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-05-02T20:12:31.384Z
+Generated: 2026-05-02T20:19:13.877Z
 
 ## Summary
 
 | Metric | Count |
 | --- | ---: |
-| open_prs | 7 |
+| open_prs | 6 |
 | ready_candidates | 0 |
 | security_hold | 1 |
-| needs_rebase | 5 |
+| needs_rebase | 4 |
 | mergeability_unknown | 0 |
 | needs_checks | 2 |
 | needs_review | 0 |
-| needs_merge_preflight | 7 |
+| needs_merge_preflight | 6 |
 | needs_result_backfill | 0 |
 
 ## Dispatch
@@ -36,4 +36,3 @@ Status: report_only
 | [#75463](https://github.com/openclaw/openclaw/pull/75463) | fix: edge case in the new prefixed-alias cache behavior | clawsweeper-commit-openclaw-openclaw-173f959613b3 | CONFLICTING | DIRTY | SUCCESS:68 SKIPPED:22 FAILURE:5 NEUTRAL:1; blockers:5 | needs_rebase:CONFLICTING, needs_merge_state:DIRTY, needs_checks:CI / checks-node-agentic-cli:FAILURE; CI / check-additional-boundaries:FAILURE; CI / checks-node-core-support-boundary:FAILURE, needs_merge_preflight | resume branch, rebase onto current main, repair conflicts, run changed checks, rerun review |
 | [#75403](https://github.com/openclaw/openclaw/pull/75403) | fix: making typing start fire-and-forget allows cleanup/idle to run before a persistent typin... | clawsweeper-commit-openclaw-openclaw-45b86450795d | CONFLICTING | DIRTY | SUCCESS:79 SKIPPED:22 NEUTRAL:1 | needs_rebase:CONFLICTING, needs_merge_state:DIRTY, needs_merge_preflight | resume branch, rebase onto current main, repair conflicts, run changed checks, rerun review |
 | [#75397](https://github.com/openclaw/openclaw/pull/75397) | fix: targeted hook resolution/cache path provider-runtime regressions | clawsweeper-commit-openclaw-openclaw-354084b1b320 | MERGEABLE | CLEAN | CANCELLED:1 SKIPPED:24 SUCCESS:79 NEUTRAL:1 | needs_merge_preflight | backfill merge preflight: security cleared, comments resolved, Codex /review passed, validation recorded |
-| [#75388](https://github.com/openclaw/openclaw/pull/75388) | fix: commit removes the runtime warning for the default group/channel private-reply behavior... | clawsweeper-commit-openclaw-openclaw-8989ceee50ab | CONFLICTING | DIRTY | SUCCESS:77 SKIPPED:9 NEUTRAL:1 | needs_rebase:CONFLICTING, needs_merge_state:DIRTY, needs_merge_preflight | resume branch, rebase onto current main, repair conflicts, run changed checks, rerun review |

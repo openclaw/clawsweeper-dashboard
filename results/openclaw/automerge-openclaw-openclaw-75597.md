@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-75597"
 mode: "autonomous"
-run_id: "25260057123"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25260057123"
+run_id: "25260394910"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25260394910"
 head_sha: "08cd9dbda14b57deec64cf4cefce1b0844246d4e"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-02T19:51:44.794Z"
+published_at: "2026-05-02T20:18:30.881Z"
 canonical: "https://github.com/openclaw/openclaw/pull/75597"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/75487"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/75597"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25260057123](https://github.com/openclaw/clawsweeper/actions/runs/25260057123)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25260394910](https://github.com/openclaw/clawsweeper/actions/runs/25260394910)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/75597
 
 ## Summary
 
-PR #75597 is the canonical repair path for issue #75487, but it is not merge-ready. The branch is same-repo writable, so the next deterministic step is to repair the contributor branch, address the explicit ClawSweeper review findings, rebase off current main 5e1529c48bf12f8a32d91fd4c52e0ddf00d5a72e, and rerun the changed gate before any merge-capable router acts.
+PR #75597 is the canonical repair path for issue #75487, but it is not merge-ready in the hydrated preflight: ClawSweeper previously requested repair and the exact head still has failing `check` / `check-dependencies` checks. The branch is same-repo writable, so the next deterministic action is to repair the contributor branch, preserve @amknight credit, rerun review, and validate before any merge router decision.
 
 ## Impact
 
@@ -66,9 +66,9 @@ PR #75597 is the canonical repair path for issue #75487, but it is not merge-rea
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #75487 | keep_related | planned | fixed_by_candidate | Covered by canonical PR #75597, but closure is blocked until the fix path is repaired and merged by the applicator/router. |
-| #75597 | fix_needed | planned | canonical | Canonical PR needs bounded branch repair and validation before it can return to the automerge review loop. |
-| cluster:automerge-openclaw-openclaw-75597 | build_fix_artifact | planned |  | The executor needs an auditable repair plan for the current contributor PR branch. |
+| #75597 | fix_needed | planned | canonical | Repair the writable canonical contributor branch before any automerge router can re-review and decide merge. |
+| #75487 | keep_related | planned | fixed_by_candidate | The issue is covered by the canonical PR path, but closeout is not allowed before a landed fix. |
+| cluster:automerge-openclaw-openclaw-75597 | build_fix_artifact | planned |  | Emit an executable repair artifact for the deterministic executor to update #75597 rather than replacing or merging it. |
 
 ## Needs Human
 
