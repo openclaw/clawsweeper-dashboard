@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-73388"
 mode: "autonomous"
-run_id: "25263513750"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25263513750"
+run_id: "25263828589"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25263828589"
 head_sha: "08cd9dbda14b57deec64cf4cefce1b0844246d4e"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-02T22:48:58.811Z"
+published_at: "2026-05-02T23:11:05.907Z"
 canonical: "https://github.com/openclaw/openclaw/pull/73388"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/62851"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/73388"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25263513750](https://github.com/openclaw/clawsweeper/actions/runs/25263513750)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25263828589](https://github.com/openclaw/clawsweeper/actions/runs/25263828589)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/73388
 
 ## Summary
 
-#73388 is the canonical adopted automerge PR for the remaining Arcee/Trinity main-session compatibility gap in #62851. It is not merge-ready because exact-head checks still show failing and pending required lanes, so the next deterministic action is to repair/rebase the writable same-repo PR branch, rerun review, and validate before the merge router decides.
+#73388 is the canonical repair path for the Arcee Trinity main-session compatibility gap. The PR branch is same-repo and writable, ClawSweeper review passed, and review-bot findings are non-blocking, but exact-head CI still has failing and pending checks, so the safe autonomous result is a repair_contributor_branch fix artifact rather than merge or close actions.
 
 ## Impact
 
@@ -66,11 +66,11 @@ Canonical: https://github.com/openclaw/openclaw/pull/73388
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #73388 | fix_needed | planned | canonical | Canonical PR needs a bounded repair/rebase and exact-head validation before automerge can continue. |
-| #62851 | keep_related | planned | fixed_by_candidate | Issue is covered by the canonical repair path but must remain open until the fix is merged. |
-| #62847 | keep_closed | skipped | related | Closed context ref is historical evidence only for this automerge repair cluster. |
-| #62848 | keep_closed | skipped | related | Closed context ref is historical evidence only for this automerge repair cluster. |
-| cluster:automerge-openclaw-openclaw-73388 | build_fix_artifact | planned |  | Automerge can continue only after branch repair/rebase, exact-head review, and changed-surface validation. |
+| #73388 | fix_needed | planned | canonical | Canonical PR is useful and writable, but failing/pending exact-head checks require repair/triage before the automerge gate can continue. |
+| #62851 | keep_related | planned | related | The issue is covered by the canonical PR path but cannot be closed until the fix lands and close permissions exist. |
+| #62847 | keep_closed | skipped | related | Closed historical context only. |
+| #62848 | keep_closed | skipped | related | Closed historical context only. |
+| cluster:automerge-openclaw-openclaw-73388 | build_fix_artifact | planned |  | Executor needs a concrete branch-repair plan for failing/pending exact-head checks. |
 
 ## Needs Human
 
