@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-73388"
 mode: "autonomous"
-run_id: "25260390567"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25260390567"
+run_id: "25261421761"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25261421761"
 head_sha: "08cd9dbda14b57deec64cf4cefce1b0844246d4e"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-02T20:27:04.854Z"
+published_at: "2026-05-02T21:00:33.436Z"
 canonical: "https://github.com/openclaw/openclaw/pull/73388"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/62851"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/73388"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25260390567](https://github.com/openclaw/clawsweeper/actions/runs/25260390567)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25261421761](https://github.com/openclaw/clawsweeper/actions/runs/25261421761)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/73388
 
 ## Summary
 
-PR #73388 is the canonical repair path for the remaining Arcee Trinity main-session compatibility mismatch in #62851. It is narrow and branch-writable, but it is not merge-ready because the hydrated checks show `check-dependencies` and aggregate `check` failing, two checks still pending, merge state `unstable`, and no fresh passing Codex `/review` preflight for the current head. Plan a bounded repair of the existing PR branch; do not close or merge anything from this worker.
+#73388 is the canonical repair path for the open Trinity main-session compatibility gap in #62851. The PR is useful, same-repo branch-writable, review-clean, and checks are green in the hydrated artifact, but it is currently dirty/unmergeable and the automerge comment explicitly requests a cloud rebase repair. Because this job blocks merge/close and allows fixes, emit a repair-contributor-branch artifact rather than merge, close, or replace.
 
 ## Impact
 
@@ -66,11 +66,11 @@ PR #73388 is the canonical repair path for the remaining Arcee Trinity main-sess
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #73388 | fix_needed | planned | canonical | Repair the existing writable PR branch, address failing relevant checks, run a fresh Codex `/review`, and validate before the comment router considers merge. |
-| cluster:automerge-openclaw-openclaw-73388 | build_fix_artifact | planned |  | Create an executable repair plan for the existing PR branch. |
-| #62851 | keep_related | planned | fixed_by_candidate | Keep the issue open and related to the canonical PR until the repair lands. |
-| #62847 | keep_closed | skipped | fixed_by_candidate | Already closed; no mutation is valid. |
-| #62848 | keep_closed | skipped | fixed_by_candidate | Already closed; no mutation is valid. |
+| #62847 | keep_closed | skipped | fixed_by_candidate | Already closed; no closure action is valid. |
+| #62848 | keep_closed | skipped | canonical | Already closed; no mutation needed. |
+| #62851 | keep_related | planned | fixed_by_candidate | Keep the issue open while #73388 is repaired and validated. |
+| #73388 | fix_needed | planned | canonical | Repair the existing same-repo branch by rebasing/resolving dirty merge state, then rerun exact-head review/check gates before any merge-capable router action. |
+| cluster:automerge-openclaw-openclaw-73388 | build_fix_artifact | planned |  | Create an executable repair plan for the ClawSweeper applicator. |
 
 ## Needs Human
 
