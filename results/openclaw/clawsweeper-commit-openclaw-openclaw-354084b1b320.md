@@ -2,16 +2,16 @@
 repo: "openclaw/openclaw"
 cluster_id: "clawsweeper-commit-openclaw-openclaw-354084b1b320"
 mode: "autonomous"
-run_id: "25230037102"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25230037102"
-head_sha: "2adcf6015a4cdb05370cca2e3cf02502e4e76f6b"
+run_id: "25257084293"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25257084293"
+head_sha: "367faa8c3c87df7703b3897671da49203ce1407e"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-01T19:55:29.286Z"
+published_at: "2026-05-02T17:13:26.688Z"
 canonical: null
 canonical_issue: null
 canonical_pr: null
-actions_total: 2
+actions_total: 3
 fix_executed: 0
 fix_failed: 0
 fix_blocked: 0
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25230037102](https://github.com/openclaw/clawsweeper/actions/runs/25230037102)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25257084293](https://github.com/openclaw/clawsweeper/actions/runs/25257084293)
 
 Workflow conclusion: success
 
@@ -35,13 +35,13 @@ Canonical: unknown
 
 ## Summary
 
-The ClawSweeper commit finding is still valid on current main from source inspection. No issue or PR refs are hydrated for this commit-sourced cluster, and no viable canonical PR exists, so the narrow path is a new credited fix PR for provider-runtime alias ownership and in-flight negative-cache suppression.
+The ClawSweeper commit finding is still valid on current main 815665f839db0323a917e3ba11312d3171054bdc. No hydrated issue or PR refs exist for this commit lane, so the canonical path is a new narrow fix PR on clawsweeper/clawsweeper-commit-openclaw-openclaw-354084b1b320. Local patching/validation was blocked by the read-only checkout and missing dependencies, but the source-level verification is sufficient to emit a cluster-scoped fix artifact for the deterministic executor.
 
 ## Impact
 
 | Metric | Count |
 | --- | ---: |
-| Worker actions | 2 |
+| Worker actions | 3 |
 | Fix executed | 0 |
 | Fix failed | 0 |
 | Fix blocked | 0 |
@@ -66,8 +66,9 @@ The ClawSweeper commit finding is still valid on current main from source inspec
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| cluster:clawsweeper-commit-openclaw-openclaw-354084b1b320 | fix_needed | planned |  | No hydrated canonical PR exists, and both reported regressions are still present in current main source. |
-| cluster:clawsweeper-commit-openclaw-openclaw-354084b1b320 | build_fix_artifact | planned |  | The fix is narrow and non-security-sensitive; allow_fix_pr is true and allow_merge is false. |
+| cluster:clawsweeper-commit-openclaw-openclaw-354084b1b320 | fix_needed | planned |  | A narrow runtime/plugin-owner fix is needed and no viable existing PR was hydrated for this commit-finding lane. |
+| cluster:clawsweeper-commit-openclaw-openclaw-354084b1b320 | build_fix_artifact | planned |  | The fix can stay in provider hook runtime, provider owner resolution, tests, and changelog. |
+| cluster:clawsweeper-commit-openclaw-openclaw-354084b1b320 | open_fix_pr | planned |  | Open a new narrow implementation PR after applying the fix artifact and validation. |
 
 ## Needs Human
 
