@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-73388"
 mode: "autonomous"
-run_id: "25260070256"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25260070256"
+run_id: "25260390567"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25260390567"
 head_sha: "08cd9dbda14b57deec64cf4cefce1b0844246d4e"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-02T19:50:15.738Z"
+published_at: "2026-05-02T20:27:04.854Z"
 canonical: "https://github.com/openclaw/openclaw/pull/73388"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/62851"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/73388"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25260070256](https://github.com/openclaw/clawsweeper/actions/runs/25260070256)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25260390567](https://github.com/openclaw/clawsweeper/actions/runs/25260390567)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/73388
 
 ## Summary
 
-#73388 is the canonical repair path for the remaining Arcee/Trinity main-session compatibility gap, but it is not merge-ready: the hydrated PR is open, same-repo branch writable, mergeable_state is dirty, and relevant checks are failing or stale. Plan a bounded repair of the contributor branch, preserve #62851 as the open tracking issue, and leave already-closed context refs untouched.
+PR #73388 is the canonical repair path for the remaining Arcee Trinity main-session compatibility mismatch in #62851. It is narrow and branch-writable, but it is not merge-ready because the hydrated checks show `check-dependencies` and aggregate `check` failing, two checks still pending, merge state `unstable`, and no fresh passing Codex `/review` preflight for the current head. Plan a bounded repair of the existing PR branch; do not close or merge anything from this worker.
 
 ## Impact
 
@@ -66,11 +66,11 @@ Canonical: https://github.com/openclaw/openclaw/pull/73388
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #73388 | fix_needed | planned | canonical | Canonical PR is useful and branch-writable, but dirty merge state and failing relevant checks require a repair/rebase/re-review loop before any merge-capable applicator can proceed. |
-| cluster:automerge-openclaw-openclaw-73388 | build_fix_artifact | planned |  | The deterministic executor can update the same-repo PR branch, address rebase/check drift, and dispatch exact-head ClawSweeper review without losing contributor/report credit. |
-| #62851 | keep_related | planned | fixed_by_candidate | Keep the issue open as the tracking issue until #73388 is repaired, reviewed, and landed by the deterministic merge path. |
-| #62847 | keep_closed | skipped | related | Already closed; no mutation is valid or needed. |
-| #62848 | keep_closed | skipped | related | Already closed; it remains context for the repair but is not a target. |
+| #73388 | fix_needed | planned | canonical | Repair the existing writable PR branch, address failing relevant checks, run a fresh Codex `/review`, and validate before the comment router considers merge. |
+| cluster:automerge-openclaw-openclaw-73388 | build_fix_artifact | planned |  | Create an executable repair plan for the existing PR branch. |
+| #62851 | keep_related | planned | fixed_by_candidate | Keep the issue open and related to the canonical PR until the repair lands. |
+| #62847 | keep_closed | skipped | fixed_by_candidate | Already closed; no mutation is valid. |
+| #62848 | keep_closed | skipped | fixed_by_candidate | Already closed; no mutation is valid. |
 
 ## Needs Human
 
