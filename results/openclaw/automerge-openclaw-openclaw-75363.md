@@ -2,21 +2,21 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-75363"
 mode: "autonomous"
-run_id: "25202543309"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25202543309"
-head_sha: "608eef4eb86affcd1125009b55c54a58305a6b51"
+run_id: "25246103463"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25246103463"
+head_sha: "232d53855deb5d19f8f29d2439d377f705770039"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-01T04:53:08.968Z"
+published_at: "2026-05-02T06:50:55.859Z"
 canonical: "https://github.com/openclaw/openclaw/pull/75363"
 canonical_issue: null
 canonical_pr: "https://github.com/openclaw/openclaw/pull/75363"
 actions_total: 2
-fix_executed: 1
-fix_failed: 1
-fix_blocked: 1
+fix_executed: 0
+fix_failed: 0
+fix_blocked: 0
 apply_executed: 0
-apply_blocked: 0
+apply_blocked: 1
 apply_skipped: 0
 needs_human_count: 0
 ---
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25202543309](https://github.com/openclaw/clawsweeper/actions/runs/25202543309)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25246103463](https://github.com/openclaw/clawsweeper/actions/runs/25246103463)
 
 Workflow conclusion: success
 
@@ -35,18 +35,18 @@ Canonical: https://github.com/openclaw/openclaw/pull/75363
 
 ## Summary
 
-PR #75363 is the canonical adopted automerge candidate, but it is not merge-ready. The branch is same-repo writable, so ClawSweeper should repair the contributor branch by removing unrelated .agents skill files, adding the required user-facing changelog entry, and verifying the Codex option-localization review finding before re-review.
+PR #75363 is the canonical adopted automerge candidate, but it is not merge-ready. The branch is same-repo writable, and the current ClawSweeper review requests a narrow repair for the one-off Discord component wait helper; merge and close are blocked by job frontmatter.
 
 ## Impact
 
 | Metric | Count |
 | --- | ---: |
 | Worker actions | 2 |
-| Fix executed | 1 |
-| Fix failed | 1 |
-| Fix blocked | 1 |
+| Fix executed | 0 |
+| Fix failed | 0 |
+| Fix blocked | 0 |
 | Applied executions | 0 |
-| Apply blocked | 0 |
+| Apply blocked | 1 |
 | Apply skipped | 0 |
 | Needs human | 0 |
 
@@ -54,22 +54,20 @@ PR #75363 is the canonical adopted automerge candidate, but it is not merge-read
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | failed |  |  | Codex /review did not pass after 2 attempt(s): No security-sensitive issue found in the diff. The artifact’s unrelated `.agents` files are absent, the Codex option-localization finding is covered, and `pnpm check:changed` is sufficient for the changed Discord extension surface. Merge is blocked by one scheduler regression. |
-| execute_fix | blocked |  |  | Codex /review did not pass after 2 attempt(s): No security-sensitive issue found in the diff. The artifact’s unrelated `.agents` files are absent, the Codex option-localization finding is covered, and `pnpm check:changed` is sufficient for the changed Discord extension surface. Merge is blocked by one scheduler regression. |
-| automerge_repair_outcome_comment | executed | #75363 |  |  |
+| repair_contributor_branch | pushed | https://github.com/openclaw/openclaw/pull/75363 |  |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| #75363 | merge_canonical | blocked | fix_pr | job does not allow merge |
 
 ## Worker Action Matrix
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #75363 | fix_needed | planned | canonical | Adopted automerge PR needs bounded repair on a writable contributor branch; merge and close actions are blocked by job frontmatter. |
-| cluster:automerge-openclaw-openclaw-75363 | build_fix_artifact | planned |  | A fix artifact is required so the executor can update #75363 and request a fresh ClawSweeper verdict. |
+| #75363 | fix_needed | planned | canonical | Adopted automerge PR needs bounded branch repair before re-review and exact-head validation. |
+| cluster:automerge-openclaw-openclaw-75363 | build_fix_artifact | planned |  | A narrow executable repair artifact is needed for the writable canonical PR branch. |
 
 ## Needs Human
 
