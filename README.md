@@ -4,7 +4,7 @@ Generated from the durable state branch for [openclaw/clawsweeper](https://githu
 
 ## Sweep Dashboard
 
-Last source update: May 2, 2026, 06:57 UTC
+Last source update: May 2, 2026, 06:58 UTC
 
 ### Fleet
 
@@ -15,7 +15,7 @@ Last source update: May 2, 2026, 06:57 UTC
 | Archived closed records | 16796 |
 | Fresh reviews, 7d | 6765 |
 | Proposed closes awaiting apply | 0 |
-| Work candidates awaiting promotion | 2845 |
+| Work candidates awaiting promotion | 2844 |
 | Failed or stale reviews | 10 |
 
 ### Current Runs
@@ -23,14 +23,14 @@ Last source update: May 2, 2026, 06:57 UTC
 | Repository | State | Updated | Run |
 | --- | --- | --- | --- |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | Planning review | May 2, 2026, 06:57 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25246307537) |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | Hot intake publish complete | May 2, 2026, 06:56 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25246080965) |
-| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Review comments checked | May 2, 2026, 06:34 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25245820340) |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | Review in progress | May 2, 2026, 06:57 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25246307537) |
+| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Audit finished | May 2, 2026, 06:58 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25246322756) |
 
 ### Repositories
 
 | Repository | Open records | Archived | Fresh | Proposed closes | Work candidates | Failed/stale | Last review | Last close |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 6624 | 16058 | 6538 | 0 | 2810 | 6 | May 2, 2026, 06:57 UTC | May 2, 2026, 06:53 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 6624 | 16058 | 6538 | 0 | 2809 | 6 | May 2, 2026, 06:58 UTC | May 2, 2026, 06:53 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | 226 | 733 | 226 | 0 | 34 | 4 | May 2, 2026, 06:55 UTC | May 2, 2026, 06:32 UTC |
 | [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | 1 | 5 | 1 | 0 | 1 | 0 | May 2, 2026, 06:33 UTC | May 1, 2026, 02:07 UTC |
 
@@ -38,7 +38,8 @@ Last source update: May 2, 2026, 06:57 UTC
 
 | Repository | Item | Title | Priority | Reviewed | Report |
 | --- | --- | --- | --- | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#75363](https://github.com/openclaw/openclaw/pull/75363) | fix(discord): harden Carbon parity | high | May 2, 2026, 06:57 UTC | [records/openclaw-openclaw/items/75363.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/75363.md) |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#75976](https://github.com/openclaw/openclaw/pull/75976) | fix: hot reload plugin management changes | high | May 2, 2026, 06:57 UTC | [records/openclaw-openclaw/items/75976.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/75976.md) |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#75363](https://github.com/openclaw/openclaw/pull/75363) | fix(discord): harden Carbon parity | high | May 2, 2026, 06:53 UTC | [records/openclaw-openclaw/items/75363.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/75363.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#75439](https://github.com/openclaw/openclaw/pull/75439) | fix(heartbeat): centralized cooldown gate prevents exec-event runaway | high | May 2, 2026, 06:53 UTC | [records/openclaw-openclaw/items/75439.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/75439.md) |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#1300](https://github.com/openclaw/clawhub/issues/1300) | Bug: transfer request, skill rename, and skill merge fail with double JSON serialization | high | May 2, 2026, 06:47 UTC | [records/openclaw-clawhub/items/1300.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-clawhub/items/1300.md) |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#1199](https://github.com/openclaw/clawhub/issues/1199) | Cannot update personal settings, server error when clicking Save | high | May 2, 2026, 06:47 UTC | [records/openclaw-clawhub/items/1199.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-clawhub/items/1199.md) |
@@ -48,7 +49,6 @@ Last source update: May 2, 2026, 06:57 UTC
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#73230](https://github.com/openclaw/openclaw/issues/73230) | Cron delivery should support dynamic accountId resolution for channels with unstable session tokens (e.g. o... | high | May 2, 2026, 06:39 UTC | [records/openclaw-openclaw/items/73230.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/73230.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#75679](https://github.com/openclaw/openclaw/pull/75679) | fix(agents): canonicalize subagent list requester keys | high | May 2, 2026, 06:39 UTC | [records/openclaw-openclaw/items/75679.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/75679.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#75975](https://github.com/openclaw/openclaw/issues/75975) | Telegram channel: DM messages with message_thread_id fragment into separate sessions, breaking conversation... | high | May 2, 2026, 06:39 UTC | [records/openclaw-openclaw/items/75975.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/75975.md) |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#75976](https://github.com/openclaw/openclaw/pull/75976) | fix: hot reload plugin management changes | high | May 2, 2026, 06:36 UTC | [records/openclaw-openclaw/items/75976.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/75976.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#75970](https://github.com/openclaw/openclaw/pull/75970) | fix(cron): ignore malformed persisted jobs | high | May 2, 2026, 06:35 UTC | [records/openclaw-openclaw/items/75970.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/75970.md) |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#1364](https://github.com/openclaw/clawhub/issues/1364) | transfer request: handle argument not mapped to toUserHandle API field | high | May 2, 2026, 06:35 UTC | [records/openclaw-clawhub/items/1364.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-clawhub/items/1364.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#75748](https://github.com/openclaw/openclaw/pull/75748) | fix: preserve provider default model selection | high | May 2, 2026, 06:33 UTC | [records/openclaw-openclaw/items/75748.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/75748.md) |
@@ -84,21 +84,21 @@ Last source update: May 2, 2026, 06:57 UTC
 
 | Repository | Item | Title | Outcome | Status | Reviewed |
 | --- | --- | --- | --- | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#75363](https://github.com/openclaw/openclaw/pull/75363) | fix(discord): harden Carbon parity | keep_open / kept_open | complete | May 2, 2026, 06:57 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#74824](https://github.com/openclaw/openclaw/pull/74824) | Add Google Meet space access controls | keep_open / kept_open | complete | May 2, 2026, 06:58 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#75973](https://github.com/openclaw/openclaw/pull/75973) | feat(subagents): expose frozen final metadata on ended hook | keep_open / kept_open | complete | May 2, 2026, 06:58 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#75976](https://github.com/openclaw/openclaw/pull/75976) | fix: hot reload plugin management changes | keep_open / kept_open | complete | May 2, 2026, 06:57 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#75981](https://github.com/openclaw/openclaw/pull/75981) | fix(agents): skip model normalization during TUI context window warmup | keep_open / kept_open | complete | May 2, 2026, 06:56 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#1659](https://github.com/openclaw/clawhub/issues/1659) | My skill just disappeared, and I can't log in again. | keep_open / kept_open | failed | May 2, 2026, 06:55 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#1222](https://github.com/openclaw/clawhub/issues/1222) | Publish skill fails with Github API rate limit exceeded | keep_open / kept_open | failed | May 2, 2026, 06:55 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#1675](https://github.com/openclaw/clawhub/issues/1675) | Skills: support org ownership and transfer to org | keep_open / kept_open | failed | May 2, 2026, 06:55 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#75980](https://github.com/openclaw/openclaw/pull/75980) | fix(model): clarify session-scoped model switches | keep_open / kept_open | complete | May 2, 2026, 06:55 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#75363](https://github.com/openclaw/openclaw/pull/75363) | fix(discord): harden Carbon parity | keep_open / kept_open | complete | May 2, 2026, 06:53 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#75439](https://github.com/openclaw/openclaw/pull/75439) | fix(heartbeat): centralized cooldown gate prevents exec-event runaway | keep_open / kept_open | complete | May 2, 2026, 06:53 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#70864](https://github.com/openclaw/openclaw/pull/70864) | feat: add scoped mention pattern policy | keep_open / kept_open | complete | May 2, 2026, 06:49 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#886](https://github.com/openclaw/clawhub/issues/886) | Failed to sign in after deleting account (Infinite login loop) | keep_open / kept_open | complete | May 2, 2026, 06:48 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#1272](https://github.com/openclaw/clawhub/issues/1272) | Plugin Sitting in Pending Scan Status | keep_open / kept_open | complete | May 2, 2026, 06:48 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#621](https://github.com/openclaw/clawhub/issues/621) | Cybercentry - ClawHub Skills and ClawHub Account Access | keep_open / kept_open | complete | May 2, 2026, 06:48 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#635](https://github.com/openclaw/clawhub/issues/635) | [Bug] ClawHub Dashboard Server Error on appMeta:getDeploymentInfo (Convex) | keep_open / kept_open | complete | May 2, 2026, 06:48 UTC |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#1336](https://github.com/openclaw/clawhub/issues/1336) | "Sign in with GitHub"按钮点击无反应，可能是 GitHub OAuth Client ID 未配置或配置错误。 | keep_open / kept_open | complete | May 2, 2026, 06:48 UTC |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#922](https://github.com/openclaw/clawhub/issues/922) | I have deleted the slug: pixverse from my personal account, but I still can't use it with my company accoun... | keep_open / kept_open | complete | May 2, 2026, 06:48 UTC |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#1569](https://github.com/openclaw/clawhub/issues/1569) | How can I transfer "personal skills" to "organization skills" | keep_open / kept_open | complete | May 2, 2026, 06:48 UTC |
 
 </details>
 
@@ -108,7 +108,7 @@ Last source update: May 2, 2026, 06:57 UTC
 | --- | --- | --- | ---: | ---: | ---: | --- |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | open archived records | May 2, 2026, 06:53 UTC | 0 | 1 | 0 | yes |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | clean | May 2, 2026, 06:53 UTC | 0 | 0 | 0 | yes |
-| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | clean | May 2, 2026, 06:40 UTC | 0 | 0 | 0 | yes |
+| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | clean | May 2, 2026, 06:58 UTC | 0 | 0 | 0 | yes |
 
 
 ## Repair Dashboard
