@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-75363"
 mode: "autonomous"
-run_id: "25250474836"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25250474836"
+run_id: "25250964839"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25250964839"
 head_sha: "2658bb652973dd1016dd9046ae9537c076b55f1e"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-02T11:32:44.350Z"
+published_at: "2026-05-02T11:57:49.594Z"
 canonical: "https://github.com/openclaw/openclaw/pull/75363"
 canonical_issue: null
 canonical_pr: "https://github.com/openclaw/openclaw/pull/75363"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25250474836](https://github.com/openclaw/clawsweeper/actions/runs/25250474836)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25250964839](https://github.com/openclaw/clawsweeper/actions/runs/25250964839)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/75363
 
 ## Summary
 
-PR #75363 is the canonical adopted automerge candidate. It is open, non-security, and same-repo branch writable, but it is not merge-ready because the hydrated ClawSweeper review still has an actionable Discord REST stale-dropping blocker. Merge and close are blocked by job frontmatter, so the safe path is a bounded repair on the contributor branch.
+PR #75363 remains the canonical adopted automerge candidate. Merge is blocked by job frontmatter and the latest ClawSweeper review requested one narrow scheduler repair: remove fixed 5 ms active-bucket polling and add focused regression coverage. The branch is same-repo writable, so the correct path is to repair the contributor branch and preserve source credit.
 
 ## Impact
 
@@ -66,8 +66,8 @@ PR #75363 is the canonical adopted automerge candidate. It is open, non-security
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #75363 | fix_needed | planned | canonical | Adopted automerge PR needs a narrow repair before re-review; merge and close are not permitted in this job. |
-| cluster:automerge-openclaw-openclaw-75363 | build_fix_artifact | planned |  | A cluster-scoped fix artifact is needed so the executor can repair the existing writable PR branch and request a fresh ClawSweeper review. |
+| #75363 | fix_needed | planned | canonical | Adopted automerge PR is useful and writable, but not merge-ready until the ClawSweeper scheduler review finding is repaired and re-reviewed. |
+| cluster:automerge-openclaw-openclaw-75363 | build_fix_artifact | planned |  | Executor needs an explicit branch-repair artifact for the canonical PR. |
 
 ## Needs Human
 
