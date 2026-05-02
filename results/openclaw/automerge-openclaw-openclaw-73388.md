@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-73388"
 mode: "autonomous"
-run_id: "25261421761"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25261421761"
+run_id: "25261775332"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25261775332"
 head_sha: "08cd9dbda14b57deec64cf4cefce1b0844246d4e"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-02T21:00:33.436Z"
+published_at: "2026-05-02T21:30:07.778Z"
 canonical: "https://github.com/openclaw/openclaw/pull/73388"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/62851"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/73388"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25261421761](https://github.com/openclaw/clawsweeper/actions/runs/25261421761)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25261775332](https://github.com/openclaw/clawsweeper/actions/runs/25261775332)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/73388
 
 ## Summary
 
-#73388 is the canonical repair path for the open Trinity main-session compatibility gap in #62851. The PR is useful, same-repo branch-writable, review-clean, and checks are green in the hydrated artifact, but it is currently dirty/unmergeable and the automerge comment explicitly requests a cloud rebase repair. Because this job blocks merge/close and allows fixes, emit a repair-contributor-branch artifact rather than merge, close, or replace.
+Classified #73388 as the canonical repairable PR for the Trinity main-session compatibility gap. Merge and close are blocked by job policy and failing relevant checks, so the deterministic next action is to repair the writable same-repo PR branch, address the failing CI lanes, rerun review, and validate with the changed gate.
 
 ## Impact
 
@@ -66,11 +66,11 @@ Canonical: https://github.com/openclaw/openclaw/pull/73388
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #62847 | keep_closed | skipped | fixed_by_candidate | Already closed; no closure action is valid. |
-| #62848 | keep_closed | skipped | canonical | Already closed; no mutation needed. |
-| #62851 | keep_related | planned | fixed_by_candidate | Keep the issue open while #73388 is repaired and validated. |
-| #73388 | fix_needed | planned | canonical | Repair the existing same-repo branch by rebasing/resolving dirty merge state, then rerun exact-head review/check gates before any merge-capable router action. |
-| cluster:automerge-openclaw-openclaw-73388 | build_fix_artifact | planned |  | Create an executable repair plan for the ClawSweeper applicator. |
+| #73388 | fix_needed | planned | canonical | The PR is useful and writable, but failing relevant checks and unstable merge state block merge. Repair the existing PR branch rather than replace it. |
+| cluster:automerge-openclaw-openclaw-73388 | build_fix_artifact | planned |  | A narrow repair artifact is required for the automerge controller to update #73388 and re-run review/validation. |
+| #62851 | keep_related | planned | fixed_by_candidate | Keep the issue open until #73388 or an equivalent fix lands; no closure action is allowed in this run. |
+| #62847 | keep_closed | skipped | fixed_by_candidate | Closed context ref only; no mutation is valid. |
+| #62848 | keep_closed | skipped | related | Closed historical context only; no mutation is valid. |
 
 ## Needs Human
 
