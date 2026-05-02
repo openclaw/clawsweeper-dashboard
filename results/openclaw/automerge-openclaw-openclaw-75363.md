@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-75363"
 mode: "autonomous"
-run_id: "25249139890"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25249139890"
-head_sha: "bd56a863d0a7276d03db05b5e5718537a26b132c"
+run_id: "25249285482"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25249285482"
+head_sha: "8084053d98e0a3376da73f217de4db3752f0f3c5"
 workflow_conclusion: "cancelled"
 result_status: "planned"
-published_at: "2026-05-02T09:52:45.124Z"
+published_at: "2026-05-02T10:01:39.421Z"
 canonical: "https://github.com/openclaw/openclaw/pull/75363"
 canonical_issue: null
 canonical_pr: "https://github.com/openclaw/openclaw/pull/75363"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25249139890](https://github.com/openclaw/clawsweeper/actions/runs/25249139890)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25249285482](https://github.com/openclaw/clawsweeper/actions/runs/25249285482)
 
 Workflow conclusion: cancelled
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/75363
 
 ## Summary
 
-PR #75363 is the canonical adopted automerge candidate. It is open, non-security, same-repo branch writable, and has green hydrated CI, but it is not merge-ready because the hydrated ClawSweeper review still has an actionable Discord REST stale-drop finding and prior repair validation reported a `pnpm check:changed` failure. Job frontmatter blocks merge/close, so the next deterministic action is repair on the contributor branch and re-review.
+PR #75363 remains the canonical adopted automerge candidate. It is open, non-security, same-repo branch-writable, and has passing GitHub checks in the artifact, but it is not merge-ready because the hydrated ClawSweeper review still has an actionable Discord REST stale-drop finding. Plan an in-place repair on the contributor branch, preserve source PR credit, rerun review, and validate with the changed gate.
 
 ## Impact
 
@@ -66,8 +66,8 @@ PR #75363 is the canonical adopted automerge candidate. It is open, non-security
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #75363 | fix_needed | planned | canonical | Canonical PR is useful and writable but not merge-ready; repair contributor branch, then rerun review and changed validation. |
-| cluster:automerge-openclaw-openclaw-75363 | build_fix_artifact | planned |  | Executor needs a bounded branch repair artifact for #75363. |
+| #75363 | fix_needed | planned | canonical | Adopted automerge PR is canonical but needs bounded repair before any merge-capable applicator can proceed. |
+| cluster:automerge-openclaw-openclaw-75363 | build_fix_artifact | planned |  | Emit a repair artifact for the deterministic executor to update the existing PR branch and rerun review/validation. |
 
 ## Needs Human
 
