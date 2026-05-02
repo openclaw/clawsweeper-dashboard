@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-73724"
 mode: "autonomous"
-run_id: "25260064120"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25260064120"
+run_id: "25261656659"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25261656659"
 head_sha: "08cd9dbda14b57deec64cf4cefce1b0844246d4e"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-02T20:12:21.443Z"
+published_at: "2026-05-02T21:20:38.357Z"
 canonical: "https://github.com/openclaw/openclaw/pull/73724"
 canonical_issue: null
 canonical_pr: "https://github.com/openclaw/openclaw/pull/73724"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25260064120](https://github.com/openclaw/clawsweeper/actions/runs/25260064120)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25261656659](https://github.com/openclaw/clawsweeper/actions/runs/25261656659)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/73724
 
 ## Summary
 
-#73724 is the only open hydrated target and remains the canonical automerge repair target, but it is not merge-ready: the preflight artifact reports mergeable=false/dirty plus relevant failing checks, and merge/close actions are blocked by job policy. Current main already contains the bounded local status-RPC fallback and changelog coverage, so the safe next action is a repair-contributor-branch pass that rebases/normalizes #73724 against main, removes any duplicate/conflicting implementation, runs review and changed-gate validation, and then leaves final merge routing to the applicator.
+Canonical PR #73724 is open and branch-writable, but not merge-ready. The hydrated artifact shows an unresolved Codex P2 review finding plus one failing and one pending relevant check, so the safe path is to repair the existing same-repo contributor branch and re-review before any merge decision.
 
 ## Impact
 
@@ -66,14 +66,14 @@ Canonical: https://github.com/openclaw/openclaw/pull/73724
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #42019 | keep_closed | skipped | duplicate | Closed context ref; historical evidence only. |
-| #48360 | keep_closed | skipped | fixed_by_candidate | Closed context ref; historical evidence only. |
-| #51357 | keep_closed | skipped | superseded | Closed context ref; historical evidence only. |
-| #62762 | keep_closed | skipped | fixed_by_candidate | Closed context ref; historical evidence only. |
-| #64400 | keep_closed | skipped | related | Closed related issue; not a mutation target. |
-| #73535 | keep_closed | skipped | fixed_by_candidate | Closed issue; evidence target for the repair branch only. |
-| #73724 | fix_needed | planned | canonical | Automerge-calibrated canonical PR is useful but not merge-ready; branch repair is the executable non-mutating path. |
-| cluster:automerge-openclaw-openclaw-73724 | build_fix_artifact | planned |  | Create an executable repair artifact for the deterministic repair/applicator lane. |
+| #42019 | keep_closed | skipped | duplicate | Closed historical evidence only. |
+| #48360 | keep_closed | skipped | fixed_by_candidate | Closed source issue remains credit/evidence for the canonical PR repair path. |
+| #51357 | keep_closed | skipped | superseded | Closed historical repro evidence only. |
+| #62762 | keep_closed | skipped | related | Closed related repro evidence only. |
+| #64400 | keep_closed | skipped | related | Related but not the same canonical repair target. |
+| #73535 | keep_closed | skipped | fixed_by_candidate | Closed source regression evidence remains covered by the canonical PR repair path. |
+| #73724 | fix_needed | planned | canonical | Repair the contributor branch in place, then require a fresh exact-head ClawSweeper review and validation before any merge-capable applicator acts. |
+| cluster:automerge-openclaw-openclaw-73724 | build_fix_artifact | planned |  | Executor should update #73724 branch, not open a replacement PR. |
 
 ## Needs Human
 
