@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-75976"
 mode: "autonomous"
-run_id: "25247354805"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25247354805"
-head_sha: "126fd0a3fb73bccbd65bee7658010e771b3b3e10"
+run_id: "25247774149"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25247774149"
+head_sha: "26f2c55b6de0f674ad103ffa68e2456d40dc81b0"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-02T08:01:04.236Z"
+published_at: "2026-05-02T08:27:20.720Z"
 canonical: "https://github.com/openclaw/openclaw/pull/75976"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/72097"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/75976"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25247354805](https://github.com/openclaw/clawsweeper/actions/runs/25247354805)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25247774149](https://github.com/openclaw/clawsweeper/actions/runs/25247774149)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/75976
 
 ## Summary
 
-#75976 is the canonical opted-in automerge PR for linked issue #72097, but it is not merge-ready because exact-head CI has relevant failures and pending checks. The branch is same-repo and writable, so the safe path is to repair the contributor PR branch, rerun ClawSweeper review and changed validation, then let the merge-capable router decide after a clean exact-head verdict. No close or merge actions are emitted because they are blocked by job policy.
+PR #75976 is the canonical repair path for linked issue #72097, but it is not merge-ready. The branch is same-repo writable, so ClawSweeper should repair the existing contributor branch, address the exact-head CI/test failure called out by the ClawSweeper review, rerun review and changed-gate validation, and leave merge/closure to the guarded router.
 
 ## Impact
 
@@ -66,9 +66,9 @@ Canonical: https://github.com/openclaw/openclaw/pull/75976
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #75976 | fix_needed | planned | canonical | The canonical PR is useful and writable, but failing relevant CI blocks merge and fixed-by-candidate closeout. Emit a branch repair artifact instead of merge/close. |
-| #72097 | keep_related | planned | fixed_by_candidate | The issue is covered by the canonical PR path but must stay open until the repaired PR is validated and later merge/close policy allows closeout. |
-| cluster:automerge-openclaw-openclaw-75976 | build_fix_artifact | planned |  | Build an executable repair plan for the existing PR branch so the deterministic executor can fix CI and re-run review without opening a replacement. |
+| #75976 | fix_needed | planned | canonical | Automerge is blocked by exact-head CI/test failure; branch is safe for repair_contributor_branch. |
+| #72097 | keep_related | planned | related | Keep the issue open and related to the canonical PR until #75976 is repaired and landed by the guarded automerge path. |
+| cluster:automerge-openclaw-openclaw-75976 | build_fix_artifact | planned |  | Emit an executable repair artifact for the opted-in automerge PR; no merge or close mutation is allowed in this worker. |
 
 ## Needs Human
 
