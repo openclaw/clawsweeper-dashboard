@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-76021"
 mode: "autonomous"
-run_id: "25262025645"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25262025645"
+run_id: "25262609195"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25262609195"
 head_sha: "08cd9dbda14b57deec64cf4cefce1b0844246d4e"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-02T21:43:17.673Z"
+published_at: "2026-05-02T22:01:05.508Z"
 canonical: "https://github.com/openclaw/openclaw/pull/76021"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/47311"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/76021"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25262025645](https://github.com/openclaw/clawsweeper/actions/runs/25262025645)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25262609195](https://github.com/openclaw/clawsweeper/actions/runs/25262609195)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/76021
 
 ## Summary
 
-#76021 is the canonical repair path for #47311, but it is not merge-ready in the hydrated preflight state because the exact head has an unstable merge state, one failing check shard, one pending check shard, and an earlier Codex inline finding that the repair pass should verify as addressed. Close and merge are blocked by job policy, so the only planned mutation path is a bounded repair of the writable same-repo PR branch.
+Canonical PR #76021 is useful and same-repo branch-writable, but it is not merge-ready: exact-head CI has relevant failures and an actionable Codex review-bot finding remains in the hydrated review comments. Plan repair on the existing contributor branch and keep linked issue #47311 open until the repaired PR lands.
 
 ## Impact
 
@@ -66,9 +66,9 @@ Canonical: https://github.com/openclaw/openclaw/pull/76021
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #76021 | fix_needed | planned | canonical | Repair the canonical writable PR branch before automerge can proceed; do not replace it because the same-repo head branch is writable. |
-| #47311 | keep_related | planned | fixed_by_candidate | The issue is covered by the canonical PR path but cannot be closed before the fix lands. |
-| cluster:automerge-openclaw-openclaw-76021 | build_fix_artifact | planned |  | Executor should fetch and update the writable source PR branch, then rerun review and changed-surface validation. |
+| #76021 | fix_needed | planned | canonical | Repair the same-repo PR branch, address the review-bot memory-retention finding, inspect and fix the failing relevant CI lanes, then rerun review and changed-surface validation before any merge-capable applicator acts. |
+| #47311 | keep_related | planned | fixed_by_candidate | The issue is covered by the canonical PR path but must stay open until the fix is actually merged. |
+| cluster:automerge-openclaw-openclaw-76021 | build_fix_artifact | planned |  | Emit an executable repair artifact for the deterministic executor. |
 
 ## Needs Human
 
