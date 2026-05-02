@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-75976"
 mode: "autonomous"
-run_id: "25247774149"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25247774149"
-head_sha: "26f2c55b6de0f674ad103ffa68e2456d40dc81b0"
-workflow_conclusion: "success"
+run_id: "25250312339"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25250312339"
+head_sha: "433ced66f38849e952913951358745a931603c98"
+workflow_conclusion: "cancelled"
 result_status: "planned"
-published_at: "2026-05-02T08:27:20.720Z"
+published_at: "2026-05-02T11:04:11.517Z"
 canonical: "https://github.com/openclaw/openclaw/pull/75976"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/72097"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/75976"
@@ -16,7 +16,7 @@ fix_executed: 0
 fix_failed: 0
 fix_blocked: 0
 apply_executed: 0
-apply_blocked: 1
+apply_blocked: 0
 apply_skipped: 0
 needs_human_count: 0
 ---
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25247774149](https://github.com/openclaw/clawsweeper/actions/runs/25247774149)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25250312339](https://github.com/openclaw/clawsweeper/actions/runs/25250312339)
 
-Workflow conclusion: success
+Workflow conclusion: cancelled
 
 Worker result: planned
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/75976
 
 ## Summary
 
-PR #75976 is the canonical repair path for linked issue #72097, but it is not merge-ready. The branch is same-repo writable, so ClawSweeper should repair the existing contributor branch, address the exact-head CI/test failure called out by the ClawSweeper review, rerun review and changed-gate validation, and leave merge/closure to the guarded router.
+Canonical PR #75976 is a same-repo, writable ClawSweeper automerge candidate, but it is not merge-ready: exact-head checks include failing core/dependency/runtime-infra gates and the prior ClawSweeper review paused for repair or maintainer review. Emit a repair-contributor-branch fix artifact only; do not close or merge.
 
 ## Impact
 
@@ -46,7 +46,7 @@ PR #75976 is the canonical repair path for linked issue #72097, but it is not me
 | Fix failed | 0 |
 | Fix blocked | 0 |
 | Applied executions | 0 |
-| Apply blocked | 1 |
+| Apply blocked | 0 |
 | Apply skipped | 0 |
 | Needs human | 0 |
 
@@ -54,21 +54,21 @@ PR #75976 is the canonical repair path for linked issue #72097, but it is not me
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | pushed | https://github.com/openclaw/openclaw/pull/75976 |  |  |
+| _None_ |  |  |  |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #75976 | merge_canonical | blocked | fix_pr | job does not allow merge |
+| _None_ |  |  |  |  |
 
 ## Worker Action Matrix
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #75976 | fix_needed | planned | canonical | Automerge is blocked by exact-head CI/test failure; branch is safe for repair_contributor_branch. |
-| #72097 | keep_related | planned | related | Keep the issue open and related to the canonical PR until #75976 is repaired and landed by the guarded automerge path. |
-| cluster:automerge-openclaw-openclaw-75976 | build_fix_artifact | planned |  | Emit an executable repair artifact for the opted-in automerge PR; no merge or close mutation is allowed in this worker. |
+| #75976 | fix_needed | planned | canonical | Repair the existing writable contributor branch, then rerun ClawSweeper review and changed-surface validation before any merge-capable applicator acts. |
+| #72097 | keep_related | planned | fixed_by_candidate | Keep the issue associated with the canonical PR, but do not close while the candidate remains unmerged and CI is failing. |
+| cluster:automerge-openclaw-openclaw-75976 | build_fix_artifact | planned |  | Create an executable repair plan for the writable canonical PR branch. |
 
 ## Needs Human
 
