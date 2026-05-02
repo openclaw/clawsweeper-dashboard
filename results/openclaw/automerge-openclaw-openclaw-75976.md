@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-75976"
 mode: "autonomous"
-run_id: "25246783047"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25246783047"
-head_sha: "4a59e45a3f5062dff132a873414f9d449001dbe1"
+run_id: "25247244737"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25247244737"
+head_sha: "15501de543ab27cbfd1e06f41733a5ef68184d1f"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-02T07:30:26.750Z"
+published_at: "2026-05-02T07:56:22.712Z"
 canonical: "https://github.com/openclaw/openclaw/pull/75976"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/72097"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/75976"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25246783047](https://github.com/openclaw/clawsweeper/actions/runs/25246783047)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25247244737](https://github.com/openclaw/clawsweeper/actions/runs/25247244737)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/75976
 
 ## Summary
 
-PR #75976 is the canonical automerge repair target. It is open, same-repo, branch-writable, and mergeable, but not merge-ready because ClawSweeper requested a focused repair for the full-workspace plugin loader cache and relevant CI is failing or pending. Plan: repair the contributor branch, preserve credit on #75976, re-run review and changed-surface validation, and keep linked issue #72097 open until the repaired PR lands.
+PR #75976 is the canonical repairable path for the plugin management hot-reload work, but it is not merge-ready because hydrated exact-head checks include failing and pending jobs. The same-repo head branch is writable, so the next deterministic action is to repair the contributor branch, rerun ClawSweeper review/checks, and keep linked issue #72097 open until the canonical PR is clean and landed.
 
 ## Impact
 
@@ -66,9 +66,9 @@ PR #75976 is the canonical automerge repair target. It is open, same-repo, branc
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #75976 | fix_needed | planned | canonical | Canonical PR is useful and branch-writable, but it needs focused repair before review/validation can pass. |
-| #72097 | keep_related | planned | related | Keep the issue open as related context while #75976 is repaired and validated. |
-| cluster:automerge-openclaw-openclaw-75976 | build_fix_artifact | planned |  | Automerge is opted in, fix PRs are allowed, merge is blocked, and a focused branch repair is executable. |
+| #75976 | fix_needed | planned | canonical | Automerge is blocked on relevant failing/pending exact-head checks, but the canonical same-repo PR branch is writable and should be repaired rather than replaced. |
+| #72097 | keep_related | planned | related | Keep the linked issue open as related context until PR #75976 is repaired, validated, reviewed on the repaired head, and landed. |
+| cluster:automerge-openclaw-openclaw-75976 | build_fix_artifact | planned |  | The canonical PR is useful and writable, but exact-head validation is not clean. |
 
 ## Needs Human
 
