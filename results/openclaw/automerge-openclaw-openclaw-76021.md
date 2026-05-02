@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-76021"
 mode: "autonomous"
-run_id: "25249053874"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25249053874"
-head_sha: "bcfc0ffc062a67bab6187524b996e0a990e906d5"
+run_id: "25249210862"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25249210862"
+head_sha: "bd56a863d0a7276d03db05b5e5718537a26b132c"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-02T09:42:19.782Z"
+published_at: "2026-05-02T10:12:47.295Z"
 canonical: "https://github.com/openclaw/openclaw/pull/76021"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/47311"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/76021"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25249053874](https://github.com/openclaw/clawsweeper/actions/runs/25249053874)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25249210862](https://github.com/openclaw/clawsweeper/actions/runs/25249210862)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/76021
 
 ## Summary
 
-#76021 is the canonical adopted PR for #47311, but it is not merge-ready: the hydrated preflight shows relevant failing and pending checks, no completed ClawSweeper review verdict, and merge is blocked by job policy. The safe path is to repair the writable same-repo contributor branch, preserve source credit, rerun review and changed-surface validation, and leave #47311 open until the fix lands.
+Canonical path is repair of open same-repo PR #76021. Do not merge or close in this worker: job blocks merge/close, PR has unresolved ClawSweeper and Codex recorder findings, and relevant checks are failing. Emit a branch-repair fix artifact for the writable contributor branch.
 
 ## Impact
 
@@ -54,8 +54,8 @@ Canonical: https://github.com/openclaw/openclaw/pull/76021
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | failed |  |  | validation command failed (pnpm check:changed): [check:changed] lanes=core, coreTests, docs [check:changed] src/gateway/method-scopes.ts: core production [check:changed] src/gateway/server-methods-list.ts: core production [check:changed] src/gateway/server-methods.ts: core production [check:changed] src/gateway/server-methods/chat-transcribe-audio.test.ts: core test [check:changed] src/gateway/server-methods/chat-transcribe-audio.ts: core production [check:changed] ui/src/styles/chat/layout.css: core production [check:changed] ui/src/ui/app-chat.test.ts: core test [check:changed] ui/src/ui/app-chat.ts: core production [check:changed] ui/s ... overage /tmp/clawsweeper-repair-fix-PcppgC/openclaw-openclaw > node scripts/check-duplicates.mjs --coverage [dup:check] target coverage ok > openclaw@2026.4.30 tsgo:core /tmp/clawsweeper-repair-fix-PcppgC/openclaw-openclaw > node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo src/plugins/loader.ts(1381,7): error TS2322: Type 'string[] | undefined' is not assignable to type 'string[]'. Type 'undefined' is not assignable to type 'string[]'. ELIFECYCLE Command failed with exit code 2. ELIFECYCLE Command failed with exit code 2. |
-| execute_fix | blocked |  |  | validation command failed (pnpm check:changed): [check:changed] lanes=core, coreTests, docs [check:changed] src/gateway/method-scopes.ts: core production [check:changed] src/gateway/server-methods-list.ts: core production [check:changed] src/gateway/server-methods.ts: core production [check:changed] src/gateway/server-methods/chat-transcribe-audio.test.ts: core test [check:changed] src/gateway/server-methods/chat-transcribe-audio.ts: core production [check:changed] ui/src/styles/chat/layout.css: core production [check:changed] ui/src/ui/app-chat.test.ts: core test [check:changed] ui/src/ui/app-chat.ts: core production [check:changed] ui/s ... overage /tmp/clawsweeper-repair-fix-PcppgC/openclaw-openclaw > node scripts/check-duplicates.mjs --coverage [dup:check] target coverage ok > openclaw@2026.4.30 tsgo:core /tmp/clawsweeper-repair-fix-PcppgC/openclaw-openclaw > node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo src/plugins/loader.ts(1381,7): error TS2322: Type 'string[] | undefined' is not assignable to type 'string[]'. Type 'undefined' is not assignable to type 'string[]'. ELIFECYCLE Command failed with exit code 2. ELIFECYCLE Command failed with exit code 2. |
+| repair_contributor_branch | failed |  |  | Codex /review did not pass after 2 attempt(s): The artifact’s listed bot fixes appear present, and the diff is narrow for WebChat dictation, but I found one merge-blocking microphone lifecycle bug. `git diff --check origin/main...HEAD` was clean, `git merge-tree --write-tree HEAD origin/main` reported no conflicts, and changed lanes are core/coreTests/docs; the stated `pnpm check:changed` validation is the right scope once this is fixed. |
+| execute_fix | blocked |  |  | Codex /review did not pass after 2 attempt(s): The artifact’s listed bot fixes appear present, and the diff is narrow for WebChat dictation, but I found one merge-blocking microphone lifecycle bug. `git diff --check origin/main...HEAD` was clean, `git merge-tree --write-tree HEAD origin/main` reported no conflicts, and changed lanes are core/coreTests/docs; the stated `pnpm check:changed` validation is the right scope once this is fixed. |
 | automerge_repair_outcome_comment | updated | #76021 |  |  |
 
 ## Apply Actions
@@ -68,9 +68,9 @@ Canonical: https://github.com/openclaw/openclaw/pull/76021
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #76021 | fix_needed | planned | canonical | Repair the writable same-repo PR branch before any later exact-head review or merge gate. |
-| #47311 | keep_related | planned | related | #47311 is the linked feature request covered by the canonical repair path, but it is not closable before the fix lands. |
-| cluster:automerge-openclaw-openclaw-76021 | build_fix_artifact | planned |  | A branch repair artifact is required for the deterministic executor to update #76021 and re-run gates. |
+| #76021 | fix_needed | planned | canonical | PR is useful and branch-writable, but not merge-ready because actionable review findings and failing checks remain. |
+| #47311 | keep_related | planned | fixed_by_candidate | Issue is covered by the canonical PR path, but must remain open until #76021 is repaired and later finalized by the applicator. |
+| cluster:automerge-openclaw-openclaw-76021 | build_fix_artifact | planned |  | A bounded fix is needed on the canonical contributor branch before automerge can continue. |
 
 ## Needs Human
 
