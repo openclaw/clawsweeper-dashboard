@@ -2,13 +2,13 @@
 repo: "openclaw/openclaw"
 cluster_id: "clawsweeper-commit-openclaw-openclaw-82ca6ecdde80"
 mode: "autonomous"
-run_id: "25217890512"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25217890512"
-head_sha: "f1bb916a329faa6fdadc8549b12d2dd5453c7f91"
+run_id: "25247655592"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25247655592"
+head_sha: "26f2c55b6de0f674ad103ffa68e2456d40dc81b0"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-01T14:27:20.972Z"
-canonical: null
+published_at: "2026-05-02T08:17:06.963Z"
+canonical: "https://github.com/openclaw/clawsweeper/blob/main/records/openclaw-openclaw/commits/82ca6ecdde801a4a858cf63f6400d25bec004308.md"
 canonical_issue: null
 canonical_pr: null
 actions_total: 2
@@ -25,17 +25,17 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25217890512](https://github.com/openclaw/clawsweeper/actions/runs/25217890512)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25247655592](https://github.com/openclaw/clawsweeper/actions/runs/25247655592)
 
 Workflow conclusion: success
 
 Worker result: planned
 
-Canonical: unknown
+Canonical: https://github.com/openclaw/clawsweeper/blob/main/records/openclaw-openclaw/commits/82ca6ecdde801a4a858cf63f6400d25bec004308.md
 
 ## Summary
 
-Verified the ClawSweeper commit report against current main efe6b37407a2b24cd44cbb74da4a399adcbfbeac. The pre-resolved requested-mode finding is already fixed on main, but the message-tool availability check still omits sandbox tool policy, so sandboxed group/channel turns can still stay in message_tool_only mode when the real tool pipeline removes message. A narrow non-security fix PR is still warranted.
+Verified the ClawSweeper commit finding against current main 06110de6f61ece018ec2f061708d40dd485e16ec. The pre-resolved requested-mode fallback is already fixed, but sandbox-scoped tool policy can still make the real message tool unavailable while dispatch believes it is available. A narrow fix PR is still warranted.
 
 ## Impact
 
@@ -66,8 +66,8 @@ Verified the ClawSweeper commit report against current main efe6b37407a2b24cd44c
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| cluster:clawsweeper-commit-openclaw-openclaw-82ca6ecdde80 | fix_needed | planned |  | The remaining bug is narrow, non-security, and fixable by aligning dispatch availability with sandbox runtime tool policy before resolving source reply visibility. |
-| cluster:clawsweeper-commit-openclaw-openclaw-82ca6ecdde80 | build_fix_artifact | planned |  | No viable canonical PR exists in the preflight artifact; source is a ClawSweeper commit finding, and allow_fix_pr=true. |
+| cluster:clawsweeper-commit-openclaw-openclaw-82ca6ecdde80 | fix_needed | planned |  | A narrow code/test fix remains needed for sandbox-aware message tool availability in source reply fallback. |
+| cluster:clawsweeper-commit-openclaw-openclaw-82ca6ecdde80 | build_fix_artifact | planned |  | allow_fix_pr is true and no viable existing PR is present in the hydrated cluster. |
 
 ## Needs Human
 
