@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-75869"
 mode: "autonomous"
-run_id: "25240801347"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25240801347"
-head_sha: "59245baa0a74fbd5c52da5665dce50baf12da5e8"
+run_id: "25241734467"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25241734467"
+head_sha: "668b5110e086bf1b31a1319c709cd97c39431aa5"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-02T02:04:43.750Z"
+published_at: "2026-05-02T02:42:35.797Z"
 canonical: "https://github.com/openclaw/openclaw/pull/75869"
 canonical_issue: null
 canonical_pr: "https://github.com/openclaw/openclaw/pull/75869"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25240801347](https://github.com/openclaw/clawsweeper/actions/runs/25240801347)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25241734467](https://github.com/openclaw/clawsweeper/actions/runs/25241734467)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/75869
 
 ## Summary
 
-PR #75869 is the canonical automerge target. The hydrated artifact shows a passing ClawSweeper review and passing relevant checks, but GitHub reports the PR as dirty/conflicting against current main, so the safe next step is a bounded same-branch repair/rebase rather than merge. Linked PR #75186 is related plugin-management work but has a separate Gateway RPC scope and its own unresolved review findings.
+#75869 is the canonical opted-in automerge PR. It is open, branch-writable, has a passing ClawSweeper review and passing relevant checks at head 989191c5e87be36ddf38812a424fcb2b6cc79f1b, but GitHub reports it dirty against current main 535eae73e941a567e09af7b76ed58f1fa8d34586, so the next deterministic action is same-branch repair/rebase plus validation. #75186 is related but separate Gateway RPC plugin-management work with its own unresolved review findings.
 
 ## Impact
 
@@ -54,8 +54,8 @@ PR #75869 is the canonical automerge target. The hydrated artifact shows a passi
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | failed |  |  | validation command failed (pnpm check:changed): [check:changed] lanes=core, coreTests, docs [check:changed] src/cli/plugins-cli-test-helpers.ts: core production [check:changed] src/cli/plugins-cli.ts: core production [check:changed] src/cli/plugins-command-helpers.ts: core production [check:changed] src/cli/plugins-install-command.ts: core production [check:changed] src/cli/plugins-install-persist.ts: core production [check:changed] src/cli/plugins-list-command.ts: core production [check:changed] src/cli/plugins-search-command.test.ts: core test [check:changed] src/cli/plugins-search-command.ts: core production [check:changed] src/cli/plu ... p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo > openclaw@2026.4.30 tsgo:core:test /tmp/clawsweeper-repair-fix-jPOmSK/openclaw-openclaw > node scripts/run-tsgo.mjs -p tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test.tsbuildinfo src/gateway/session-compaction-checkpoints.test.ts(301,46): error TS2339: Property 'content' does not exist on type 'AgentMessage'. Property 'content' does not exist on type 'BashExecutionMessage'. ELIFECYCLE Command failed with exit code 2. ELIFECYCLE Command failed with exit code 2. |
-| execute_fix | blocked |  |  | validation command failed (pnpm check:changed): [check:changed] lanes=core, coreTests, docs [check:changed] src/cli/plugins-cli-test-helpers.ts: core production [check:changed] src/cli/plugins-cli.ts: core production [check:changed] src/cli/plugins-command-helpers.ts: core production [check:changed] src/cli/plugins-install-command.ts: core production [check:changed] src/cli/plugins-install-persist.ts: core production [check:changed] src/cli/plugins-list-command.ts: core production [check:changed] src/cli/plugins-search-command.test.ts: core test [check:changed] src/cli/plugins-search-command.ts: core production [check:changed] src/cli/plu ... p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo > openclaw@2026.4.30 tsgo:core:test /tmp/clawsweeper-repair-fix-jPOmSK/openclaw-openclaw > node scripts/run-tsgo.mjs -p tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test.tsbuildinfo src/gateway/session-compaction-checkpoints.test.ts(301,46): error TS2339: Property 'content' does not exist on type 'AgentMessage'. Property 'content' does not exist on type 'BashExecutionMessage'. ELIFECYCLE Command failed with exit code 2. ELIFECYCLE Command failed with exit code 2. |
+| repair_contributor_branch | failed |  |  | rebase produced additional conflicts: docs/.generated/config-baseline.sha256 |
+| execute_fix | blocked |  |  | rebase produced additional conflicts: docs/.generated/config-baseline.sha256 |
 | automerge_repair_outcome_comment | updated | #75869 |  |  |
 
 ## Apply Actions
@@ -68,9 +68,9 @@ PR #75869 is the canonical automerge target. The hydrated artifact shows a passi
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #75869 | fix_needed | planned | canonical | Canonical PR is safe to update but not merge-ready because it conflicts with current main; job forbids direct merge and allows fix/raise_pr only. |
-| cluster:automerge-openclaw-openclaw-75869 | build_fix_artifact | planned |  | A cluster-scoped fix artifact is required for the executor to repair the canonical PR branch. |
-| #75186 | keep_related | planned | related | Same plugin-management area, but different surface and review state; keep it open outside this bounded automerge repair cluster. |
+| #75869 | fix_needed | planned | canonical | Canonical PR is not merge-ready because it is dirty against current main; branch is writable, so repair_contributor_branch is the correct non-mutating plan. |
+| #75186 | keep_related | planned | related | Same product area, different surface and root scope; keep #75186 open as related work outside this automerge repair. |
+| cluster:automerge-openclaw-openclaw-75869 | build_fix_artifact | planned |  | Build a repair artifact so the executor can rebase/fix the canonical PR branch and hand it back to the automerge router. |
 
 ## Needs Human
 
