@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-76393"
 mode: "autonomous"
-run_id: "25271077602"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25271077602"
+run_id: "25272101832"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25272101832"
 head_sha: "753ebcf63747a0daba7275759b90f41b4b3d3398"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-03T05:59:45.911Z"
+published_at: "2026-05-03T06:56:33.401Z"
 canonical: "https://github.com/openclaw/openclaw/pull/76393"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/76367"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/76393"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25271077602](https://github.com/openclaw/clawsweeper/actions/runs/25271077602)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25272101832](https://github.com/openclaw/clawsweeper/actions/runs/25272101832)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/76393
 
 ## Summary
 
-#76393 is the canonical repair path for the #76367 doctor/status cold memory-runtime bug. It is useful, small, credited, and branch-writable, but preflight reports it dirty/unmergeable against main, so the deterministic executor should repair the contributor branch and rerun review/checks before any merge-capable router acts.
+Canonical PR #76393 is useful, narrow, and branch-writable, but the hydrated preflight reports it as dirty/unmergeable against current main. Plan a repair of the contributor branch, preserve @neeravmakwana credit, and keep linked issue #76367 open until the repaired PR lands. No close or merge action is emitted because this job blocks close/merge.
 
 ## Impact
 
@@ -66,9 +66,9 @@ Canonical: https://github.com/openclaw/openclaw/pull/76393
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #76393 | fix_needed | planned | canonical | Repair the existing contributor branch because it is useful, narrow, credited, and writable, but currently dirty/unmergeable against main. |
-| #76367 | keep_related | planned | fixed_by_candidate | Keep the issue open while #76393 is repaired and validated; do not close or post-merge-close in this job. |
-| cluster:automerge-openclaw-openclaw-76393 | build_fix_artifact | planned | canonical | Build an executable artifact for the deterministic repair executor. |
+| #76367 | keep_related | planned | fixed_by_candidate | Covered by the repairable canonical PR path, but must remain open until #76393 is repaired and landed. |
+| #76393 | fix_needed | planned | canonical | Repair the existing contributor PR branch rather than replacing it; the branch is writable and the remaining blocker is dirty/unmergeable state. |
+| cluster:automerge-openclaw-openclaw-76393 | build_fix_artifact | planned |  | Automerge repair loop needs an executable branch repair plan; merge remains out of scope for this worker. |
 
 ## Needs Human
 
