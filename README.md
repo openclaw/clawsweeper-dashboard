@@ -4,33 +4,33 @@ Generated from the durable state branch for [openclaw/clawsweeper](https://githu
 
 ## Sweep Dashboard
 
-Last source update: May 3, 2026, 18:31 UTC
+Last source update: May 3, 2026, 18:33 UTC
 
 ### Fleet
 
 | Metric | Count |
 | --- | ---: |
 | Covered repositories | 3 |
-| Open review records | 6892 |
+| Open review records | 6893 |
 | Archived closed records | 17595 |
-| Fresh reviews, 7d | 6799 |
+| Fresh reviews, 7d | 6800 |
 | Proposed closes awaiting apply | 0 |
-| Work candidates awaiting promotion | 2792 |
+| Work candidates awaiting promotion | 2791 |
 | Failed or stale reviews | 123 |
 
 ### Current Runs
 
 | Repository | State | Updated | Run |
 | --- | --- | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Audit finished | May 3, 2026, 18:31 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25287204701) |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | Audit finished | May 3, 2026, 18:31 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25287243665) |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Apply finished | May 3, 2026, 18:32 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25287247240) |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | Hot intake publish complete | May 3, 2026, 18:11 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25286739908) |
 | [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Audit finished | May 3, 2026, 07:08 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25272705225) |
 
 ### Repositories
 
 | Repository | Open records | Archived | Fresh | Proposed closes | Work candidates | Failed/stale | Last review | Last close |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 6669 | 16840 | 6576 | 0 | 2770 | 123 | May 3, 2026, 18:30 UTC | May 3, 2026, 18:30 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 6670 | 16840 | 6577 | 0 | 2769 | 123 | May 3, 2026, 18:33 UTC | May 3, 2026, 18:30 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | 222 | 750 | 222 | 0 | 21 | 0 | May 3, 2026, 18:10 UTC | May 3, 2026, 17:23 UTC |
 | [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | 1 | 5 | 1 | 0 | 1 | 0 | May 2, 2026, 06:33 UTC | May 1, 2026, 02:07 UTC |
 
@@ -84,8 +84,7 @@ Last source update: May 3, 2026, 18:31 UTC
 
 | Repository | Item | Title | Outcome | Status | Reviewed |
 | --- | --- | --- | --- | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#70058](https://github.com/openclaw/openclaw/pull/70058) | fix(skills): add watcher polling fallback | keep_open / kept_open | complete | May 3, 2026, 18:30 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#75605](https://github.com/openclaw/openclaw/pull/75605) | [plugin sdk] Derive tool target paths for hooks | keep_open / kept_open | complete | May 3, 2026, 18:30 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#76878](https://github.com/openclaw/openclaw/pull/76878) | fix(doctor): reset stale plugin slots | keep_open / kept_open | complete | May 3, 2026, 18:33 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#76093](https://github.com/openclaw/openclaw/pull/76093) | fix(doctor): prune stale runtime dependency roots | keep_open / kept_open | complete | May 3, 2026, 18:25 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#76690](https://github.com/openclaw/openclaw/issues/76690) | openai/gpt-image-2 via Codex OAuth fails: image_generation tool not found | keep_open / kept_open | complete | May 3, 2026, 18:25 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#75578](https://github.com/openclaw/openclaw/pull/75578) | [plugin sdk] Add session action gateway protocol | keep_open / kept_open | complete | May 3, 2026, 18:25 UTC |
@@ -99,6 +98,7 @@ Last source update: May 3, 2026, 18:31 UTC
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#76863](https://github.com/openclaw/openclaw/issues/76863) | [Bug]: 04.29 install freezes at TUI | keep_open / kept_open | complete | May 3, 2026, 18:24 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#76629](https://github.com/openclaw/openclaw/issues/76629) | [Bug] replay should prune internal/no-op control messages before provider context | keep_open / kept_open | complete | May 3, 2026, 18:24 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#74051](https://github.com/openclaw/openclaw/pull/74051) | fix(memory): keep daily signals out of recall gates | keep_open / kept_open | complete | May 3, 2026, 18:24 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#42877](https://github.com/openclaw/openclaw/issues/42877) | Bounded memory tool with hard character limits | keep_open / kept_open | complete | May 3, 2026, 18:24 UTC |
 
 </details>
 
