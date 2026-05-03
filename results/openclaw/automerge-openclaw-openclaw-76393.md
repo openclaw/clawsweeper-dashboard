@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-76393"
 mode: "autonomous"
-run_id: "25272497031"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25272497031"
+run_id: "25272895937"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25272895937"
 head_sha: "753ebcf63747a0daba7275759b90f41b4b3d3398"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-03T07:17:11.363Z"
+published_at: "2026-05-03T07:39:44.770Z"
 canonical: "https://github.com/openclaw/openclaw/pull/76393"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/76367"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/76393"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25272497031](https://github.com/openclaw/clawsweeper/actions/runs/25272497031)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25272895937](https://github.com/openclaw/clawsweeper/actions/runs/25272895937)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/76393
 
 ## Summary
 
-#76393 is the canonical repair path for #76367, but it is not merge-ready because exact-head CI has failing relevant checks. The branch is writable, the diff is small, security is cleared by the hydrated artifact, and ClawSweeper review passed, so the deterministic next step is to repair the contributor branch rather than replace it or ask for human judgment.
+#76393 remains the canonical repair path for #76367, but it is not merge-ready in this worker result because the hydrated preflight shows failing CI checks, one pending check, unstable merge state, and merge is blocked by job policy. The branch is writable, the diff is small, the prior ClawSweeper review is clean, and the right next action is a bounded repair of the contributor branch followed by exact-head review and changed-surface validation.
 
 ## Impact
 
@@ -66,9 +66,9 @@ Canonical: https://github.com/openclaw/openclaw/pull/76393
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #76393 | fix_needed | planned | canonical | Repair #76393 in place before merge because relevant CI failures block automerge and the contributor branch is safely writable. |
-| #76367 | keep_related | planned | fixed_by_candidate | Keep the issue open until #76393 is repaired and merged; no close action is allowed in this run. |
-| cluster:automerge-openclaw-openclaw-76393 | build_fix_artifact | planned |  | Create an executable in-place repair artifact for the contributor branch; do not merge or close from this worker. |
+| #76393 | fix_needed | planned | canonical | Repair the contributor branch before any merge routing: fetch logs for the failing exact-head checks, rebase if stale, address any PR-caused failures narrowly, rerun ClawSweeper review, and validate with pnpm check:changed. |
+| #76367 | keep_related | planned | related | Keep the issue open while #76393 is repaired; do not close or mark fixed until a canonical fix lands and the later related active-memory comment is either covered or split. |
+| cluster:automerge-openclaw-openclaw-76393 | build_fix_artifact | planned |  | Create an executor-facing repair plan for the existing contributor branch; do not open a replacement PR unless branch update fails during execution. |
 
 ## Needs Human
 
