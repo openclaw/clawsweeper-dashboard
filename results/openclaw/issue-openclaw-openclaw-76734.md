@@ -2,15 +2,15 @@
 repo: "openclaw/openclaw"
 cluster_id: "issue-openclaw-openclaw-76734"
 mode: "autonomous"
-run_id: "25284167270"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25284167270"
-head_sha: "05074fca93f2ec583749f27ac60ed48310e86c68"
+run_id: "25290320811"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25290320811"
+head_sha: "c67b2d83cb9adde8e893536bd387639a1c09e0db"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-03T16:18:49.996Z"
+published_at: "2026-05-03T20:53:36.564Z"
 canonical: "https://github.com/openclaw/openclaw/issues/76734"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/76734"
-canonical_pr: null
+canonical_pr: "https://github.com/openclaw/openclaw/pull/76744"
 actions_total: 3
 fix_executed: 0
 fix_failed: 0
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25284167270](https://github.com/openclaw/clawsweeper/actions/runs/25284167270)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25290320811](https://github.com/openclaw/clawsweeper/actions/runs/25290320811)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/issues/76734
 
 ## Summary
 
-Issue #76734 is open, non-security-sensitive, and reproducible on current main. A narrow docs-only fix should replace `persistent behaviour` with `persistent behavior` in `docs/tools/acp-agents.md`, using a new ClawSweeper fix PR on `clawsweeper/issue-openclaw-openclaw-76734`. No close or merge actions are allowed by this job.
+Issue #76734 is still valid on current main e387764014d6d18f8c9fadaf4366fc509fb136c6: docs/tools/acp-agents.md still says `persistent behaviour`, while repo guidance requires American spelling. PR #76744 is the right existing implementation path, but it is dirty against current main and has a ClawSweeper review asking for a narrow branch refresh before merge. Plan repair of the same writable branch/PR; no close or merge action is emitted.
 
 ## Impact
 
@@ -54,8 +54,7 @@ Issue #76734 is open, non-security-sensitive, and reproducible on current main. 
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| open_fix_pr | opened | https://github.com/openclaw/openclaw/pull/76744 | clawsweeper/issue-openclaw-openclaw-76734 |  |
-| issue_implementation_status_comment | updated | #76734 |  |  |
+| repair_contributor_branch | pushed | https://github.com/openclaw/openclaw/pull/76744 |  |  |
 
 ## Apply Actions
 
@@ -67,9 +66,9 @@ Issue #76734 is open, non-security-sensitive, and reproducible on current main. 
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #76734 | keep_canonical | planned | canonical | #76734 is the canonical source issue for this single-item docs wording cluster. |
-| cluster:issue-openclaw-openclaw-76734 | fix_needed | planned |  | The issue is valid on current main and has no existing hydrated fix PR, so ClawSweeper should create or update one narrow implementation PR. |
-| cluster:issue-openclaw-openclaw-76734 | build_fix_artifact | planned |  | A deterministic executor can apply the one-line docs change and open the requested PR. |
+| #76734 | keep_canonical | planned | canonical |  |
+| #76744 | fix_needed | planned | canonical | Repair the existing writable ClawSweeper PR branch by rebasing/recreating the narrow docs/changelog diff on current main before any future merge consideration. |
+| cluster:issue-openclaw-openclaw-76734 | build_fix_artifact | planned |  |  |
 
 ## Needs Human
 
