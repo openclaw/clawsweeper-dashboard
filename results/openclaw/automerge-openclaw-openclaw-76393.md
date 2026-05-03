@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-76393"
 mode: "autonomous"
-run_id: "25272101832"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25272101832"
+run_id: "25272497031"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25272497031"
 head_sha: "753ebcf63747a0daba7275759b90f41b4b3d3398"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-03T06:56:33.401Z"
+published_at: "2026-05-03T07:17:11.363Z"
 canonical: "https://github.com/openclaw/openclaw/pull/76393"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/76367"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/76393"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25272101832](https://github.com/openclaw/clawsweeper/actions/runs/25272101832)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25272497031](https://github.com/openclaw/clawsweeper/actions/runs/25272497031)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/76393
 
 ## Summary
 
-Canonical PR #76393 is useful, narrow, and branch-writable, but the hydrated preflight reports it as dirty/unmergeable against current main. Plan a repair of the contributor branch, preserve @neeravmakwana credit, and keep linked issue #76367 open until the repaired PR lands. No close or merge action is emitted because this job blocks close/merge.
+#76393 is the canonical repair path for #76367, but it is not merge-ready because exact-head CI has failing relevant checks. The branch is writable, the diff is small, security is cleared by the hydrated artifact, and ClawSweeper review passed, so the deterministic next step is to repair the contributor branch rather than replace it or ask for human judgment.
 
 ## Impact
 
@@ -66,9 +66,9 @@ Canonical PR #76393 is useful, narrow, and branch-writable, but the hydrated pre
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #76367 | keep_related | planned | fixed_by_candidate | Covered by the repairable canonical PR path, but must remain open until #76393 is repaired and landed. |
-| #76393 | fix_needed | planned | canonical | Repair the existing contributor PR branch rather than replacing it; the branch is writable and the remaining blocker is dirty/unmergeable state. |
-| cluster:automerge-openclaw-openclaw-76393 | build_fix_artifact | planned |  | Automerge repair loop needs an executable branch repair plan; merge remains out of scope for this worker. |
+| #76393 | fix_needed | planned | canonical | Repair #76393 in place before merge because relevant CI failures block automerge and the contributor branch is safely writable. |
+| #76367 | keep_related | planned | fixed_by_candidate | Keep the issue open until #76393 is repaired and merged; no close action is allowed in this run. |
+| cluster:automerge-openclaw-openclaw-76393 | build_fix_artifact | planned |  | Create an executable in-place repair artifact for the contributor branch; do not merge or close from this worker. |
 
 ## Needs Human
 
