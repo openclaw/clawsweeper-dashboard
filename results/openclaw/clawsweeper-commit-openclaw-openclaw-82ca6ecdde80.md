@@ -2,13 +2,13 @@
 repo: "openclaw/openclaw"
 cluster_id: "clawsweeper-commit-openclaw-openclaw-82ca6ecdde80"
 mode: "autonomous"
-run_id: "25247655592"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25247655592"
-head_sha: "26f2c55b6de0f674ad103ffa68e2456d40dc81b0"
+run_id: "25277369897"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25277369897"
+head_sha: "753ebcf63747a0daba7275759b90f41b4b3d3398"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-02T08:17:06.963Z"
-canonical: "https://github.com/openclaw/clawsweeper/blob/main/records/openclaw-openclaw/commits/82ca6ecdde801a4a858cf63f6400d25bec004308.md"
+published_at: "2026-05-03T11:05:47.340Z"
+canonical: null
 canonical_issue: null
 canonical_pr: null
 actions_total: 2
@@ -25,17 +25,17 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25247655592](https://github.com/openclaw/clawsweeper/actions/runs/25247655592)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25277369897](https://github.com/openclaw/clawsweeper/actions/runs/25277369897)
 
 Workflow conclusion: success
 
 Worker result: planned
 
-Canonical: https://github.com/openclaw/clawsweeper/blob/main/records/openclaw-openclaw/commits/82ca6ecdde801a4a858cf63f6400d25bec004308.md
+Canonical: unknown
 
 ## Summary
 
-Verified the ClawSweeper commit finding against current main 06110de6f61ece018ec2f061708d40dd485e16ec. The pre-resolved requested-mode fallback is already fixed, but sandbox-scoped tool policy can still make the real message tool unavailable while dispatch believes it is available. A narrow fix PR is still warranted.
+Verified the ClawSweeper commit finding against current main 9772ce6ce975ed0b5b0f3fa371cbddcddcd3a447. The pre-resolved requested-mode fallback is already fixed, but the sandbox-policy portion of the message-tool availability bug still appears valid, so a narrow fix PR is planned.
 
 ## Impact
 
@@ -66,8 +66,8 @@ Verified the ClawSweeper commit finding against current main 06110de6f61ece018ec
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| cluster:clawsweeper-commit-openclaw-openclaw-82ca6ecdde80 | fix_needed | planned |  | A narrow code/test fix remains needed for sandbox-aware message tool availability in source reply fallback. |
-| cluster:clawsweeper-commit-openclaw-openclaw-82ca6ecdde80 | build_fix_artifact | planned |  | allow_fix_pr is true and no viable existing PR is present in the hydrated cluster. |
+| cluster:clawsweeper-commit-openclaw-openclaw-82ca6ecdde80 | fix_needed | planned |  | A sandboxed group/channel turn with sandbox tools.allow omitting message can still be resolved as message_tool_only by dispatch, while the actual model tool list later removes message. That preserves the visible-reply suppression the fallback was meant to avoid. |
+| cluster:clawsweeper-commit-openclaw-openclaw-82ca6ecdde80 | build_fix_artifact | planned |  | No viable canonical PR exists in the hydrated cluster; the remaining bug is narrow and fix-pr eligible. |
 
 ## Needs Human
 
