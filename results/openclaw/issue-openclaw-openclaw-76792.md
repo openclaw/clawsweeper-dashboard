@@ -2,21 +2,21 @@
 repo: "openclaw/openclaw"
 cluster_id: "issue-openclaw-openclaw-76792"
 mode: "autonomous"
-run_id: "25283894851"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25283894851"
-head_sha: "05074fca93f2ec583749f27ac60ed48310e86c68"
+run_id: "25284422328"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25284422328"
+head_sha: "bbd932acd6e82f5de8052a23713bab0a1fc55424"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-03T16:08:41.825Z"
-canonical: "https://github.com/openclaw/openclaw/issues/76792"
+published_at: "2026-05-03T16:35:25.851Z"
+canonical: "https://github.com/openclaw/openclaw/pull/76797"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/76792"
-canonical_pr: null
+canonical_pr: "https://github.com/openclaw/openclaw/pull/76797"
 actions_total: 3
 fix_executed: 0
 fix_failed: 0
-fix_blocked: 0
+fix_blocked: 1
 apply_executed: 0
-apply_blocked: 1
+apply_blocked: 0
 apply_skipped: 0
 needs_human_count: 0
 ---
@@ -25,17 +25,17 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25283894851](https://github.com/openclaw/clawsweeper/actions/runs/25283894851)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25284422328](https://github.com/openclaw/clawsweeper/actions/runs/25284422328)
 
 Workflow conclusion: success
 
 Worker result: planned
 
-Canonical: https://github.com/openclaw/openclaw/issues/76792
+Canonical: https://github.com/openclaw/openclaw/pull/76797
 
 ## Summary
 
-Issue #76792 is the canonical open bug. Current main still has a narrow doctor diagnostic path where CLI-side active memory backend resolution can return null and emit the misleading no-active-plugin note before honoring a ready gateway memory probe. A narrow new fix PR is appropriate; no merge or close action is planned.
+Issue #76792 is a valid open bug on current main: doctor memory search still returns the no-active-plugin warning before consulting a ready gateway memory probe. Open PR #76797 is the canonical implementation candidate on the intended ClawSweeper branch, but it is not merge-ready because GitHub reports mergeable_state=dirty and relevant checks include failures. Plan repair of the existing writable same-repo branch, then rerun review and validation. No close or merge actions are allowed by this job.
 
 ## Impact
 
@@ -44,9 +44,9 @@ Issue #76792 is the canonical open bug. Current main still has a narrow doctor d
 | Worker actions | 3 |
 | Fix executed | 0 |
 | Fix failed | 0 |
-| Fix blocked | 0 |
+| Fix blocked | 1 |
 | Applied executions | 0 |
-| Apply blocked | 1 |
+| Apply blocked | 0 |
 | Apply skipped | 0 |
 | Needs human | 0 |
 
@@ -54,22 +54,21 @@ Issue #76792 is the canonical open bug. Current main still has a narrow doctor d
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| open_fix_pr | opened | https://github.com/openclaw/openclaw/pull/76797 | clawsweeper/issue-openclaw-openclaw-76792 |  |
-| issue_implementation_status_comment | updated | #76792 |  |  |
+| repair_contributor_branch | blocked | https://github.com/openclaw/openclaw/pull/76797 |  | source PR #76797 is paused by clawsweeper:human-review; refusing to mutate the PR branch |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #76797 | merge_canonical | blocked | fix_pr | job does not allow merge |
+| _None_ |  |  |  |  |
 
 ## Worker Action Matrix
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
 | #76792 | keep_canonical | planned | canonical |  |
-| cluster:issue-openclaw-openclaw-76792 | fix_needed | planned |  | A narrow code/test/changelog change is needed to suppress the false doctor warning when the gateway memory probe already proves the active runtime is healthy. |
-| cluster:issue-openclaw-openclaw-76792 | build_fix_artifact | planned |  |  |
+| #76797 | fix_needed | planned | canonical | Repair the existing writable ClawSweeper branch instead of opening a second PR. |
+| cluster:issue-openclaw-openclaw-76792 | build_fix_artifact | planned |  | Existing implementation PR is useful but requires branch repair/rebase and validation. |
 
 ## Needs Human
 
