@@ -2,21 +2,21 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-75135"
 mode: "autonomous"
-run_id: "25264642749"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25264642749"
-head_sha: "08cd9dbda14b57deec64cf4cefce1b0844246d4e"
+run_id: "25266237558"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25266237558"
+head_sha: "753ebcf63747a0daba7275759b90f41b4b3d3398"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-03T00:09:15.277Z"
+published_at: "2026-05-03T01:25:40.964Z"
 canonical: "https://github.com/openclaw/openclaw/pull/75135"
 canonical_issue: null
 canonical_pr: "https://github.com/openclaw/openclaw/pull/75135"
 actions_total: 3
 fix_executed: 0
 fix_failed: 1
-fix_blocked: 1
+fix_blocked: 0
 apply_executed: 0
-apply_blocked: 0
+apply_blocked: 1
 apply_skipped: 0
 needs_human_count: 0
 ---
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25264642749](https://github.com/openclaw/clawsweeper/actions/runs/25264642749)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25266237558](https://github.com/openclaw/clawsweeper/actions/runs/25266237558)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/75135
 
 ## Summary
 
-#75135 is the canonical repair path, but it is not merge-ready: the hydrated ClawSweeper review still has two actionable P3 findings, and the job forbids merge/close. Plan a narrow repair on the writable contributor branch, preserving @keen0206 credit. Keep #63432 open as related because the exact iPad/Tailscale RangeError is not proven fixed by this diagnostic PR.
+Non-mutating repair plan for adopted PR #75135. The PR is the canonical path, branch is writable, and the bounded repair is to address the ClawSweeper review findings: broaden the chat staging failure log label and add the required changelog entry. Linked issue #63432 should stay open as related because #75135 adds diagnostics and response formatting, not a proven fix for the iPad/Tailscale RangeError root cause.
 
 ## Impact
 
@@ -44,9 +44,9 @@ Canonical: https://github.com/openclaw/openclaw/pull/75135
 | Worker actions | 3 |
 | Fix executed | 0 |
 | Fix failed | 1 |
-| Fix blocked | 1 |
+| Fix blocked | 0 |
 | Applied executions | 0 |
-| Apply blocked | 0 |
+| Apply blocked | 1 |
 | Apply skipped | 0 |
 | Needs human | 0 |
 
@@ -54,23 +54,24 @@ Canonical: https://github.com/openclaw/openclaw/pull/75135
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | failed |  |  | Codex /review timed out after 150905ms |
-| execute_fix | blocked |  |  | Codex /review timed out after 150905ms |
-| automerge_repair_outcome_comment | updated | #75135 |  |  |
+| repair_contributor_branch | failed |  |  | To https://github.com/keen0206/openclaw.git
+ ! [remote rejected]       HEAD -> fix/chat-send-preserve-stack (refusing to allow a GitHub App to create or update workflow `.github/workflows/ci.yml` without `workflows` permission)
+error: failed to push some refs to 'https://github.com/keen0206/openclaw.git' |
+| open_fix_pr | opened | https://github.com/openclaw/openclaw/pull/76351 | clawsweeper/automerge-openclaw-openclaw-75135 |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| #76351 | merge_canonical | blocked | fix_pr | job does not allow merge |
 
 ## Worker Action Matrix
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #75135 | fix_needed | planned | canonical | Repair the opted-in canonical PR branch before any merge decision; merge is blocked by job policy and missing repair/re-review proof. |
-| #63432 | keep_related | planned | related | Related diagnostic path only; keep the issue open for reproduction/follow-up after #75135 captures stack frames. |
-| cluster:automerge-openclaw-openclaw-75135 | build_fix_artifact | planned |  | Automerge repair worker needs an executable artifact for the writable contributor PR branch. |
+| #75135 | fix_needed | planned | canonical | #75135 is useful and repairable, but not merge-ready until the review finding and changelog requirement are addressed on the contributor branch. |
+| #63432 | keep_related | planned | related | Keep #63432 open as related follow-up because the user-visible root cause is not proven fixed by the diagnostic PR. |
+| cluster:automerge-openclaw-openclaw-75135 | build_fix_artifact | planned |  | A branch repair artifact is needed because automerge is enabled but the current PR head has actionable ClawSweeper findings. |
 
 ## Needs Human
 
