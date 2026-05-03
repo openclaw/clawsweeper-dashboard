@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "issue-openclaw-openclaw-76734"
 mode: "autonomous"
-run_id: "25283695699"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25283695699"
-head_sha: "8ddc4380854e5facec87f1d9221f057cd62599d5"
+run_id: "25284167270"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25284167270"
+head_sha: "05074fca93f2ec583749f27ac60ed48310e86c68"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-03T16:00:35.938Z"
+published_at: "2026-05-03T16:18:49.996Z"
 canonical: "https://github.com/openclaw/openclaw/issues/76734"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/76734"
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25283695699](https://github.com/openclaw/clawsweeper/actions/runs/25283695699)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25284167270](https://github.com/openclaw/clawsweeper/actions/runs/25284167270)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/issues/76734
 
 ## Summary
 
-Issue #76734 is a live, narrow docs-only wording fix on current main. The canonical path is a new ClawSweeper fix PR from clawsweeper/issue-openclaw-openclaw-76734 replacing `persistent behaviour` with `persistent behavior` in the ACP agents doc, with changelog handling per repo policy.
+Issue #76734 is open, non-security-sensitive, and reproducible on current main. A narrow docs-only fix should replace `persistent behaviour` with `persistent behavior` in `docs/tools/acp-agents.md`, using a new ClawSweeper fix PR on `clawsweeper/issue-openclaw-openclaw-76734`. No close or merge actions are allowed by this job.
 
 ## Impact
 
@@ -67,9 +67,9 @@ Issue #76734 is a live, narrow docs-only wording fix on current main. The canoni
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #76734 | fix_needed | planned | canonical | No viable canonical PR exists; allow_fix_pr is true and the requested implementation is a one-word docs correction. |
-| cluster:issue-openclaw-openclaw-76734 | build_fix_artifact | planned |  | Build a narrow fix artifact for the deterministic executor; this worker must not mutate GitHub directly. |
-| cluster:issue-openclaw-openclaw-76734 | open_fix_pr | planned |  | Open or update the single ClawSweeper implementation PR after applying the narrow docs fix and validation. |
+| #76734 | keep_canonical | planned | canonical | #76734 is the canonical source issue for this single-item docs wording cluster. |
+| cluster:issue-openclaw-openclaw-76734 | fix_needed | planned |  | The issue is valid on current main and has no existing hydrated fix PR, so ClawSweeper should create or update one narrow implementation PR. |
+| cluster:issue-openclaw-openclaw-76734 | build_fix_artifact | planned |  | A deterministic executor can apply the one-line docs change and open the requested PR. |
 
 ## Needs Human
 
