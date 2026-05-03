@@ -2,16 +2,16 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-73500"
 mode: "autonomous"
-run_id: "25264666656"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25264666656"
-head_sha: "08cd9dbda14b57deec64cf4cefce1b0844246d4e"
+run_id: "25266234668"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25266234668"
+head_sha: "753ebcf63747a0daba7275759b90f41b4b3d3398"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-03T00:01:10.476Z"
-canonical: "https://github.com/openclaw/openclaw/pull/73500"
+published_at: "2026-05-03T01:17:30.080Z"
+canonical: "https://github.com/openclaw/openclaw/pull/76317"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/73381"
-canonical_pr: "https://github.com/openclaw/openclaw/pull/73500"
-actions_total: 3
+canonical_pr: "https://github.com/openclaw/openclaw/pull/76317"
+actions_total: 4
 fix_executed: 0
 fix_failed: 1
 fix_blocked: 0
@@ -25,23 +25,23 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25264666656](https://github.com/openclaw/clawsweeper/actions/runs/25264666656)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25266234668](https://github.com/openclaw/clawsweeper/actions/runs/25266234668)
 
 Workflow conclusion: success
 
 Worker result: planned
 
-Canonical: https://github.com/openclaw/openclaw/pull/73500
+Canonical: https://github.com/openclaw/openclaw/pull/76317
 
 ## Summary
 
-PR #73500 is the canonical, writable contributor repair path for issue #73381, but it is not merge-ready. Current main still rejects gateway agent requests on session sendPolicy=deny before delivery intent is evaluated, and the hydrated ClawSweeper review identifies one actionable test-isolation blocker on the PR branch. Plan repair of the contributor branch and re-review before any merge or closeout.
+Hydrated state shows #73500 is already closed and superseded by writable same-repo replacement PR #76317. Current main at e8f13c625e3458e8d97fbc1441a23a8ed9e0a536 still has the over-broad gateway agent send-policy check before delivery intent is evaluated, while #76317 has a passing Codex review but failing exact-head checks. No close or merge action is allowed for this job; the correct next step is a repair artifact for #76317.
 
 ## Impact
 
 | Metric | Count |
 | --- | ---: |
-| Worker actions | 3 |
+| Worker actions | 4 |
 | Fix executed | 0 |
 | Fix failed | 1 |
 | Fix blocked | 0 |
@@ -54,9 +54,7 @@ PR #73500 is the canonical, writable contributor repair path for issue #73381, b
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | failed |  |  | To https://github.com/wenxu007/openclaw.git
- ! [remote rejected]       HEAD -> fix/gateway-agent-send-policy-non-delivery (refusing to allow a GitHub App to create or update workflow `.github/workflows/ci.yml` without `workflows` permission)
-error: failed to push some refs to 'https://github.com/wenxu007/openclaw.git' |
+| repair_contributor_branch | failed |  |  | source PR #73500 is closed |
 | open_fix_pr | opened | https://github.com/openclaw/openclaw/pull/76317 | clawsweeper/automerge-openclaw-openclaw-73500 |  |
 
 ## Apply Actions
@@ -69,9 +67,10 @@ error: failed to push some refs to 'https://github.com/wenxu007/openclaw.git' |
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #73500 | fix_needed | planned | canonical | Canonical PR is useful and writable, but ClawSweeper review has an unresolved test-isolation blocker that should be repaired on the contributor branch before re-review. |
-| #73381 | keep_related | planned | fixed_by_candidate | Keep the issue open pending repaired #73500 and later post-merge closeout; no close action is allowed or appropriate in this run. |
-| cluster:automerge-openclaw-openclaw-73500 | build_fix_artifact | planned |  | A deterministic executor can update the writable PR branch, preserve contributor credit, run validation, and request a fresh ClawSweeper review for the exact repaired head. |
+| #73381 | keep_canonical | planned | canonical | Keep the issue open as the canonical user-facing bug while #76317 is repaired and validated. |
+| #73500 | keep_closed | skipped | superseded | Already closed source PR, superseded by writable replacement #76317. |
+| #76317 | fix_needed | planned | canonical | The replacement PR is the canonical repair path but is not merge-ready because exact-head CI has relevant failures. |
+| cluster:automerge-openclaw-openclaw-73500 | build_fix_artifact | planned |  | Emit an executable repair plan for the writable canonical PR branch. |
 
 ## Needs Human
 
