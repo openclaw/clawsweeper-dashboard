@@ -194,10 +194,15 @@ function runLink(record) {
   return record.run_url ? link(record.run_id ?? "run", record.run_url) : "_none_";
 }
 
-function targetLink(action) {
+function targetLink(record, action) {
   const target = String(action.target ?? "");
   const match = target.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/(issues|pull)\/(\d+)/);
   if (match) return link(`#${match[3]}`, target);
+  const shorthand = target.match(/^#(\d+)$/);
+  const repo = String(record.repo ?? "");
+  if (shorthand && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
+    return link(target, `https://github.com/${repo}/issues/${shorthand[1]}`);
+  }
   return target ? link(target, target) : "";
 }
 
@@ -207,10 +212,10 @@ function inspectionRow(row) {
 
 function fixRow(row) {
   const action = row.action;
-  return `| ${clusterLink(row.record)} | ${tableCell(action.status)} | ${targetLink(action)} | ${tableCell(action.branch ?? action.pr ?? "")} | ${truncate(action.reason, 150)} | ${runLink(row.record)} |`;
+  return `| ${clusterLink(row.record)} | ${tableCell(action.status)} | ${targetLink(row.record, action)} | ${tableCell(action.branch ?? action.pr ?? "")} | ${truncate(action.reason, 150)} | ${runLink(row.record)} |`;
 }
 
 function closeRow(row) {
   const action = row.action;
-  return `| ${targetLink(action)} | ${tableCell(action.action)} | ${truncate(action.title ?? "")} | ${formatTimestamp(action.closed_at ?? action.merged_at ?? row.record.published_at)} | ${clusterLink(row.record)} | ${clusterLink(row.record)} | ${runLink(row.record)} |`;
+  return `| ${targetLink(row.record, action)} | ${tableCell(action.action)} | ${truncate(action.title ?? "")} | ${formatTimestamp(action.closed_at ?? action.merged_at ?? row.record.published_at)} | ${clusterLink(row.record)} | ${clusterLink(row.record)} | ${runLink(row.record)} |`;
 }
