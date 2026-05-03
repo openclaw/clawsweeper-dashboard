@@ -2,19 +2,19 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-76764"
 mode: "autonomous"
-run_id: "25282990414"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25282990414"
-head_sha: "3dc3e028a7976f7318b64bfef917c19a51c34b6a"
-workflow_conclusion: "failure"
+run_id: "25283308533"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25283308533"
+head_sha: "0fbf1e65bfcc491df0fb130111ead95d80c9025d"
+workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-03T15:29:16.213Z"
+published_at: "2026-05-03T16:19:35.780Z"
 canonical: "https://github.com/openclaw/openclaw/pull/76764"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/76554"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/76764"
 actions_total: 4
 fix_executed: 0
 fix_failed: 0
-fix_blocked: 0
+fix_blocked: 1
 apply_executed: 0
 apply_blocked: 0
 apply_skipped: 0
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25282990414](https://github.com/openclaw/clawsweeper/actions/runs/25282990414)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25283308533](https://github.com/openclaw/clawsweeper/actions/runs/25283308533)
 
-Workflow conclusion: failure
+Workflow conclusion: success
 
 Worker result: planned
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/76764
 
 ## Summary
 
-Canonical path is PR #76764, but it is not merge-ready: the hydrated preflight reports mergeable=false/dirty against main 081f873162c2db1ed2c6c0585f1cb86db0fa80f1. The same-repo head branch is writable, so the correct next step is a narrow repair of the contributor branch, preserving @obviyus credit and keeping issue #76554 tied to that PR. No close or merge action is emitted because the job blocks close/merge and requires human handling for both.
+Canonical path is the open contributor PR #76764. It is useful, narrow, same-repo writable, and covered by exact-head passing checks, but GitHub preflight reports it as dirty/unmergeable against current main, so the next deterministic action is to repair/rebase that PR branch and re-review before any merge. No close or merge actions are emitted because this job blocks both.
 
 ## Impact
 
@@ -44,7 +44,7 @@ Canonical path is PR #76764, but it is not merge-ready: the hydrated preflight r
 | Worker actions | 4 |
 | Fix executed | 0 |
 | Fix failed | 0 |
-| Fix blocked | 0 |
+| Fix blocked | 1 |
 | Applied executions | 0 |
 | Apply blocked | 0 |
 | Apply skipped | 0 |
@@ -54,7 +54,8 @@ Canonical path is PR #76764, but it is not merge-ready: the hydrated preflight r
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| repair_contributor_branch | blocked |  |  | source PR branch changed while the repair worker was preparing its push; requeue against the latest head |
+| automerge_repair_outcome_comment | updated | #76764 |  |  |
 
 ## Apply Actions
 
@@ -66,10 +67,10 @@ Canonical path is PR #76764, but it is not merge-ready: the hydrated preflight r
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #76764 | fix_needed | planned | canonical | Repair the writable contributor branch for dirty merge state, then rerun exact-head review and validation before any separate merge-capable applicator acts. |
-| #76554 | keep_related | planned | fixed_by_candidate | Covered by candidate PR #76764, but no closeout is allowed before the canonical fix lands. |
-| #76272 | keep_closed | skipped | related | Already closed; no mutation is valid. |
-| cluster:automerge-openclaw-openclaw-76764 | build_fix_artifact | planned |  | Create an executable repair plan for the existing contributor PR branch. |
+| #76764 | fix_needed | planned | canonical | Repair the existing contributor branch, resolve dirty merge state against current main, rerun focused Telegram validation plus `pnpm check:changed`, then require a fresh ClawSweeper/Codex review before any later merge applicator step. |
+| cluster:automerge-openclaw-openclaw-76764 | build_fix_artifact | planned |  | Build an executable repair artifact for the existing canonical PR branch. |
+| #76554 | keep_related | planned | fixed_by_candidate | The issue is covered by the canonical repair path, but closure is blocked until the canonical fix lands and this job does not allow close actions. |
+| #76272 | keep_closed | skipped | related | Already closed related context; no mutation needed. |
 
 ## Needs Human
 
