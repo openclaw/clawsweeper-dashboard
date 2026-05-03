@@ -1,6 +1,6 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-05-03T01:18:21.154Z
+Generated: 2026-05-03T01:19:06.862Z
 
 ## Summary
 
@@ -31,5 +31,5 @@ Status: report_only
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | [#76330](https://github.com/openclaw/openclaw/pull/76330) | fix(slack): enable preview streaming in flat DMs (replyToMode: off) | automerge-openclaw-openclaw-56544 | MERGEABLE | CLEAN | CANCELLED:1 SKIPPED:24 SUCCESS:80 NEUTRAL:1 | needs_merge_preflight, needs_result_backfill | backfill merge preflight: security cleared, comments resolved, Codex /review passed, validation recorded |
-| [#76318](https://github.com/openclaw/openclaw/pull/76318) | fix(ui): clean up delete confirm popover listener | automerge-openclaw-openclaw-75590 | MERGEABLE | UNSTABLE | CANCELLED:1 SUCCESS:64 SKIPPED:9 FAILURE:4 IN_PROGRESS:1; blockers:6 | needs_merge_state:UNSTABLE, needs_checks:ClawSweeper Dispatch / dispatch:CANCELLED; CI / checks-fast-contracts-plugins-c:FAILURE; CI / check-additional-boundaries:IN_PROGRESS, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
+| [#76318](https://github.com/openclaw/openclaw/pull/76318) | fix(ui): clean up delete confirm popover listener | automerge-openclaw-openclaw-75590 | MERGEABLE | UNSTABLE | CANCELLED:1 SUCCESS:64 SKIPPED:9 FAILURE:6; blockers:7 | needs_merge_state:UNSTABLE, needs_checks:ClawSweeper Dispatch / dispatch:CANCELLED; CI / checks-fast-contracts-plugins-c:FAILURE; CI / check-additional-boundaries:FAILURE, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
 | [#76317](https://github.com/openclaw/openclaw/pull/76317) | fix(gateway,agent): only enforce session sendPolicy=deny when delivering | automerge-openclaw-openclaw-73500 | MERGEABLE | UNSTABLE | SUCCESS:75 SKIPPED:22 FAILURE:4 NEUTRAL:1; blockers:4 | needs_merge_state:UNSTABLE, needs_checks:CI / checks-fast-contracts-plugins-c:FAILURE; CI / check-additional-boundaries:FAILURE; CI / checks-fast-contracts-plugins:FAILURE, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
