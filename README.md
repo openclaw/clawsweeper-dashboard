@@ -100,7 +100,8 @@ Maintainers can steer ClawSweeper from target-repo issue and PR comments. The
 preferred form is `@clawsweeper ...`. The router also accepts
 `@clawsweeper[bot] ...`, `@openclaw-clawsweeper ...`,
 `@openclaw-clawsweeper[bot] ...`, and legacy slash aliases such as
-`/clawsweeper ...`, `/review`, `/automerge`, and `/autoclose <reason>`.
+`/clawsweeper ...`, `/review`, `/automerge`, `/auto merge`, and
+`/autoclose <reason>`.
 
 Common commands:
 
@@ -123,8 +124,9 @@ Common commands:
 - `review` and `re-review` dispatch a fresh ClawSweeper issue/PR review without
   starting repair.
 - Command status replies are marker-backed and edited in place per
-  issue/PR, intent, and head SHA, so repeated review nudges do not leave a
-  trail of duplicate lobster notes.
+  issue/PR, intent, and head SHA. The visible badge is one lobster plus the
+  current state: `👀` for acknowledgement, `🧹` for review, `🔧` for repair, and
+  `✅` for completed/paused work.
 - Freeform `@clawsweeper ...` mentions dispatch a read-only assist review that
   answers the maintainer request in the next ClawSweeper comment. Action-looking
   prose still maps through existing safe markers and deterministic gates.
@@ -143,8 +145,10 @@ Common commands:
   exact-head review is clean.
 - `approve` lets a maintainer clear a ClawSweeper human-review pause and merge
   only after the normal exact-head, checks, mergeability, and gate checks pass.
-- `stop` adds `clawsweeper:human-review`; `/autoclose <reason>` closes the
-  item and bounded linked same-repo targets with an explicit maintainer reason.
+- `stop` removes repair-loop labels, adds `clawsweeper:human-review`, and makes
+  older automerge/autofix comments ineligible to continue. `/autoclose <reason>`
+  closes the item and bounded linked same-repo targets with an explicit
+  maintainer reason.
 
 Only maintainers are accepted. The router checks repository collaborator
 permission (`admin`, `maintain`, or `write`) and falls back to trusted
@@ -433,7 +437,9 @@ full compiled-repo coverage ratchet.
 
 Required secrets:
 
-- `OPENAI_API_KEY`: OpenAI API key used to log Codex in before review shards run.
+- `OPENAI_API_KEY`: OpenAI API key used by the per-job local Codex Responses
+  proxy. Codex subprocesses inherit only the proxy-backed `CODEX_HOME`, not the
+  raw API key.
 - `CLAWSWEEPER_APP_CLIENT_ID`: public GitHub App client ID for `clawsweeper`.
   Currently `Iv23liOECG0slfuhz093`.
 - `CLAWSWEEPER_APP_PRIVATE_KEY`: private key for `clawsweeper`; plan/review
@@ -447,8 +453,9 @@ Required secrets:
 
 Token flow:
 
-- Review shards log Codex in with `OPENAI_API_KEY`, then run without OpenAI or
-  Codex token environment variables.
+- Review and repair jobs create an isolated per-run `CODEX_HOME`, start a local
+  Responses proxy from `OPENAI_API_KEY`, write proxy-only Codex config there,
+  and run Codex without OpenAI or Codex token environment variables.
 - ClawSweeper uses the `clawsweeper` GitHub App token for read-heavy target
   context.
 - Apply mode uses the same app token for review comments and closes, so GitHub
