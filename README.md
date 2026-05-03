@@ -4,16 +4,16 @@ Generated from the durable state branch for [openclaw/clawsweeper](https://githu
 
 ## Sweep Dashboard
 
-Last source update: May 3, 2026, 01:12 UTC
+Last source update: May 3, 2026, 01:14 UTC
 
 ### Fleet
 
 | Metric | Count |
 | --- | ---: |
 | Covered repositories | 3 |
-| Open review records | 6805 |
+| Open review records | 6807 |
 | Archived closed records | 17190 |
-| Fresh reviews, 7d | 6713 |
+| Fresh reviews, 7d | 6715 |
 | Proposed closes awaiting apply | 0 |
 | Work candidates awaiting promotion | 2818 |
 | Failed or stale reviews | 4 |
@@ -24,13 +24,13 @@ Last source update: May 3, 2026, 01:12 UTC
 | --- | --- | --- | --- |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | Review in progress | May 3, 2026, 01:12 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25266360767) |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | Audit finished | May 3, 2026, 01:12 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25266379463) |
-| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Audit finished | May 2, 2026, 12:35 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25252021874) |
+| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Audit finished | May 3, 2026, 01:14 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25266424091) |
 
 ### Repositories
 
 | Repository | Open records | Archived | Fresh | Proposed closes | Work candidates | Failed/stale | Last review | Last close |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 6578 | 16445 | 6486 | 0 | 2792 | 4 | May 3, 2026, 01:12 UTC | May 3, 2026, 01:12 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 6580 | 16445 | 6488 | 0 | 2792 | 4 | May 3, 2026, 01:14 UTC | May 3, 2026, 01:12 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | 226 | 740 | 226 | 0 | 25 | 0 | May 2, 2026, 23:44 UTC | May 3, 2026, 01:12 UTC |
 | [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | 1 | 5 | 1 | 0 | 1 | 0 | May 2, 2026, 06:33 UTC | May 1, 2026, 02:07 UTC |
 
@@ -84,6 +84,8 @@ Last source update: May 3, 2026, 01:12 UTC
 
 | Repository | Item | Title | Outcome | Status | Reviewed |
 | --- | --- | --- | --- | --- | --- |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#76347](https://github.com/openclaw/openclaw/pull/76347) | fix(ci): realign check-no-raw-channel-fetch allowlist line numbers | keep_open / kept_open | complete | May 3, 2026, 01:14 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#76346](https://github.com/openclaw/openclaw/pull/76346) | fix(daemon): prefer system Node for gateway services | keep_open / kept_open | complete | May 3, 2026, 01:14 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#76332](https://github.com/openclaw/openclaw/pull/76332) | fix: harden subagent completion announce cleanup races | keep_open / kept_open | complete | May 3, 2026, 01:12 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#76343](https://github.com/openclaw/openclaw/issues/76343) | Active Memory embedded recall fails because memory tools are unavailable in embedded runtime | close / skipped_invalid_decision | complete | May 3, 2026, 01:07 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#76341](https://github.com/openclaw/openclaw/pull/76341) | fix(slack): make tool-progress draft preview ephemeral; preserve agent text segments | keep_open / kept_open | complete | May 3, 2026, 01:06 UTC |
@@ -97,8 +99,6 @@ Last source update: May 3, 2026, 01:12 UTC
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#41368](https://github.com/openclaw/openclaw/pull/41368) | feat(feishu): add delete tools for Bitable fields and records | keep_open / kept_open | complete | May 3, 2026, 01:02 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#70864](https://github.com/openclaw/openclaw/pull/70864) | feat: add scoped mention pattern policy | keep_open / kept_open | complete | May 3, 2026, 01:02 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#71837](https://github.com/openclaw/openclaw/pull/71837) | fix(memory-core): denoise dreaming wrappers and promote grounded REM truths | keep_open / kept_open | complete | May 3, 2026, 01:02 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#73987](https://github.com/openclaw/openclaw/pull/73987) | fix(control-ui): share gateway token scope across loopback hosts | keep_open / kept_open | complete | May 3, 2026, 01:02 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#71170](https://github.com/openclaw/openclaw/pull/71170) | fix(auto-reply): add reminderGuard opt-out for external schedulers | keep_open / kept_open | complete | May 3, 2026, 01:02 UTC |
 
 </details>
 
@@ -108,7 +108,7 @@ Last source update: May 3, 2026, 01:12 UTC
 | --- | --- | --- | ---: | ---: | ---: | --- |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | open archived records | May 3, 2026, 01:12 UTC | 0 | 2 | 0 | yes |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | clean | May 3, 2026, 01:12 UTC | 0 | 0 | 0 | yes |
-| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | clean | May 2, 2026, 18:35 UTC | 0 | 0 | 0 | yes |
+| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | clean | May 3, 2026, 01:14 UTC | 0 | 0 | 0 | yes |
 
 
 ## Repair Dashboard
