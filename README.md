@@ -525,6 +525,8 @@ Required `clawsweeper` app permissions:
   authorization context.
 - Pull requests: read/write, for PR comments, labels, merge readiness, repair PRs,
   and guarded automerge.
+- Workflows: write, for adopted automerge repairs that need to rebase or update
+  source branches containing `.github/workflows/*` changes.
 - Actions: read/write on `openclaw/clawsweeper`, for run cancellation, manual
   dispatch, self-heal, and commit-review continuations.
 - Checks: write on target repositories when commit Check Runs should be
