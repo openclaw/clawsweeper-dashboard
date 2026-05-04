@@ -1,75 +1,98 @@
-# ClawSweeper
+# 🦞🧹 ClawSweeper
 
 ClawSweeper is the conservative maintenance bot for OpenClaw repositories. It
-currently covers `openclaw/openclaw`, `openclaw/clawhub`, and self-review for
-`openclaw/clawsweeper`.
+keeps the backlog reviewed, keeps maintainer-visible GitHub comments tidy, and
+turns narrow trusted findings into guarded repair or automerge work.
 
-It has two independent lanes:
+The current production targets are `openclaw/openclaw`, `openclaw/clawhub`, and
+self-review for `openclaw/clawsweeper`.
 
-- issue/PR sweeper: keeps one markdown report per open issue or PR, publishes
-  one durable Codex automated review comment when useful, and only closes items
-  when the evidence is strong
-- commit sweeper: reviews code-bearing commits that land on `main`, writes one
-  canonical markdown report per commit, and optionally publishes a GitHub Check
-  Run for that commit
+At a high level ClawSweeper:
+
+- reviews open issues and pull requests on a schedule and on exact GitHub events
+- writes one durable markdown report per item in generated state
+- syncs one marker-backed public review comment per issue or PR, edited in place
+- closes only unchanged, high-confidence, policy-allowed proposals
+- routes maintainer commands such as `@clawsweeper review`,
+  `@clawsweeper fix`, `@clawsweeper autofix`, and `@clawsweeper automerge`
+- repairs opted-in PRs through a bounded Codex review/fix loop before merge
+- can open guarded implementation PRs for strict, reproducible bug issues
+- reviews code-bearing commits that land on target `main` branches
+- publishes dashboard, audit, repair, and activity state to
+  `openclaw/clawsweeper-state`
+
+ClawSweeper is not a generic auto-close bot. Review is proposal-only, apply is
+guarded, Codex never gets write credentials during review, and every GitHub
+mutation is rechecked against live target state immediately before it happens.
 
 ## Capabilities
 
-- **Repository profiles:** per-repository rules live in
-  `src/repository-profiles.ts`, so OpenClaw, ClawHub, and ClawSweeper can share
-  the same engine while keeping different apply limits.
-- **Issue and PR intake:** scheduled runs scan open issues and pull requests,
-  while target repositories can forward exact issue/PR events with
-  `repository_dispatch` for low-latency one-item reviews.
-- **Codex review reports:** each issue or PR becomes
-  `records/<repo-slug>/items/<number>.md` with the decision, evidence, proposed
-  maintainer-facing comment, runtime metadata, and GitHub snapshot hash.
-- **Durable review comments:** ClawSweeper syncs one marker-backed public review
-  comment per item and edits it in place instead of posting repeated comments.
-  When a review starts and no ClawSweeper comment exists yet, it posts a short
-  crustacean-friendly status placeholder first, then replaces that same comment
-  with the completed review. Completed comments include a dedicated security
-  review section for supply-chain, permission, secret-handling, and code
-  execution concerns. Pull request comments include hidden verdict markers, and
-  actionable PR follow-up includes a hidden
-  `clawsweeper-action:fix-required` marker for the trusted ClawSweeper repair
-  loop. See
-  [`docs/pr-review-comments.md`](docs/pr-review-comments.md).
-- **Guarded apply:** apply mode re-fetches live GitHub state, checks labels,
-  maintainer authorship, paired issue/PR state, snapshot drift, and repository
-  profile rules before commenting or closing anything.
-- **Archive and reopen handling:** closed or already-closed reports move to
-  `records/<repo-slug>/closed/<number>.md`; reopened archived items move back to
-  `items/` as stale work.
-- **Generated state:** `openclaw/clawsweeper-state` stores durable `records/`,
-  `jobs/`, `results/`, and rendered dashboard output so this repo stays focused
-  on source, workflows, docs, and tests.
-- **Workflow status state:** `pnpm run status` updates tracked per-repository
-  status JSON under `results/sweep-status/` in the state repo so long-running
-  workflows can publish progress without changing report data.
-- **Audit:** `pnpm run audit` compares live GitHub state with report storage and
-  can publish audit state under `results/audit/` in the state repo without
-  mutating issues or PRs.
-- **Reconcile:** `pnpm run reconcile` repairs report placement drift such as
-  reopened archived records or closed items still sitting in `items/`.
-- **Work candidates:** valid, narrow items can be marked as
-  `queue_fix_pr` candidates for manual ClawSweeper repair promotion.
-- **Commit review:** push events on target `main` branches can dispatch to
-  `.github/workflows/commit-review.yml`, which expands the commit range, skips
-  non-code-only commits cheaply, starts one Codex worker per code-bearing
-  commit, and writes `records/<repo-slug>/commits/<sha>.md`.
-- **Manual reruns and backfills:** both lanes support manual workflow dispatch.
-  Commit review supports exact SHAs, historic ranges with `before_sha`, and an
-  `additional_prompt` input for one-off review instructions.
-- **Commit report queries:** `pnpm commit-reports -- --since 24h`,
-  `--findings`, `--non-clean`, `--repo`, and `--author` make the flat per-SHA
-  commit storage easy to review by time window without date folders.
-- **Optional commit checks:** commit reports are the source of truth; target
-  commit Check Runs are disabled by default and can be enabled per run or repo.
-- **ClawSweeper repair dispatch:** commit reports with `result: findings` can
-  dispatch to the repair intake, where an audit record is written and a PR is
-  created only when the finding is narrow, non-security, and still relevant on
-  latest `main`.
+### Issue and PR Reviews
+
+Scheduled runs scan open issues and pull requests, while target repositories can
+forward exact issue/PR events with `repository_dispatch` for low-latency
+one-item reviews. Each review writes
+`records/<repo-slug>/items/<number>.md` with the decision, evidence, proposed
+maintainer-facing comment, runtime metadata, and GitHub snapshot hash.
+
+ClawSweeper syncs one marker-backed public review comment per item and edits it
+in place instead of posting repeated comments. If a review starts before a
+completed comment exists, it first posts a short status placeholder, then
+replaces that same comment with the final review. Pull request comments include
+hidden verdict/action markers so trusted repair and automerge flows can continue
+without scraping visible prose. See
+[`docs/pr-review-comments.md`](docs/pr-review-comments.md).
+
+### Apply and State
+
+Apply mode re-fetches live GitHub state, checks labels, maintainer authorship,
+paired issue/PR state, snapshot drift, and repository profile rules before
+commenting or closing anything. Closed or already-closed reports move to
+`records/<repo-slug>/closed/<number>.md`; reopened archived items move back to
+`items/` as stale work.
+
+Generated state lives in `openclaw/clawsweeper-state`: durable `records/`,
+`jobs/`, `results/`, audit output, workflow status JSON, repair ledgers, and the
+rendered dashboard. This repository stays focused on source, workflows, docs,
+and tests.
+
+### Repair and Automerge
+
+Maintainer commands can opt PRs into `autofix` or `automerge`, dispatch a fresh
+exact-head review, and run a bounded Codex review/fix loop. Codex handles the
+code repair and local validation loop; deterministic executor steps own every
+GitHub mutation, branch push, label update, and final merge gate.
+
+Automerge waits for exact-head review, required checks, mergeability, and policy
+gates. If repair was needed, the mutable status comment records each review,
+repair, re-review, and merge step with timing and links. The final merge result
+summarizes both the original PR change and any ClawSweeper fixups.
+
+For issues, strict bug reviews that are high-confidence reproducible, do not
+already have a linked PR, and do not require feature/config expansion can
+dispatch Codex to open one guarded implementation PR labeled
+`clawsweeper:autogenerated`.
+
+### Commit Reviews
+
+Push events on target `main` branches can dispatch to
+`.github/workflows/commit-review.yml`. The workflow expands the commit range,
+skips non-code-only commits cheaply, starts one Codex worker per code-bearing
+commit, and writes `records/<repo-slug>/commits/<sha>.md`.
+
+Commit reports are the source of truth. Optional target commit Check Runs are
+disabled by default and can be enabled per run or repository. Reports with
+`result: findings` can dispatch to repair intake when the finding is narrow,
+non-security, and still relevant on latest `main`.
+
+### Operations
+
+Repository-specific rules live in `src/repository-profiles.ts`, so OpenClaw,
+ClawHub, and ClawSweeper can share the same engine while keeping different apply
+limits. Both review and repair lanes support manual workflow dispatch, reruns,
+and backfills. `pnpm commit-reports -- --since 24h`, `--findings`,
+`--non-clean`, `--repo`, and `--author` query flat per-SHA commit storage
+without date buckets.
 
 ## Guardrails
 
@@ -163,13 +186,17 @@ Live dashboard and generated state: https://github.com/openclaw/clawsweeper-stat
 
 ## How It Works
 
-ClawSweeper is split into two operational systems:
+ClawSweeper is split into four operational lanes:
 
-- issue/PR sweeper: scheduler, review lane, apply lane, audit, reconcile, and
-  durable state publishing
-- commit sweeper: main-branch commit dispatch, cheap code/non-code
-  classification, one Codex review worker per code-bearing commit, report
-  publishing, and optional target commit checks
+- review lane: scheduled and event-driven issue/PR reviews, durable reports, and
+  public review comment sync
+- apply lane: guarded close/comment mutations, audit, reconcile, and state
+  publishing
+- repair lane: maintainer-command routing, autofix, automerge, issue
+  implementation PRs, and repair result publishing
+- commit review lane: main-branch commit dispatch, cheap code/non-code
+  classification, one Codex review worker per code-bearing commit, and optional
+  target commit checks
 
 ### Scheduler
 
@@ -251,6 +278,30 @@ sync stale public review comments, but closing remains guarded by apply so a
 fresh GitHub snapshot, labels, maintainer-authorship, and unchanged item state
 are checked immediately before mutation.
 
+### Repair Lane
+
+Repair starts from maintainer intent or trusted ClawSweeper review metadata. The
+comment router accepts commands from target repositories, validates maintainer
+permissions, updates one mutable command/status comment, and dispatches the
+appropriate repair job.
+
+- `autofix` and `automerge` adopt the PR branch and run exact-head review before
+  making changes.
+- If review or CI finds actionable issues, Codex rebases, addresses PR review
+  comments, fixes CI, runs the requested validation, and returns a structured
+  repair artifact.
+- The deterministic executor applies the artifact, pushes only after validation,
+  re-dispatches exact-head review, and waits for required checks.
+- `automerge` merges only after review verdict, checks, mergeability, changelog,
+  security, maintainer stop/approve state, and repository policy gates pass.
+- Issue implementation is narrower: only strict, reproducible bugs with no
+  linked PR and no feature/config expansion can open a generated PR.
+
+Repair internals are documented in
+[`docs/repair/README.md`](docs/repair/README.md), and the automerge state
+machine is documented in
+[`docs/repair/automerge-flow.md`](docs/repair/automerge-flow.md).
+
 ### Commit Review Lane
 
 Commit review is intentionally separate from issue/PR cleanup. It never closes
@@ -261,8 +312,8 @@ items, writes comments, or fixes code.
 - Manual runs can pass `commit_sha`, optional `before_sha`, optional
   `additional_prompt`, `enabled`, and `create_checks`.
 - The receiver verifies the selected commits are reachable from `origin/main`.
-- Before selecting and reviewing commits, the receiver waits 15 minutes by
-  default (`CLAWSWEEPER_COMMIT_REVIEW_SETTLE_SECONDS=900`) so a push range has
+- Before selecting and reviewing commits, the receiver waits 60 seconds by
+  default (`CLAWSWEEPER_COMMIT_REVIEW_SETTLE_SECONDS=60`) so a push range has
   time to settle across GitHub and the runner.
 - The plan job expands ranges, pages large backfills at GitHub's matrix limit,
   and classifies each commit before Codex starts.
@@ -497,4 +548,4 @@ Target repository setup:
   should be published
 - optionally set `CLAWSWEEPER_COMMIT_REVIEW_SETTLE_SECONDS=0` for manual
   backfills where the target commit range is already settled; the default is
-  `900`
+  `60`
