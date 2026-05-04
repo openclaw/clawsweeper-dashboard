@@ -1,0 +1,76 @@
+---
+repo: "openclaw/openclaw"
+cluster_id: "automerge-openclaw-openclaw-77188"
+mode: "autonomous"
+run_id: "25326592149"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25326592149"
+head_sha: "09e9daf950ced9cfe740417d18f30b6e88b5b33a"
+workflow_conclusion: "success"
+result_status: "planned"
+published_at: "2026-05-04T15:34:17.619Z"
+canonical: "https://github.com/openclaw/openclaw/pull/77188"
+canonical_issue: "https://github.com/openclaw/openclaw/issues/77118"
+canonical_pr: "https://github.com/openclaw/openclaw/pull/77188"
+actions_total: 3
+fix_executed: 0
+fix_failed: 0
+fix_blocked: 1
+apply_executed: 0
+apply_blocked: 0
+apply_skipped: 0
+needs_human_count: 0
+---
+
+# automerge-openclaw-openclaw-77188
+
+Repo: openclaw/openclaw
+
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25326592149](https://github.com/openclaw/clawsweeper/actions/runs/25326592149)
+
+Workflow conclusion: success
+
+Worker result: planned
+
+Canonical: https://github.com/openclaw/openclaw/pull/77188
+
+## Summary
+
+PR #77188 is the canonical repair path for #77118, but it is not merge-ready: the hydrated ClawSweeper review has actionable P2/P3 findings and the PR checks include relevant failures. The branch is writable, so the correct next step is an in-place contributor-branch repair, not replacement, merge, or closeout.
+
+## Impact
+
+| Metric | Count |
+| --- | ---: |
+| Worker actions | 3 |
+| Fix executed | 0 |
+| Fix failed | 0 |
+| Fix blocked | 1 |
+| Applied executions | 0 |
+| Apply blocked | 0 |
+| Apply skipped | 0 |
+| Needs human | 0 |
+
+## Fix Execution Actions
+
+| Action | Status | Target | Branch | Reason |
+| --- | --- | --- | --- | --- |
+| repair_contributor_branch | blocked |  |  | GitHub rejected the repair branch push because it updates workflow files and the ClawSweeper app token does not have workflows permission |
+| automerge_repair_outcome_comment | updated | #77188 |  |  |
+
+## Apply Actions
+
+| Target | Action | Status | Classification | Reason |
+| --- | --- | --- | --- | --- |
+| _None_ |  |  |  |  |
+
+## Worker Action Matrix
+
+| Target | Action | Status | Classification | Reason |
+| --- | --- | --- | --- | --- |
+| #77188 | fix_needed | planned | canonical | Repair the useful contributor PR branch in place. The branch is writable and the remaining blockers are narrow review findings plus required user-facing documentation/changelog work. |
+| #77118 | keep_related | planned | related | The issue is linked to the canonical PR repair path, but no close action is permitted before the repair lands. |
+| cluster:automerge-openclaw-openclaw-77188 | build_fix_artifact | planned |  | Executor needs an actionable in-place repair artifact for the adopted automerge PR. |
+
+## Needs Human
+
+- none
