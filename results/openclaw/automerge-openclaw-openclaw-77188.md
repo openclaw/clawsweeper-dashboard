@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-77188"
 mode: "autonomous"
-run_id: "25340189833"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25340189833"
+run_id: "25342474738"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25342474738"
 head_sha: "dd15176f9f4f63d24973e616babbd804085b1809"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-04T20:33:45.556Z"
+published_at: "2026-05-04T21:14:40.460Z"
 canonical: "https://github.com/openclaw/openclaw/pull/77188"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/77118"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/77188"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25340189833](https://github.com/openclaw/clawsweeper/actions/runs/25340189833)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25342474738](https://github.com/openclaw/clawsweeper/actions/runs/25342474738)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/77188
 
 ## Summary
 
-PR #77188 is the canonical repair path for issue #77118, but it is not merge-ready. The branch is writable, the scope is narrow, and the actionable ClawSweeper findings are mechanical: normalize the requested agentId before filtering and add the required docs/changelog coverage. No close or merge action is planned because the job blocks both.
+PR #77188 is the canonical repair path for #77118, but it is not merge-ready. The branch is writable, the diff is focused, and ClawSweeper already found narrow blockers: normalize the requested agentId before filtering, add required docs, and add a changelog entry. Merge and close are blocked by job policy, so this result emits an executable repair-contributor-branch fix artifact only.
 
 ## Impact
 
@@ -67,9 +67,9 @@ PR #77188 is the canonical repair path for issue #77118, but it is not merge-rea
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #77188 | fix_needed | planned | canonical | Maintainer opted #77188 into ClawSweeper automerge, but merge is blocked by actionable review findings, failing relevant checks, and missing changelog/docs proof. Repair the contributor branch rather than replace it. |
-| #77118 | keep_related | planned | fixed_by_candidate | #77118 is covered by the canonical PR path, but no closure is planned before the fix lands. |
-| cluster:automerge-openclaw-openclaw-77188 | build_fix_artifact | planned |  | A narrow executable branch repair is available and allowed by the job. |
+| #77188 | fix_needed | planned | canonical | Repair the useful contributor branch instead of replacing it; branch_writable=true and blockers are narrow. |
+| #77118 | keep_related | planned | fixed_by_candidate | Keep the linked issue open until the canonical PR repair lands; no close action is allowed in this job. |
+| cluster:automerge-openclaw-openclaw-77188 | build_fix_artifact | planned |  | Build a deterministic repair artifact for the existing contributor PR branch. |
 
 ## Needs Human
 
