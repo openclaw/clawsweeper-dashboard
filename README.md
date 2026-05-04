@@ -4,7 +4,7 @@ Generated from the durable state branch for [openclaw/clawsweeper](https://githu
 
 ## Sweep Dashboard
 
-Last source update: May 4, 2026, 01:10 UTC
+Last source update: May 4, 2026, 01:11 UTC
 
 ### Fleet
 
@@ -12,10 +12,10 @@ Last source update: May 4, 2026, 01:10 UTC
 | --- | ---: |
 | Covered repositories | 3 |
 | Open review records | 6870 |
-| Archived closed records | 17749 |
+| Archived closed records | 17750 |
 | Fresh reviews, 7d | 6778 |
 | Proposed closes awaiting apply | 5 |
-| Work candidates awaiting promotion | 2846 |
+| Work candidates awaiting promotion | 2845 |
 | Failed or stale reviews | 23 |
 
 ### Current Runs
@@ -24,13 +24,13 @@ Last source update: May 4, 2026, 01:10 UTC
 | --- | --- | --- | --- |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | Review in progress | May 4, 2026, 01:10 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25296196804) |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | Audit finished | May 4, 2026, 01:09 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25296197362) |
-| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Audit finished | May 3, 2026, 18:36 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25287348887) |
+| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Audit finished | May 4, 2026, 01:11 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25296250180) |
 
 ### Repositories
 
 | Repository | Open records | Archived | Fresh | Proposed closes | Work candidates | Failed/stale | Last review | Last close |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 6643 | 16994 | 6551 | 5 | 2823 | 23 | May 4, 2026, 01:08 UTC | May 4, 2026, 01:09 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 6643 | 16995 | 6551 | 5 | 2822 | 23 | May 4, 2026, 01:11 UTC | May 4, 2026, 01:11 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | 226 | 750 | 226 | 0 | 22 | 0 | May 3, 2026, 23:52 UTC | May 3, 2026, 17:23 UTC |
 | [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | 1 | 5 | 1 | 0 | 1 | 0 | May 2, 2026, 06:33 UTC | May 1, 2026, 02:07 UTC |
 
@@ -84,6 +84,7 @@ Last source update: May 4, 2026, 01:10 UTC
 
 | Repository | Item | Title | Outcome | Status | Reviewed |
 | --- | --- | --- | --- | --- | --- |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#76657](https://github.com/openclaw/openclaw/pull/76657) | fix(embedded-runner): keep active compaction retries from looking stuck | keep_open / kept_open | complete | May 4, 2026, 01:11 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#73664](https://github.com/openclaw/openclaw/issues/73664) | llamacpp provider: session table shows n_ctx_train (262k) instead of actual runtime context (n_ctx) | keep_open / kept_open | complete | May 4, 2026, 01:08 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#42771](https://github.com/openclaw/openclaw/pull/42771) | Docker: Move Playwright browsers to `/opt/playwright` | keep_open / kept_open | complete | May 4, 2026, 01:08 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#43735](https://github.com/openclaw/openclaw/issues/43735) | Skills not loading in agent context from ~/.openclaw/workspace/skills/ | keep_open / kept_open | complete | May 4, 2026, 01:08 UTC |
@@ -98,7 +99,6 @@ Last source update: May 4, 2026, 01:10 UTC
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#76770](https://github.com/openclaw/openclaw/issues/76770) | Feature: expose defer_loading flag for first-party MCP tool schemas | keep_open / kept_open | complete | May 4, 2026, 01:07 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#76938](https://github.com/openclaw/openclaw/issues/76938) | Context compaction ineffective — agent loses context and loops after truncation | keep_open / kept_open | complete | May 4, 2026, 01:07 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#76786](https://github.com/openclaw/openclaw/issues/76786) | [Bug]: Memory index fails with "no such table: chunks_vec" — node:sqlite does not support loadExtension (sq... | keep_open / kept_open | complete | May 4, 2026, 01:07 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#43996](https://github.com/openclaw/openclaw/issues/43996) | [Bug]: Sandbox container exits immediately when no-new-privileges is applied (exec /usr/bin/sleep: operatio... | keep_open / kept_open | complete | May 4, 2026, 01:07 UTC |
 
 </details>
 
@@ -108,7 +108,7 @@ Last source update: May 4, 2026, 01:10 UTC
 | --- | --- | --- | ---: | ---: | ---: | --- |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | open archived records | May 4, 2026, 01:10 UTC | 0 | 2 | 0 | yes |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | clean | May 4, 2026, 01:09 UTC | 0 | 0 | 0 | yes |
-| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | clean | May 3, 2026, 18:36 UTC | 0 | 0 | 0 | yes |
+| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | clean | May 4, 2026, 01:11 UTC | 0 | 0 | 0 | yes |
 
 
 ## Repair Dashboard
