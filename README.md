@@ -225,7 +225,7 @@ Review is proposal-only. It never closes items.
 - Manual runs can pass `item_number` or comma-separated `item_numbers` to review
   exact Audit Health findings without scanning for a normal batch.
 - Each shard checks out the selected target repository at `main`.
-- Codex reviews with `gpt-5.5`, high reasoning, fast service tier, and a
+- Codex reviews with `gpt-5.5`, high reasoning, the default service tier, and a
   10-minute per-item timeout.
 - Each item becomes a flat report under
   `records/<repo-slug>/items/<number>.md` with the decision, evidence,
@@ -394,8 +394,8 @@ source ~/.profile
 corepack enable
 pnpm install
 pnpm run build
-pnpm run plan -- --target-repo openclaw/openclaw --batch-size 5 --shard-count 100 --max-pages 250 --codex-model gpt-5.5 --codex-reasoning-effort high --codex-service-tier fast
-pnpm run review -- --target-repo openclaw/openclaw --target-dir ../openclaw --batch-size 5 --max-pages 250 --artifact-dir artifacts/reviews --codex-model gpt-5.5 --codex-reasoning-effort high --codex-service-tier fast --codex-timeout-ms 600000
+pnpm run plan -- --target-repo openclaw/openclaw --batch-size 5 --shard-count 100 --max-pages 250 --codex-model gpt-5.5 --codex-reasoning-effort high
+pnpm run review -- --target-repo openclaw/openclaw --target-dir ../openclaw --batch-size 5 --max-pages 250 --artifact-dir artifacts/reviews --codex-model gpt-5.5 --codex-reasoning-effort high --codex-timeout-ms 600000
 pnpm run apply-artifacts -- --target-repo openclaw/openclaw --artifact-dir artifacts/reviews --skip-dashboard
 pnpm run audit -- --target-repo openclaw/openclaw --max-pages 250 --sample-limit 25 --update-dashboard
 pnpm run reconcile -- --target-repo openclaw/openclaw --dry-run
@@ -451,7 +451,7 @@ default, subject to the selected repository profile; pass `target_repo`,
 `apply_kind=issue`, or `apply_kind=pull_request` to narrow a manual run.
 
 Scheduled runs cover the configured product profiles. `openclaw/openclaw` runs
-normal backfill every 5 minutes with up to 100 review shards when due backlog
+normal backfill every 5 minutes with up to 80 review shards when due backlog
 exists; `openclaw/clawhub` runs on offset review/apply/audit crons so its
 reports live under `records/openclaw-clawhub/` without colliding with default
 repo records. `openclaw/clawsweeper` has a scheduled read-only audit row and is
