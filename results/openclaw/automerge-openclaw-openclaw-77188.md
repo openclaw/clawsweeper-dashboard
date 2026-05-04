@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-77188"
 mode: "autonomous"
-run_id: "25326592149"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25326592149"
+run_id: "25335132209"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25335132209"
 head_sha: "09e9daf950ced9cfe740417d18f30b6e88b5b33a"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-04T15:34:17.619Z"
+published_at: "2026-05-04T18:45:41.120Z"
 canonical: "https://github.com/openclaw/openclaw/pull/77188"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/77118"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/77188"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25326592149](https://github.com/openclaw/clawsweeper/actions/runs/25326592149)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25335132209](https://github.com/openclaw/clawsweeper/actions/runs/25335132209)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/77188
 
 ## Summary
 
-PR #77188 is the canonical repair path for #77118, but it is not merge-ready: the hydrated ClawSweeper review has actionable P2/P3 findings and the PR checks include relevant failures. The branch is writable, so the correct next step is an in-place contributor-branch repair, not replacement, merge, or closeout.
+PR #77188 is the canonical repair path for #77118, but it is not merge-ready. The branch is writable, so ClawSweeper should repair the contributor branch by addressing the existing ClawSweeper review findings, adding the required docs/changelog/test coverage, and rerunning review/changed checks before any merge router decision.
 
 ## Impact
 
@@ -67,9 +67,9 @@ PR #77188 is the canonical repair path for #77118, but it is not merge-ready: th
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #77188 | fix_needed | planned | canonical | Repair the useful contributor PR branch in place. The branch is writable and the remaining blockers are narrow review findings plus required user-facing documentation/changelog work. |
-| #77118 | keep_related | planned | related | The issue is linked to the canonical PR repair path, but no close action is permitted before the repair lands. |
-| cluster:automerge-openclaw-openclaw-77188 | build_fix_artifact | planned |  | Executor needs an actionable in-place repair artifact for the adopted automerge PR. |
+| #77188 | fix_needed | planned | canonical | Maintainer opted #77188 into automerge, but the current hydrated PR has unresolved ClawSweeper review findings and failing/unstable checks. Because branch_writable is true, the executable path is repair_contributor_branch, not replacement or maintainer escalation. |
+| #77118 | keep_related | planned | fixed_by_candidate | The issue is covered by the candidate PR but must remain open until the repair path lands. |
+| cluster:automerge-openclaw-openclaw-77188 | build_fix_artifact | planned |  | Build a repair artifact for the deterministic executor to update the contributor branch and preserve credit. |
 
 ## Needs Human
 
