@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-74905"
 mode: "autonomous"
-run_id: "25308973883"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25308973883"
+run_id: "25310226215"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25310226215"
 head_sha: "f638537aa38094cfe50a1835da215c9ee149d194"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-04T08:58:01.901Z"
+published_at: "2026-05-04T09:30:53.569Z"
 canonical: "https://github.com/openclaw/openclaw/pull/74905"
 canonical_issue: null
 canonical_pr: "https://github.com/openclaw/openclaw/pull/74905"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25308973883](https://github.com/openclaw/clawsweeper/actions/runs/25308973883)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25310226215](https://github.com/openclaw/clawsweeper/actions/runs/25310226215)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/74905
 
 ## Summary
 
-Plan a bounded in-place repair for adopted PR #74905. The PR is the canonical path, current main still has the direct APNs `http2.connect()` call, and the same-repo head branch is writable, but the preflight says the PR is dirty against main and merge is disabled. Linked PR #77126 is security-sensitive and must be routed out of this repair lane.
+Keep #74905 as the canonical adopted PR and plan a bounded same-branch repair/review loop. The branch is writable, but merge and close are disabled by job policy. Route linked security-sensitive #77126 to central security handling only.
 
 ## Impact
 
@@ -67,9 +67,9 @@ Plan a bounded in-place repair for adopted PR #74905. The PR is the canonical pa
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #74905 | fix_needed | planned | canonical | Repair the contributor PR branch in place: rebase #74905 onto current main, resolve only resulting conflicts or exact-head ClawSweeper findings, rerun review and changed-surface validation, and leave final merge to the protected human/security gate. |
-| #77126 | route_security | planned | security_sensitive | Route the linked security-sensitive PR to central OpenClaw security handling; do not repair, close, label, or merge it from this job. |
-| cluster:automerge-openclaw-openclaw-74905 | build_fix_artifact | planned |  | Emit an executable repair plan for the deterministic ClawSweeper executor. |
+| #74905 | fix_needed | planned | canonical | Canonical adopted PR is useful and branch-writable, but exact-head ClawSweeper review still requires a bounded repair/proof pass before any later merge consideration. |
+| cluster:automerge-openclaw-openclaw-74905 | build_fix_artifact | planned |  | Emit executable repair instructions for the deterministic executor without mutating GitHub directly. |
+| #77126 | route_security | planned | security_sensitive | Security-sensitive linked ref is outside this bounded adopted-PR repair lane. |
 
 ## Needs Human
 
