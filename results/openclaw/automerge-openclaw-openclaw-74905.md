@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-74905"
 mode: "autonomous"
-run_id: "25312744510"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25312744510"
+run_id: "25314074976"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25314074976"
 head_sha: "09e9daf950ced9cfe740417d18f30b6e88b5b33a"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-04T10:35:33.782Z"
+published_at: "2026-05-04T11:05:16.077Z"
 canonical: "https://github.com/openclaw/openclaw/pull/74905"
 canonical_issue: null
 canonical_pr: "https://github.com/openclaw/openclaw/pull/74905"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25312744510](https://github.com/openclaw/clawsweeper/actions/runs/25312744510)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25314074976](https://github.com/openclaw/clawsweeper/actions/runs/25314074976)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/74905
 
 ## Summary
 
-Canonical path is the adopted open PR #74905. It is not merge-ready in this job because merge is disabled and the hydrated ClawSweeper review still requests a bounded repair/re-review loop. Emit a contributor-branch repair artifact for #74905, and quarantine linked security-sensitive PR #77126 without repair or closure.
+PR #74905 remains the canonical adopted repair path, but it is not merge-ready in this job: merge is disabled, the exact head has relevant failing checks, and the hydrated ClawSweeper/Copilot review context still requires a bounded repair or fresh exact-head clean review. Security-sensitive linked PR #77126 is routed to central security handling and kept out of this repair lane.
 
 ## Impact
 
@@ -66,9 +66,9 @@ Canonical path is the adopted open PR #74905. It is not merge-ready in this job 
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #74905 | fix_needed | planned | canonical | Repair the adopted contributor branch, then require exact-head re-review and validation; do not merge from this autonomous job. |
-| #77126 | route_security | planned | security_sensitive | Route linked security-sensitive raw-socket guardrail work to central OpenClaw security handling. |
-| cluster:automerge-openclaw-openclaw-74905 | build_fix_artifact | planned |  | Produce an executable repair artifact for the deterministic applicator without mutating GitHub directly. |
+| #74905 | fix_needed | planned | canonical | Repair the writable contributor branch in place, then require fresh exact-head ClawSweeper review and `pnpm check:changed` before any later merge-capable lane. |
+| cluster:automerge-openclaw-openclaw-74905 | build_fix_artifact | planned |  | Build an executable in-place repair plan for #74905; do not open a replacement PR unless branch repair becomes unsafe. |
+| #77126 | route_security | planned | security_sensitive | Quarantine #77126 to central OpenClaw security triage and continue the unrelated bounded repair lane for #74905. |
 
 ## Needs Human
 
