@@ -7,6 +7,11 @@ turns narrow trusted findings into guarded repair or automerge work.
 The current production targets are `openclaw/openclaw`, `openclaw/clawhub`, and
 self-review for `openclaw/clawsweeper`.
 
+The OpenClaw-hosted ClawSweeper instance is not a public review service and does
+not provide free reviews for third-party repositories. If you want ClawSweeper
+for your own project, fork this repository, deploy it in your own organization,
+and configure that self-hosted instance for your repositories.
+
 At a high level ClawSweeper:
 
 - reviews open issues and pull requests on a schedule and on exact GitHub events
