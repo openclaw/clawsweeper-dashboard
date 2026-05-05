@@ -1,6 +1,6 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-05-05T04:16:16.079Z
+Generated: 2026-05-05T06:05:06.629Z
 
 ## Summary
 
@@ -11,7 +11,7 @@ Generated: 2026-05-05T04:16:16.079Z
 | security_hold | 0 |
 | needs_rebase | 0 |
 | mergeability_unknown | 0 |
-| needs_checks | 1 |
+| needs_checks | 0 |
 | needs_review | 0 |
 | needs_merge_preflight | 1 |
 | needs_result_backfill | 0 |
@@ -30,4 +30,4 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#77602](https://github.com/openclaw/openclaw/pull/77602) | feat(cron): add agentId filtering to cron list | automerge-openclaw-openclaw-77188 | MERGEABLE | UNSTABLE | CANCELLED:1 SUCCESS:85 SKIPPED:20 FAILURE:4 NEUTRAL:1; blockers:5 | needs_merge_state:UNSTABLE, needs_checks:ClawSweeper Dispatch / dispatch:CANCELLED; CI / check-additional-boundaries-a:FAILURE; CI / checks-node-core-support-boundary:FAILURE, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
+| [#77602](https://github.com/openclaw/openclaw/pull/77602) | feat(cron): add agentId filtering to cron list | automerge-openclaw-openclaw-77188 | MERGEABLE | CLEAN | SUCCESS:90 SKIPPED:20 NEUTRAL:1 | needs_merge_preflight | backfill merge preflight: security cleared, comments resolved, Codex /review passed, validation recorded |
