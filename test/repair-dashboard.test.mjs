@@ -24,6 +24,13 @@ test("repair dashboard links shorthand targets through the source repo", () => {
           status: "blocked",
           reason: "needs inspection",
         },
+        {
+          target: "#901",
+          action: "repair_contributor_branch",
+          status: "blocked",
+          reason: "needs branch repair",
+          url: "https://github.com/openclaw/openclaw/pull/901",
+        },
       ],
       apply_actions: [
         {
@@ -50,6 +57,7 @@ test("repair dashboard links shorthand targets through the source repo", () => {
   assert.match(dashboard, /\[#123\]\(https:\/\/github\.com\/openclaw\/openclaw\/issues\/123\)/);
   assert.match(dashboard, /\[#789\]\(https:\/\/github\.com\/openclaw\/openclaw\/issues\/789\)/);
   assert.match(dashboard, /\[#456\]\(https:\/\/github\.com\/openclaw\/openclaw\/pull\/456\)/);
+  assert.match(dashboard, /\[#901\]\(https:\/\/github\.com\/openclaw\/openclaw\/pull\/901\)/);
   assert.doesNotMatch(dashboard, /\[#123\]\(#123\)/);
   assert.doesNotMatch(dashboard, /\[#789\]\(#789\)/);
 });

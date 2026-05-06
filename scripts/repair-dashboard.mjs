@@ -201,9 +201,30 @@ function targetLink(record, action) {
   const shorthand = target.match(/^#(\d+)$/);
   const repo = String(record.repo ?? "");
   if (shorthand && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
-    return link(target, `https://github.com/${repo}/issues/${shorthand[1]}`);
+    const explicitUrl = githubItemUrlForNumber(action.url, shorthand[1]);
+    if (explicitUrl) return link(target, explicitUrl);
+    const segment = repairActionTargetsPullRequest(action) ? "pull" : "issues";
+    return link(target, `https://github.com/${repo}/${segment}/${shorthand[1]}`);
   }
   return target ? link(target, target) : "";
+}
+
+function githubItemUrlForNumber(value, number) {
+  const url = String(value ?? "");
+  const match = url.match(/^https:\/\/github\.com\/[^/]+\/[^/]+\/(?:issues|pull)\/(\d+)$/);
+  return match?.[1] === number ? url : "";
+}
+
+function repairActionTargetsPullRequest(action) {
+  const actionName = String(action.action ?? "");
+  const classification = String(action.classification ?? "");
+  return (
+    actionName.startsWith("merge_") ||
+    actionName.includes("automerge") ||
+    actionName.includes("repair_contributor_branch") ||
+    classification === "canonical" ||
+    classification === "fix_pr"
+  );
 }
 
 function inspectionRow(row) {
