@@ -4,34 +4,34 @@ Generated from the durable state branch for [openclaw/clawsweeper](https://githu
 
 ## Sweep Dashboard
 
-Last source update: May 5, 2026, 23:30 UTC
+Last source update: May 6, 2026, 00:00 UTC
 
 ### Fleet
 
 | Metric | Count |
 | --- | ---: |
 | Covered repositories | 3 |
-| Open review records | 7233 |
-| Archived closed records | 18390 |
-| Fresh reviews, 7d | 7131 |
-| Proposed closes awaiting apply | 1 |
-| Work candidates awaiting promotion | 2924 |
+| Open review records | 7230 |
+| Archived closed records | 18398 |
+| Fresh reviews, 7d | 7128 |
+| Proposed closes awaiting apply | 0 |
+| Work candidates awaiting promotion | 2922 |
 | Failed or stale reviews | 69 |
 
 ### Current Runs
 
 | Repository | State | Updated | Run |
 | --- | --- | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Hot intake publish complete | May 5, 2026, 23:30 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25407778161) |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | Hot intake publish complete | May 5, 2026, 23:24 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25407585256) |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Apply finished | May 5, 2026, 23:59 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25408911067) |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | Review in progress | May 6, 2026, 00:00 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25408958456) |
 | [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Audit finished | May 5, 2026, 18:49 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25395683662) |
 
 ### Repositories
 
 | Repository | Open records | Archived | Fresh | Proposed closes | Work candidates | Failed/stale | Last review | Last close |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 6980 | 17630 | 6878 | 1 | 2900 | 68 | May 5, 2026, 23:30 UTC | May 5, 2026, 23:21 UTC |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | 252 | 755 | 252 | 0 | 23 | 1 | May 5, 2026, 23:22 UTC | May 5, 2026, 22:28 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 6977 | 17638 | 6875 | 0 | 2898 | 68 | May 5, 2026, 23:54 UTC | May 5, 2026, 23:52 UTC |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | 252 | 755 | 252 | 0 | 23 | 1 | May 5, 2026, 23:55 UTC | May 5, 2026, 22:28 UTC |
 | [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | 1 | 5 | 1 | 0 | 1 | 0 | May 2, 2026, 06:33 UTC | May 1, 2026, 02:07 UTC |
 
 ### Work Candidates
@@ -84,21 +84,21 @@ Last source update: May 5, 2026, 23:30 UTC
 
 | Repository | Item | Title | Outcome | Status | Reviewed |
 | --- | --- | --- | --- | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78076](https://github.com/openclaw/openclaw/pull/78076) | feat(mistral): add mistral-medium-3.5 model | keep_open / kept_open | complete | May 5, 2026, 23:30 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#76251](https://github.com/openclaw/openclaw/pull/76251) | fix(agents): filter runtime context from context engines | keep_open / kept_open | complete | May 5, 2026, 23:29 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78121](https://github.com/openclaw/openclaw/issues/78121) | [Bug]: refreshPageRelatedBlocks rewrites empty source pages as 107-byte tail-only stubs (replaceManagedMark... | keep_open / kept_open | complete | May 5, 2026, 23:29 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78120](https://github.com/openclaw/openclaw/issues/78120) | WhatsApp group: CLI assistant reply generated but never dispatched (group lane only — DM works) | close / proposed_close | complete | May 5, 2026, 23:26 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#9546](https://github.com/openclaw/openclaw/issues/9546) | [Feature Request] Add option to disable 'new messages' notification banner in WebChat | keep_open / kept_open | complete | May 5, 2026, 23:25 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78030](https://github.com/openclaw/openclaw/pull/78030) | fix(google): refresh Gemini CLI OAuth tokens | keep_open / kept_open | complete | May 5, 2026, 23:25 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78105](https://github.com/openclaw/openclaw/pull/78105) | fix(plugins): make empty-allowlist actionable for new users | keep_open / kept_open | complete | May 5, 2026, 23:24 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78119](https://github.com/openclaw/openclaw/pull/78119) | fix: allow tweakcn theme imports in Control UI CSP | keep_open / kept_open | complete | May 5, 2026, 23:24 UTC |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#2029](https://github.com/openclaw/clawhub/issues/2029) | gateway-wechaty | keep_open / kept_open | complete | May 5, 2026, 23:22 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#77634](https://github.com/openclaw/openclaw/issues/77634) | [Bug] Discord plugin fetch timeout blocks Node.js event loop, causing liveness warnings | keep_open / kept_open | complete | May 5, 2026, 23:22 UTC |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#26](https://github.com/openclaw/clawhub/issues/26) | Search doesn't work in the latest update. | keep_open / kept_open | complete | May 5, 2026, 23:20 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78112](https://github.com/openclaw/openclaw/pull/78112) | [AI-assisted] fix(doctor): tolerate malformed crontab output | keep_open / kept_open | complete | May 5, 2026, 23:20 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#9016](https://github.com/openclaw/openclaw/issues/9016) | Feature: Expose OpenRouter usage cost to agent runtime | keep_open / kept_open | complete | May 5, 2026, 23:19 UTC |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#2032](https://github.com/openclaw/clawhub/issues/2032) | skill safe-encryption-skill: Spec Prohibits File Output But CLI Tool's Standard Interface Is File Output | keep_open / kept_open | complete | May 5, 2026, 23:17 UTC |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#1711](https://github.com/openclaw/clawhub/issues/1711) | Request: Change skill display name from 'skill' to 'Relic Soul Chip' | keep_open / kept_open | complete | May 5, 2026, 23:15 UTC |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#2002](https://github.com/openclaw/clawhub/issues/2002) | skill publish --tags latest does not move displayed latest version to prerelease publish | keep_open / kept_open | complete | May 5, 2026, 23:55 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#9987](https://github.com/openclaw/openclaw/issues/9987) | [Feature]: CLI command to list pending exec approval requests | keep_open / kept_open | complete | May 5, 2026, 23:54 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#77929](https://github.com/openclaw/openclaw/pull/77929) | feat: unify Talk session runtime | keep_open / kept_open | complete | May 5, 2026, 23:54 UTC |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#575](https://github.com/openclaw/clawhub/issues/575) | Enforce uppercase SKILL.md and PROTOCOL.md | keep_open / kept_open | complete | May 5, 2026, 23:52 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#76193](https://github.com/openclaw/openclaw/pull/76193) | fix(telegram): suppress tool-only silent fallback | keep_open / kept_open | complete | May 5, 2026, 23:46 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78130](https://github.com/openclaw/openclaw/pull/78130) | fix(memory-core): exclude session-corpus files from short-term promotion (#77831) | keep_open / kept_open | complete | May 5, 2026, 23:46 UTC |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#128](https://github.com/openclaw/clawhub/issues/128) | Feature Request: Add --dry-run flag to update command | keep_open / kept_open | complete | May 5, 2026, 23:45 UTC |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#2024](https://github.com/openclaw/clawhub/issues/2024) | Publisher "@4tk" not found when publishing package as 4tk-ai | keep_open / kept_open | complete | May 5, 2026, 23:44 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78119](https://github.com/openclaw/openclaw/pull/78119) | fix: allow tweakcn theme imports in Control UI CSP | keep_open / kept_open | complete | May 5, 2026, 23:44 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78129](https://github.com/openclaw/openclaw/pull/78129) | fix: preserve final replies without block streaming | keep_open / kept_open | complete | May 5, 2026, 23:42 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#77889](https://github.com/openclaw/openclaw/pull/77889) | Fix WebChat display for Codex-generated local media | keep_open / kept_open | complete | May 5, 2026, 23:42 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#9607](https://github.com/openclaw/openclaw/issues/9607) | Himalaya skill: missing email formatting philosophy and incorrect command syntax | keep_open / kept_open | complete | May 5, 2026, 23:40 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78127](https://github.com/openclaw/openclaw/pull/78127) | fix(memory-wiki): skip empty source pages in refreshPageRelatedBlocks (#78121) | keep_open / kept_open | complete | May 5, 2026, 23:39 UTC |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#625](https://github.com/openclaw/clawhub/issues/625) | Urgent: Please delete my two published skills | keep_open / kept_open | complete | May 5, 2026, 23:39 UTC |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#2025](https://github.com/openclaw/clawhub/issues/2025) | Cannot login after account deletion (GitHub OAuth locked) | keep_open / kept_open | complete | May 5, 2026, 23:39 UTC |
 
 </details>
 
