@@ -2,16 +2,16 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-75035"
 mode: "autonomous"
-run_id: "25430896142"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25430896142"
+run_id: "25432112999"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25432112999"
 head_sha: "1f9fcbc5089921a390e47d48f49e4f2a9b77e6d4"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-06T11:17:59.911Z"
+published_at: "2026-05-06T11:42:06.172Z"
 canonical: "https://github.com/openclaw/openclaw/pull/75035"
 canonical_issue: null
 canonical_pr: "https://github.com/openclaw/openclaw/pull/75035"
-actions_total: 2
+actions_total: 3
 fix_executed: 0
 fix_failed: 0
 fix_blocked: 0
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25430896142](https://github.com/openclaw/clawsweeper/actions/runs/25430896142)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25432112999](https://github.com/openclaw/clawsweeper/actions/runs/25432112999)
 
 Workflow conclusion: success
 
@@ -35,13 +35,13 @@ Canonical: https://github.com/openclaw/openclaw/pull/75035
 
 ## Summary
 
-PR #75035 is the canonical automerge candidate, but it is not merge-ready in the hydrated preflight state because one relevant CI shard is failing and several required checks are still pending. Branch is same-repo writable, so the safe path is to repair the contributor branch rather than replace it.
+#75035 is the canonical PR and remains open, non-draft, branch-writable, and opted into ClawSweeper automerge. The hydrated ClawSweeper review passed and CI is green, but GitHub reports mergeable_state dirty, so the next deterministic action is to repair/rebase the same contributor branch and rerun the exact-head review and changed gate. No close or merge action is allowed by this job.
 
 ## Impact
 
 | Metric | Count |
 | --- | ---: |
-| Worker actions | 2 |
+| Worker actions | 3 |
 | Fix executed | 0 |
 | Fix failed | 0 |
 | Fix blocked | 0 |
@@ -66,8 +66,9 @@ PR #75035 is the canonical automerge candidate, but it is not merge-ready in the
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #75035 | fix_needed | planned | canonical | Canonical PR needs a bounded repair/validation loop for the failing auto-reply dispatch check and pending exact-head gates before any later automerge router can consider merge. |
-| cluster:automerge-openclaw-openclaw-75035 | build_fix_artifact | planned |  | Create an executable repair artifact for the existing writable PR branch instead of opening a replacement PR. |
+| #75035 | keep_canonical | planned | canonical | Canonical PR is useful and branch-writable, but not merge-ready because GitHub reports mergeable_state dirty. |
+| cluster:automerge-openclaw-openclaw-75035 | fix_needed | planned |  | Repair the existing #75035 branch by rebasing/resolving conflicts against current main fc1e2c505ad0ba173b80e0193064798856caf5f4, then rerun ClawSweeper review and pnpm check:changed before any merge-capable applicator proceeds. |
+| cluster:automerge-openclaw-openclaw-75035 | build_fix_artifact | planned |  | Build an executable repair plan for the branch-writable canonical PR; do not open a replacement PR unless branch repair becomes unsafe. |
 
 ## Needs Human
 
