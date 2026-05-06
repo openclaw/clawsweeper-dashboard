@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-78426"
 mode: "autonomous"
-run_id: "25431450671"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25431450671"
+run_id: "25432732404"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25432732404"
 head_sha: "1f9fcbc5089921a390e47d48f49e4f2a9b77e6d4"
 workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-05-06T11:11:20.484Z"
+published_at: "2026-05-06T11:36:57.631Z"
 canonical: "https://github.com/openclaw/openclaw/pull/78426"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/77814"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/78426"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25431450671](https://github.com/openclaw/clawsweeper/actions/runs/25431450671)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25432732404](https://github.com/openclaw/clawsweeper/actions/runs/25432732404)
 
 Workflow conclusion: failure
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/78426
 
 ## Summary
 
-PR #78426 is the canonical repair path for issue #77814, but it is not merge-ready. The same-repo contributor branch is writable, the diff is small, and the actionable blocker is repairable in place: add after-fix real behavior proof to the PR body, investigate/rerun the failed relevant checks, run changed-surface validation, then request a fresh ClawSweeper review for the exact repaired head.
+Canonical PR #78426 is a focused, writable same-repo repair candidate for issue #77814, but it is not merge-ready in this worker lane because merge/close are blocked by job policy and the hydrated ClawSweeper comments still require exact-path real behavior proof plus re-review before final automerge. Emit a repair-contributor-branch fix artifact for the executor to update/verify the existing PR branch, preserve @obviyus credit, rerun review, and leave closure/merge to the guarded router.
 
 ## Impact
 
@@ -66,9 +66,9 @@ PR #78426 is the canonical repair path for issue #77814, but it is not merge-rea
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #78426 | fix_needed | planned | canonical | The canonical PR is useful and branch-writable, but ClawSweeper review and CI proof gates are not clean; repair should update the contributor branch/PR body rather than replace it. |
-| #77814 | keep_related | planned | fixed_by_candidate | Keep the issue open while the canonical PR is repaired and validated; no closeout is allowed in this job. |
-| cluster:automerge-openclaw-openclaw-78426 | build_fix_artifact | planned |  | A bounded repair artifact is needed; merge and close are explicitly blocked by job policy. |
+| #78426 | fix_needed | planned | canonical | Repair the adopted contributor PR branch rather than replacing it; the branch is writable and the remaining work is bounded to proof/review validation for the current head. |
+| #77814 | keep_related | planned | related | Keep the issue open and linked to the canonical repair PR until the fix lands and the closeout gate is allowed. |
+| cluster:automerge-openclaw-openclaw-78426 | build_fix_artifact | planned |  | Create an executable repair plan for the existing contributor branch so the executor can refresh proof, validation, changelog attribution, and review state before any later merge-capable router decision. |
 
 ## Needs Human
 
