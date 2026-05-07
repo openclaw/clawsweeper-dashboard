@@ -4,7 +4,7 @@ Generated from the durable state branch for [openclaw/clawsweeper](https://githu
 
 ## Sweep Dashboard
 
-Last source update: May 7, 2026, 01:09 UTC
+Last source update: May 7, 2026, 01:11 UTC
 
 ### Fleet
 
@@ -23,14 +23,14 @@ Last source update: May 7, 2026, 01:09 UTC
 | Repository | State | Updated | Run |
 | --- | --- | --- | --- |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | Apply finished | May 7, 2026, 01:09 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25470117724) |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | Apply in progress | May 7, 2026, 01:05 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25470015524) |
-| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Audit finished | May 6, 2026, 07:14 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25421636354) |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | Review in progress | May 7, 2026, 01:11 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25470181034) |
+| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Audit finished | May 7, 2026, 01:11 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25470194210) |
 
 ### Repositories
 
 | Repository | Open records | Archived | Fresh | Proposed closes | Work candidates | Failed/stale | Last review | Last close |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 7170 | 17893 | 7058 | 0 | 2903 | 71 | May 7, 2026, 01:07 UTC | May 7, 2026, 01:09 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 7170 | 17893 | 7058 | 0 | 2903 | 71 | May 7, 2026, 01:11 UTC | May 7, 2026, 01:09 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | 258 | 767 | 257 | 0 | 21 | 1 | May 7, 2026, 01:08 UTC | May 7, 2026, 00:24 UTC |
 | [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | 0 | 6 | 0 | 0 | 0 | 0 | unknown | May 6, 2026, 01:07 UTC |
 
@@ -84,6 +84,7 @@ Last source update: May 7, 2026, 01:09 UTC
 
 | Repository | Item | Title | Outcome | Status | Reviewed |
 | --- | --- | --- | --- | --- | --- |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78152](https://github.com/openclaw/openclaw/pull/78152) | fix(auto-reply): keep silent turn errors visible | keep_open / kept_open | complete | May 7, 2026, 01:11 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#737](https://github.com/openclaw/clawhub/issues/737) | Remove duplicate label on @nexecuteinc/cmdbcompass | keep_open / kept_open | complete | May 7, 2026, 01:08 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#2049](https://github.com/openclaw/clawhub/issues/2049) | [False Positive] - Skill Flagged as sensitive, just for checking URL and alerting user | keep_open / kept_open | complete | May 7, 2026, 01:08 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78678](https://github.com/openclaw/openclaw/pull/78678) | feat(workspace): full oc-path addressing substrate (md/jsonc/jsonl/yaml) | keep_open / kept_open | complete | May 7, 2026, 01:07 UTC |
@@ -98,7 +99,6 @@ Last source update: May 7, 2026, 01:09 UTC
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#8321](https://github.com/openclaw/openclaw/issues/8321) | Feature: Per-job cache control for cron jobs | keep_open / kept_open | complete | May 7, 2026, 00:56 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78684](https://github.com/openclaw/openclaw/issues/78684) | [Bug]: `gateway.auth.mode=trusted-proxy` still accepts local password auth fallback when `OPENCLAW_GATEWAY_... | keep_open / kept_open | complete | May 7, 2026, 00:56 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78683](https://github.com/openclaw/openclaw/issues/78683) | [Feature]: We hope that OpenClaw will optimize runtime speed and improve stability in future releases. | keep_open / kept_open | complete | May 7, 2026, 00:55 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78558](https://github.com/openclaw/openclaw/pull/78558) | [Experimental] chore: prune generated and vendored surfaces | keep_open / kept_open | complete | May 7, 2026, 00:55 UTC |
 
 </details>
 
@@ -108,7 +108,7 @@ Last source update: May 7, 2026, 01:09 UTC
 | --- | --- | --- | ---: | ---: | ---: | --- |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | missing records | May 7, 2026, 01:08 UTC | 48 | 0 | 0 | yes |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | clean | May 7, 2026, 01:08 UTC | 0 | 0 | 0 | yes |
-| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | missing records | May 6, 2026, 18:53 UTC | 1 | 0 | 0 | yes |
+| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | missing records | May 7, 2026, 01:11 UTC | 1 | 0 | 0 | yes |
 
 
 ## Repair Dashboard
