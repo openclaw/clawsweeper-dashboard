@@ -4,7 +4,7 @@ Generated from the durable state branch for [openclaw/clawsweeper](https://githu
 
 ## Sweep Dashboard
 
-Last source update: May 7, 2026, 18:48 UTC
+Last source update: May 7, 2026, 18:55 UTC
 
 ### Fleet
 
@@ -12,7 +12,7 @@ Last source update: May 7, 2026, 18:48 UTC
 | --- | ---: |
 | Covered repositories | 3 |
 | Open review records | 7529 |
-| Archived closed records | 18880 |
+| Archived closed records | 18881 |
 | Fresh reviews, 7d | 7414 |
 | Proposed closes awaiting apply | 0 |
 | Work candidates awaiting promotion | 2903 |
@@ -22,16 +22,16 @@ Last source update: May 7, 2026, 18:48 UTC
 
 | Repository | State | Updated | Run |
 | --- | --- | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Apply finished | May 7, 2026, 18:42 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25515095946) |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | Review in progress | May 7, 2026, 18:48 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25515437972) |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Audit finished | May 7, 2026, 18:49 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25515427947) |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | Planning review | May 7, 2026, 18:55 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25515763024) |
 | [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Audit finished | May 7, 2026, 12:58 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25497166682) |
 
 ### Repositories
 
 | Repository | Open records | Archived | Fresh | Proposed closes | Work candidates | Failed/stale | Last review | Last close |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 7256 | 18099 | 7141 | 0 | 2882 | 84 | May 7, 2026, 18:46 UTC | May 7, 2026, 18:32 UTC |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | 273 | 775 | 273 | 0 | 21 | 2 | May 7, 2026, 18:46 UTC | May 7, 2026, 09:54 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 7256 | 18100 | 7141 | 0 | 2882 | 84 | May 7, 2026, 18:52 UTC | May 7, 2026, 18:54 UTC |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | 273 | 775 | 273 | 0 | 21 | 2 | May 7, 2026, 18:52 UTC | May 7, 2026, 09:54 UTC |
 | [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | 0 | 6 | 0 | 0 | 0 | 0 | unknown | May 6, 2026, 01:07 UTC |
 
 ### Work Candidates
@@ -63,6 +63,7 @@ Last source update: May 7, 2026, 18:48 UTC
 
 | Repository | Item | Title | Reason | Closed | Report |
 | --- | --- | --- | --- | --- | --- |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78896](https://github.com/openclaw/openclaw/pull/78896) | fix: preserve user config fields in doctor --fix (#78858) | closed externally after review | May 7, 2026, 18:54 UTC | [records/openclaw-openclaw/closed/78896.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/78896.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#75669](https://github.com/openclaw/openclaw/pull/75669) | fix(subagents): fall through to gateway call when steer+fallback fail | closed externally after review | May 7, 2026, 18:32 UTC | [records/openclaw-openclaw/closed/75669.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/75669.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#75663](https://github.com/openclaw/openclaw/issues/75663) | Bug: Subagent completion announcements silently drop on Telegram when parent session is idle between turns | closed externally after review | May 7, 2026, 18:32 UTC | [records/openclaw-openclaw/closed/75663.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/75663.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79042](https://github.com/openclaw/openclaw/pull/79042) | Openclaw | not_actionable_in_repo | May 7, 2026, 17:58 UTC | [records/openclaw-openclaw/closed/79042.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/79042.md) |
@@ -77,13 +78,19 @@ Last source update: May 7, 2026, 18:48 UTC
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79010](https://github.com/openclaw/openclaw/pull/79010) | feat(wizard): add CLI wizard i18n with zh-CN support | duplicate_or_superseded | May 7, 2026, 16:08 UTC | [records/openclaw-openclaw/closed/79010.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/79010.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79005](https://github.com/openclaw/openclaw/issues/79005) | Telegram forum topics should map to separate sessions | closed externally after review | May 7, 2026, 16:06 UTC | [records/openclaw-openclaw/closed/79005.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/79005.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79001](https://github.com/openclaw/openclaw/pull/79001) | fix/issue-76890-memory-session-yield | duplicate_or_superseded | May 7, 2026, 16:05 UTC | [records/openclaw-openclaw/closed/79001.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/79001.md) |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78997](https://github.com/openclaw/openclaw/issues/78997) | [Feature]: CLI setup wizard i18n / 安装向导多语言支持 | duplicate_or_superseded | May 7, 2026, 15:58 UTC | [records/openclaw-openclaw/closed/78997.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/78997.md) |
 
 <details>
 <summary>Recently Reviewed</summary>
 
 | Repository | Item | Title | Outcome | Status | Reviewed |
 | --- | --- | --- | --- | --- | --- |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#13364](https://github.com/openclaw/openclaw/issues/13364) | [Feature]: Expose before_tool_call/after_tool_call in internal hooks system | keep_open / kept_open | failed | May 7, 2026, 18:52 UTC |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#1717](https://github.com/openclaw/clawhub/issues/1717) | Bug: /api/auth/signin/github returns HTTP 500 — GitHub OAuth broken, no new tokens can be generated | keep_open / kept_open | complete | May 7, 2026, 18:52 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79041](https://github.com/openclaw/openclaw/pull/79041) | fix(webhooks): scope child task sessions | keep_open / kept_open | complete | May 7, 2026, 18:50 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#61396](https://github.com/openclaw/openclaw/pull/61396) | fix(i18n): add device/node pairing terms to zh-CN glossary | keep_open / kept_open | complete | May 7, 2026, 18:50 UTC |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#2083](https://github.com/openclaw/clawhub/issues/2083) | please unflag my skills | keep_open / kept_open | complete | May 7, 2026, 18:49 UTC |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#2072](https://github.com/openclaw/clawhub/pull/2072) | Enforce scoped plugin ownership | keep_open / kept_open | complete | May 7, 2026, 18:49 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79055](https://github.com/openclaw/openclaw/issues/79055) | [Feature]: add pre-answer context preload hook for realtime voice agents | keep_open / kept_open | complete | May 7, 2026, 18:49 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79029](https://github.com/openclaw/openclaw/pull/79029) | fix: clear stale lastGood OAuth profile on refresh_token_reused (#79021) | keep_open / kept_open | complete | May 7, 2026, 18:46 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78186](https://github.com/openclaw/openclaw/pull/78186) | fix(line): respond 200 to webhook before agent processing (#65375) | keep_open / kept_open | complete | May 7, 2026, 18:46 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79054](https://github.com/openclaw/openclaw/pull/79054) | fix(slack): preserve mention source metadata | keep_open / kept_open | complete | May 7, 2026, 18:46 UTC |
@@ -92,13 +99,6 @@ Last source update: May 7, 2026, 18:48 UTC
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#2086](https://github.com/openclaw/clawhub/issues/2086) | My skill has been incorrectly flagged，link：https://clawhub.ai/qizhitang/xiaozhi-learning-dna | keep_open / kept_open | complete | May 7, 2026, 18:44 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#76262](https://github.com/openclaw/openclaw/pull/76262) | fix(msteams): rebase TeamsSDK patterns to simplify Teams Integration | keep_open / kept_open | complete | May 7, 2026, 18:43 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79053](https://github.com/openclaw/openclaw/issues/79053) | Bug: Subagent completion announcements dropped when parent session is idle (reopened, upstream restructured) | keep_open / kept_open | complete | May 7, 2026, 18:39 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#10737](https://github.com/openclaw/openclaw/issues/10737) | Feature Request: Auto-acknowledgment for iMessage channel | keep_open / kept_open | complete | May 7, 2026, 18:38 UTC |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#2085](https://github.com/openclaw/clawhub/issues/2085) | [Skill Appeal] Manual Review Request: False Positives on Memory Plugin (@memorilabs/openclaw-memori) | keep_open / kept_open | complete | May 7, 2026, 18:37 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#75781](https://github.com/openclaw/openclaw/pull/75781) | fix(gateway): include auth mode "none" in backend self-pairing skip | keep_open / kept_open | complete | May 7, 2026, 18:36 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78543](https://github.com/openclaw/openclaw/pull/78543) | fix(gateway): allow tweakcn.com in Control UI CSP connect-src | keep_open / kept_open | complete | May 7, 2026, 18:36 UTC |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#920](https://github.com/openclaw/clawhub/issues/920) | Pairing feishu error | keep_open / kept_open | complete | May 7, 2026, 18:34 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79048](https://github.com/openclaw/openclaw/issues/79048) | [Bug]: Impossible to install on mac | keep_open / kept_open | complete | May 7, 2026, 18:32 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79018](https://github.com/openclaw/openclaw/issues/79018) | [Bug]: openclaw-cli container cannot resolve DNS due to cap_drop NET_RAW/NET_ADMIN (blocks 'openclaw plugin... | keep_open / kept_open | complete | May 7, 2026, 18:30 UTC |
 
 </details>
 
@@ -106,9 +106,9 @@ Last source update: May 7, 2026, 18:48 UTC
 
 | Repository | Status | Last audit | Missing eligible | Stale records | Protected proposed | Scan complete |
 | --- | --- | --- | ---: | ---: | ---: | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | missing records | May 7, 2026, 12:55 UTC | 64 | 0 | 0 | yes |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | missing records | May 7, 2026, 18:49 UTC | 74 | 0 | 0 | yes |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | clean | May 7, 2026, 18:48 UTC | 0 | 0 | 0 | yes |
-| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | missing records | May 7, 2026, 12:58 UTC | 3 | 0 | 0 | yes |
+| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | missing records | May 7, 2026, 18:54 UTC | 3 | 0 | 0 | yes |
 
 
 ## Repair Dashboard
