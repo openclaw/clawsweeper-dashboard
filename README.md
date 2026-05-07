@@ -4,25 +4,25 @@ Generated from the durable state branch for [openclaw/clawsweeper](https://githu
 
 ## Sweep Dashboard
 
-Last source update: May 7, 2026, 07:18 UTC
+Last source update: May 7, 2026, 07:20 UTC
 
 ### Fleet
 
 | Metric | Count |
 | --- | ---: |
 | Covered repositories | 3 |
-| Open review records | 7451 |
-| Archived closed records | 18773 |
-| Fresh reviews, 7d | 7339 |
+| Open review records | 7453 |
+| Archived closed records | 18771 |
+| Fresh reviews, 7d | 7341 |
 | Proposed closes awaiting apply | 1 |
 | Work candidates awaiting promotion | 2905 |
-| Failed or stale reviews | 79 |
+| Failed or stale reviews | 81 |
 
 ### Current Runs
 
 | Repository | State | Updated | Run |
 | --- | --- | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Review publish complete | May 7, 2026, 07:17 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25481402318) |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Apply finished | May 7, 2026, 07:20 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25481815533) |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | Review publish complete | May 7, 2026, 07:17 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25481545232) |
 | [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Audit finished | May 7, 2026, 01:11 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25470194210) |
 
@@ -30,7 +30,7 @@ Last source update: May 7, 2026, 07:18 UTC
 
 | Repository | Open records | Archived | Fresh | Proposed closes | Work candidates | Failed/stale | Last review | Last close |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 7190 | 17995 | 7078 | 1 | 2886 | 78 | May 7, 2026, 07:15 UTC | May 7, 2026, 07:18 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 7192 | 17993 | 7080 | 1 | 2886 | 80 | May 7, 2026, 07:15 UTC | May 7, 2026, 07:18 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | 261 | 772 | 261 | 0 | 19 | 1 | May 7, 2026, 07:16 UTC | May 7, 2026, 06:41 UTC |
 | [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | 0 | 6 | 0 | 0 | 0 | 0 | unknown | May 6, 2026, 01:07 UTC |
 
@@ -69,8 +69,6 @@ Last source update: May 7, 2026, 07:18 UTC
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#69708](https://github.com/openclaw/openclaw/issues/69708) | auth-profiles.json rejects "type": "aws-sdk" as invalid_type since 2026.4.1 — breaks Bedrock on EC2 (IMDS) | closed externally after review | May 7, 2026, 07:18 UTC | [records/openclaw-openclaw/closed/69708.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/69708.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#47561](https://github.com/openclaw/openclaw/issues/47561) | Bug: /new session can be stranded by routing-mode changes and resume an older session | closed externally after review | May 7, 2026, 07:18 UTC | [records/openclaw-openclaw/closed/47561.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/47561.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#45554](https://github.com/openclaw/openclaw/issues/45554) | [Bug]: switching session.dmScope back to main does not reconcile stale peer-keyed direct DM sessions | closed externally after review | May 7, 2026, 07:18 UTC | [records/openclaw-openclaw/closed/45554.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/45554.md) |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#64044](https://github.com/openclaw/openclaw/pull/64044) | fix(infra): upgrade base image from Debian 12 to Debian 13 (trixie) | closed externally after review | May 7, 2026, 07:17 UTC | [records/openclaw-openclaw/closed/64044.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/64044.md) |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#64046](https://github.com/openclaw/openclaw/issues/64046) | [Feature]: 希望支持敏感数据脱敏 | closed externally after review | May 7, 2026, 07:17 UTC | [records/openclaw-openclaw/closed/64046.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/64046.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#77593](https://github.com/openclaw/openclaw/pull/77593) | Fix Bedrock aws-sdk auth refresh after shared credential rotation | closed externally after review | May 7, 2026, 07:08 UTC | [records/openclaw-openclaw/closed/77593.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/77593.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#77551](https://github.com/openclaw/openclaw/issues/77551) | Bedrock aws-sdk auth: ExpiredTokenException after credential file refresh (regression in v2026.5.3) | closed externally after review | May 7, 2026, 07:01 UTC | [records/openclaw-openclaw/closed/77551.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/77551.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78779](https://github.com/openclaw/openclaw/pull/78779) | fix(updater): prefer pkgRoot-inferred global root over npm root -g on nvm PATH mismatch | closed externally after review | May 7, 2026, 06:51 UTC | [records/openclaw-openclaw/closed/78779.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/78779.md) |
@@ -78,6 +76,8 @@ Last source update: May 7, 2026, 07:18 UTC
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78345](https://github.com/openclaw/openclaw/pull/78345) | fix(control-ui): read exec policy from tools.exec.security instead of agents.defaults.exec.security | closed externally after review | May 7, 2026, 06:45 UTC | [records/openclaw-openclaw/closed/78345.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/78345.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78773](https://github.com/openclaw/openclaw/pull/78773) | fix(gateway): fail closed trusted-proxy password fallback | closed externally after review | May 7, 2026, 06:43 UTC | [records/openclaw-openclaw/closed/78773.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/78773.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78324](https://github.com/openclaw/openclaw/pull/78324) | fix(cron): bootstrap channel plugins for delivery previews | closed externally after review | May 7, 2026, 06:43 UTC | [records/openclaw-openclaw/closed/78324.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/78324.md) |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78816](https://github.com/openclaw/openclaw/pull/78816) | [codex] fix BTW usage placeholder visibility | none | May 7, 2026, 06:43 UTC | [records/openclaw-openclaw/closed/78816.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/78816.md) |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#1879](https://github.com/openclaw/clawhub/pull/1879) | fix(slug): enforce length, pattern, and reserved-word rules on skill & soul slugs | closed externally after review | May 7, 2026, 06:41 UTC | [records/openclaw-clawhub/closed/1879.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-clawhub/closed/1879.md) |
 
 <details>
 <summary>Recently Reviewed</summary>
@@ -106,9 +106,9 @@ Last source update: May 7, 2026, 07:18 UTC
 
 | Repository | Status | Last audit | Missing eligible | Stale records | Protected proposed | Scan complete |
 | --- | --- | --- | ---: | ---: | ---: | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | missing records | May 7, 2026, 01:08 UTC | 48 | 0 | 0 | yes |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | missing records | May 7, 2026, 07:19 UTC | 59 | 0 | 0 | yes |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | clean | May 7, 2026, 07:17 UTC | 0 | 0 | 0 | yes |
-| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | missing records | May 7, 2026, 01:11 UTC | 1 | 0 | 0 | yes |
+| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | missing records | May 7, 2026, 07:19 UTC | 3 | 0 | 0 | yes |
 
 
 ## Repair Dashboard
