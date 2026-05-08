@@ -4,34 +4,34 @@ Generated from the durable state branch for [openclaw/clawsweeper](https://githu
 
 ## Sweep Dashboard
 
-Last source update: May 8, 2026, 18:40 UTC
+Last source update: May 8, 2026, 18:48 UTC
 
 ### Fleet
 
 | Metric | Count |
 | --- | ---: |
 | Covered repositories | 3 |
-| Open review records | 7641 |
+| Open review records | 7642 |
 | Archived closed records | 19139 |
-| Fresh reviews, 7d | 7375 |
+| Fresh reviews, 7d | 7338 |
 | Proposed closes awaiting apply | 0 |
-| Work candidates awaiting promotion | 2808 |
+| Work candidates awaiting promotion | 2787 |
 | Failed or stale reviews | 128 |
 
 ### Current Runs
 
 | Repository | State | Updated | Run |
 | --- | --- | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Apply finished | May 8, 2026, 18:40 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25572907186) |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | Review publish complete | May 8, 2026, 18:40 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25572750046) |
-| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Audit finished | May 8, 2026, 12:49 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25556394536) |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Apply finished | May 8, 2026, 18:47 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25573266833) |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | Review publish complete | May 8, 2026, 18:48 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25573069554) |
+| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Audit finished | May 8, 2026, 18:47 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25573330497) |
 
 ### Repositories
 
 | Repository | Open records | Archived | Fresh | Proposed closes | Work candidates | Failed/stale | Last review | Last close |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 7366 | 18347 | 7100 | 0 | 2786 | 126 | May 8, 2026, 18:40 UTC | May 8, 2026, 18:31 UTC |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | 275 | 786 | 275 | 0 | 22 | 2 | May 8, 2026, 18:39 UTC | May 8, 2026, 16:24 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 7367 | 18347 | 7063 | 0 | 2765 | 126 | May 8, 2026, 18:46 UTC | May 8, 2026, 18:31 UTC |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | 275 | 786 | 275 | 0 | 22 | 2 | May 8, 2026, 18:46 UTC | May 8, 2026, 16:24 UTC |
 | [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | 0 | 6 | 0 | 0 | 0 | 0 | unknown | May 6, 2026, 01:07 UTC |
 
 ### Work Candidates
@@ -84,7 +84,12 @@ Last source update: May 8, 2026, 18:40 UTC
 
 | Repository | Item | Title | Outcome | Status | Reviewed |
 | --- | --- | --- | --- | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79491](https://github.com/openclaw/openclaw/pull/79491) | fix(gateway): keep newer node session on stale disconnect | close / skipped_invalid_decision | complete | May 8, 2026, 18:40 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79494](https://github.com/openclaw/openclaw/pull/79494) | fix(doctor): preserve openai-codex/* model refs on Codex-OAuth-only hosts | keep_open / kept_open | complete | May 8, 2026, 18:46 UTC |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#1996](https://github.com/openclaw/clawhub/issues/1996) | False Positive — suspicious.llm_suspicious flag on NextSteps and ClawShorts | keep_open / kept_open | complete | May 8, 2026, 18:46 UTC |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#2029](https://github.com/openclaw/clawhub/issues/2029) | gateway-wechaty | keep_open / kept_open | complete | May 8, 2026, 18:46 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78595](https://github.com/openclaw/openclaw/pull/78595) | Refactor runtime state into SQLite | keep_open / kept_open | complete | May 8, 2026, 18:44 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79492](https://github.com/openclaw/openclaw/issues/79492) | Agent runtime returns empty response for anthropic/claude-opus-4-7 while infer model run works (macOS 26.2,... | keep_open / kept_open | complete | May 8, 2026, 18:43 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#14376](https://github.com/openclaw/openclaw/issues/14376) | Feature: Reason-aware cron guardrails (quota/auth/rate-limit aware backoff + circuit breaker) | keep_open / kept_open | complete | May 8, 2026, 18:42 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#2047](https://github.com/openclaw/clawhub/issues/2047) | [Submission] jjr-iot-skill v1.3.1 - Agriculture IoT Integration | keep_open / kept_open | complete | May 8, 2026, 18:39 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79480](https://github.com/openclaw/openclaw/pull/79480) | fix(agents): enforce MCP deny policy for CLI backends | keep_open / kept_open | complete | May 8, 2026, 18:36 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#18860](https://github.com/openclaw/openclaw/pull/18860) | feat(agents): expose tools and their schemas via new after_tools_resolved hook [AI-assisted] | keep_open / kept_open | complete | May 8, 2026, 18:35 UTC |
@@ -94,11 +99,6 @@ Last source update: May 8, 2026, 18:40 UTC
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79489](https://github.com/openclaw/openclaw/pull/79489) | fix: check billing errors before surfacing rate-limit message | keep_open / kept_open | complete | May 8, 2026, 18:32 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79487](https://github.com/openclaw/openclaw/issues/79487) | Channel-reload race: deferred reload + gateway-tool `restart` double-spawn telegram channel → EADDRINUSE cr... | keep_open / kept_open | complete | May 8, 2026, 18:31 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79387](https://github.com/openclaw/openclaw/pull/79387) | feat(imessage): inbound catchup (cursor + replay loop + monitor wiring) | keep_open / kept_open | complete | May 8, 2026, 18:31 UTC |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#1994](https://github.com/openclaw/clawhub/issues/1994) | Trying to get Plugin verified | keep_open / kept_open | complete | May 8, 2026, 18:27 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79483](https://github.com/openclaw/openclaw/pull/79483) | [AI-assisted] fix(feishu): keep group context on chat target | keep_open / kept_open | complete | May 8, 2026, 18:26 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79485](https://github.com/openclaw/openclaw/issues/79485) | /model and /models cannot show auto-discovered models for selected providers | keep_open / kept_open | complete | May 8, 2026, 18:26 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79068](https://github.com/openclaw/openclaw/pull/79068) | fix: bound gateway session memory after compaction | keep_open / kept_open | complete | May 8, 2026, 18:24 UTC |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#2042](https://github.com/openclaw/clawhub/issues/2042) | Complementary tool: automated skill quality scoring for curation workflow | keep_open / kept_open | complete | May 8, 2026, 18:21 UTC |
 
 </details>
 
@@ -106,9 +106,9 @@ Last source update: May 8, 2026, 18:40 UTC
 
 | Repository | Status | Last audit | Missing eligible | Stale records | Protected proposed | Scan complete |
 | --- | --- | --- | ---: | ---: | ---: | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | missing records | May 8, 2026, 12:47 UTC | 83 | 0 | 0 | yes |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | missing records | May 8, 2026, 12:47 UTC | 1 | 0 | 0 | yes |
-| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | missing records | May 8, 2026, 12:49 UTC | 5 | 0 | 0 | yes |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | missing records | May 8, 2026, 18:45 UTC | 98 | 0 | 0 | yes |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | missing records | May 8, 2026, 18:44 UTC | 2 | 0 | 0 | yes |
+| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | missing records | May 8, 2026, 18:47 UTC | 5 | 0 | 0 | yes |
 
 
 ## Repair Dashboard
