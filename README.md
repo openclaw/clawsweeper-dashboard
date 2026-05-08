@@ -4,16 +4,16 @@ Generated from the durable state branch for [openclaw/clawsweeper](https://githu
 
 ## Sweep Dashboard
 
-Last source update: May 8, 2026, 01:12 UTC
+Last source update: May 8, 2026, 01:13 UTC
 
 ### Fleet
 
 | Metric | Count |
 | --- | ---: |
 | Covered repositories | 3 |
-| Open review records | 7554 |
+| Open review records | 7555 |
 | Archived closed records | 18941 |
-| Fresh reviews, 7d | 7404 |
+| Fresh reviews, 7d | 7405 |
 | Proposed closes awaiting apply | 0 |
 | Work candidates awaiting promotion | 2898 |
 | Failed or stale reviews | 87 |
@@ -22,7 +22,7 @@ Last source update: May 8, 2026, 01:12 UTC
 
 | Repository | State | Updated | Run |
 | --- | --- | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Apply finished | May 8, 2026, 01:11 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25530838733) |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Review publish complete | May 8, 2026, 01:13 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25530821638) |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | Hot intake publish complete | May 8, 2026, 01:08 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25530644457) |
 | [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Audit finished | May 8, 2026, 01:11 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25530906995) |
 
@@ -30,8 +30,8 @@ Last source update: May 8, 2026, 01:12 UTC
 
 | Repository | Open records | Archived | Fresh | Proposed closes | Work candidates | Failed/stale | Last review | Last close |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 7279 | 18158 | 7129 | 0 | 2876 | 84 | May 8, 2026, 01:12 UTC | May 8, 2026, 01:08 UTC |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | 275 | 777 | 275 | 0 | 22 | 3 | May 8, 2026, 01:11 UTC | May 7, 2026, 23:34 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 7280 | 18158 | 7130 | 0 | 2876 | 84 | May 8, 2026, 01:13 UTC | May 8, 2026, 01:08 UTC |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | 275 | 777 | 275 | 0 | 22 | 3 | May 8, 2026, 01:12 UTC | May 7, 2026, 23:34 UTC |
 | [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | 0 | 6 | 0 | 0 | 0 | 0 | unknown | May 6, 2026, 01:07 UTC |
 
 ### Work Candidates
@@ -84,21 +84,21 @@ Last source update: May 8, 2026, 01:12 UTC
 
 | Repository | Item | Title | Outcome | Status | Reviewed |
 | --- | --- | --- | --- | --- | --- |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#57843](https://github.com/openclaw/openclaw/pull/57843) | fix(delivery): disambiguate hook cancellations from delivery failures | keep_open / kept_open | complete | May 8, 2026, 01:13 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78595](https://github.com/openclaw/openclaw/pull/78595) | Refactor runtime state into SQLite | keep_open / kept_open | complete | May 8, 2026, 01:13 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#77187](https://github.com/openclaw/openclaw/pull/77187) | Fix/sessions list resolver cache | keep_open / kept_open | complete | May 8, 2026, 01:13 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#75630](https://github.com/openclaw/openclaw/pull/75630) | fix(slack): harden thread continuation gating | keep_open / kept_open | complete | May 8, 2026, 01:12 UTC |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#2073](https://github.com/openclaw/clawhub/pull/2073) | Fix plugin publish ownership visibility | keep_open / kept_open | complete | May 8, 2026, 01:12 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79158](https://github.com/openclaw/openclaw/issues/79158) | Codex ChatGPT OAuth rejects gpt-5.4-pro and gpt-5.5-pro model refs | keep_open / kept_open | complete | May 8, 2026, 01:12 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#11977](https://github.com/openclaw/openclaw/issues/11977) | feat: add linux/riscv64 Docker image to multi-platform build | keep_open / kept_open | complete | May 8, 2026, 01:12 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79138](https://github.com/openclaw/openclaw/pull/79138) | Add OAuth-backed realtime voice controls | keep_open / kept_open | complete | May 8, 2026, 01:12 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#2095](https://github.com/openclaw/clawhub/pull/2095) | docs: split ClawHub public docs from specs | keep_open / kept_open | complete | May 8, 2026, 01:11 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79157](https://github.com/openclaw/openclaw/issues/79157) | Feature: LLM-assisted exec approvals / policy reasoning | keep_open / kept_open | complete | May 8, 2026, 01:11 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#2068](https://github.com/openclaw/clawhub/issues/2068) | https://clawhub.ai/isee15/billcat-save-my-money has been incorrectly flagged | keep_open / kept_open | complete | May 8, 2026, 01:07 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#1112](https://github.com/openclaw/clawhub/issues/1112) | Cron "New Job" form misaligns the Description field after interacting with Agent ID | keep_open / kept_open | complete | May 8, 2026, 01:07 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78595](https://github.com/openclaw/openclaw/pull/78595) | Refactor runtime state into SQLite | keep_open / kept_open | complete | May 8, 2026, 01:04 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#77236](https://github.com/openclaw/openclaw/pull/77236) | fix(telegram): honor agents.list[].reasoningDefault and agents.defaults.reasoningDefault | keep_open / kept_open | complete | May 8, 2026, 01:02 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#1103](https://github.com/openclaw/clawhub/issues/1103) | [skill]uni-image | keep_open / kept_open | complete | May 8, 2026, 01:01 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79151](https://github.com/openclaw/openclaw/pull/79151) | fix: respect Codex requirements for app-server defaults | keep_open / kept_open | complete | May 8, 2026, 01:01 UTC |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#2083](https://github.com/openclaw/clawhub/issues/2083) | please unflag my skills | keep_open / kept_open | complete | May 8, 2026, 01:00 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#12512](https://github.com/openclaw/openclaw/issues/12512) | [Feature Request] SKILL.md Instruction Isolation from Agent Context | keep_open / kept_open | complete | May 8, 2026, 00:59 UTC |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#1350](https://github.com/openclaw/clawhub/issues/1350) | [Network] clawhub.ai blocked on some institutional networks due to current Spamhaus DBL listing | keep_open / kept_open | complete | May 8, 2026, 00:58 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79143](https://github.com/openclaw/openclaw/pull/79143) | fix(update): mandatory post-core plugin convergence before gateway restart | keep_open / kept_open | complete | May 8, 2026, 00:58 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#50818](https://github.com/openclaw/openclaw/pull/50818) | fix(heartbeat): remap cron-run session keys for exec/ACP/CLI events (refs #52305) | keep_open / kept_open | complete | May 8, 2026, 00:56 UTC |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#2080](https://github.com/openclaw/clawhub/issues/2080) | Package publish fails after UI delete due to stale package ownership / slug reservation | keep_open / kept_open | complete | May 8, 2026, 00:55 UTC |
 
 </details>
 
