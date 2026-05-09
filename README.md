@@ -4,17 +4,17 @@ Generated from the durable state branch for [openclaw/clawsweeper](https://githu
 
 ## Sweep Dashboard
 
-Last source update: May 9, 2026, 12:36 UTC
+Last source update: May 9, 2026, 12:38 UTC
 
 ### Fleet
 
 | Metric | Count |
 | --- | ---: |
 | Covered repositories | 3 |
-| Open review records | 7685 |
+| Open review records | 7681 |
 | Archived closed records | 19357 |
-| Fresh reviews, 7d | 6420 |
-| Proposed closes awaiting apply | 2 |
+| Fresh reviews, 7d | 6416 |
+| Proposed closes awaiting apply | 0 |
 | Work candidates awaiting promotion | 2285 |
 | Failed or stale reviews | 122 |
 
@@ -22,23 +22,22 @@ Last source update: May 9, 2026, 12:36 UTC
 
 | Repository | State | Updated | Run |
 | --- | --- | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Hot intake publish complete | May 9, 2026, 12:36 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25601113415) |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | Hot intake publish complete | May 9, 2026, 12:36 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25601174581) |
-| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Audit finished | May 9, 2026, 07:00 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25594769340) |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Apply finished | May 9, 2026, 12:38 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25601273675) |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | Hot intake publish complete | May 9, 2026, 12:30 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25601043835) |
+| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Audit finished | May 9, 2026, 12:38 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25601307382) |
 
 ### Repositories
 
 | Repository | Open records | Archived | Fresh | Proposed closes | Work candidates | Failed/stale | Last review | Last close |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 7415 | 18546 | 6150 | 2 | 2265 | 120 | May 9, 2026, 12:36 UTC | May 9, 2026, 12:35 UTC |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | 270 | 805 | 270 | 0 | 20 | 2 | May 9, 2026, 12:35 UTC | May 9, 2026, 11:44 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 7411 | 18546 | 6146 | 0 | 2265 | 120 | May 9, 2026, 12:30 UTC | May 9, 2026, 12:35 UTC |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | 270 | 805 | 270 | 0 | 20 | 2 | May 9, 2026, 12:29 UTC | May 9, 2026, 11:44 UTC |
 | [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | 0 | 6 | 0 | 0 | 0 | 0 | unknown | May 6, 2026, 01:07 UTC |
 
 ### Work Candidates
 
 | Repository | Item | Title | Priority | Reviewed | Report |
 | --- | --- | --- | --- | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79619](https://github.com/openclaw/openclaw/pull/79619) | docs(notion): make allowlist examples direct | high | May 9, 2026, 12:36 UTC | [records/openclaw-openclaw/items/79619.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/79619.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79370](https://github.com/openclaw/openclaw/pull/79370) | fix(cache): honour explicit cacheRetention for OpenRouter→Anthropic models | high | May 9, 2026, 12:30 UTC | [records/openclaw-openclaw/items/79370.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/79370.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#65933](https://github.com/openclaw/openclaw/pull/65933) | fix(exec): respect configured security=full as floor; model args cannot downgrade | high | May 9, 2026, 12:21 UTC | [records/openclaw-openclaw/items/65933.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/65933.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79778](https://github.com/openclaw/openclaw/issues/79778) | [Bug]: echoTranscript bypass in externalized @openclaw/whatsapp v2026.5.7 | high | May 9, 2026, 11:21 UTC | [records/openclaw-openclaw/items/79778.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/79778.md) |
@@ -58,6 +57,7 @@ Last source update: May 9, 2026, 12:36 UTC
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#72724](https://github.com/openclaw/openclaw/pull/72724) | fix(status): add gateway delivery health telemetry | high | May 9, 2026, 03:40 UTC | [records/openclaw-openclaw/items/72724.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/72724.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79621](https://github.com/openclaw/openclaw/issues/79621) | Telegram direct replies can duplicate because accumulated assistantTexts are emitted as separate messages a... | high | May 9, 2026, 03:19 UTC | [records/openclaw-openclaw/items/79621.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/79621.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79524](https://github.com/openclaw/openclaw/issues/79524) | [Bug]: Cron agent runs regress after 2026.5.7 with no tool work and plugin export errors | high | May 9, 2026, 03:03 UTC | [records/openclaw-openclaw/items/79524.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/79524.md) |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79609](https://github.com/openclaw/openclaw/pull/79609) | Show session cleanup dry-run counts by label | high | May 9, 2026, 02:53 UTC | [records/openclaw-openclaw/items/79609.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/79609.md) |
 
 ### Recently Closed
 
@@ -84,10 +84,6 @@ Last source update: May 9, 2026, 12:36 UTC
 
 | Repository | Item | Title | Outcome | Status | Reviewed |
 | --- | --- | --- | --- | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79619](https://github.com/openclaw/openclaw/pull/79619) | docs(notion): make allowlist examples direct | keep_open / kept_open | complete | May 9, 2026, 12:36 UTC |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#2086](https://github.com/openclaw/clawhub/issues/2086) | My skill has been incorrectly flagged，link：https://clawhub.ai/qizhitang/xiaozhi-learning-dna | keep_open / kept_open | complete | May 9, 2026, 12:35 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79794](https://github.com/openclaw/openclaw/issues/79794) | [Bug]: Discord gateway READY event never fires — bot online but guild messages not received (regression in... | keep_open / kept_open | complete | May 9, 2026, 12:34 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79762](https://github.com/openclaw/openclaw/pull/79762) | feat: pass trusted sender metadata via systemInputProvenance for operator clients | keep_open / kept_open | complete | May 9, 2026, 12:34 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79370](https://github.com/openclaw/openclaw/pull/79370) | fix(cache): honour explicit cacheRetention for OpenRouter→Anthropic models | keep_open / kept_open | complete | May 9, 2026, 12:30 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78595](https://github.com/openclaw/openclaw/pull/78595) | Refactor runtime state into SQLite | keep_open / kept_open | complete | May 9, 2026, 12:30 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#2109](https://github.com/openclaw/clawhub/issues/2109) | Surface scanner finding detail (rule + file:line) in moderation-status / inspect output for false-positive... | keep_open / kept_open | complete | May 9, 2026, 12:29 UTC |
@@ -99,6 +95,10 @@ Last source update: May 9, 2026, 12:36 UTC
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#65933](https://github.com/openclaw/openclaw/pull/65933) | fix(exec): respect configured security=full as floor; model args cannot downgrade | keep_open / kept_open | complete | May 9, 2026, 12:21 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79767](https://github.com/openclaw/openclaw/pull/79767) | fix(google): change onboarding default to gemini-2.5-flash stable model (#79670) | keep_open / kept_open | complete | May 9, 2026, 12:19 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79787](https://github.com/openclaw/openclaw/pull/79787) | fix(minimax): resolve portal OAuth token via resolveProviderAuth with oauthMarker (#79731) | keep_open / kept_open | complete | May 9, 2026, 12:19 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79641](https://github.com/openclaw/openclaw/pull/79641) | fix(context-engine): expose loop hook checkpoint to finalizer to prevent duplicate afterTurn calls | close / skipped_invalid_decision | complete | May 9, 2026, 12:19 UTC |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#917](https://github.com/openclaw/clawhub/issues/917) | Account accidentally deleted — request restoration or GitHub identity unlink | keep_open / kept_open | complete | May 9, 2026, 12:19 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79788](https://github.com/openclaw/openclaw/pull/79788) | fix(whatsapp): pass routing ctx to transcribeFirstAudio so echoTranscript can deliver (#79778) | keep_open / kept_open | complete | May 9, 2026, 12:19 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79786](https://github.com/openclaw/openclaw/pull/79786) | fix(webchat): always suppress HEARTBEAT_OK from chat stream regardless of showOk (#79735) | keep_open / kept_open | complete | May 9, 2026, 12:16 UTC |
 
 </details>
 
@@ -108,7 +108,7 @@ Last source update: May 9, 2026, 12:36 UTC
 | --- | --- | --- | ---: | ---: | ---: | --- |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | missing records | May 9, 2026, 12:35 UTC | 128 | 2 | 0 | yes |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | clean | May 9, 2026, 12:35 UTC | 0 | 0 | 0 | yes |
-| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | missing records | May 9, 2026, 07:00 UTC | 1 | 0 | 0 | yes |
+| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | missing records | May 9, 2026, 12:38 UTC | 1 | 0 | 0 | yes |
 
 
 ## Repair Dashboard
