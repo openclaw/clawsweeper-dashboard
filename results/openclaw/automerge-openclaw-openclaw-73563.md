@@ -2,19 +2,19 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-73563"
 mode: "autonomous"
-run_id: "25590789778"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25590789778"
-head_sha: "b9a420e71bdc72e6fecafac1a6480448219d40cc"
+run_id: "25593563115"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25593563115"
+head_sha: "9ac2a14bcadf21a865435feeb6d7fcb71dca1d3e"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-09T04:07:12.194Z"
-canonical: "https://github.com/openclaw/openclaw/pull/73563"
-canonical_issue: "https://github.com/openclaw/openclaw/issues/73565"
-canonical_pr: "https://github.com/openclaw/openclaw/pull/73563"
-actions_total: 4
+published_at: "2026-05-09T06:19:17.660Z"
+canonical: "https://github.com/openclaw/openclaw/pull/79645"
+canonical_issue: null
+canonical_pr: "https://github.com/openclaw/openclaw/pull/79645"
+actions_total: 5
 fix_executed: 0
-fix_failed: 0
-fix_blocked: 1
+fix_failed: 1
+fix_blocked: 0
 apply_executed: 0
 apply_blocked: 1
 apply_skipped: 0
@@ -25,26 +25,26 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25590789778](https://github.com/openclaw/clawsweeper/actions/runs/25590789778)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25593563115](https://github.com/openclaw/clawsweeper/actions/runs/25593563115)
 
 Workflow conclusion: success
 
 Worker result: planned
 
-Canonical: https://github.com/openclaw/openclaw/pull/73563
+Canonical: https://github.com/openclaw/openclaw/pull/79645
 
 ## Summary
 
-#73563 is the canonical repair path for the scoped session transcript redaction gap, but it is not merge-ready from the hydrated state: branch mergeability is dirty/rebaseable false and ClawSweeper's prior review still requires a changelog entry. The branch is writable, so the correct non-mutating autonomous result is to repair the contributor branch, preserve @Ziy1-Tan credit, rerun review/validation, and leave closure/merge to the guarded applicator.
+Canonical repair path is the open same-repo replacement PR #79645. The original contributor PR #73563 is already closed, #79645 has a clean ClawSweeper review and passing checks in the artifact, but it is still dirty/unmergeable against current main and must be repaired/rebased before the automerge router can re-review and merge. No GitHub mutation is planned by this worker.
 
 ## Impact
 
 | Metric | Count |
 | --- | ---: |
-| Worker actions | 4 |
+| Worker actions | 5 |
 | Fix executed | 0 |
-| Fix failed | 0 |
-| Fix blocked | 1 |
+| Fix failed | 1 |
+| Fix blocked | 0 |
 | Applied executions | 0 |
 | Apply blocked | 1 |
 | Apply skipped | 0 |
@@ -54,7 +54,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/73563
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | blocked | https://github.com/openclaw/openclaw/pull/73563 |  | GitHub rejected the repair branch push because it updates workflow files and the ClawSweeper app token does not have workflows permission |
+| repair_contributor_branch | failed |  |  | source PR #73563 is closed |
 | open_fix_pr | opened | https://github.com/openclaw/openclaw/pull/79645 | clawsweeper/automerge-openclaw-openclaw-73563 |  |
 
 ## Apply Actions
@@ -67,10 +67,11 @@ Canonical: https://github.com/openclaw/openclaw/pull/73563
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #73563 | fix_needed | planned | canonical | Repair the opted-in contributor branch instead of replacing it: the branch is writable and the remaining blockers are narrow changelog and branch-state repair items. |
-| cluster:automerge-openclaw-openclaw-73563 | build_fix_artifact | planned |  | The job allows fix and raise_pr work, but not direct merge/close. A branch repair artifact is executable and preserves contributor credit. |
-| #73565 | keep_related | planned | fixed_by_candidate | #73565 is covered by the candidate PR, but unmerged-fix closeout is not allowed in this job. |
-| #64046 | keep_related | planned | related | Related umbrella issue should stay open; the scoped PR does not close all requested work. |
+| #64046 | keep_related | planned | related | #79645 is related narrow fix work under the umbrella, not a complete duplicate or full closeout for #64046. |
+| #73563 | keep_closed | skipped | superseded | Already superseded by same-repo replacement PR #79645; no further mutation is valid for this closed PR. |
+| #73565 | keep_related | planned | fixed_by_candidate | Covered by candidate #79645, but closure is blocked until #79645 is repaired and merged by the separate automerge path. |
+| #79645 | fix_needed | planned | canonical | Repair the writable same-repo replacement branch, resolve dirty mergeability against current main, rerun review/gates, and leave final merge to the automerge router. |
+| cluster:automerge-openclaw-openclaw-73563 | build_fix_artifact | planned |  | A narrow repair artifact is needed because the canonical PR is open and reviewed but dirty/unmergeable. |
 
 ## Needs Human
 

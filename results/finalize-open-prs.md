@@ -1,6 +1,6 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-05-09T04:07:15.292Z
+Generated: 2026-05-09T06:19:20.608Z
 
 ## Summary
 
@@ -30,4 +30,4 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#79645](https://github.com/openclaw/openclaw/pull/79645) | fix(security): inline redact into appendSessionTranscriptMessage | automerge-openclaw-openclaw-73563 | MERGEABLE | UNSTABLE | CANCELLED:17 IN_PROGRESS:34 SKIPPED:27 SUCCESS:49 QUEUED:1 NEUTRAL:1; blockers:43 | needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
+| [#79645](https://github.com/openclaw/openclaw/pull/79645) | fix(security): inline redact into appendSessionTranscriptMessage | automerge-openclaw-openclaw-73563 | MERGEABLE | UNSTABLE | CANCELLED:3 IN_PROGRESS:2 SKIPPED:23 SUCCESS:84 FAILURE:5 NEUTRAL:1; blockers:8 | needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:IN_PROGRESS; CodeQL Critical Quality / Critical Quality (network-runtime-boundary):IN_PROGRESS, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
