@@ -13,10 +13,10 @@ result: nothing_found
 confidence: high
 highest_severity: none
 check_conclusion: success
-reviewed_at: 2026-05-10T04:28:07Z
+reviewed_at: 2026-05-10T15:57:24Z
 ---
 
-# Commit 40aa57b
+# Commit 40aa57ba8f
 
 Nothing found.
 
@@ -29,17 +29,16 @@ Nothing found.
 
 - Diff: `ff045ea9ca001d4c6aebd9d624dab3ee961dd7eb..40aa57ba8fccbfbf0c422bd60b263cca2e4b5ddb`
 - Changed files: `CHANGELOG.md`, `docs/channels/discord.md`, `extensions/openai/realtime-voice-provider.test.ts`, `extensions/openai/realtime-voice-provider.ts`
-- Code read: changed files in full; `src/plugin-sdk/realtime-voice.ts`; `src/talk/provider-types.ts`; `src/talk/session-runtime.ts`; `src/gateway/talk-realtime-relay.ts`; `extensions/discord/src/voice/realtime.ts`
-- Dependencies/web: checked installed `openai` Realtime type definitions and official OpenAI Realtime API docs. The documented current events and payload fields align with the commit’s existing/current handling: `response.output_audio.delta` carries base64 audio in `delta`, transcript done carries `transcript`, and text done carries `text`. ([platform.openai.com](https://platform.openai.com/docs/api-reference/realtime-server-events/response/audio/done?utm_source=openai))
-- Commands: `pnpm docs:list`; `git show`; `git diff`; `rg`; `pnpm install`; `npm pack @openai/codex@0.130.0`; `pnpm test extensions/openai/realtime-voice-provider.test.ts`; `pnpm exec oxfmt --check --threads=1 ...`; `git diff --check`
+- Code read: full OpenAI realtime voice provider, full focused provider test file, relevant Discord voice docs section, realtime bridge session wrapper, and callers in Discord voice, Talk relay, voice-call, and Google Meet realtime paths.
+- Dependencies/web: installed deps, checked local `openai` `6.37.0` realtime type declarations, and checked OpenAI API Reference event definitions for current audio/transcript/text events. ([platform.openai.com](https://platform.openai.com/docs/api-reference/realtime-server-events))
+- Commands: `pnpm install`; `pnpm docs:list`; `pnpm test extensions/openai/realtime-voice-provider.test.ts -- --reporter=verbose`; `git diff --check ff045ea9ca001d4c6aebd9d624dab3ee961dd7eb..40aa57ba8fccbfbf0c422bd60b263cca2e4b5ddb`
 
 ## Tests / Live Checks
 
-- `pnpm test extensions/openai/realtime-voice-provider.test.ts`: passed, 43 tests.
-- `pnpm exec oxfmt --check --threads=1 extensions/openai/realtime-voice-provider.ts extensions/openai/realtime-voice-provider.test.ts docs/channels/discord.md CHANGELOG.md`: passed.
-- `git diff --check ff045ea9ca001d4c6aebd9d624dab3ee961dd7eb..40aa57ba8fccbfbf0c422bd60b263cca2e4b5ddb`: passed.
+- `pnpm test extensions/openai/realtime-voice-provider.test.ts -- --reporter=verbose`: passed, 43 tests.
+- `git diff --check`: passed.
+- Live OpenAI realtime session was not run; the change is event-dispatch compatibility and the focused mocked websocket coverage exercises the affected payload shapes.
 
 ## Limitations
 
-- `pnpm tsgo:extensions` and `pnpm tsgo:extensions:test` both failed before proving this touched surface because current `main` has an unrelated `src/agents/openai-transport-stream.ts:1523` `ChatCompletionChunk.delta` type error.
-- The pinned `@openai/codex@0.130.0` npm package is only a thin binary wrapper, so it did not expose source for the legacy `conversation.*` alias producer.
+- none
