@@ -2,8 +2,8 @@
 sha: 1f99cddb61b75fff8724ebc1c0d07d3ef9da4cc6
 parent: e07febd075305778230d8ebfe093c3d1bc7e5da4
 repository: openclaw/openclaw
-author: "steipete"
-committer: "steipete"
+author: "Peter Steinberger"
+committer: "Peter Steinberger"
 github_author: steipete
 github_committer: steipete
 co_authors: []
@@ -13,10 +13,10 @@ result: nothing_found
 confidence: high
 highest_severity: none
 check_conclusion: success
-reviewed_at: 2026-05-10T03:51:02Z
+reviewed_at: 2026-05-10T14:50:40+00:00
 ---
 
-# Commit 1f99cddb61
+# Commit 1f99cdd
 
 Nothing found.
 
@@ -29,10 +29,9 @@ Nothing found.
 
 - Diff: `e07febd075305778230d8ebfe093c3d1bc7e5da4..1f99cddb61b75fff8724ebc1c0d07d3ef9da4cc6`
 - Changed files: `src/cli/update-cli.test.ts`
-- Code read: full current `src/cli/update-cli.test.ts`, parent version, diff, `src/cli/update-cli/shared.ts`, `src/cli/update-cli/update-command.ts`
-- Current main: checked later same-file follow-up `71ebedee95`; no remaining actionable regression found.
-- Dependencies/web: no dependency changes; no web lookup needed.
-- Commands: `pnpm docs:list`, `pnpm install`, `pnpm exec oxfmt --check --threads=1 src/cli/update-cli.test.ts`, `node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/cli/update-cli.test.ts`, `pnpm test src/cli/update-cli.test.ts`, `pnpm tsgo:core:test`, `git diff --check e07febd075305778230d8ebfe093c3d1bc7e5da4..1f99cddb61b75fff8724ebc1c0d07d3ef9da4cc6`
+- Code read: `src/cli/update-cli.test.ts`, `src/cli/update-cli/shared.ts`, `src/cli/update-cli.ts`, `src/cli/update-cli/update-command.ts`
+- Dependencies/web: no dependency, lockfile, or external behavior changes; no web checks needed.
+- Commands: `git show --stat --format=fuller 1f99cddb61b75fff8724ebc1c0d07d3ef9da4cc6`, `git diff e07febd075305778230d8ebfe093c3d1bc7e5da4..1f99cddb61b75fff8724ebc1c0d07d3ef9da4cc6 -- src/cli/update-cli.test.ts`, `rg`, `sed`, `pnpm install`, `pnpm test src/cli/update-cli.test.ts -- --reporter=verbose`, `git diff --check e07febd075305778230d8ebfe093c3d1bc7e5da4..1f99cddb61b75fff8724ebc1c0d07d3ef9da4cc6`
 
 ## Limitations
 
