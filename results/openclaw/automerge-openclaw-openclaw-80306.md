@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-80306"
 mode: "autonomous"
-run_id: "25631997437"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25631997437"
-head_sha: "be33667638c8a7b275a39d1f1b7c6c50f49762c9"
+run_id: "25632632520"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25632632520"
+head_sha: "b3153aa5f15ae6e9411f0fdd17d4d3358f93a3c1"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-10T15:31:42.864Z"
+published_at: "2026-05-10T15:48:47.077Z"
 canonical: "https://github.com/openclaw/openclaw/pull/80306"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/79349"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/80306"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25631997437](https://github.com/openclaw/clawsweeper/actions/runs/25631997437)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25632632520](https://github.com/openclaw/clawsweeper/actions/runs/25632632520)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/80306
 
 ## Summary
 
-PR #80306 is the canonical repair path for Feishu thread reply fallback issue #79349, but it is not merge-ready because the hydrated preflight shows relevant failing checks and no clean Codex /review merge preflight. Plan a bounded repair of the same writable contributor branch; do not close or merge under this job.
+#80306 is the canonical repair path for #79349, but it is not merge-ready: the hydrated exact-head state shows failing check, check-additional, check-lint, check-test-types, and check-additional-extension-bundled jobs, plus one pending Critical Quality shard. The same-repo PR branch is writable, so the executable path is to repair #80306 in place, re-run review and changed-surface validation, and leave #79349 open until the fix lands.
 
 ## Impact
 
@@ -66,9 +66,9 @@ PR #80306 is the canonical repair path for Feishu thread reply fallback issue #7
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #79349 | keep_related | planned | fixed_by_candidate | Keep the issue open until the canonical PR branch is repaired, re-reviewed, validated, and later landed by the deterministic merge path. |
-| #80306 | fix_needed | planned | canonical | Repair the writable contributor branch rather than replace it; merge is blocked by job policy and by missing clean review/check proof. |
-| cluster:automerge-openclaw-openclaw-80306 | build_fix_artifact | planned |  | A narrow repair artifact is needed for the executor to update the existing PR branch and rerun validation/review. |
+| #80306 | fix_needed | planned | canonical | Canonical automerge PR needs CI/check repair on the writable contributor branch before any exact-head automerge gate can proceed. |
+| cluster:automerge-openclaw-openclaw-80306 | build_fix_artifact | planned | canonical | Build a repair-contributor-branch artifact so the executor can fetch failing job logs, patch the current #80306 head narrowly, and rerun review/validation. |
+| #79349 | fix_needed | planned | fixed_by_candidate | Issue is covered by the canonical candidate PR, but closeout is intentionally blocked until the fixed exact head lands. |
 
 ## Needs Human
 
