@@ -198,6 +198,12 @@ can be used for one-off live routing.
 
 Live dashboard and generated state: https://github.com/openclaw/clawsweeper-state
 
+Live pipeline dashboard: https://clawsweeper.openclaw.ai/
+
+The Cloudflare dashboard is observability-only: it shows active workers,
+repair/automerge pipeline rows, CI state, recent failures, and automerge timing
+without owning GitHub mutations. See [`docs/live-dashboard.md`](docs/live-dashboard.md).
+
 ## How It Works
 
 ClawSweeper is split into four operational lanes:
