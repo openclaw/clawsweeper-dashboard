@@ -173,8 +173,9 @@ Common commands:
 - `automerge` labels an open PR, creates or reuses the adopted job, dispatches
   review, and enters the bounded review/fix/merge loop. Draft PRs are fix-only
   until GitHub marks them ready for review.
-- User-facing OpenClaw `fix`, `feat`, and `perf` automerge PRs must include a
-  `CHANGELOG.md` entry before ClawSweeper will merge them.
+- User-facing OpenClaw `fix`, `feat`, and `perf` automerge PRs get a
+  maintainer/ClawSweeper-owned `CHANGELOG.md` entry before merge; contributors
+  are not asked to add it.
 - Security-sensitive findings can be repaired only after explicit
   `autofix`/`automerge` opt-in; ClawSweeper still will not merge until a later
   exact-head review is clean.
