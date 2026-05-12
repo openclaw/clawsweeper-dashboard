@@ -1,6 +1,6 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-05-12T12:01:29.534Z
+Generated: 2026-05-12T17:17:20.478Z
 
 ## Summary
 
@@ -30,4 +30,4 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#81013](https://github.com/openclaw/openclaw/pull/81013) | fix(gateway): wire max_completion_tokens/max_tokens through openai-http | automerge-openclaw-openclaw-80867 | MERGEABLE | UNSTABLE | CANCELLED:15 IN_PROGRESS:37 SKIPPED:28 SUCCESS:43 QUEUED:1 NEUTRAL:1; blockers:46 | needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
+| [#81095](https://github.com/openclaw/openclaw/pull/81095) | ci: add missing extension and channel labels to labeler.yml | automerge-openclaw-openclaw-51672 | MERGEABLE | CLEAN | CANCELLED:6 SKIPPED:12 SUCCESS:78; blockers:3 | needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
