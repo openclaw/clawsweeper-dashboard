@@ -4,7 +4,7 @@ Generated from the durable state branch for [openclaw/clawsweeper](https://githu
 
 ## Sweep Dashboard
 
-Last source update: May 13, 2026, 18:53 UTC
+Last source update: May 13, 2026, 18:59 UTC
 
 ### Fleet
 
@@ -22,15 +22,15 @@ Last source update: May 13, 2026, 18:53 UTC
 
 | Repository | State | Updated | Run |
 | --- | --- | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Apply finished | May 13, 2026, 18:53 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25819581986) |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | Hot intake publish complete | May 13, 2026, 18:19 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25817721623) |
-| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Audit finished | May 13, 2026, 01:15 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25772005255) |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Apply finished | May 13, 2026, 18:56 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25819782579) |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | Hot intake publish complete | May 13, 2026, 18:59 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25819912433) |
+| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Audit finished | May 13, 2026, 18:57 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25819925269) |
 
 ### Repositories
 
 | Repository | Open records | Archived | Fresh | Proposed closes | Work candidates | Failed/stale | Last review | Last close |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 7187 | 20355 | 6122 | 0 | 862 | 76 | May 13, 2026, 18:45 UTC | May 13, 2026, 18:53 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 7187 | 20355 | 6122 | 0 | 862 | 76 | May 13, 2026, 18:58 UTC | May 13, 2026, 18:53 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | 167 | 962 | 158 | 0 | 12 | 1 | May 13, 2026, 18:18 UTC | May 13, 2026, 16:38 UTC |
 | [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | 0 | 6 | 0 | 0 | 0 | 0 | unknown | May 6, 2026, 01:07 UTC |
 
@@ -38,9 +38,10 @@ Last source update: May 13, 2026, 18:53 UTC
 
 | Repository | Item | Title | Priority | Reviewed | Report |
 | --- | --- | --- | --- | --- | --- |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#81419](https://github.com/openclaw/openclaw/issues/81419) | [Bug] Xiaomi MiMo reasoning_content passthrough missing for multi-turn tool calls | high | May 13, 2026, 18:58 UTC | [records/openclaw-openclaw/items/81419.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/81419.md) |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#60212](https://github.com/openclaw/openclaw/pull/60212) | [codex] Cron: repair empty sanitized final replies | high | May 13, 2026, 18:56 UTC | [records/openclaw-openclaw/items/60212.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/60212.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79897](https://github.com/openclaw/openclaw/issues/79897) | OpenAI-compatible streaming with llama.cpp saves zero usage (stream closed before final usage chunk) | high | May 13, 2026, 18:33 UTC | [records/openclaw-openclaw/items/79897.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/79897.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79982](https://github.com/openclaw/openclaw/pull/79982) | feat(tools): introduce group:core for all built-in core tools | high | May 13, 2026, 18:32 UTC | [records/openclaw-openclaw/items/79982.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/79982.md) |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#60212](https://github.com/openclaw/openclaw/pull/60212) | [codex] Cron: repair empty sanitized final replies | high | May 13, 2026, 18:30 UTC | [records/openclaw-openclaw/items/60212.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/60212.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#81239](https://github.com/openclaw/openclaw/pull/81239) | fix(models): keep CLI runtime providers in /models picker | high | May 13, 2026, 18:29 UTC | [records/openclaw-openclaw/items/81239.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/81239.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79068](https://github.com/openclaw/openclaw/pull/79068) | fix: bound gateway session memory after compaction | high | May 13, 2026, 18:18 UTC | [records/openclaw-openclaw/items/79068.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/79068.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79925](https://github.com/openclaw/openclaw/pull/79925) | feat: context-pressure-aware continuation (continue_work / continue_delegate / request_compaction) | high | May 13, 2026, 18:18 UTC | [records/openclaw-openclaw/items/79925.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/79925.md) |
@@ -57,7 +58,6 @@ Last source update: May 13, 2026, 18:53 UTC
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#81362](https://github.com/openclaw/openclaw/pull/81362) | fix(infra): guard workspace skill scanning against filesystem errors | high | May 13, 2026, 17:48 UTC | [records/openclaw-openclaw/items/81362.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/81362.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#68967](https://github.com/openclaw/openclaw/pull/68967) | feat(googlechat): add sessionThread option to bind OpenClaw sessions to Google Chat threads | high | May 13, 2026, 17:48 UTC | [records/openclaw-openclaw/items/68967.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/68967.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#19482](https://github.com/openclaw/openclaw/pull/19482) | fix(agents): only seed HEARTBEAT.md on brand-new workspaces | high | May 13, 2026, 17:47 UTC | [records/openclaw-openclaw/items/19482.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/19482.md) |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78303](https://github.com/openclaw/openclaw/pull/78303) | feat(mcp): channel-mediated approval for MCP tool calls (consent envelope) | high | May 13, 2026, 17:45 UTC | [records/openclaw-openclaw/items/78303.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/items/78303.md) |
 
 ### Recently Closed
 
@@ -84,6 +84,11 @@ Last source update: May 13, 2026, 18:53 UTC
 
 | Repository | Item | Title | Outcome | Status | Reviewed |
 | --- | --- | --- | --- | --- | --- |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#81486](https://github.com/openclaw/openclaw/pull/81486) | fix: clear Telegram progress drafts before final reply | keep_open / kept_open | complete | May 13, 2026, 18:58 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#81419](https://github.com/openclaw/openclaw/issues/81419) | [Bug] Xiaomi MiMo reasoning_content passthrough missing for multi-turn tool calls | keep_open / kept_open | complete | May 13, 2026, 18:58 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#81016](https://github.com/openclaw/openclaw/pull/81016) | fix(ui): order live chat items by timestamp | keep_open / kept_open | complete | May 13, 2026, 18:56 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#60212](https://github.com/openclaw/openclaw/pull/60212) | [codex] Cron: repair empty sanitized final replies | keep_open / kept_open | complete | May 13, 2026, 18:56 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#81467](https://github.com/openclaw/openclaw/pull/81467) | fix(usage): show every calendar day in Daily Token Usage / Daily Cost chart | keep_open / kept_open | complete | May 13, 2026, 18:56 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#59920](https://github.com/openclaw/openclaw/pull/59920) | [codex] prefer terminal reply fields in CLI JSONL parser | keep_open / kept_open | complete | May 13, 2026, 18:45 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#80370](https://github.com/openclaw/openclaw/pull/80370) | feat(diagnostics): add skill usage telemetry | keep_open / kept_open | complete | May 13, 2026, 18:41 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#81411](https://github.com/openclaw/openclaw/issues/81411) | [Bug]: Cron Telegram delivery renders Markdown links as raw HTML and needs better support for long-running... | close / skipped_invalid_decision | complete | May 13, 2026, 18:35 UTC |
@@ -91,14 +96,9 @@ Last source update: May 13, 2026, 18:53 UTC
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#81443](https://github.com/openclaw/openclaw/pull/81443) | fix: resolve QMD Windows shims and guard image URL downloads | keep_open / kept_open | complete | May 13, 2026, 18:34 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#70864](https://github.com/openclaw/openclaw/pull/70864) | feat: add scoped mention pattern policy | keep_open / kept_open | complete | May 13, 2026, 18:34 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79897](https://github.com/openclaw/openclaw/issues/79897) | OpenAI-compatible streaming with llama.cpp saves zero usage (stream closed before final usage chunk) | keep_open / kept_open | complete | May 13, 2026, 18:33 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#81016](https://github.com/openclaw/openclaw/pull/81016) | fix(ui): order live chat items by timestamp | keep_open / kept_open | complete | May 13, 2026, 18:33 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#80520](https://github.com/openclaw/openclaw/issues/80520) | Telegram messages silently dropped, no sendMessage logged | keep_open / kept_open | complete | May 13, 2026, 18:33 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#68079](https://github.com/openclaw/openclaw/pull/68079) | feat(providers/zai): inject X-Session-Id header for prompt cache stickiness | keep_open / kept_open | complete | May 13, 2026, 18:33 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#54821](https://github.com/openclaw/openclaw/pull/54821) | feat: support capability subscription thinking events | keep_open / kept_open | complete | May 13, 2026, 18:32 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#79392](https://github.com/openclaw/openclaw/issues/79392) | [Bug]: LLM request timeout still present | keep_open / kept_open | complete | May 13, 2026, 18:32 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#80483](https://github.com/openclaw/openclaw/issues/80483) | voice-call realtime: "Realtime voice provider \"openai\" is not registered" on startup — load-order bug sim... | keep_open / kept_open | complete | May 13, 2026, 18:32 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#80171](https://github.com/openclaw/openclaw/issues/80171) | Codex-vs-Pi runtime parity QA harness (RFC + tracking) | keep_open / kept_open | complete | May 13, 2026, 18:32 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#80699](https://github.com/openclaw/openclaw/issues/80699) | Proposal: first-class AI Agentic Engineer identity binding for CLI-backend spawns | keep_open / kept_open | complete | May 13, 2026, 18:32 UTC |
 
 </details>
 
@@ -106,9 +106,9 @@ Last source update: May 13, 2026, 18:53 UTC
 
 | Repository | Status | Last audit | Missing eligible | Stale records | Protected proposed | Scan complete |
 | --- | --- | --- | ---: | ---: | ---: | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | missing records | May 13, 2026, 07:22 UTC | 47 | 8 | 0 | yes |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | missing records | May 13, 2026, 18:53 UTC | 46 | 1 | 0 | yes |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | clean | May 13, 2026, 18:52 UTC | 0 | 0 | 0 | yes |
-| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | missing records | May 13, 2026, 07:24 UTC | 4 | 0 | 0 | yes |
+| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | missing records | May 13, 2026, 18:57 UTC | 6 | 0 | 0 | yes |
 
 
 ## Repair Dashboard
