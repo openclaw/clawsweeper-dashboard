@@ -2,13 +2,13 @@
 repo: "openclaw/openclaw"
 cluster_id: "issue-openclaw-openclaw-76734"
 mode: "autonomous"
-run_id: "25290320811"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25290320811"
-head_sha: "c67b2d83cb9adde8e893536bd387639a1c09e0db"
-workflow_conclusion: "success"
+run_id: "25842208365"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25842208365"
+head_sha: "1558af39eeca02b91e57ae98a885c7871229a8e8"
+workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-05-03T20:53:36.564Z"
-canonical: "https://github.com/openclaw/openclaw/issues/76734"
+published_at: "2026-05-14T04:58:05.347Z"
+canonical: "https://github.com/openclaw/openclaw/pull/76744"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/76734"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/76744"
 actions_total: 3
@@ -16,7 +16,7 @@ fix_executed: 0
 fix_failed: 0
 fix_blocked: 0
 apply_executed: 0
-apply_blocked: 1
+apply_blocked: 0
 apply_skipped: 0
 needs_human_count: 0
 ---
@@ -25,17 +25,17 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25290320811](https://github.com/openclaw/clawsweeper/actions/runs/25290320811)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25842208365](https://github.com/openclaw/clawsweeper/actions/runs/25842208365)
 
-Workflow conclusion: success
+Workflow conclusion: failure
 
 Worker result: planned
 
-Canonical: https://github.com/openclaw/openclaw/issues/76734
+Canonical: https://github.com/openclaw/openclaw/pull/76744
 
 ## Summary
 
-Issue #76734 is still valid on current main e387764014d6d18f8c9fadaf4366fc509fb136c6: docs/tools/acp-agents.md still says `persistent behaviour`, while repo guidance requires American spelling. PR #76744 is the right existing implementation path, but it is dirty against current main and has a ClawSweeper review asking for a narrow branch refresh before merge. Plan repair of the same writable branch/PR; no close or merge action is emitted.
+The docs wording request is still valid on current main: `docs/tools/acp-agents.md` contains `persistent behaviour`, while repo guidance requires American spelling. The existing implementation PR #76744 is the canonical path but is dirty/unmergeable and needs the same narrow docs/changelog repair refreshed on the target branch. No close or merge action is planned.
 
 ## Impact
 
@@ -46,7 +46,7 @@ Issue #76734 is still valid on current main e387764014d6d18f8c9fadaf4366fc509fb1
 | Fix failed | 0 |
 | Fix blocked | 0 |
 | Applied executions | 0 |
-| Apply blocked | 1 |
+| Apply blocked | 0 |
 | Apply skipped | 0 |
 | Needs human | 0 |
 
@@ -54,21 +54,21 @@ Issue #76734 is still valid on current main e387764014d6d18f8c9fadaf4366fc509fb1
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | pushed | https://github.com/openclaw/openclaw/pull/76744 |  |  |
+| _None_ |  |  |  |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #76744 | merge_canonical | blocked | fix_pr | job does not allow merge |
+| _None_ |  |  |  |  |
 
 ## Worker Action Matrix
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #76734 | keep_canonical | planned | canonical |  |
-| #76744 | fix_needed | planned | canonical | Repair the existing writable ClawSweeper PR branch by rebasing/recreating the narrow docs/changelog diff on current main before any future merge consideration. |
-| cluster:issue-openclaw-openclaw-76734 | build_fix_artifact | planned |  |  |
+| #76734 | keep_closed | skipped | canonical | Already closed in live preflight state; no closure mutation is allowed or needed. |
+| #76744 | fix_needed | planned | canonical | Repair the existing ClawSweeper implementation branch with the same narrow docs wording and changelog update; do not merge. |
+| cluster:issue-openclaw-openclaw-76734 | build_fix_artifact | planned |  | Emit a deterministic repair plan for the executor to update the existing target branch/PR. |
 
 ## Needs Human
 
