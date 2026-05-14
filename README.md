@@ -4,16 +4,16 @@ Generated from the durable state branch for [openclaw/clawsweeper](https://githu
 
 ## Sweep Dashboard
 
-Last source update: May 14, 2026, 18:54 UTC
+Last source update: May 14, 2026, 18:56 UTC
 
 ### Fleet
 
 | Metric | Count |
 | --- | ---: |
 | Covered repositories | 3 |
-| Open review records | 7231 |
+| Open review records | 7232 |
 | Archived closed records | 21851 |
-| Fresh reviews, 7d | 7063 |
+| Fresh reviews, 7d | 7064 |
 | Proposed closes awaiting apply | 1 |
 | Work candidates awaiting promotion | 1002 |
 | Failed or stale reviews | 9 |
@@ -22,15 +22,15 @@ Last source update: May 14, 2026, 18:54 UTC
 
 | Repository | State | Updated | Run |
 | --- | --- | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Planning review | May 14, 2026, 18:54 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25879137678) |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Apply finished | May 14, 2026, 18:56 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25879136465) |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | Audit finished | May 14, 2026, 18:50 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25878944799) |
-| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Audit finished | May 13, 2026, 18:57 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25819925269) |
+| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Audit finished | May 14, 2026, 18:56 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/25879272699) |
 
 ### Repositories
 
 | Repository | Open records | Archived | Fresh | Proposed closes | Work candidates | Failed/stale | Last review | Last close |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 7058 | 20872 | 6899 | 1 | 989 | 7 | May 14, 2026, 18:49 UTC | May 14, 2026, 18:32 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 7059 | 20872 | 6900 | 1 | 989 | 7 | May 14, 2026, 18:56 UTC | May 14, 2026, 18:32 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | 173 | 973 | 164 | 0 | 13 | 2 | May 14, 2026, 18:34 UTC | May 14, 2026, 18:23 UTC |
 | [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | 0 | 6 | 0 | 0 | 0 | 0 | unknown | May 6, 2026, 01:07 UTC |
 
@@ -84,6 +84,8 @@ Last source update: May 14, 2026, 18:54 UTC
 
 | Repository | Item | Title | Outcome | Status | Reviewed |
 | --- | --- | --- | --- | --- | --- |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#81864](https://github.com/openclaw/openclaw/pull/81864) | feat(approvals): add plain-language plugin approvals | keep_open / kept_open | complete | May 14, 2026, 18:56 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#81889](https://github.com/openclaw/openclaw/issues/81889) | [Feature]: WhatsApp login via phone-pairing code (Baileys requestPairingCode) as alternative to QR | keep_open / kept_open | complete | May 14, 2026, 18:56 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#81887](https://github.com/openclaw/openclaw/pull/81887) | Stream Codex preambles in channel progress drafts | keep_open / kept_open | complete | May 14, 2026, 18:49 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#67782](https://github.com/openclaw/openclaw/pull/67782) | fix(telegram): skip delete before non-empty command sync | keep_open / kept_open | complete | May 14, 2026, 18:49 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#68109](https://github.com/openclaw/openclaw/issues/68109) | [Bug]: gateway restart returns exit=null on systemd instead of exit=0 (2026.4.15) | close / proposed_close | complete | May 14, 2026, 18:49 UTC |
@@ -97,8 +99,6 @@ Last source update: May 14, 2026, 18:54 UTC
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#81865](https://github.com/openclaw/openclaw/issues/81865) | [Bug]: OpenAI Codex OAuth can fail JSON parsing on compressed-looking response and hang after success | keep_open / kept_open | complete | May 14, 2026, 18:48 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#81861](https://github.com/openclaw/openclaw/issues/81861) | Bug: image_generate via openai-codex OAuth does not refresh expired per-agent token | keep_open / kept_open | complete | May 14, 2026, 18:48 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#80131](https://github.com/openclaw/openclaw/issues/80131) | perf: per-request auth (5.5s) and tool bundling (8.9s) dominate gateway TTFT | keep_open / kept_open | complete | May 14, 2026, 18:48 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78735](https://github.com/openclaw/openclaw/pull/78735) | Fix: remove dangerouslyForceUnsafeInstall from gateway protocol | keep_open / kept_open | complete | May 14, 2026, 18:48 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#41284](https://github.com/openclaw/openclaw/pull/41284) | fix(ios): read IDEProvisioningTeamByIdentifier | keep_open / kept_open | complete | May 14, 2026, 18:48 UTC |
 
 </details>
 
@@ -108,7 +108,7 @@ Last source update: May 14, 2026, 18:54 UTC
 | --- | --- | --- | ---: | ---: | ---: | --- |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | clean | May 14, 2026, 18:51 UTC | 0 | 0 | 0 | yes |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | clean | May 14, 2026, 18:50 UTC | 0 | 0 | 0 | yes |
-| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | missing records | May 14, 2026, 12:56 UTC | 7 | 0 | 0 | yes |
+| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | missing records | May 14, 2026, 18:56 UTC | 7 | 0 | 0 | yes |
 
 
 ## Repair Dashboard
