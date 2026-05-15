@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "clawsweeper-commit-openclaw-openclaw-82ca6ecdde80"
 mode: "autonomous"
-run_id: "25842227457"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25842227457"
-head_sha: "1558af39eeca02b91e57ae98a885c7871229a8e8"
+run_id: "25937740852"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25937740852"
+head_sha: "dc54e41d5b23a3fbbf781b551151d91922f0e6eb"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-14T04:52:37.441Z"
+published_at: "2026-05-15T23:07:29.865Z"
 canonical: null
 canonical_issue: null
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25842227457](https://github.com/openclaw/clawsweeper/actions/runs/25842227457)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25937740852](https://github.com/openclaw/clawsweeper/actions/runs/25937740852)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: unknown
 
 ## Summary
 
-Latest main 6db2ee6583d968586ffba6dbf995f2e31402c2a1 partially fixed the commit finding: pre-resolved message_tool_only now falls back when message is unavailable, and dispatch now checks group/subagent/inherited policy. A narrow follow-up is still needed because dispatch still omits sandbox tool policy and runtime tool disabling/allowlisting from the message-tool-availability decision, while the real tool pipeline applies those filters.
+Verified the ClawSweeper commit finding against current main ea16a5e9e10c5b2be28ed46ea77ba5a7aa787d8c. The pre-resolved requested-mode path and group-policy path are already fixed on main, but the dispatch-time message-tool availability check still omits sandbox and sender tool-policy inputs that the real tool construction pipeline applies, so a narrow non-security fix PR is still warranted.
 
 ## Impact
 
@@ -66,8 +66,8 @@ Latest main 6db2ee6583d968586ffba6dbf995f2e31402c2a1 partially fixed the commit 
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| cluster:clawsweeper-commit-openclaw-openclaw-82ca6ecdde80 | fix_needed | planned |  | The reported bug remains valid for sandbox/runtime-filtered message tool availability, so a narrow fix PR is appropriate. |
-| cluster:clawsweeper-commit-openclaw-openclaw-82ca6ecdde80 | build_fix_artifact | planned |  | No viable existing PR is hydrated; allow_fix_pr is true and the patch can stay narrow. |
+| cluster:clawsweeper-commit-openclaw-openclaw-82ca6ecdde80 | fix_needed | planned |  | The original finding is partially fixed on current main, but one narrow residual mismatch remains between source-reply fallback policy and actual tool construction policy. |
+| cluster:clawsweeper-commit-openclaw-openclaw-82ca6ecdde80 | build_fix_artifact | planned |  | A small fix artifact is enough; no issue/PR refs need closure or merge actions in this job. |
 
 ## Needs Human
 
