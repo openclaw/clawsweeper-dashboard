@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "clawsweeper-commit-openclaw-openclaw-955a0e9c0f7d"
 mode: "autonomous"
-run_id: "25233955248"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25233955248"
-head_sha: "2adcf6015a4cdb05370cca2e3cf02502e4e76f6b"
+run_id: "25937723642"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25937723642"
+head_sha: "dc54e41d5b23a3fbbf781b551151d91922f0e6eb"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-01T21:56:18.687Z"
+published_at: "2026-05-15T23:28:06.114Z"
 canonical: null
 canonical_issue: null
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25233955248](https://github.com/openclaw/clawsweeper/actions/runs/25233955248)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25937723642](https://github.com/openclaw/clawsweeper/actions/runs/25937723642)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: unknown
 
 ## Summary
 
-The ClawSweeper commit finding is still valid on current main. No canonical issue or PR was hydrated for this commit-sourced cluster, so the safe path is a narrow new fix PR for heartbeat commitment delivery.
+The ClawSweeper commit finding is still valid on current main ea16a5e9e10c5b2be28ed46ea77ba5a7aa787d8c. Same-session inferred commitments are still suppressed whenever HEARTBEAT.md has a due task, and the scheduler still skips the default session during the follow-up commitment pass. No GitHub mutation, close, merge, or PR creation was performed by this worker.
 
 ## Impact
 
@@ -66,8 +66,8 @@ The ClawSweeper commit finding is still valid on current main. No canonical issu
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| cluster:clawsweeper-commit-openclaw-openclaw-955a0e9c0f7d | fix_needed | planned |  | A due HEARTBEAT.md task with the same interval as the heartbeat cadence can keep winning every tick, leaving same-session inferred commitments pending until they expire. |
-| cluster:clawsweeper-commit-openclaw-openclaw-955a0e9c0f7d | build_fix_artifact | planned |  | No viable existing canonical PR was hydrated, and the fix can stay confined to heartbeat scheduling plus focused commitment tests. |
+| cluster:clawsweeper-commit-openclaw-openclaw-955a0e9c0f7d | fix_needed | planned |  | A narrow implementation PR is needed to deliver due same-session commitments through a separate no-tools commitment path after due task turns, without mixing untrusted commitment metadata into tool-capable task prompts. |
+| cluster:clawsweeper-commit-openclaw-openclaw-955a0e9c0f7d | build_fix_artifact | planned |  | No viable canonical PR exists in the hydrated artifact, and allow_fix_pr/allow_raise_pr are enabled while merge and close are blocked. |
 
 ## Needs Human
 
