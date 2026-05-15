@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "clawsweeper-commit-openclaw-openclaw-8989ceee50ab"
 mode: "autonomous"
-run_id: "25839744627"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25839744627"
-head_sha: "1558af39eeca02b91e57ae98a885c7871229a8e8"
+run_id: "25937732512"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/25937732512"
+head_sha: "dc54e41d5b23a3fbbf781b551151d91922f0e6eb"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-14T03:35:08.384Z"
+published_at: "2026-05-15T23:16:52.438Z"
 canonical: null
 canonical_issue: null
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/25839744627](https://github.com/openclaw/clawsweeper/actions/runs/25839744627)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/25937732512](https://github.com/openclaw/clawsweeper/actions/runs/25937732512)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: unknown
 
 ## Summary
 
-Verified the ClawSweeper commit finding against current main 7c5222a195e2e2d1ecda60df398671e889fff6e7 by source inspection. The regression is still present: group/channel replies still default to message-tool-only delivery, while doctor preview warnings return early when the message tool is available. A narrow non-security fix PR is appropriate.
+The ClawSweeper commit finding is still valid on current main ea16a5e9e10c5b2be28ed46ea77ba5a7aa787d8c. The doctor warning path still returns no warning when the source-reply runtime can grant the message tool, while group/channel reply delivery still defaults to message_tool_only, so a narrow fix PR is warranted. Local execution proof was blocked because pnpm is unavailable and corepack cannot write its cache in this read-only worker, but source inspection confirms the regression path.
 
 ## Impact
 
@@ -66,8 +66,8 @@ Verified the ClawSweeper commit finding against current main 7c5222a195e2e2d1ecd
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| cluster:clawsweeper-commit-openclaw-openclaw-8989ceee50ab | fix_needed | planned |  | No viable hydrated canonical PR exists for this source=clawsweeper_commit job, the non-security bug is still present on main, and allow_fix_pr is true. |
-| cluster:clawsweeper-commit-openclaw-openclaw-8989ceee50ab | build_fix_artifact | planned |  | A cluster-scoped implementation PR is needed from the configured target branch clawsweeper/clawsweeper-commit-openclaw-openclaw-8989ceee50ab. |
+| cluster:clawsweeper-commit-openclaw-openclaw-8989ceee50ab | fix_needed | planned |  | No viable canonical PR is hydrated for this commit-finding lane, and the current-main source still matches the reported regression. |
+| cluster:clawsweeper-commit-openclaw-openclaw-8989ceee50ab | build_fix_artifact | planned |  | allow_fix_pr is true, allow_merge and close actions are blocked, and the finding can be fixed in the doctor warning surface without broad product changes. |
 
 ## Needs Human
 
