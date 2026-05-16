@@ -50,6 +50,17 @@ hidden verdict/action markers so trusted repair and automerge flows can continue
 without scraping visible prose. See
 [`docs/pr-review-comments.md`](docs/pr-review-comments.md).
 
+For open issues with complete, current kept-open reviews, ClawSweeper also
+projects selected structured review conclusions into advisory GitHub labels for
+maintainer filtering and project views. These labels expose states such as
+current-main reproduction, source reproduction, linked open PRs, queueable
+fixes, missing info, and product/security review needs. They are advisory only
+and do not trigger repair, merge, or close behavior. Label-only syncs record
+`labels_synced_at` in the durable report so GitHub `updated_at` changes caused
+by ClawSweeper-owned label writes do not look like fresh target-side activity to
+the scheduler. See
+[`docs/work-lane.md`](docs/work-lane.md).
+
 ### Apply and State
 
 Apply mode re-fetches live GitHub state, checks labels, maintainer authorship,
