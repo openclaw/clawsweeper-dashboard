@@ -1,19 +1,19 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-05-17T16:42:50.102Z
+Generated: 2026-05-17T17:13:31.713Z
 
 ## Summary
 
 | Metric | Count |
 | --- | ---: |
-| open_prs | 1 |
+| open_prs | 0 |
 | ready_candidates | 0 |
 | security_hold | 0 |
 | needs_rebase | 0 |
 | mergeability_unknown | 0 |
-| needs_checks | 1 |
+| needs_checks | 0 |
 | needs_review | 0 |
-| needs_merge_preflight | 1 |
+| needs_merge_preflight | 0 |
 | needs_result_backfill | 0 |
 
 ## Dispatch
@@ -30,4 +30,4 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#83191](https://github.com/openclaw/openclaw/pull/83191) | fix(update): tailor gateway recovery hints by platform | automerge-openclaw-openclaw-83096 | MERGEABLE | UNSTABLE | CANCELLED:7 IN_PROGRESS:10 SKIPPED:61 SUCCESS:72 NEUTRAL:1; blockers:16 | needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
+| _None_ |  |  |  |  |  |  |  |
