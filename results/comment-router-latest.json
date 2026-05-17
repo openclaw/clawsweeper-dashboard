@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-17T17:35:33.664Z",
+  "generated_at": "2026-05-17T17:37:22.414Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-17T14:35:33.453Z",
+  "since": "2026-05-17T14:37:20.484Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    83206
+    83205
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,124 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:83205:4471796045:2026-05-17T17:37:17Z:clawsweeper_auto_repair",
+      "comment_id": "4471796045",
+      "comment_version_key": "4471796045:2026-05-17T17:37:17Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83205#issuecomment-4471796045",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83205,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-17T17:30:41Z",
+      "comment_updated_at": "2026-05-17T17:37:17Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=2c7f81f94a8126f790e45d55bcfee8aa31c5aae1)",
+      "review_summary": "The PR makes `baseUrl` and `models` optional in `ModelProviderSchema` and adds schema regression tests for timeout-only provider entries.\n\nReproducibility: yes. by source inspection: current main's provider schema requires `baseUrl` and `models`, while the resolver reads `providerConfig.timeoutSeconds` once validation succeeds. I did not run a gateway restart because this review is read-only.",
+      "review_followup": "Human review is needed because the branch needs a tighter validation shape and the external PR still needs real after-fix proof from OpenClaw's actual validator or gateway.",
+      "freeform_prompt": null,
+      "expected_head_sha": "2c7f81f94a8126f790e45d55bcfee8aa31c5aae1",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(schema): allow standalone timeoutSeconds on built-in providers (#83201)",
+        "body": "Fixes #83201.\n\n## Problem\n\n`models.providers.<id>.timeoutSeconds` is documented in the help text and schema labels (`src/config/schema.help.ts`, `src/config/schema.labels.ts`) as a per-provider request-timeout knob, and the runtime resolver already knows how to consume a partial provider entry that only sets `timeoutSeconds` for built-in providers (openai, anthropic, openai-codex, …). The startup zod validator at `src/config/zod-schema.core.ts:377` however required `baseUrl` and `models` on **every** entry, so the documented config shape\n\n```json\n{ \"models\": { \"providers\": { \"openai\": { \"timeoutSeconds\": 60 } } } }\n```\n\nwas rejected at startup. Operators could not change the per-provider request timeout on a built-in without copying the entire built-in `baseUrl` + catalog into their config (and then maintaining it against upstream changes).\n\nPer ClawSweeper review: \"schema/validator mismatch: the startup validation schema requires `baseUrl` and `models` for every entry, while the help/docs expose `timeoutSeconds` as a provider-level request-timeout knob and the runtime resolver already knows how to consume it.\"\n\n## Fix\n\n`src/config/zod-schema.core.ts`: make `baseUrl` and `models` optional on `ModelProviderSchema`. Custom providers that add an entry for a brand-new provider id still need both fields populated for the runtime resolver to do anything useful; this PR does not change that observable behaviour. Built-in providers now resolve their own baseUrl/catalog and apply the operator-supplied `timeoutSeconds` on top.\n\nThe `.strict()` still applies, so unknown keys are still rejected.\n\n`src/config/zod-schema.providers-timeout.test.ts` (new): four regression cases.\n\n## Real behavior proof\n\n**Behavior or issue addressed**: Per #83201, the documented standalone `timeoutSeconds` override on built-in providers is rejected by the startup validator because `ModelProviderSchema` requires `baseUrl` and `models`. ClawSweeper confirmed the runtime resolver already consumes a partial entry correctly — the schema is the only thing in the way.\n\n**Real environment tested**: Linux x86_64 (Ubuntu 24.04), Node v22.16, local checkout of `openclaw/openclaw` at branch `fix-models-provider-schema-optional-baseurl` rebased on `origin/main` (`2c9f68f42b`). The probe replicates the patched `ModelsConfigSchema.safeParse(...)` against four canonical config shapes — the issue scenario and three negative controls.\n\n**Exact steps or command run after this patch**:\n\n```\nnode --input-type=module -e '\nimport { z } from \"zod\";\n// Mirrors the patched ModelProviderSchema after #83201.\nconst ModelProviderSchema = z.object({\n  baseUrl: z.string().min(1).optional(),\n  timeoutSeconds: z.number().int().positive().optional(),\n  models: z.array(z.object({ id: z.string() })).optional(),\n}).strict();\nconst ModelsConfigSchema = z.object({\n  providers: z.record(z.string(), ModelProviderSchema).optional(),\n}).strict();\n\nconst cases = [\n  [\"standalone timeoutSeconds (issue scenario)\", { providers: { openai: { timeoutSeconds: 60 } } }, true],\n  [\"full custom provider entry\",                  { providers: { custom: { baseUrl: \"https://x\", models: [{ id: \"a\" }] } } }, true],\n  [\"unknown key (strict still rejects)\",          { providers: { openai: { timeoutSeconds: 60, unknownKey: 1 } } }, false],\n  [\"negative timeoutSeconds (still rejected)\",    { providers: { openai: { timeoutSeconds: -1 } } }, false],\n];\nfor (const [n, cfg, expected] of cases) {\n  const result = ModelsConfigSchema.safeParse(cfg);\n  console.log(`${result.success === expected ? \"PASS\" : \"FAIL\"} ${n}: success=${result.success}`);\n}\n'\n```\n\n**Evidence after fix**: live stdout from the probe (real `node`, real `zod`):\n\n```\nPASS standalone timeoutSeconds (issue scenario): success=true\nPASS full custom provider entry: success=true\nPASS unknown key (strict still rejects): success=false\nPASS negative timeoutSeconds (still rejected): success=false\n```\n\n- Row 1 (issue scenario): pre-fix returned `success=false` because `baseUrl` and `models` were required; post-fix returns `success=true`.\n- Row 2: regression-safe — full custom provider entries still parse cleanly.\n- Row 3: `.strict()` still rejects unknown keys, so this is not a \"loosen all validation\" change.\n- Row 4: positive integer constraint on `timeoutSeconds` is preserved.\n\n**Observed result after fix**: operators can now set `models.providers.openai.timeoutSeconds: 60` (or any built-in provider) at startup without being forced to copy the entire built-in baseUrl + catalog. The runtime resolver was already wired to apply the partial entry; this PR just unblocks the schema gate the resolver was sitting behind.\n\n**What was not tested**: I did not run a live gateway boot with a real `~/.openclaw/openclaw.json` containing only the timeoutSeconds override (no need — the schema is the only gate this PR changes, and the runtime resolver path is already exercised by the existing built-in provider tests). The runtime resolver behaviour for partial provider entries is the subject of separate `provider-runtime.*` tests that are not touched by this PR.\n\n## Pre-implement audit\n\n- **Existing-helper check:** No new helper. Two `.optional()` calls on existing fields. The runtime resolver merge code in `src/plugins/provider-runtime.*` already handles missing `baseUrl`/`models` for built-in providers — that is the very behaviour the issue cites. PASS.\n- **Shared-helper caller check:** `ModelProviderSchema` is consumed by `ModelsConfigSchema` at line 410 (same file). The downstream type `ModelsConfigSchema` is used in the full `OpenClawConfigSchema` and propagates into `OpenClawConfig`. The change relaxes constraints — every previously-valid config still parses; some previously-invalid configs now parse. No call site that consumed the strict types breaks because they all already handle `baseUrl?` / `models?` via the runtime resolver's merge against built-in defaults. PASS.\n- **Broader-fix rival scan:** `gh pr list --search \"83201 in:body\"` returns no rival PRs. ClawSweeper labelled the issue P2 + queueable-fix + fix-shape-clear + source-repro + impact:auth-provider with no linked closing PR. PASS.\n",
+        "branch": "fix-models-provider-schema-optional-baseurl",
+        "head_sha": "2c7f81f94a8126f790e45d55bcfee8aa31c5aae1",
+        "author": "hclsys",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "impact:auth-provider"
+        ],
+        "files": [
+          {
+            "path": "src/config/zod-schema.core.ts",
+            "additions": 12,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.providers-timeout.test.ts",
+            "additions": 50,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83205",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83205.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 115,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 27,
+            "SUCCESS": 81,
+            "FAILURE": 4,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-runtime-infra-process:FAILURE",
+            "check-test-types:FAILURE",
+            "check:FAILURE",
+            "checks-node-core:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-runtime-infra-process:FAILURE",
+            "check-test-types:FAILURE",
+            "check:FAILURE",
+            "checks-node-core:FAILURE"
+          ]
+        }
+      },
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 402,
+    "total_ms": 2202,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 199
+        "ms": 315
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1601
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 191
+        "ms": 261
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
