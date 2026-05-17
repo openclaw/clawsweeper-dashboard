@@ -194,8 +194,8 @@ Common commands:
   only after the normal exact-head, checks, mergeability, and gate checks pass.
 - `stop` removes repair-loop labels, adds `clawsweeper:human-review`, and makes
   older automerge/autofix comments ineligible to continue. `/autoclose <reason>`
-  closes the item and bounded linked same-repo targets with an explicit
-  maintainer reason.
+  closes the item and any open same-repo targets explicitly referenced in the
+  command text.
 
 Only maintainers are accepted for write actions. The router checks repository
 collaborator permission (`admin`, `maintain`, or `write`) and falls back to
