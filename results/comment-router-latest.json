@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-17T21:52:07.264Z",
+  "generated_at": "2026-05-17T21:56:13.847Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-17T18:52:05.325Z",
+  "since": "2026-05-17T18:56:13.380Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    19328
+    83278
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 7,
-  "commands_seen": 1,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,118 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:19328:4352802437:2026-05-17T21:52:02Z:clawsweeper_auto_repair",
-      "comment_id": "4352802437",
-      "comment_version_key": "4352802437:2026-05-17T21:52:02Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/19328#issuecomment-4352802437",
-      "repo": "openclaw/openclaw",
-      "issue_number": 19328,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-30T13:21:18Z",
-      "comment_updated_at": "2026-05-17T21:52:02Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=8dfec7de5b7128dd26b9eba1ca0fbe1a09f09075)",
-      "review_summary": "The PR changes gateway agent session persistence to avoid cached session-entry writebacks clobbering fresh store values and adds regression tests for `modelOverride`, `providerOverride`, and adjacent session fields.\n\nReproducibility: yes. at source level. Current main reads a cached session row, builds a patch containing stale override fields, and merges that patch over the fresh store row; the PR body also includes terminal proof through production session-store merge code.",
-      "review_followup": "A narrow automated repair can preserve legacy `sessionStartedAt` backfill while keeping this PR's stale-writeback fix focused.",
-      "freeform_prompt": null,
-      "expected_head_sha": "8dfec7de5b7128dd26b9eba1ca0fbe1a09f09075",
-      "finding_id": "review-feedback",
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "Fix: preserve modelOverride in agent handler (#5369)",
-        "body": "## Summary\n\nFixes the intermittent race condition where sub-agent model overrides were silently ignored (~3% failure rate).\n\n- When `sessions.patch` writes a fresh `modelOverride` between when the agent handler captures its local `entry` reference and when it builds `nextEntryPatch`, the captured stale value would clobber the fresh store value through `mergeSessionEntry({...freshStore, ...patch})`.\n- The fix removes the stale `entry?.X` writebacks from `nextEntryPatch` (incl. `modelOverride`, `providerOverride`, `cliSessionIds`, `cliSessionBindings`, `claudeCliSessionId`, gated `pluginOwnerId`). `mergeSessionEntry` already preserves anything not in the patch, so fresh store values survive the write.\n- Rotation-clearing for `sessionFile` (added by #79076) is preserved through a conditional spread that only writes `sessionFile: undefined` on session rotation.\n\n## Root Cause\n\nThe agent handler was:\n1. Reading the session entry early via `loadSessionEntry()` and holding it in a local variable.\n2. Building `nextEntryPatch` with `modelOverride: entry?.modelOverride` and several siblings — values read from that captured local entry, not the fresh store.\n3. Calling `updateSessionStore()` whose mutator does `mergeSessionEntry(store[primaryKey], nextEntryPatch)` — which spreads `{...freshStore, ...patch}`, so any stale value in the patch clobbers the fresh store value written concurrently (e.g., by `sessions.patch` setting `modelOverride` on a sub-agent between spawn and run).\n\n## Changes\n\n- `src/gateway/server-methods/agent.ts`: drop stale `entry?.X` writebacks from `nextEntryPatch`. Switch the patch type to `Partial<SessionEntry>`. Gate `pluginOwnerId` behind `entry === undefined`. Convert the `sessionFile` rotation-clearing from #79076 into a conditional spread that fires only when `entry.sessionId !== sessionId`.\n- `src/gateway/server-methods/agent.test.ts`: add the original #5369 regression and a broader regression guard for the whole stale-writeback class (sendPolicy, skillsSnapshot, thinkingLevel, fastMode, verboseLevel, traceLevel, reasoningLevel, systemSent, spawnedWorkspaceDir, spawnDepth, cliSessionIds, cliSessionBindings, claudeCliSessionId).\n\n## Real behavior proof\n\n**Behavior or issue addressed:** When `sessions.patch` writes a fresh `modelOverride` between when the agent handler captures its local `entry` reference and when it builds `nextEntryPatch`, the captured stale value clobbers the fresh store value through `mergeSessionEntry({...freshStore, ...patch})`. Per #5369, this manifested as ~3% of sub-agent runs silently ignoring an explicit model override and falling back to the parent's model.\n\n**Real environment tested:**\n- Host: Linux 6.14.0-34-generic on x86_64, Node v22.22.0, openclaw production session-store modules from this branch (`src/config/sessions/store.ts`, `src/config/sessions/types.ts`).\n- Multipass guest VM `ai-assistant`: Ubuntu 24.04 LTS, IP 10.119.193.216, Node v22.22.2, same modules from this branch via a host mount at `/home/ubuntu/openclaw-pr5369`.\n\nBoth run the production `loadSessionStore` / `updateSessionStore` / `mergeSessionEntry` code paths against a real on-disk JSON store in a per-run tmp directory. No mocking. No shims.\n\n**Exact steps or command run after this patch:**\n\n```\nnode --import tsx scripts/repro-5369.mts 1000\n```\n\nThe driver lives in this branch (local-only, intentionally not committed). For each of 1000 iterations it:\n\n1. Initializes a session entry on disk via `updateSessionStore` (no override yet).\n2. Captures the entry via `loadSessionStore({ skipCache: true })` — the same shape the agent handler holds in its local `entry` variable.\n3. Fires a concurrent `updateSessionStore` to set `modelOverride: haiku-4.5-iter-N` (mimicking what `sessions.patch` does during sub-agent setup).\n4. Builds `nextEntryPatch` two ways and applies each through the same `mergeSessionEntry(store[primaryKey], nextEntryPatch)` call shape that `src/gateway/server-methods/agent.ts` uses:\n   - PRE-FIX shape: `modelOverride: capturedEntry.modelOverride` (writes back the captured stale `undefined`).\n   - POST-FIX shape: `modelOverride` dropped from the patch — `mergeSessionEntry` preserves the fresh store value.\n5. Reads the persisted entry back from disk and reports whether the override survived.\n\n**Evidence after fix:**\n\nHost (Linux 6.14, Node v22.22.0):\n\n```\n[repro #5369] node v22.22.0 on linux x64\n[repro #5369] storePath=/tmp/openclaw-pr5369-0fZPH1/sessions.json\n[repro #5369] iterations=1000\n\n[repro #5369] running PRE-FIX patch shape (entry?.modelOverride writeback)...\n[repro #5369] PRE-FIX :  1000/1000 sub-agents lost their override  (338 ms)\n[repro #5369]           sample: expected=haiku-4.5-iter-0 actual=undefined\n\n[repro #5369] running POST-FIX patch shape (modelOverride dropped from patch)...\n[repro #5369] POST-FIX:  0/1000 sub-agents lost their override  (254 ms)\n[repro #5369]           sample: expected=haiku-4.5-iter-0 actual=haiku-4.5-iter-0\n\n[repro #5369] verdict: fix VERIFIED\n```\n\nMultipass guest VM `ai-assistant` (Ubuntu 24.04 LTS, Node v22.22.2):\n\n```\n[repro #5369] node v22.22.2 on linux x64\n[repro #5369] storePath=/tmp/openclaw-pr5369-4EJXTF/sessions.json\n[repro #5369] iterations=1000\n\n[repro #5369] running PRE-FIX patch shape (entry?.modelOverride writeback)...\n[repro #5369] PRE-FIX :  1000/1000 sub-agents lost their override  (2602 ms)\n[repro #5369]           sample: expected=haiku-4.5-iter-0 actual=undefined\n\n[repro #5369] running POST-FIX patch shape (modelOverride dropped from patch)...\n[repro #5369] POST-FIX:  0/1000 sub-agents lost their override  (1337 ms)\n[repro #5369]           sample: expected=haiku-4.5-iter-0 actual=haiku-4.5-iter-0\n\n[repro #5369] verdict: fix VERIFIED\n```\n\n**Observed result after fix:** in both environments every one of 1000 iterations preserved the sub-agent `modelOverride` written by the concurrent store update. The same 1000 iterations under the pre-fix patch shape lost the override every single time — confirming the writeback was the clobbering vector and that dropping it from `nextEntryPatch` is what makes the override durable. The persisted on-disk values (`actual=haiku-4.5-iter-0`) match what `sessions.patch` wrote, end-to-end, through the production merge code.\n\nThe 100% pre-fix loss rate (vs the ~3% reported in #5369) reflects that the driver deterministically forces the stale-then-fresh ordering on every iteration. Production traffic only hits that ordering when `sessions.patch` lands in the narrow window between the agent handler's `loadSessionEntry` and its own `updateSessionStore` call — about 3% of the time per the linked issue. Whenever that ordering does occur in production, the driver shows the pre-fix shape always loses the override and the post-fix shape never does.\n\n**What was not tested:** end-to-end Anthropic API calls burning credit on each of the 1000 iterations. The sub-agent dispatch loop is upstream of the `modelOverride` persistence the fix addresses; a real model loop would only confirm what the persisted `modelOverride` value is, which the driver already reads back from disk on every iteration. Driving 1000 real Anthropic calls would not provide additional information about the persistence behavior the fix changes.\n\nFixes #5369\n\nSupersedes #8398 (rebased onto latest main to resolve conflicts).\n",
-        "branch": "fix/5369-subagent-model-override-race",
-        "head_sha": "8dfec7de5b7128dd26b9eba1ca0fbe1a09f09075",
-        "author": "codereclaimers",
-        "labels": [
-          "gateway",
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "impact:session-state",
-          "impact:auth-provider"
-        ],
-        "files": [
-          {
-            "path": "src/gateway/server-methods/agent.test.ts",
-            "additions": 108,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/agent.ts",
-            "additions": 37,
-            "deletions": 28,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-19328",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-19328.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 117,
-          "counts": {
-            "SUCCESS": 88,
-            "SKIPPED": 27,
-            "IN_PROGRESS": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS"
-          ],
-          "pending": [
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS"
-          ],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2142,
+    "total_ms": 756,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 325
+        "ms": 456
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1599
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 189
+        "ms": 289
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
