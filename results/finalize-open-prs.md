@@ -1,6 +1,6 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-05-17T15:12:54.499Z
+Generated: 2026-05-17T16:42:50.102Z
 
 ## Summary
 
@@ -30,4 +30,4 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#83147](https://github.com/openclaw/openclaw/pull/83147) | fix(plugins): default 15s timeout for before_agent_start hook (#48534) | automerge-openclaw-openclaw-83136 | MERGEABLE | UNSTABLE | CANCELLED:15 IN_PROGRESS:10 SKIPPED:32 SUCCESS:73 NEUTRAL:1; blockers:16 | needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
+| [#83191](https://github.com/openclaw/openclaw/pull/83191) | fix(update): tailor gateway recovery hints by platform | automerge-openclaw-openclaw-83096 | MERGEABLE | UNSTABLE | CANCELLED:7 IN_PROGRESS:10 SKIPPED:61 SUCCESS:72 NEUTRAL:1; blockers:16 | needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
