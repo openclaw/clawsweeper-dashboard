@@ -216,6 +216,11 @@ The Cloudflare dashboard is observability-only: it shows active workers,
 repair/automerge pipeline rows, CI state, recent failures, and automerge timing
 without owning GitHub mutations. See [`docs/live-dashboard.md`](docs/live-dashboard.md).
 
+The optional triage dashboard page at `/triage` exposes ClawSweeper advisory
+issue labels as read-only maintainer views, backed by GitHub Search snapshots
+instead of GitHub Project writes. See
+[`docs/triage-dashboard.md`](docs/triage-dashboard.md).
+
 ## How It Works
 
 ClawSweeper is split into four operational lanes:
