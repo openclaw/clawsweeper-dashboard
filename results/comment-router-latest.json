@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-18T13:39:54.467Z",
+  "generated_at": "2026-05-18T13:40:41.556Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-18T10:39:51.437Z",
+  "since": "2026-05-18T10:40:41.252Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    83487
+    83613
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,137 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:83487:4475232919:2026-05-18T13:39:46Z:clawsweeper_needs_human",
-      "comment_id": "4475232919",
-      "comment_version_key": "4475232919:2026-05-18T13:39:46Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83487#issuecomment-4475232919",
-      "repo": "openclaw/openclaw",
-      "issue_number": 83487,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-18T07:07:21Z",
-      "comment_updated_at": "2026-05-18T13:39:46Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "The remaining blocker is contributor real behavior proof plus maintainer security review, not an automated code repair.; Cleared: The diff narrows gateway method dispatch to the accepting server context and does not add dependencies, credential handling, broader permissions, or new external execution paths. (sha=4042d38f04ad5e0439f2b093b6714ed7350a7e27)",
-      "review_summary": "The branch injects a server-local plugin route registry and GatewayRequestContext into plugin HTTP request/upgrade scopes, adds regression coverage, and updates the changelog.\n\nReproducibility: yes. at source level: current main creates plugin HTTP scopes without a gateway context and dispatch then falls back to the process-global context. I did not establish a live two-gateway runtime repro in this read-only review.",
-      "review_followup": "The remaining blocker is contributor real behavior proof plus maintainer security review, not an automated code repair.",
-      "freeform_prompt": null,
-      "expected_head_sha": "4042d38f04ad5e0439f2b093b6714ed7350a7e27",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: Admin HTTP RPC can execute against another live gateway instance",
-        "body": "## Summary\n\n- Problem: plugin HTTP routes could call `dispatchGatewayMethod()` with a scoped client but no server-local gateway context, so `admin-http-rpc` could fall back to the process-global gateway context when multiple gateway instances lived in one Node process.\n- What changed: plugin HTTP route dispatch now resolves routes from the accepting server's current plugin registry and injects that same server's `GatewayRequestContext` into request/upgrade runtime scopes.\n- Guardrail: added a regression test where the globally active/pinned route registry belongs to gateway B, while gateway A's handler still dispatches gateway A's route with gateway A's context.\n- Scope boundary: no unrelated defaults, migrations, permissions, or compatibility behavior were intentionally changed.\n\n## Change Type\n\n- [x] Bug fix\n- [x] Security hardening\n\n## Linked Issue/PR\n\n- Closes #83486\n\n## Real Behavior Proof\n\nBehavior addressed: admin HTTP RPC/plugin HTTP control-plane dispatch is bound to the gateway instance that accepted the HTTP request, preventing cross-gateway in-process dispatch when multiple gateway servers are live.\n\nReal environment tested: macOS source checkout for focused gateway/plugin HTTP regression tests plus OpenClaw Blacksmith Testbox for `pnpm check:changed` on Linux CI image.\n\nExact steps or command run after this patch:\n\n```bash\nnode scripts/run-vitest.mjs src/gateway/server/plugins-http.runtime-scopes.test.ts src/gateway/server/plugins-http.test.ts src/gateway/server-runtime-state.test.ts src/plugin-sdk/gateway-method-runtime.test.ts extensions/admin-http-rpc/src/handler.test.ts\ncodex review --base origin/main\npnpm check:changed\n```\n\nEvidence after fix:\n\n```text\nnode scripts/run-vitest.mjs ...\nTest Files 9 passed (9)\nTests 104 passed (104)\n\ncodex review --base origin/main\nNo actionable correctness issues found in the diff; focused gateway/plugin HTTP tests also passed locally.\n\npnpm check:changed\nblacksmith-testbox leaseId=tbx_01krxm60zwhwmnqgz7mq8s6gpp exitCode=0\nGitHub Actions run: https://github.com/openclaw/openclaw/actions/runs/26036353253\n```\n\nObserved result after fix: the focused regression dispatches server A's route with server A's context even while the active/pinned route registry points at server B, and both focused tests plus Testbox changed gate pass.\n\nWhat was not tested: a manual packaged two-gateway admin HTTP RPC session with live credentials; the in-process route/context mismatch is covered by focused gateway runtime tests and the Testbox changed gate.\n\n## Root Cause\n\n`dispatchGatewayMethodInProcessRaw()` correctly prefers `scope?.context`, but plugin HTTP routes only populated the request scope with a synthetic client. When no scoped context was present, dispatch fell back to the single process-global gateway context resolver. In a multi-gateway process, that resolver could point at the last-started gateway, so a request accepted by gateway A could execute against gateway B. The first PR shape added a WeakMap by registry, but that still failed when route registries were globally pinned or shared.\n\n## Fix\n\n- Removed the registry WeakMap context plumbing.\n- Added server-local route registry and gateway context callbacks to the plugin HTTP request/upgrade handlers.\n- Passed the current mutable server plugin registry and gateway request context from `startGatewayServer()` into `createGatewayRuntimeState()`.\n- Used the same server-local registry resolver for route auth, node capability routes, and cached plugin HTTP handlers.\n- Added changelog coverage for the user-visible security hardening.\n\n## Security Impact\n\n- New permissions/capabilities? No.\n- Secrets/tokens handling changed? No.\n- New/changed network calls? No.\n- Command/tool execution surface changed? Yes, in-process gateway method dispatch is now bound to the correct accepting server instance.\n- Data access scope changed? Yes, the fix prevents an authenticated caller on one gateway from dispatching into another live gateway instance in the same process.\n\n## Compatibility / Migration\n\n- Backward compatible: Yes.\n- Config/env changes: No.\n- Migration needed: No.\n\n## Risks and Mitigations\n\n- Risk: plugin HTTP route reload behavior could use stale routes.\n- Mitigation: the handler receives a live registry resolver over the mutable server-local `pluginRegistry`; regression tests cover stale explicit registry and active/pinned registry mismatch cases.\n",
-        "branch": "fix/ar-gdn-cross-gateway-admin-rpc-context-confusion",
-        "head_sha": "4042d38f04ad5e0439f2b093b6714ed7350a7e27",
-        "author": "coygeek",
-        "labels": [
-          "gateway",
-          "size: S",
-          "proof: supplied",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 security-boundary",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-runtime-state.ts",
-            "additions": 14,
-            "deletions": 11,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.impl.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server/plugins-http.runtime-scopes.test.ts",
-            "additions": 80,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server/plugins-http.test.ts",
-            "additions": 5,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server/plugins-http.ts",
-            "additions": 11,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83487",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83487.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 95,
-          "counts": {
-            "SUCCESS": 67,
-            "SKIPPED": 27,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3348,
+    "total_ms": 551,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 425
+        "ms": 290
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2591
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 306
+        "ms": 247
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
