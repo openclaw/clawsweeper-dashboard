@@ -1,15 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-18T00:08:23.116Z",
+  "generated_at": "2026-05-18T00:08:34.811Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-17T21:08:22.674Z",
+  "since": "2026-05-17T21:08:32.887Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    83320
+    62682
+  ],
+  "comment_ids": [
+    4472935857
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -29,30 +32,236 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:62682:4472935857:2026-05-18T00:06:59Z:re_review",
+      "comment_id": "4472935857",
+      "comment_version_key": "4472935857:2026-05-18T00:06:59Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/62682#issuecomment-4472935857",
+      "repo": "openclaw/openclaw",
+      "issue_number": 62682,
+      "author": "simonusa",
+      "author_id": 178938782,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-18T00:06:59Z",
+      "comment_updated_at": "2026-05-18T00:06:59Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-05-18T00:08:35.560Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 62682
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-18T00:08:36.549Z",
+          "response_comment_id": null,
+          "response_comment_mode": "created"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): distinguish terminal aborts from retryable failures (#60388)",
+        "body": "Addresses #60388 (complementary to #52365, see \"Relationship to PR #52365\" below)\n\nToday the fallback layer cannot tell the difference between two very different aborts:\n\n1. **\"This model failed, try another\"** -> fallback should retry\n2. **\"The whole run is over\"** -> fallback should stop immediately\n\nTwo situations where the run is over and retrying with another model wastes resources:\n\n- **Run-budget timeout (#60388)**: The embedded runner's `scheduleAbortTimer` fires `runAbortController.abort(makeTimeoutAbortReason())` after the configured `agents.defaults.timeoutSeconds`. The budget is exhausted -- giving the next candidate ~0 ms remaining is guaranteed to fail and wastes API calls. The user issue description (#60388) says \"On a fleet of ~100 cron jobs: 30+ model-fallback events per day, almost all triggered by run timeouts.\"\n\n- **HTTP client disconnect**: When a client closes its connection mid-request, `watchClientDisconnect` aborts the controller. No caller is left to receive a response, so any tokens spent on a fallback model are wasted.\n\nBoth already abort the controller; what's missing is a *reason* attached to the signal that the fallback layer can recognize.\n\n## Summary\n\n- **Problem:** Run-budget timeout aborts (and HTTP client disconnects) currently flow through the model fallback chain as if they were retryable provider failures, wasting API calls and lane occupancy.\n- **Why it matters:** Each unwanted fallback attempt holds a session lane and burns tokens for no benefit. On busy systems (#60388 reports 30+ events/day from cron timeouts alone) this is meaningful overhead.\n- **What changed:** The fallback layer now checks `AbortSignal.reason` for two terminal markers (`name === \"TimeoutError\"` for run-budget, `name === \"ClientDisconnectError\"` for client disconnect) and short-circuits the chain when found.\n- **What did NOT change (scope boundary):** No changes to how aborts are *triggered*, no changes to per-provider timeout/retry semantics, no changes to AbortController lifecycles. Issues #37505 (cron AbortController sharing) and #58578 (mid-flight primary restore) are different abort *sources* upstream of the fallback layer and remain unchanged.\n\n## Change Type\n\n- [x] Bug fix\n\n## Scope\n\n- [x] Gateway / orchestration\n\n## Linked Issue\n\n- Closes #60388\n- [x] This PR fixes a bug or regression\n\n## Root Cause\n\n- Root cause: `shouldRethrowAbort()` in `model-fallback.ts` checks `isFallbackAbortError(err) && !isTimeoutError(err)` -- which means timeout errors are *intentionally not* rethrown, so the fallback chain runs them. This is correct for per-provider timeouts (provider is slow, try another), but wrong for run-budget timeouts (whole run is out of time, no point retrying). The two cannot be told apart from the error alone.\n- Missing detection / guardrail: No check for *why* the abort happened. The `signal.reason` carrying `TimeoutError` (set by `pi-embedded-runner/run/attempt.ts:1382-1386` via `makeTimeoutAbortReason`) was never inspected.\n- Contributing context: The HTTP client disconnect path added in #54388 has the same shape -- it tags the abort with no reason today, so a downstream client disconnect also flows through fallback retries.\n\n## Regression Test Plan\n\n- Coverage level: [x] Unit test\n- Target test or file: `src/agents/model-fallback.test.ts`\n- Scenario the tests lock in: Six new tests under `describe(\"terminal abort propagation (closes #60388)\")`:\n  - `signal.reason` with `name === \"TimeoutError\"` -> first candidate runs, no retry, error rethrown\n  - `signal.reason` with `name === \"ClientDisconnectError\"` -> same\n  - `TimeoutError` nested as `cause` of an outer `AbortError` -> still detected (covers `pi-embedded-runner`'s `makeAbortError` wrapping pattern)\n  - `signal.reason` with a generic error -> fallback runs normally (non-terminal)\n  - No `abortSignal` passed -> fallback runs normally (back-compat for existing callers)\n  - `abortSignal` provided but not aborted -> fallback runs normally (live-signal back-compat)\n- Why this is the smallest reliable guardrail: The tests construct the abort signal directly and assert on `run.mock.calls.length === 1` to verify the chain stopped. No need for a full E2E because the contract is purely about how `model-fallback.ts` interprets `AbortSignal.reason`.\n- Existing test that already covers this: None.\n- If no new test is added, why not: 6 new tests added.\n\n## User-visible / Behavior Changes\n\nWhen a run-budget timeout fires (the agent run exceeds `agents.defaults.timeoutSeconds`), the model fallback chain now stops immediately instead of trying further candidates. The user-facing error is the same (the original `AbortError`), but the lane is freed faster and no further API calls are made.\n\nWhen an HTTP client disconnects from `/v1/responses` or `/v1/chat/completions` mid-request, the fallback chain also stops immediately (no caller is left to receive the response).\n\nExisting callers that don't pass `abortSignal` to `runWithModelFallback` see no change in behavior -- the new check is gated on `signal !== undefined && signal.aborted`.\n\n## Diagram\n\n```text\nBefore:\n[run-budget timer fires]\n  -> runAbortController.abort(TimeoutError)\n  -> agent attempt throws AbortError\n  -> shouldRethrowAbort(err) returns false (because isTimeoutError(err) is true)\n  -> runFallbackCandidate returns { ok: false } -> tries next candidate\n  -> next candidate also times out (~0ms budget left) -> tries next ...\n  -> wasted API calls\n\nAfter:\n[run-budget timer fires]\n  -> runAbortController.abort(TimeoutError)  // unchanged\n  -> agent attempt throws AbortError\n  -> isTerminalAbort(signal) returns true (signal.reason.name === \"TimeoutError\")\n  -> shouldRethrowAbort(err, signal) returns true\n  -> error rethrown immediately, no further candidates tried\n```\n\n## Security Impact\n\n- New permissions/capabilities? No\n- Secrets/tokens handling changed? No\n- New/changed network calls? No (this REDUCES network calls in the timeout path)\n- Command/tool execution surface changed? No\n- Data access scope changed? No\n\n## Repro + Verification\n\n### Environment\n\n- OS: macOS (Docker linux/amd64)\n- Runtime/container: Node 22 / OpenClaw built from this branch\n- Test runner: Vitest\n\n### Steps\n\n1. Configure an agent with a small `agents.defaults.timeoutSeconds` (e.g. 5s) and one or more model fallbacks\n2. Send a request that takes longer than the timeout\n3. Observe the fallback chain behavior\n\n### Expected (after fix)\n\n- Primary candidate runs, hits the timeout, fallback chain stops, single error returned\n- Logs show no `[model-fallback] candidate_failed` entries for fallback candidates beyond the first\n\n### Actual (before fix)\n\n- Primary candidate runs, hits the timeout\n- Fallback layer tries the next candidate with ~0ms budget remaining\n- Next candidate also times out, fallback layer tries the next, and so on\n- 2-3x the API calls before the chain exhausts and returns an error\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Before this PR, an HTTP client disconnect mid-request — or an embedded-runner / cron run-budget timeout — fired into `model-fallback.ts` as if it were a retryable provider failure. The gateway kept trying additional fallback candidates against a caller that no longer existed, wasting tokens and lane occupancy (issue #60388 reports \"30+ model-fallback events per day, almost all triggered by run timeout\" on a fleet of ~100 cron jobs). After this PR, `isTerminalAbort()` recognizes terminal abort reasons across four pathways: (1) `ClientDisconnectError` / `TimeoutError` on `signal.reason` (commit 1), (2) `TimeoutError` nested as `.cause` of an outer `AbortError` from the embedded runner's *private* `runAbortController` (commit 4 — `isTerminalAbortFromError`), (3) string-shaped abort reasons emitted by the cron service (commit 3), and (4) **prefix-matched** cron timeout strings including the `\"(last phase: <name>)\"` and `\"isolated agent setup timed out before runner start\"` variants emitted by `src/cron/service/timer.ts:367/375` (commit 5 — fixed after clawsweeper flagged that the exact-string Set match in commit 3 missed phase-suffixed variants).\n- **Real environment tested:** Docker container built fresh from this PR's branch head — `fix/terminal-abort-reasons` at `84b0b64418`, rebased onto current `upstream/main`. Build performed inside a container based on `openclaw:main` with the PR's source mounted at `/workspace`; ran `pnpm install --frozen-lockfile` then `pnpm build:docker`, producing a 92 MB `dist/`. Two kinds of proof exercised below:\n  - **Live HTTP gateway** (`node /workspace/openclaw.mjs gateway run` on port 19102) demonstrating an end-to-end HTTP-client-disconnect → `decision=surface_error` flow.\n  - **Direct in-process Node call** into the compiled `dist/model-fallback-*.js` (same bundle the running gateway loads) — calls `runWithModelFallback()` with various `AbortController.abort(reason)` shapes and asserts the run-callback count, demonstrating both the four terminal-reason variants AND the non-terminal cascade for contrast.\n- **Exact steps or command run after this patch:**\n\n```bash\n# (1) Inside the running container with PR source mounted, build\npnpm install --frozen-lockfile\npnpm build:docker\n\n# (2-HTTP) Start gateway with 3-fallback config + force client disconnect mid-flight\nnode /workspace/openclaw.mjs gateway run &\ncurl -sS --max-time 3 -X POST http://127.0.0.1:19102/v1/responses \\\n  -H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\" \\\n  -d '{\"model\":\"openclaw\",\"input\":\"Long essay on consensus algorithms; 2000+ words.\",\"stream\":false}'\n\n# (3-Direct) Run a Node test script that imports the built bundle and verifies\n# all four terminal-reason variants short-circuit while non-terminal cascades:\nnode /tmp/live-proof.mjs   # see Evidence section for source\n```\n\n- **Evidence after fix:**\n\n**(i) Live gateway log captured directly after curl disconnect (redacted runId):**\n\n```text\n$ curl --max-time 3 -X POST http://127.0.0.1:19102/v1/responses ...\ncurl: (28) Operation timed out after 3009 milliseconds with 0 bytes received\n\n# Gateway log immediately after:\n2026-05-17T22:30:22.372Z [agent/embedded] embedded run failover decision:\n  runId=resp_<redacted>\n  stage=assistant\n  decision=surface_error\n  reason=timeout\n  from=ollama/qwen3.5-128k\n  profile=-\n  rawError=This operation was aborted\n```\n\nExactly **one** failover decision was emitted, with `decision=surface_error` (not `fallback_model`). No subsequent `decision=fallback_model` attempts against the 3 configured fallbacks (`nvidia/mistralai/...`, `nvidia/minimaxai/...`, `deepseek-com/deepseek-chat`).\n\n**(ii) Direct call into the compiled `runWithModelFallback` (same module the gateway loads):**\n\n```text\n===== PR #62682 + commit 5 — live behavior on built bundle =====\n\nA. Terminal reasons → should short-circuit (run called exactly 1 time):\n  A1 bare cron timeout                                          run() calls = 1\n  A2 phase-suffixed cron timeout (THE BUG FIX)                  run() calls = 1\n  A3 setup-timeout bare                                         run() calls = 1\n  A4 setup-timeout phase-suffixed                               run() calls = 1\n\nB. Non-terminal provider failure → should cascade through 4 candidates:\n[model-fallback/decision] model fallback decision: decision=candidate_failed requested=ollama/dummy-primary candidate=ollama/dummy-primary reason=rate_limit next=ollama/dummy-fb1 detail=HTTP 429 rate_limited\n[model-fallback/decision] model fallback decision: decision=candidate_failed requested=ollama/dummy-primary candidate=ollama/dummy-fb1 reason=rate_limit next=ollama/dummy-fb2 detail=HTTP 429 rate_limited\n[model-fallback/decision] model fallback decision: decision=candidate_failed requested=ollama/dummy-primary candidate=ollama/dummy-fb2 reason=rate_limit next=ollama/dummy-fb3 detail=HTTP 429 rate_limited\n[model-fallback/decision] model fallback decision: decision=candidate_failed requested=ollama/dummy-primary candidate=ollama/dummy-fb3 reason=rate_limit next=none detail=HTTP 429 rate_limited\n  B1 RateLimitError (no abort signal)                           run() calls = 4\n\n--- Assertions ---\n  ✅ A1 bare cron → 1 call\n  ✅ A2 phase-suffixed cron → 1 call — THIS IS THE BUG FIX (commit 5)\n  ✅ A3 setup-timeout bare → 1 call\n  ✅ A4 setup-timeout phase-suffixed → 1 call\n  ✅ B1 non-terminal cascades through all 4 candidates → 4 calls\n```\n\nThe Node script imports `runWithModelFallback as r` from `/workspace/dist/model-fallback-DrD9FXdH.js` (the same compiled module the running gateway uses) and exercises it with four phase-suffixed cron-timeout reason strings plus one non-terminal `RateLimitError`. The cascade log lines in B1 are the EXACT shape of pre-fix #60388 / #62464 behavior — and the absence of those lines in A2/A4 is the smoking gun that the prefix-match fix works.\n\n**(iii) Bundle-presence sanity:**\n\n```text\n$ grep -c \"TERMINAL_ABORT_REASON_PREFIXES\" /workspace/dist/model-fallback-*.js\n2\n$ grep -c \"isTerminalAbortReasonString\" /workspace/dist/model-fallback-*.js\n5\n$ grep -lF \"cron: isolated agent setup timed out before runner start\" /workspace/dist/*.js\n/workspace/dist/model-fallback-DrD9FXdH.js\n/workspace/dist/server-cron-SUG3pKzN.js\n$ grep -c \"timedOutByRunBudget\" /workspace/dist/*.js | grep -v \":0\"\n3 files\n$ grep -c \"isTerminalAbortFromError\" /workspace/dist/*.js | grep -v \":0\"\n1 file\n```\n\n- **Observed result after fix:** Every terminal-reason variant short-circuits to a single `run()` call (no fallback attempted), and a non-terminal `RateLimitError` still cascades through the full primary + 3 fallbacks chain. The HTTP-disconnect path on the live gateway produces a single `decision=surface_error` log line. The phase-suffixed cron-timeout case — which was the bug the clawsweeper review flagged — is fixed by commit 5's prefix-match (`TERMINAL_ABORT_REASON_PREFIXES`).\n- **What was not tested:** End-to-end cron job that actually fires `scheduleAbortTimer` and produces a phase-suffixed string at runtime is impractical in a short-lived test container (requires a scheduled cron entry + waiting for timeoutSeconds elapse + capturing the runner's logs). The compiled-bundle test (ii) exercises the same code path with the same string shapes that `src/cron/service/timer.ts:367/375` would emit. Per-provider HTTP timeouts (the original `isTimeoutError(err)` path) are intentionally **unchanged** — non-terminal cascade preserved (test B1).\n- **Before evidence:** Same `curl --max-time 3` against unpatched OpenClaw `2026.4.x` would emit `decision=fallback_model reason=timeout` for each fallback candidate followed by `decision=candidate_failed reason=timeout next=...` between each — the exact shape captured in test B1 above (4 cascading decisions). Phase-suffixed cron timeouts on `simon/production` (which carries commits 1-3 but not commit 5) likewise still cascade — `simon-prod-current` produces the bug because `TERMINAL_ABORT_REASON_STRINGS.has(\"cron: job execution timed out (last phase: model_call_started)\")` returns false.\n\n## Human Verification\n\n- Verified scenarios:\n  - All 70 tests in `model-fallback.test.ts` pass after the change\n  - All 20 tests in `model-fallback.probe.test.ts` pass\n  - All 8 tests in `agent-command.live-model-switch.test.ts` pass\n  - End-to-end smoke: container rebuilt from this branch, HTTP client disconnect on `/v1/responses` produces the expected `[openresponses] client disconnected, aborting streaming run runId=...` log line and the agent run terminates within ~1s (the upstream `watchClientDisconnect` plumbing already in `aad3bbedd` works correctly with the new `ClientDisconnectError` reason tag)\n- Edge cases checked: cause-chain walking (one level deep) for `TimeoutError`/`ClientDisconnectError` wrapped inside an outer `AbortError` -- this matches `pi-embedded-runner/run/attempt.ts:1387`'s `makeAbortError` pattern\n- What I did **not** verify:\n  - Direct E2E of the fallback-skip path with a real cron timeout firing (would require setting `timeoutSeconds` to a very small value; the unit tests cover the contract)\n  - The image-model fallback variant (`runWithImageModelFallback`) -- it gets the new `abortSignal?` parameter for consistency but no callers currently pass a signal\n\n## Compatibility / Migration\n\n- Backward compatible? **Yes** -- the new `abortSignal?` parameter is optional. Existing callers that don't pass it continue to behave exactly as before.\n- Config/env changes? No\n- Migration needed? No\n\n## Risks and Mitigations\n\n- **Risk**: A future caller passes an abort signal whose `signal.reason` happens to have `name === \"TimeoutError\"` for an unrelated reason, accidentally short-circuiting the fallback chain when they didn't want to.\n  - **Mitigation**: The check is intentionally narrow -- only the exact name strings `TimeoutError` and `ClientDisconnectError` match. Both names are already reserved for run-budget timeout (set by `makeTimeoutAbortReason` in `pi-embedded-runner/run/attempt.ts`) and HTTP client disconnect (set by `watchClientDisconnect` in `gateway/http-common.ts` after this PR).\n- **Risk**: `TimeoutError` from a per-provider request timeout (not run-budget) gets mistaken for a run-budget timeout and skips fallback when it shouldn't.\n  - **Mitigation**: Per-provider timeouts come from the LLM SDK's internal fetch timeout, which throws an error directly -- they don't propagate through `runAbortController.abort()`. Only `runAbortController` is tagged with `TimeoutError` via `makeTimeoutAbortReason`.\n\n## Out of scope (for separate PRs)\n\n- Issue #37505 (cron timeout aborts entire fallback chain via shared AbortController) -- different abort source (cron service `executeJobCoreWithTimeout`), needs per-attempt AbortController isolation. PR #42482 already addresses this.\n- Issue #58578 (fallback chain aborted by premature primary restore mid-flight) -- different abort source (`requestLiveSessionModelSwitch`), needs coordination state between live-model-switch and fallback layers\n\n## Relationship to PR #52365\n\nPR #52365 (fix(cron): stop fallback attempts when cron budget is exhausted) addresses the same underlying problem from #60388 but with a different, complementary mechanism:\n\n- **#52365 is proactive**: a new `beforeAttempt` hook in `runWithModelFallback` that lets the cron layer check its remaining budget *before* each attempt and stop the chain if budget is too low.\n- **This PR is reactive**: an `isTerminalAbort(signal)` check in `shouldRethrowAbort` that inspects `signal.reason` *after* an attempt aborts to decide whether to rethrow or retry.\n\nThese are complementary, not exclusive. #52365's `beforeAttempt` hook stops the chain *before* wasting an attempt when budget is known to be low. This PR's check stops the chain *after* the first attempt aborts with a terminal reason -- which covers both the cron-timeout case (redundantly with #52365) AND the HTTP client disconnect case (which #52365 does not address).\n\nNotable differences:\n\n- **Scope**: this PR is 8 files / ~276 lines touching only `model-fallback.ts`, `http-common.ts`, `agent-command.ts`, 3 auto-reply callers, and one cron caller. #52365 is 47 files / ~1900 lines (includes unrelated slack/plugin-sdk changes).\n- **Client disconnect coverage**: this PR handles the HTTP `/v1/responses` and `/v1/chat/completions` client-disconnect case by tagging the abort with `ClientDisconnectError` in `watchClientDisconnect`. #52365 does not touch the gateway HTTP path.\n- **Detection layer**: this PR checks `signal.reason` which is a generic mechanism usable by *any* caller (including future non-cron sources). #52365's `beforeAttempt` hook requires each caller to implement its own budget-check logic.\n\nEither PR alone fixes the #60388 cron-timeout case. Both merged together would give defense-in-depth: `beforeAttempt` stops before wasting an attempt when budget is known to be low, and `isTerminalAbort` stops after any attempt aborts with a terminal reason (including client disconnects that the cron-aware hook doesn't see).\n\nIf the maintainers prefer #52365's approach and would rather not have two overlapping mechanisms, I'd suggest retargeting this PR to cover only the `ClientDisconnectError` branch of `isTerminalAbort` (the unique coverage) and letting #52365 handle the cron-timeout case via its proactive hook.\n\n",
+        "branch": "fix/terminal-abort-reasons",
+        "head_sha": "84b0b64418782e044b8516e72eda669a0712ee47",
+        "author": "simonusa",
+        "labels": [
+          "gateway",
+          "agents",
+          "size: L",
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "impact:auth-provider"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-command.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback.test.ts",
+            "additions": 399,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback.ts",
+            "additions": 193,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run.ts",
+            "additions": 17,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/assistant-failover.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/assistant-failover.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/failover-policy.test.ts",
+            "additions": 58,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/failover-policy.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/types.ts",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-memory.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/followup-runner.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run-executor.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/http-common.ts",
+            "additions": 15,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/trajectory/export.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/trajectory/metadata.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/trajectory/metadata.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-62682",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-62682.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "",
+        "checks": {
+          "total": 113,
+          "counts": {
+            "FAILURE": 1,
+            "SUCCESS": 93,
+            "SKIPPED": 18,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ]
+        }
+      }
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 786,
+    "total_ms": 4279,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 431
+        "ms": 420
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1489
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 345
+        "ms": 2343
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 2
       }
     ]
   }
