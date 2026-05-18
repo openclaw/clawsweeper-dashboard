@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-83697"
 mode: "autonomous"
-run_id: "26050583311"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26050583311"
-head_sha: "58ac11959cadbccb61aad2455601c8c8788cde00"
+run_id: "26052468757"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26052468757"
+head_sha: "31c73204ba51d55a39643fa83167522549a52aac"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-18T18:02:58.804Z"
+published_at: "2026-05-18T18:42:55.342Z"
 canonical: "#83697"
 canonical_issue: null
 canonical_pr: "#83697"
@@ -16,7 +16,7 @@ fix_executed: 0
 fix_failed: 0
 fix_blocked: 1
 apply_executed: 0
-apply_blocked: 0
+apply_blocked: 1
 apply_skipped: 0
 needs_human_count: 0
 ---
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/26050583311](https://github.com/openclaw/clawsweeper/actions/runs/26050583311)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/26052468757](https://github.com/openclaw/clawsweeper/actions/runs/26052468757)
 
 Workflow conclusion: success
 
@@ -46,7 +46,7 @@ Make PR #83697 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 | Fix failed | 0 |
 | Fix blocked | 1 |
 | Applied executions | 0 |
-| Apply blocked | 0 |
+| Apply blocked | 1 |
 | Apply skipped | 0 |
 | Needs human | 0 |
 
@@ -54,14 +54,14 @@ Make PR #83697 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | blocked | https://github.com/openclaw/openclaw/pull/83697 |  | source PR #83697 is paused by clawsweeper:human-review; refusing to mutate the PR branch |
-| automerge_repair_outcome_comment | updated | #83697 |  |  |
+| repair_contributor_branch | blocked | https://github.com/openclaw/openclaw/pull/83697 |  | GitHub rejected the repair branch push because it updates workflow files and the ClawSweeper app token does not have workflows permission |
+| open_fix_pr | opened | https://github.com/openclaw/openclaw/pull/83726 | clawsweeper/automerge-openclaw-openclaw-83697 |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| #83726 | merge_canonical | blocked | fix_pr | job does not allow merge |
 
 ## Worker Action Matrix
 
