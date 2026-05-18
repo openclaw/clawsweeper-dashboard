@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-18T10:03:16.467Z",
+  "generated_at": "2026-05-18T10:03:28.866Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-18T07:03:14.522Z",
+  "since": "2026-05-18T07:03:25.796Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     83462
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4476191364
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 3,
@@ -61,11 +63,11 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(provider-catalog): skip catalog discovery when apiKey is a non-secret auth marker",
-        "body": "## Summary\n\n`buildSingleProviderApiKeyCatalog`, `buildPairedProviderApiKeyCatalog`, `discoverOpenAICompatibleSelfHostedProvider`, and `discoverOpenAICompatibleLocalModels` all check `!apiKey` before allowing catalog/model discovery. When the resolved `apiKey` is a non-secret auth marker like `\"custom-local\"` or `\"ollama-local\"` (truthy strings), this guard passes, but `toDiscoveryApiKey()` filters these markers to `undefined`. The downstream HTTP request then sends `GET /models` **without any `Authorization` header**.\n\n## Root Cause\n\n`model-auth-markers.ts` defines several non-secret markers for local/self-hosted providers:\n- `CUSTOM_LOCAL_AUTH_MARKER = \"custom-local\"`\n- `OLLAMA_LOCAL_AUTH_MARKER = \"ollama-local\"`\n- etc.\n\n`models-config.providers.secrets.ts` → `toDiscoveryApiKey()` correctly filters these to `undefined`. But the guards in the catalog/self-hosted helpers only checked falsiness — and markers are truthy strings.\n\n## Fix\n\nAdded `isNonSecretApiKeyMarker(apiKey, { includeEnvVarName: false })` check to all four functions. The `includeEnvVarName: false` option is critical: it preserves valid env-var names (like `LITELLM_API_KEY`, `VLLM_API_KEY`) which `resolveProviderApiKey` returns as the `apiKey` value while carrying the actual secret in `discoveryApiKey`.\n\n### Files changed\n\n| File | Function | Change |\n|------|----------|--------|\n| `src/plugins/provider-catalog.ts` | `buildSingleProviderApiKeyCatalog` | `!apiKey` → `!apiKey || isNonSecretApiKeyMarker(apiKey, { includeEnvVarName: false })` |\n| `src/plugins/provider-catalog.ts` | `buildPairedProviderApiKeyCatalog` | Same |\n| `src/plugins/provider-self-hosted-setup.ts` | `discoverOpenAICompatibleSelfHostedProvider` | Same |\n| `src/plugins/provider-self-hosted-setup.ts` | `discoverOpenAICompatibleLocalModels` | Only block true markers (preserve undefined/no-key for authless local servers) |\n\n## Real behavior proof\n\n### Before-fix evidence (live LiteLLM proxy log)\n\nLiteLLM proxy logged **61 unauthenticated `GET /models` requests** to `/Users/samson1357924/proxy.log`. Each request includes the LiteLLM auth error:\n\n```\nException: No api key passed in.\nINFO: 127.0.0.1:58983 - \"GET /models HTTP/1.1\" 401 Unauthorized\nINFO: 127.0.0.1:58998 - \"POST /embeddings HTTP/1.1\" 200 OK\n```\n\nThe pattern is clear: `GET /models` (401, no API key) is always followed by successful requests with valid API keys.\n\nTimeline from live debug:\n```\n16:55:36 → Cron job triggered (backup-daily)\n16:55:43 → GET /models (401, NO Authorization header)    ← 7s gap\n16:55:46 → POST /chat/completions (200, WITH valid API key)\n```\n\nSource ports are sequential (51450 → 51455 → 51458), confirming the same process sends both requests — the unauthenticated discovery probe before the first authenticated inference call.\n\n### After-fix evidence (pending)\n\nTo produce after-fix proof:\n1. Apply this branch to a running OpenClaw Gateway\n2. Trigger a cron job (e.g. `openclaw cron run backup-daily`)\n3. Check `lsof -i :4000` and LiteLLM proxy log for `GET /models`\n4. The unauthenticated request should no longer appear\n\nExpected result: After the fix, the first catalog load skips discovery when the apiKey is a non-secret marker, so no `GET /models` is sent to LiteLLM without auth.\n\n## Related Issues\n\n- #80732 — SSRF guard blocks private IP provider baseUrl\n- #82061 — expose allowPrivateNetwork for internal-network LLM gateways\n- #82191 — SSRF guard blocks Tailscale CGNAT IP\n- #82259 — Cannot use local VLLM server\n",
-        "branch": "fix/catalog-discovery-auth",
-        "head_sha": "b169ae9e327aebd0cad03fd1ed365f81c651cee9",
-        "author": "samson1357924",
+        "title": "test(qa-lab): trace Slack RTT ping pong",
+        "body": "Summary\n- Switch the Slack live canary to a ping/pong marker and measure RTT from Slack accepted timestamps when available.\n- Record observer lag, poll counts, gateway RSS samples, and optional heap checkpoints for Slack live runs.\n- Remove non-reply reaction traffic from the Slack QA canary config.\n\nVerification\n- node scripts/run-vitest.mjs extensions/qa-lab/src/live-transports/slack/slack-live.runtime.test.ts extensions/qa-lab/src/live-transports/shared/live-gateway.runtime.test.ts\n- node_modules/.bin/oxfmt --write extensions/qa-lab/src/live-transports/shared/live-gateway.runtime.ts extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts extensions/qa-lab/src/live-transports/slack/slack-live.runtime.test.ts CHANGELOG.md\n- git diff --check\n\nReal behavior proof\nBehavior addressed: Slack QA canary RTT was measuring harness observer latency instead of Slack accepted ping/pong timing.\nReal environment tested: Local unit proof only so far; Convex-backed Slack live proof will run after this draft PR exists.\nExact steps or command run after this patch: node scripts/run-vitest.mjs extensions/qa-lab/src/live-transports/slack/slack-live.runtime.test.ts extensions/qa-lab/src/live-transports/shared/live-gateway.runtime.test.ts\nEvidence after fix: 2 test files passed, 17 tests passed.\nObserved result after fix: Slack helper tests verify ping/pong canary text, low-noise config, accepted timestamp capture, and skipped thread polling for top-level replies.\nWhat was not tested: Secret-backed Slack live canary and openclaw-rtt dashboard import are pending.",
+        "branch": "perf/slack-rtt-leak-hunt",
+        "head_sha": "d334ecc540a5e4b1f3b5a16283cf2bd2d73707c2",
+        "author": "vincentkoc",
         "labels": [
           "size: XS",
           "triage: needs-real-behavior-proof",
@@ -83,9 +85,51 @@
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/plugins/provider-self-hosted-setup.ts",
-            "additions": 14,
-            "deletions": 2,
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qa-lab/src/live-transports/shared/live-gateway.runtime.ts",
+            "additions": 39,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qa-lab/src/live-transports/slack/slack-live.runtime.test.ts",
+            "additions": 118,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts",
+            "additions": 404,
+            "deletions": 36,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/slack/src/monitor/message-handler.ts",
+            "additions": 54,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/slack/src/monitor/message-handler/dispatch.ts",
+            "additions": 183,
+            "deletions": 154,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/slack/src/qa-trace.ts",
+            "additions": 60,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/slack/src/send.ts",
+            "additions": 37,
+            "deletions": 29,
             "changeType": "MODIFIED"
           }
         ],
@@ -99,20 +143,14 @@
         "merge_state_status": "UNKNOWN",
         "review_decision": "",
         "checks": {
-          "total": 9,
+          "total": 41,
           "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 6,
-            "SKIPPED": 1,
-            "NEUTRAL": 1
+            "SKIPPED": 32,
+            "SUCCESS": 9
           },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
+          "terminalBlockers": []
         }
       },
       "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
@@ -120,15 +158,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2312,
+    "total_ms": 3413,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 503
+        "ms": 919
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1429
+        "ms": 2137
       },
       {
         "name": "classify_commands",
@@ -136,7 +174,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 355
+        "ms": 343
       },
       {
         "name": "append_ledger",
