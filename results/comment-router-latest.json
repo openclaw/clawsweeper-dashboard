@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-18T04:26:11.752Z",
+  "generated_at": "2026-05-18T04:26:19.744Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-18T01:26:09.679Z",
+  "since": "2026-05-18T01:26:17.275Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    83418
+    83417
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 4,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:83418:4474078228:2026-05-18T04:26:06Z:automerge",
-      "comment_id": "4474078228",
-      "comment_version_key": "4474078228:2026-05-18T04:26:06Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83418#issuecomment-4474078228",
+      "idempotency_key": "comment-router:openclaw/openclaw:83417:4474062694:2026-05-18T04:26:11Z:automerge",
+      "comment_id": "4474062694",
+      "comment_version_key": "4474062694:2026-05-18T04:26:11Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83417#issuecomment-4474062694",
       "repo": "openclaw/openclaw",
-      "issue_number": 83418,
+      "issue_number": 83417,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-18T03:44:24Z",
-      "comment_updated_at": "2026-05-18T04:26:06Z",
+      "comment_created_at": "2026-05-18T03:40:53Z",
+      "comment_updated_at": "2026-05-18T04:26:11Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "automerge",
@@ -52,8 +52,8 @@
       "trusted_bot_author": null,
       "automation_source": null,
       "repair_reason": null,
-      "review_summary": "The PR adds GitHub App token minting to the real-behavior-proof workflow, checks the PR author’s `openclaw/maintainer` team membership before enforcing proof, and adds tests for the membership helper.\n\nReproducibility: yes. A direct current-main Node probe of `evaluateRealBehaviorProof` with a `CONTRIBUTOR` PR author and no proof section returns `missing`, and the source path shows no private-team-membership check before the gate.",
-      "review_followup": "A narrow workflow-only repair can address the blocking security finding without changing the proof-gate semantics.",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "Review did not complete, so no work-lane recommendation was made.",
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
@@ -62,43 +62,66 @@
       "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "ci(proof): skip real-behavior-proof gate for private maintainers",
-        "body": "## Summary\n\nPrivate org memberships report `author_association=CONTRIBUTOR`, so the real-behavior-proof gate currently demands proof from private maintainers. Mint a GitHub App token in `real-behavior-proof.yml` (same pattern + same app ids as `labeler.yml`) and call `GET /orgs/{org}/teams/maintainer/memberships/{login}` directly from the check script — skip the gate when membership is active. App-token steps are `continue-on-error`, so the gate falls back to the existing author-association path when the App key secrets are absent.\n\n## Verification\n\n- `node scripts/run-vitest.mjs test/scripts/real-behavior-proof-policy.test.ts` -> 16 passed (5 new `isMaintainerTeamMember` cases)\n- `node scripts/run-vitest.mjs test/scripts/barnacle-auto-response.test.ts` -> 32 passed",
-        "branch": "real-behavior-proof",
-        "head_sha": "ddc7fe15a2fc70ffaabb0bd7ad6985e063d30605",
-        "author": "romneyda",
+        "title": "fix(followup): stop model-fallback retries duplicating queued user messages and assistant error stubs",
+        "body": "## Summary\n\n- Followup queue + model fallback: latch queued user-message persistence so only the first fallback candidate writes the queued user message to the session JSONL.\n- Followup queue + model fallback: suppress the `[assistant turn failed before producing content]` stub on every fallback candidate after the first, so the JSONL never gains consecutive assistant-error entries.\n- Add `suppressAssistantErrorPersistence` to the session tool-result guard and wrapper; plumb through pi-embedded-runner params, the embedded attempt, and the run-time overload loop.\n- Regression tests: contract-level (the runner receives the right suppress flags on each fallback candidate) and behavior-level (real `SessionManager` + guard cascade ends with exactly `[user, assistant]` and zero consecutive same-role pairs).\n\n## Why\n\nWith `messages.queue.mode: \"followup\"`, `runWithModelFallback` invokes its run callback once per candidate model. Each invocation re-passed `queued.transcriptPrompt` into the embedded runner, the session manager re-appended the queued user message, and every failed candidate wrote an `[assistant turn failed before producing content]` stub. The session ended up with consecutive same-role entries (4x user in followup mode, 4x assistant in steer mode); the next request was rejected because Anthropic does not accept consecutive same-role messages, OpenRouter masked the upstream 400 as a 500, and the failover loop ran again — death spiral, ~4KB session growth per cycle, unrecoverable without manual session deletion.\n\nThe fix is two latches in `createFollowupRunner`'s `runWithModelFallback` run callback:\n\n1. `queuedUserMessagePersistedAcrossFallback` — flipped by `onUserMessagePersisted`. ORed into `suppressNextUserMessagePersistence` so the second+ candidate skips re-appending the queued user message.\n2. `fallbackCandidateAttemptIndex` — counter; passes `suppressAssistantErrorPersistence: true` on every candidate after the first. The session tool-result guard then skips assistant messages with `stopReason === \"error\"`.\n\nCLI runner branch is untouched: it does not accept either suppression flag and owns its own transcript management. Scope limited to the embedded path described in the issue.\n\nCloses #83404\n\n## Real behavior proof\n\nBehavior addressed: queued followup user messages and per-candidate assistant error stubs duplicated in the session JSONL on model-fallback retry, producing consecutive same-role entries that the provider then rejects (https://github.com/openclaw/openclaw/issues/83404).\n\nReal environment tested: behavior-level integration against the real `SessionManager` (`@earendil-works/pi-coding-agent`) plus `installSessionToolResultGuard` from this branch. A four-candidate failover cascade is driven through the real persistence stack in both `followup` and `steer` queue modes, with the new suppression flags forced off versus on, and the resulting session journal is read back and inspected. The terminal output below is the captured stdout of that integration cascade.\n\nExact steps or command run after this patch:\n\n    node scripts/run-vitest.mjs src/agents/session-tool-result-guard.test.ts \\\n      -t \"four-candidate followup fallback cascade\"\n    node scripts/run-vitest.mjs src/auto-reply/reply/followup-runner.test.ts \\\n      -t \"queued user message idempotency across fallback\"\n    node scripts/run-vitest.mjs src/auto-reply/reply/followup-runner.test.ts \\\n      -t \"only persists assistant error stub on the first fallback candidate\"\n\nEvidence after fix: redacted terminal capture of the session journal contents for each scenario, taken directly from the integration cascade's debug print of the persisted entries:\n\n    mode=followup applyFix=false\n      entries=8 role-sequence=[user, assistant, user, assistant, user, assistant, user, assistant]\n      consecutive same-role pairs=0\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n\n    mode=followup applyFix=true\n      entries=2 role-sequence=[user, assistant]\n      consecutive same-role pairs=0\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n\n    mode=steer applyFix=false\n      entries=5 role-sequence=[user, assistant, assistant, assistant, assistant]\n      consecutive same-role pairs=3\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n        assistant stopReason=error: [assistant turn failed before producing content]\n        assistant stopReason=error: [assistant turn failed before producing content]\n        assistant stopReason=error: [assistant turn failed before producing content]\n\n    mode=steer applyFix=true\n      entries=2 role-sequence=[user, assistant]\n      consecutive same-role pairs=0\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n\nObserved result after fix: session journal collapses from 8 entries (followup) / 5 entries with 3 consecutive same-role pairs (steer) down to exactly 2 entries with zero consecutive same-role pairs in both modes. The exact session-JSONL shape from the issue — `user, user, user, user` in followup and `assistant, assistant, assistant, assistant` in steer — is no longer produced. Subsequent inbound messages will no longer hit the provider's consecutive-same-role validation and the death-spiral re-failover described in the issue cannot start.\n\nWhat was not tested: a live OpenRouter run against four real anthropic fallback models on a real channel. Reporter's exact configuration was reproduced through the real session-persistence stack but not against a live provider; a maintainer with provider credentials should run the same flow end-to-end on a real account before merge.\n\n## Verification\n\nBuild:\n\n    pnpm build\n\npasses (required because `params.ts` and the guard wrapper grew a new public field).\n\nTargeted tests:\n\n    node scripts/run-vitest.mjs src/agents/session-tool-result-guard.test.ts src/auto-reply/reply/followup-runner.test.ts\n\nResult: `Test Files 2 passed (2) | Tests 76 passed (76)`.\n\nThe new `installSessionToolResultGuard > models a four-candidate followup fallback cascade producing exactly one user and one assistant-error entry` test asserts the same invariant the runtime journal above shows, executed inside CI on every push.",
+        "branch": "fix/followup-fallback-dup-user",
+        "head_sha": "a417d190a64c7db34de382a27c82a4fe52dd2f89",
+        "author": "yetval",
         "labels": [
-          "scripts",
-          "maintainer",
-          "size: S",
-          "P2",
-          "impact:security",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 automation",
-          "merge-risk: 🚨 security-boundary"
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "P1",
+          "impact:session-state",
+          "impact:message-loss",
+          "rating: 🌊 off-meta tidepool"
         ],
         "files": [
           {
-            "path": ".github/workflows/real-behavior-proof.yml",
-            "additions": 15,
+            "path": "src/agents/pi-embedded-runner/run.ts",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "scripts/github/real-behavior-proof-check.mjs",
-            "additions": 22,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/github/real-behavior-proof-policy.mjs",
-            "additions": 29,
+            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "test/scripts/real-behavior-proof-policy.test.ts",
-            "additions": 58,
+            "path": "src/agents/pi-embedded-runner/run/params.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-tool-result-guard-wrapper.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-tool-result-guard.test.ts",
+            "additions": 86,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-tool-result-guard.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/followup-runner.test.ts",
+            "additions": 144,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/followup-runner.ts",
+            "additions": 12,
             "deletions": 1,
             "changeType": "MODIFIED"
           }
@@ -106,51 +129,86 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83418",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83418.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83417",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83417.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 94,
+          "total": 105,
           "counts": {
             "CANCELLED": 2,
-            "SKIPPED": 14,
-            "SUCCESS": 77,
+            "SKIPPED": 26,
+            "SUCCESS": 75,
+            "IN_PROGRESS": 1,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:CANCELLED"
+            "Real behavior proof:CANCELLED",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS"
           ],
-          "pending": [],
+          "pending": [
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS"
+          ],
           "terminalBlockers": [
             "Real behavior proof:CANCELLED"
           ]
         }
       },
       "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83417:4474283577:2026-05-18T04:15:51Z:re_review",
+      "comment_id": "4474283577",
+      "comment_version_key": "4474283577:2026-05-18T04:15:51Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83417#issuecomment-4474283577",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83417,
+      "author": "yetval",
+      "author_id": 102706514,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-18T04:15:51Z",
+      "comment_updated_at": "2026-05-18T04:15:51Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2303,
+    "total_ms": 3760,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 345
+        "ms": 373
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1715
+        "ms": 2081
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 231
+        "ms": 1291
       },
       {
         "name": "append_ledger",
