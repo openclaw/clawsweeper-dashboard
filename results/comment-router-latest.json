@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-18T15:17:34.980Z",
+  "generated_at": "2026-05-18T15:18:02.877Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-18T12:17:34.662Z",
+  "since": "2026-05-18T12:17:59.791Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    83653
+    81971
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,119 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:81971:4455925341:2026-05-18T15:17:52Z:clawsweeper_needs_human",
+      "comment_id": "4455925341",
+      "comment_version_key": "4455925341:2026-05-18T15:17:52Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/81971#issuecomment-4455925341",
+      "repo": "openclaw/openclaw",
+      "issue_number": 81971,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-15T00:55:21Z",
+      "comment_updated_at": "2026-05-18T15:17:52Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "The remaining action is contributor proof plus maintainer review of a command-execution permission boundary, not an automated code repair.; Needs attention: The diff is security-sensitive because it changes native Bash permission handling; no definite code bug was found, but live permission-boundary proof is still required. (sha=2aa449fdcd8b5a26902ab2530d96c91f5a391828)",
+      "review_summary": "The PR adds Claude live-session `control_request` handling for `can_use_tool`, maps native Bash allow/deny to the resolved exec policy and Claude permission mode, and adds spawn-path regression tests.\n\nReproducibility: yes. from source inspection: current main returns early for non-`result` Claude JSONL frames, and upstream docs confirm unlisted tools can fall through to `can_use_tool`. I did not run a live Claude CLI reproduction in this read-only review.",
+      "review_followup": "The remaining action is contributor proof plus maintainer review of a command-execution permission boundary, not an automated code repair.",
+      "freeform_prompt": null,
+      "expected_head_sha": "2aa449fdcd8b5a26902ab2530d96c91f5a391828",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): answer Claude live control_request can_use_tool via exec policy",
+        "body": "## Summary\n\nFixes #80819.\n\nThe Claude CLI live-session bridge in `src/agents/cli-runner/claude-live-session.ts` previously ignored stream-json frames of type `control_request` (subtype `can_use_tool`). When the Claude CLI wanted to call a native tool such as `Bash`, it emitted `control_request` and waited for a matching `control_response`. Because OpenClaw never answered, the session hung until the 180s/600s no-output timeout fired and the agent appeared stuck.\n\nThis PR makes the bridge answer `can_use_tool` requests according to the agent's resolved OpenClaw exec policy, and gives all other `control_request` subtypes a structured error response instead of a silent no-op.\n\n## What changed\n\n- Introduced `resolveClaudeLiveControlRequestPolicy(...)`, which resolves the effective exec policy once at session-start time using the documented precedence:\n  1. agent-level `tools.exec` override\n  2. global `tools.exec`\n  3. OpenClaw's default full/no-ask Claude CLI launch behavior\n\n- `handleClaudeLiveControlRequest(...)` now:\n  - For subtype `can_use_tool` with `tool_name === \"Bash\"`: allows when the resolved policy is `security: \"full\", ask: \"off\"` and Claude is launched in `bypassPermissions` mode. Otherwise denies with a structured message that names the resolved policy and points the agent at OpenClaw MCP tool equivalents.\n  - For any other subtype: responds with a structured error so the CLI does not hang.\n  - Stray `control_response` frames are dropped because OpenClaw is the responder, not the requester.\n\n## How this differs from #80973\n\nPR #80973 also addresses #80819 but unconditionally denies every native-tool request. The issue calls out that, when the agent's resolved exec policy is `security: \"full\", ask: \"off\"`, native `Bash` should be allowed. That is the configuration where OpenClaw already runs Claude with bypass permissions, so denying `Bash` there is a regression versus the documented behavior. This PR adds the exec-policy-aware allow path in addition to the deny path.\n\n## Tests\n\n`src/agents/cli-runner.spawn.test.ts` adds regression coverage for:\n\n- allow path: `tools.exec: { security: \"full\", ask: \"off\" }` receives a `Bash` `control_request` and writes a `behavior: \"allow\"` response\n- deny path: restrictive exec policy receives a `Bash` `control_request` and writes a `behavior: \"deny\"` response\n- default deployment path: no explicit `tools.exec` still resolves consistently with the Claude CLI launch defaults\n- raw `--permission-mode default` override is denied even when exec policy alone would otherwise allow\n\nLocal validation:\n\n```\npnpm exec vitest run src/agents/cli-runner.spawn.test.ts -t control_request\n# Test Files  2 passed (2)\n# Tests       8 passed | 92 skipped (100)\n\npnpm tsgo:core:test\n# passed\n```\n\n## Real behavior proof\n\n- Behavior addressed: Claude CLI live sessions previously stalled until the no-output timeout when the model wanted to use a native tool, because the bridge dropped `control_request` / `can_use_tool` frames without writing a matching `control_response`.\n- Real environment tested: OpenClaw Docker container on Linux/Unraid using `claude-cli/claude-opus-4-6` and `claude-cli/claude-opus-4-7`.\n- Evidence: after patching the live bundle, Claude native `Bash` in a full/no-ask session completed and returned the expected marker instead of timing out.\n- Deny-path behavior was also observed: unsupported or restricted native tools receive a structured `behavior: \"deny\"` payload, which Claude surfaces as a tool result instead of hanging.\n\n## Security impact\n\n- The allow path mirrors OpenClaw's existing full/no-ask Claude CLI permission semantics.\n- Deployments without full/no-ask exec policy still hit the deny path.\n- Malformed requests and unsupported subtypes fail closed.\n- No new network calls, outbound endpoints, credential handling, or secret exposure are introduced.",
+        "branch": "feat/claude-live-session-control-request",
+        "head_sha": "2aa449fdcd8b5a26902ab2530d96c91f5a391828",
+        "author": "guthirry",
+        "labels": [
+          "agents",
+          "size: L",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/cli-runner.spawn.test.ts",
+            "additions": 312,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-runner/claude-live-session.ts",
+            "additions": 192,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-81971",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-81971.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 128,
+          "counts": {
+            "CANCELLED": 1,
+            "SUCCESS": 99,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 553,
+    "total_ms": 3384,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 306
+        "ms": 371
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2703
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 236
+        "ms": 288
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
