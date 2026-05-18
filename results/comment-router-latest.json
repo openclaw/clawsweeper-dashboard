@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-18T10:52:06.902Z",
+  "generated_at": "2026-05-18T10:52:08.737Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-18T07:52:04.911Z",
+  "since": "2026-05-18T07:52:08.427Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    83472
+    83565
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,120 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:83472:4474983844:2026-05-18T10:52:01Z:clawsweeper_auto_repair",
-      "comment_id": "4474983844",
-      "comment_version_key": "4474983844:2026-05-18T10:52:01Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83472#issuecomment-4474983844",
-      "repo": "openclaw/openclaw",
-      "issue_number": 83472,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-18T06:31:44Z",
-      "comment_updated_at": "2026-05-18T10:52:01Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=90a54ac42699249430f633dc3d56138b2cf79dc7)",
-      "review_summary": "The PR changes `moveToTrash` to call the shared `movePathToTrash` helper instead of a PATH `trash` command and adds onboard helper regression tests.\n\nReproducibility: yes. by source inspection: current main's offline cleanup helper calls a PATH `trash` binary while the official Docker image does not install `trash-cli`. I did not run live Docker proof in this read-only review.",
-      "review_followup": "The PR needs author or maintainer revision for the allowed-root compatibility finding plus contributor-owned real CLI/Docker proof, so it should stay in normal review rather than automated repair.",
-      "freeform_prompt": null,
-      "expected_head_sha": "90a54ac42699249430f633dc3d56138b2cf79dc7",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(onboard): fall back to fs.rm when 'trash' command is unavailable (#83459)",
-        "body": "Fixes #83459.\n\n`moveToTrash` in `src/commands/onboard-helpers.ts:248` invoked the `trash` command and, on failure, logged `Failed to move to Trash (manual delete): <path>` without actually deleting the path. In the official Docker image — which intentionally keeps default apt packages minimal (extras now added via `OPENCLAW_IMAGE_APT_PACKAGES` per the recent `47b8e56e3f feat(docker): add image apt package build arg`) — `trash-cli` is not installed, so `openclaw agents delete`, the doctor reset paths, and other callers silently leaked workspace/agents/sessions directories.\n\nThis patch adds an `fs.rm({ recursive: true, force: true })` fallback inside the catch path. On systems where `trash` IS available the happy path is unchanged; on systems where it isn't, the path is now actually removed and the log message surfaces the distinction (`Deleted (trash unavailable): ...`). If `fs.rm` also fails (e.g. `EACCES` on a read-only mount), the actual error is surfaced so operators can repair manually.\n\nIntentionally **not** modifying the Dockerfile — the recent `47b8e56e3f` change moved away from baking extras into the default image, so adding `trash-cli` to the default `apt-get install` set would fight that direction. The code-side fallback fixes the bug in every environment uniformly, including non-Docker minimal Linux installs that hit the same gap.\n\n## Changes\n\n- `src/commands/onboard-helpers.ts`: in `moveToTrash`, return on trash success; in the catch path, attempt `fs.rm({ recursive, force })` and log the trash-vs-rm distinction; if that also fails, surface the error message. 8-line comment block referencing #83459 + the recent Dockerfile policy direction.\n- `src/commands/onboard-helpers.test.ts`: 3 new regression cases (fallback removes path when trash rejects; happy-path trash success doesn't trigger fallback log; degraded both-fail surfaces error).\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** `openclaw agents delete bug_test --force` in the official Docker image (`v2026.5.12`) logged `Failed to move to Trash (manual delete): /tmp/bug_test` and left the directory on disk, leaving residual files in `workspace` and `agents` after the agent was \"deleted\" from `openclaw.json`. The fallback restores the semantic contract.\n\n- **Real environment tested:** Local Node 22.x. Probe at `/tmp/probe_83459.mjs` exercises the OLD and NEW `moveToTrash` shapes with real `fs` operations on a `mkdtemp` scratch tree, using a stubbed `runTrash` that always rejects with `ENOENT` (the actual error shape the official Docker image produces).\n\n- **Exact steps or command run after this patch:** `node /tmp/probe_83459.mjs`\n\n- **Evidence after fix:**\n\n```\n=== Case A: OLD code on missing trash-cli (bug repro) ===\n[OLD log] Failed to move to Trash (manual delete): /tmp/openclaw-probe-83459-.../old-agent\nPASS: OLD leaves directory on disk (BUG CONFIRMED)\n\n=== Case B: NEW code on missing trash-cli (fix) ===\n[runtime.log] Deleted (trash unavailable): /tmp/openclaw-probe-83459-.../new-agent\nPASS: NEW falls back to fs.rm and removes directory\n\n=== Case C: NEW code on already-missing path (no-op) ===\nPASS: NEW returns silently when path doesn't exist\n\nALL CASES PASS\n```\n\n- **Observed result after fix:** When `trash` is missing, the path is actually deleted (the bug surface is closed). When `trash` is present, behavior is unchanged. When neither works (e.g. read-only mount), the failure is surfaced with the actual error message instead of producing a silent leak. The pre-existing fast-return for already-missing paths is preserved.\n\n- **What was not tested:** Live invocation through `openclaw agents delete` against the actual `openclaw/openclaw:v2026.5.12` Docker container. The new vitest cases cover the public path through `moveToTrash` directly with mocked `runCommandWithTimeout` to simulate the missing-binary failure; the probe verifies the semantic contract with real `fs` operations.\n\n## Audit (per CLAUDE rules — including new prototype-pollution + recent-merge steps)\n\n- **Existing-helper check:** Reuses `runCommandWithTimeout` and `fs.rm` (both already in use). No new helper. PASS\n- **Shared-helper caller check:** `moveToTrash` is exported with 5 prod callers (`handleReset`, `agents.commands.delete.ts` × 3, etc.). The function signature is unchanged; the behavior is strictly improved (success cases match prior; failure cases now actually delete instead of leaking). PASS\n- **Broader-fix rival scan:** No open PRs touching `moveToTrash` / `trash-cli` / Dockerfile-default-trash. PASS\n- **Recent-merge audit (new):** `git log --oneline -10 -- src/commands/onboard-helpers.ts Dockerfile` shows `47b8e56e3f feat(docker): add image apt package build arg` just landed on Dockerfile — that PR's direction (operator-driven extras, not baked-in default) is *why* this code-side fix is the right shape rather than a Dockerfile change. No recent merges on `onboard-helpers.ts`. PASS\n- **Prototype-pollution scan:** N/A — no external-input key copying.\n",
-        "branch": "fix-movetotrash-rm-fallback-83459",
-        "head_sha": "90a54ac42699249430f633dc3d56138b2cf79dc7",
-        "author": "hclsys",
-        "labels": [
-          "commands",
-          "size: S",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/commands/onboard-helpers.test.ts",
-            "additions": 77,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/onboard-helpers.ts",
-            "additions": 7,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83472",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83472.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 98,
-          "counts": {
-            "SUCCESS": 76,
-            "SKIPPED": 19,
-            "FAILURE": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-agentic-commands-agent-channel:FAILURE",
-            "check-additional-boundaries-a:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-agentic-commands-agent-channel:FAILURE",
-            "check-additional-boundaries-a:FAILURE"
-          ]
-        }
-      },
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2241,
+    "total_ms": 548,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 428
+        "ms": 297
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1549
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 237
+        "ms": 238
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
