@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-18T20:10:19.347Z",
+  "generated_at": "2026-05-18T20:11:05.440Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-18T17:10:16.968Z",
+  "since": "2026-05-18T17:11:03.272Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     83743
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4480875342
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -55,171 +57,269 @@
       "review_summary": "The branch adds a shared core event-session routing helper and threads it through exec, heartbeat, cron, gateway node-event, ACP parent-stream, and CLI watchdog paths with focused regression coverage.\n\nReproducibility: yes. source-reproducible on current main: exec completion and forced heartbeat paths preserve same-agent direct DM keys because only cron-run keys are remapped. The related issue also includes production session-store evidence for the same orphan-session behavior.",
       "review_followup": "Keep this in normal PR review because the remaining blocker is proof and maintainer risk acceptance, not a narrow code repair for automation.",
       "freeform_prompt": null,
-      "expected_head_sha": "887eaae610ccbb0d91c1042ce0886a485b6d7ec0",
+      "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
+      "status": "ignored",
       "actions": [],
+      "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix(core): route dmScope main event wakes to agent main",
-        "body": "Fixes #71581.\nReplaces #72648 with a narrower implementation.\n\n## Summary\n- Add a shared event-session routing helper for internal system-event enqueue and heartbeat wake targets.\n- Route single-owner `session.dmScope=main` direct DM event keys back to the drained agent main session instead of leaving events on stale per-DM queues.\n- Preserve existing cron-run remapping and explicit route-binding direct-session overrides.\n- Apply the helper to exec completion events, gateway node exec events, cron forced-session resolution, heartbeat forced-session resolution, ACP parent-stream events, and CLI watchdog events.\n\n## Duplicate check\nBefore opening this PR, I searched open PRs for `71581 dmScope exec-event cron-event heartbeat`, `session.dmScope heartbeat`, and `resolveHeartbeatSession resolveEventSessionKey scopedHeartbeatWakeOptions`. No active duplicate appeared other than the abandoned #72648.\n\n## Real behavior proof\nBehavior or issue addressed:\n- With `session.dmScope=main` and a single static DM owner allowlist, internal exec/cron event wakes can carry an old direct DM session key such as `agent:main:telegram:default:direct:123`. Those events need to enqueue and wake the agent main session that the heartbeat actually drains.\n\nReal environment tested:\n- GCP Crabbox Spot VM, `e2-standard-4`, `us-east1-b`\n- Node `24.15.0`, pnpm `11.1.0`\n- Commit `887eaae610`\n\nExact steps or command run after this patch:\n```sh\nOPENCLAW_OXLINT_SKIP_PREPARE=1 pnpm check:changed -- --timed\nnode scripts/run-vitest.mjs run \\\n  src/infra/event-session-routing.test.ts \\\n  src/agents/bash-tools.exec-runtime.test.ts \\\n  src/infra/heartbeat-runner.subagent-session-guard.test.ts \\\n  --reporter=verbose\nnode --import tsx -e \"import { resolveEventSessionRoutingPolicy, resolveEventSessionKeyForPolicy, scopedHeartbeatWakeOptionsForPolicy } from './src/infra/event-session-routing.ts'; const cfg={session:{dmScope:'main'},channels:{telegram:{allowFrom:['123']}}}; const policy=resolveEventSessionRoutingPolicy({cfg,sessionKey:'agent:main:telegram:default:direct:123'}); if (resolveEventSessionKeyForPolicy('agent:main:telegram:default:direct:123', policy) !== 'agent:main:main') throw new Error('event key did not route to main'); const wake=scopedHeartbeatWakeOptionsForPolicy('agent:main:telegram:default:direct:123',{reason:'exec-event'},policy); if (wake.sessionKey !== 'agent:main:main') throw new Error('wake did not route to main'); console.log('event-session-routing smoke ok');\"\n```\n\nEvidence after fix:\n- `check:changed` summary was clean for conflict markers, changelog attributions, extension export guards, duplicate coverage, dependency pins, package patches, core typecheck, core test typecheck, core lint, runtime sidecar loader guard, runtime import cycles, webhook body guard, pairing store guard, and pairing account guard.\n- Targeted Vitest result: `4 passed`, `87 passed`.\n- Runtime smoke printed `event-session-routing smoke ok`.\n\nObserved result after fix:\n- Single-owner `dmScope=main` direct event keys resolve to `agent:main:main` for enqueue and heartbeat wake.\n- Global session scope still wakes the agent while enqueueing on `global`.\n- Multi-owner and wildcard allowlists do not collapse direct keys.\n- Explicit route-binding direct-session overrides are preserved.\n\nWhat was not tested:\n- A full local WSL Vitest run; local Vitest stalled before output on this host, so validation was run remotely.\n- `pnpm check:changed` without `OPENCLAW_OXLINT_SKIP_PREPARE=1`; the raw VM hung in unrelated plugin SDK boundary-artifact lint preparation, so the final remote gate skipped only that preparation step while still running full core lint.",
-        "branch": "fix/dmscope-main-event-wakes",
-        "head_sha": "887eaae610ccbb0d91c1042ce0886a485b6d7ec0",
-        "author": "kaspre",
+        "title": "fix(exec): block configured denied path operands",
+        "body": "## Summary\n\n- Problem: issue #11829 calls out agent access to provider/API key material as a security roadmap gap, and the issue discussion proposed a configurable `tools.exec.deniedPaths` surface for tenant-controlled secret paths.\n- Solution: add `tools.exec.deniedPaths` as an exec preflight guard that rejects commands referencing configured paths such as `/run/secrets/**` before gateway/node/sandbox execution. The guard now inspects command-carrier and shell-wrapper payloads, and sandbox checks resolve relative operands in the container path namespace.\n- What changed: runtime guard, global/agent config wiring, zod/type/schema help/labels/tags, docs, generated config baseline, and regression tests for direct paths, shell-wrapper payloads, command substitutions, and sandbox container-relative traversal.\n- What did NOT change: no changes to model catalog filtering, auth proxy docs, or the existing models.json key-stripping work already covered by other PRs.\n\n## Change Type (select all)\n\n- [ ] Bug fix\n- [x] Feature\n- [ ] Refactor required for the fix\n- [x] Docs\n- [x] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all touched areas)\n\n- [ ] Gateway / orchestration\n- [x] Skills / tool execution\n- [x] Auth / tokens\n- [ ] Memory / storage\n- [ ] Integrations\n- [x] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- Related #11829\n- [x] This PR fixes a bug or regression\n\n## Motivation\n\n- This gives operators a config-level guard for mounted secret directories, especially deployments that keep provider credentials in predictable paths such as `/run/secrets/**`. It is defense-in-depth rather than a replacement for sandboxing or secret isolation.\n\n## Real behavior proof\n\n- Behavior or issue addressed: exec commands can currently reference mounted sensitive paths unless deployment isolation catches the access; after this patch a configured denied path is rejected before host execution.\n- Real environment tested: local OpenClaw checkout on Linux with Node 22.22.0, invoking the real `createExecTool` runtime with `host: \"gateway\"`, `security: \"full\"`, `ask: \"off\"`, and `deniedPaths: [\"/tmp/openclaw-denied-proof/**\"]`.\n- Exact steps or command run after this patch: `node --import tsx` importing `./src/agents/bash-tools.exec.ts`, creating the exec tool, and calling `tool.execute(...)` for these commands:\n  - `cat \"/tmp/openclaw-denied-proof/provider.key\"`\n  - `bash -lc 'cat \"/tmp/openclaw-denied-proof/provider.key\"'`\n  - `bash -lc 'echo \"$(cat \"/tmp/openclaw-denied-proof/provider.key\")\"'`\n- Evidence after fix (copied live local runtime output):\n\n```text\nblocked: cat \"/tmp/openclaw-denied-proof/provider.key\"\nSecurity Violation: exec command references denied path /tmp/openclaw-denied-proof/provider.key\nblocked: bash -lc 'cat \"/tmp/openclaw-denied-proof/provider.key\"'\nSecurity Violation: exec command references denied path /tmp/openclaw-denied-proof/provider.key\nblocked: bash -lc 'echo \"$(cat \"/tmp/openclaw-denied-proof/provider.key\")\"'\nSecurity Violation: exec command references denied path /tmp/openclaw-denied-proof/provider.key\n```\n\n- Observed result after fix: the exec tool throws before running each command, including the shell-wrapper and command-substitution forms, so the denied path is not handed to gateway execution.\n- Additional sandbox namespace proof: `src/agents/bash-tools.exec.path.test.ts` now covers `host: \"sandbox\"`, `workdir: \"/workspace\"`, `deniedPaths: [\"/run/secrets/**\"]`, and `cat ../../run/secrets/provider.key`. The preflight resolves the operand against `/workspace` using POSIX container semantics and rejects `/run/secrets/provider.key` before `buildExecSpec` is called.\n- What was not tested: a full multi-tenant Docker deployment with real mounted provider secrets.\n- Before evidence: the new regression tests failed before the follow-up fixes because `bash -lc 'cat \"<deniedFile>\"'`, `bash -lc 'echo \"$(cat \"<deniedFile>\")\"'`, and the sandbox container-relative traversal resolved successfully with `(no output)` instead of rejecting.\n\n## Root Cause (if applicable)\n\n- Root cause: exec had approval/safe-bin/env guards, but no config-level path denylist for sensitive operand paths. The first implementation scanned only the outer argv tokens and used host path semantics for sandbox relative operands.\n- Missing detection / guardrail: no regression test asserted that a configured secret path is blocked inside a shell wrapper, command substitution, or sandbox container-relative path before execution.\n- Contributing context (if known): issue #11829 covers a broader roadmap; this PR implements only the `tools.exec.deniedPaths` part.\n\n## Regression Test Plan (if applicable)\n\n- Coverage level that should have caught this:\n  - [x] Unit test\n  - [ ] Seam / integration test\n  - [ ] End-to-end test\n  - [ ] Existing coverage already sufficient\n- Target test or file: `src/agents/bash-tools.exec.path.test.ts`\n- Scenarios the tests lock in:\n  - direct `cat \"<deniedFile>\"` is rejected;\n  - `bash -lc 'cat \"<deniedFile>\"'` is rejected;\n  - `bash -lc 'echo \"$(cat \"<deniedFile>\")\"'` is rejected;\n  - sandbox `cat ../../run/secrets/provider.key` from `/workspace` is rejected as `/run/secrets/provider.key` before `buildExecSpec`.\n- Why this is the smallest reliable guardrail: it exercises `createExecTool` directly and proves the preflight guard runs even when approvals are bypassed.\n- Existing test that already covers this (if any): none.\n- If no new test is added, why not: N/A\n\n## User-visible / Behavior Changes\n\n- New optional config key: `tools.exec.deniedPaths`. Commands that reference matching paths now fail before exec starts.\n\n## Diagram (if applicable)\n\n```text\nBefore:\nexec command -> env/path setup -> host execution may receive /run/secrets/provider.key\n\nAfter:\nexec command -> env/path setup -> denied path preflight -> Security Violation before host execution\n```\n\n## Verification\n\n- `OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs src/agents/bash-tools.exec.path.test.ts` -> 88 passed\n- `pnpm config:schema:check` -> ok\n- `pnpm config:docs:check` -> ok\n- `pnpm tsgo:core` -> ok\n- `pnpm tsgo:core:test` -> ok\n- `pnpm lint:core` -> 0 warnings, 0 errors\n- `pnpm exec oxfmt --check --threads=1 src/agents/bash-tools.exec.ts src/agents/bash-tools.exec.path.test.ts` -> all matched files use correct format\n- `git diff --check` -> ok\n",
+        "branch": "taskbounty-11829-exec-denied-paths",
+        "head_sha": "366b43eb6e6149deb76dac8c9cb43ad6b0ea4293",
+        "author": "iamdinhthuan",
         "labels": [
-          "gateway",
+          "docs",
           "agents",
-          "size: L",
-          "triage: mock-only-proof",
+          "size: M",
+          "proof: supplied",
           "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 security-boundary",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/agents/acp-spawn-parent-stream.ts",
-            "additions": 13,
-            "deletions": 5,
+            "path": "docs/.generated/config-baseline.sha256",
+            "additions": 4,
+            "deletions": 4,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/acp-spawn.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/bash-process-registry.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/bash-tools.exec-runtime.test.ts",
-            "additions": 33,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/bash-tools.exec-runtime.ts",
-            "additions": 23,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/bash-tools.exec-types.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/bash-tools.exec.ts",
+            "path": "docs/tools/exec.md",
             "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/cli-runner/execute.ts",
-            "additions": 14,
-            "deletions": 11,
+            "path": "src/agents/bash-tools.exec-types.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.exec.path.test.ts",
+            "additions": 88,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.exec.ts",
+            "additions": 201,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
             "path": "src/agents/pi-tools.ts",
-            "additions": 7,
+            "additions": 2,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server-cron.ts",
-            "additions": 8,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-node-events.ts",
-            "additions": 9,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/event-session-routing.test.ts",
-            "additions": 127,
+            "path": "src/config/schema.help.ts",
+            "additions": 2,
             "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/event-session-routing.ts",
-            "additions": 271,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/heartbeat-runner.subagent-session-guard.test.ts",
-            "additions": 77,
-            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/infra/heartbeat-runner.ts",
-            "additions": 9,
-            "deletions": 2,
+            "path": "src/config/schema.labels.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.tags.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.tools.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.agent-runtime.ts",
+            "additions": 1,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83743",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83743.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83729",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83729.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 102,
+          "total": 94,
           "counts": {
-            "CANCELLED": 1,
-            "SUCCESS": 72,
-            "SKIPPED": 27,
-            "FAILURE": 1,
-            "NEUTRAL": 1
+            "SUCCESS": 10,
+            "IN_PROGRESS": 64,
+            "SKIPPED": 20
           },
           "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-agentic-control-plane-auth-node:FAILURE"
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "Scan changed paths (precise):IN_PROGRESS",
+            "Security High (channel-runtime-boundary):IN_PROGRESS",
+            "Security High (network-ssrf-boundary):IN_PROGRESS",
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "Security High (actions):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "Critical Quality (config-boundary):IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-core-fast:IN_PROGRESS",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
+            "checks-node-core-src-security:IN_PROGRESS",
+            "checks-node-core-ui:IN_PROGRESS",
+            "checks-node-core-support:IN_PROGRESS",
+            "checks-node-core-runtime-infra-state:IN_PROGRESS",
+            "checks-node-core-runtime-infra-process:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-core-runtime-shared:IN_PROGRESS",
+            "checks-node-core-runtime-cron-core:IN_PROGRESS",
+            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
+            "checks-node-core-runtime-cron-service:IN_PROGRESS",
+            "checks-node-agentic-control-plane-agent-chat:IN_PROGRESS",
+            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
+            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
+            "checks-node-agentic-control-plane-http-plugin-ws:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-runtime:IN_PROGRESS",
+            "checks-node-agentic-cli:IN_PROGRESS",
+            "checks-node-agentic-command-support:IN_PROGRESS",
+            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-shared:IN_PROGRESS",
+            "checks-node-agentic-commands-models:IN_PROGRESS",
+            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
+            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
+            "checks-node-agentic-agents:IN_PROGRESS",
+            "checks-node-agentic-gateway-core:IN_PROGRESS",
+            "checks-node-agentic-gateway-methods:IN_PROGRESS",
+            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
+            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
+            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
+            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
+            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
+            "checks-node-auto-reply-reply-session:IN_PROGRESS",
+            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS",
+            "check-docs:IN_PROGRESS",
+            "Socket Security: Project Report:IN_PROGRESS",
+            "Socket Security: Pull Request Alerts:IN_PROGRESS"
           ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-agentic-control-plane-auth-node:FAILURE"
-          ]
+          "pending": [
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "Scan changed paths (precise):IN_PROGRESS",
+            "Security High (channel-runtime-boundary):IN_PROGRESS",
+            "Security High (network-ssrf-boundary):IN_PROGRESS",
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "Security High (actions):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "Critical Quality (config-boundary):IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-core-fast:IN_PROGRESS",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
+            "checks-node-core-src-security:IN_PROGRESS",
+            "checks-node-core-ui:IN_PROGRESS",
+            "checks-node-core-support:IN_PROGRESS",
+            "checks-node-core-runtime-infra-state:IN_PROGRESS",
+            "checks-node-core-runtime-infra-process:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-core-runtime-shared:IN_PROGRESS",
+            "checks-node-core-runtime-cron-core:IN_PROGRESS",
+            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
+            "checks-node-core-runtime-cron-service:IN_PROGRESS",
+            "checks-node-agentic-control-plane-agent-chat:IN_PROGRESS",
+            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
+            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
+            "checks-node-agentic-control-plane-http-plugin-ws:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-runtime:IN_PROGRESS",
+            "checks-node-agentic-cli:IN_PROGRESS",
+            "checks-node-agentic-command-support:IN_PROGRESS",
+            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-shared:IN_PROGRESS",
+            "checks-node-agentic-commands-models:IN_PROGRESS",
+            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
+            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
+            "checks-node-agentic-agents:IN_PROGRESS",
+            "checks-node-agentic-gateway-core:IN_PROGRESS",
+            "checks-node-agentic-gateway-methods:IN_PROGRESS",
+            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
+            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
+            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
+            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
+            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
+            "checks-node-auto-reply-reply-session:IN_PROGRESS",
+            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS",
+            "check-docs:IN_PROGRESS",
+            "Socket Security: Project Report:IN_PROGRESS",
+            "Socket Security: Pull Request Alerts:IN_PROGRESS"
+          ],
+          "terminalBlockers": []
         }
       },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2582,
+    "total_ms": 2415,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 293
+        "ms": 754
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2070
+        "ms": 1400
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 191
+        "ms": 248
       },
       {
         "name": "append_ledger",
