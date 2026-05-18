@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-18T04:26:19.744Z",
+  "generated_at": "2026-05-18T04:26:23.861Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-18T01:26:17.275Z",
+  "since": "2026-05-18T01:26:22.366Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    83417
+    77375
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:83417:4474062694:2026-05-18T04:26:11Z:automerge",
-      "comment_id": "4474062694",
-      "comment_version_key": "4474062694:2026-05-18T04:26:11Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83417#issuecomment-4474062694",
+      "idempotency_key": "comment-router:openclaw/openclaw:77375:4372133896:2026-05-18T04:26:17Z:automerge",
+      "comment_id": "4372133896",
+      "comment_version_key": "4372133896:2026-05-18T04:26:17Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/77375#issuecomment-4372133896",
       "repo": "openclaw/openclaw",
-      "issue_number": 83417,
+      "issue_number": 77375,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-18T03:40:53Z",
-      "comment_updated_at": "2026-05-18T04:26:11Z",
+      "comment_created_at": "2026-05-04T15:05:11Z",
+      "comment_updated_at": "2026-05-18T04:26:17Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "automerge",
@@ -62,66 +62,45 @@
       "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix(followup): stop model-fallback retries duplicating queued user messages and assistant error stubs",
-        "body": "## Summary\n\n- Followup queue + model fallback: latch queued user-message persistence so only the first fallback candidate writes the queued user message to the session JSONL.\n- Followup queue + model fallback: suppress the `[assistant turn failed before producing content]` stub on every fallback candidate after the first, so the JSONL never gains consecutive assistant-error entries.\n- Add `suppressAssistantErrorPersistence` to the session tool-result guard and wrapper; plumb through pi-embedded-runner params, the embedded attempt, and the run-time overload loop.\n- Regression tests: contract-level (the runner receives the right suppress flags on each fallback candidate) and behavior-level (real `SessionManager` + guard cascade ends with exactly `[user, assistant]` and zero consecutive same-role pairs).\n\n## Why\n\nWith `messages.queue.mode: \"followup\"`, `runWithModelFallback` invokes its run callback once per candidate model. Each invocation re-passed `queued.transcriptPrompt` into the embedded runner, the session manager re-appended the queued user message, and every failed candidate wrote an `[assistant turn failed before producing content]` stub. The session ended up with consecutive same-role entries (4x user in followup mode, 4x assistant in steer mode); the next request was rejected because Anthropic does not accept consecutive same-role messages, OpenRouter masked the upstream 400 as a 500, and the failover loop ran again — death spiral, ~4KB session growth per cycle, unrecoverable without manual session deletion.\n\nThe fix is two latches in `createFollowupRunner`'s `runWithModelFallback` run callback:\n\n1. `queuedUserMessagePersistedAcrossFallback` — flipped by `onUserMessagePersisted`. ORed into `suppressNextUserMessagePersistence` so the second+ candidate skips re-appending the queued user message.\n2. `fallbackCandidateAttemptIndex` — counter; passes `suppressAssistantErrorPersistence: true` on every candidate after the first. The session tool-result guard then skips assistant messages with `stopReason === \"error\"`.\n\nCLI runner branch is untouched: it does not accept either suppression flag and owns its own transcript management. Scope limited to the embedded path described in the issue.\n\nCloses #83404\n\n## Real behavior proof\n\nBehavior addressed: queued followup user messages and per-candidate assistant error stubs duplicated in the session JSONL on model-fallback retry, producing consecutive same-role entries that the provider then rejects (https://github.com/openclaw/openclaw/issues/83404).\n\nReal environment tested: behavior-level integration against the real `SessionManager` (`@earendil-works/pi-coding-agent`) plus `installSessionToolResultGuard` from this branch. A four-candidate failover cascade is driven through the real persistence stack in both `followup` and `steer` queue modes, with the new suppression flags forced off versus on, and the resulting session journal is read back and inspected. The terminal output below is the captured stdout of that integration cascade.\n\nExact steps or command run after this patch:\n\n    node scripts/run-vitest.mjs src/agents/session-tool-result-guard.test.ts \\\n      -t \"four-candidate followup fallback cascade\"\n    node scripts/run-vitest.mjs src/auto-reply/reply/followup-runner.test.ts \\\n      -t \"queued user message idempotency across fallback\"\n    node scripts/run-vitest.mjs src/auto-reply/reply/followup-runner.test.ts \\\n      -t \"only persists assistant error stub on the first fallback candidate\"\n\nEvidence after fix: redacted terminal capture of the session journal contents for each scenario, taken directly from the integration cascade's debug print of the persisted entries:\n\n    mode=followup applyFix=false\n      entries=8 role-sequence=[user, assistant, user, assistant, user, assistant, user, assistant]\n      consecutive same-role pairs=0\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n\n    mode=followup applyFix=true\n      entries=2 role-sequence=[user, assistant]\n      consecutive same-role pairs=0\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n\n    mode=steer applyFix=false\n      entries=5 role-sequence=[user, assistant, assistant, assistant, assistant]\n      consecutive same-role pairs=3\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n        assistant stopReason=error: [assistant turn failed before producing content]\n        assistant stopReason=error: [assistant turn failed before producing content]\n        assistant stopReason=error: [assistant turn failed before producing content]\n\n    mode=steer applyFix=true\n      entries=2 role-sequence=[user, assistant]\n      consecutive same-role pairs=0\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n\nObserved result after fix: session journal collapses from 8 entries (followup) / 5 entries with 3 consecutive same-role pairs (steer) down to exactly 2 entries with zero consecutive same-role pairs in both modes. The exact session-JSONL shape from the issue — `user, user, user, user` in followup and `assistant, assistant, assistant, assistant` in steer — is no longer produced. Subsequent inbound messages will no longer hit the provider's consecutive-same-role validation and the death-spiral re-failover described in the issue cannot start.\n\nWhat was not tested: a live OpenRouter run against four real anthropic fallback models on a real channel. Reporter's exact configuration was reproduced through the real session-persistence stack but not against a live provider; a maintainer with provider credentials should run the same flow end-to-end on a real account before merge.\n\n## Verification\n\nBuild:\n\n    pnpm build\n\npasses (required because `params.ts` and the guard wrapper grew a new public field).\n\nTargeted tests:\n\n    node scripts/run-vitest.mjs src/agents/session-tool-result-guard.test.ts src/auto-reply/reply/followup-runner.test.ts\n\nResult: `Test Files 2 passed (2) | Tests 76 passed (76)`.\n\nThe new `installSessionToolResultGuard > models a four-candidate followup fallback cascade producing exactly one user and one assistant-error entry` test asserts the same invariant the runtime journal above shows, executed inside CI on every push.",
-        "branch": "fix/followup-fallback-dup-user",
-        "head_sha": "a417d190a64c7db34de382a27c82a4fe52dd2f89",
-        "author": "yetval",
+        "title": "fix(tui): dismiss watchdog notice when response actually arrives",
+        "body": "## Summary\n\nThe TUI streaming watchdog adds **\"This response is taking longer than expected. Send another message to continue.\"** to the chat log after 30 s without a delta. When a chat delta or `final` then arrives — common for runs that were slow but not actually stuck — the notice persists next to the recovered response and contradicts what the user sees.\n\nThis change tracks the notice by `runId` and dismisses it from `handleChatEvent` whenever any further chat event for that run is processed, so the message disappears the moment the response continues. The watchdog's internal cleanup (`activeChatRunId` reset, status idle, deferred history reload) is unchanged, so genuinely stuck runs still show the notice and recover identically.\n\n## Implementation\n\n- `src/tui/components/chat-log.ts` — new `addPendingSystem(runId, text)` / `dismissPendingSystem(runId)` pair, keyed by `runId` (mirrors the existing `pendingUsers` map at `addPendingUser` / `dropPendingUser`). `clearAll` and `dropComponentReferences` updated.\n- `src/tui/tui-event-handlers.ts` — watchdog timer routes through `addPendingSystem(runId, …)`, and `handleChatEvent` calls `dismissPendingSystem(evt.runId)` after early-return checks but before `noteSessionRun`, so any delta / final / aborted / error for the run drops a stale notice.\n- Tests cover the happy-path display, dismissal on a late delta, dismissal on a late final, and the chat-log component contract.\n\n## Related\n\n- Refs #67052 (\"TUI streaming indicator stays active long after response content finishes\") — same surface, adjacent UX bug; this PR addresses the user-visible notice rather than the streaming-status indicator timing, so #67052 stays open.\n- Refs #69081 (closed) — the watchdog desync issue whose tool/lifecycle proof-of-life fix already shipped on `main`.\n- Prior attempt #69026 by @jpruit20 raised the threshold to 120 s and suppressed the notice entirely; this PR is the narrower fix that keeps the warning useful for genuinely stuck runs. #69026 can be closed in favor of this once merged.\n\n## Verification\n\n- `pnpm test src/tui/tui-event-handlers.test.ts src/tui/components/chat-log.test.ts` — 61 passed (including 2 new dismissal tests + 2 new chat-log tests).\n- `pnpm exec oxfmt --check --threads=1 src/tui/tui-event-handlers.ts src/tui/tui-event-handlers.test.ts src/tui/components/chat-log.ts src/tui/components/chat-log.test.ts CHANGELOG.md` — clean.\n- `node scripts/run-oxlint.mjs src/tui/tui-event-handlers.ts src/tui/tui-event-handlers.test.ts src/tui/components/chat-log.ts src/tui/components/chat-log.test.ts` — 0 warnings, 0 errors.\n- `pnpm check:changed` — exit 0 (core + core-tests lanes selected).\n\n## Test plan\n\n- [ ] CI green\n- [ ] Manual TUI: trigger a run that exceeds 30 s without a delta, see the notice; let the run continue and confirm the notice disappears once a delta/final arrives\n- [ ] Manual TUI: trigger a genuinely stuck run (kill gateway mid-run); confirm the notice still appears and persists\n",
+        "branch": "fix/tui-watchdog-notice-dismiss",
+        "head_sha": "18fa9d1955779bbf22ab2f8af485c16efd571455",
+        "author": "romneyda",
         "labels": [
-          "agents",
-          "size: M",
-          "proof: supplied",
-          "P1",
-          "impact:session-state",
-          "impact:message-loss",
+          "maintainer",
+          "size: S",
+          "P2",
           "rating: 🌊 off-meta tidepool"
         ],
         "files": [
           {
-            "path": "src/agents/pi-embedded-runner/run.ts",
+            "path": "CHANGELOG.md",
             "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
-            "additions": 1,
+            "path": "src/tui/components/chat-log.test.ts",
+            "additions": 27,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/pi-embedded-runner/run/params.ts",
-            "additions": 1,
+            "path": "src/tui/components/chat-log.ts",
+            "additions": 27,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/session-tool-result-guard-wrapper.ts",
-            "additions": 2,
-            "deletions": 0,
+            "path": "src/tui/tui-event-handlers.test.ts",
+            "additions": 67,
+            "deletions": 7,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/session-tool-result-guard.test.ts",
-            "additions": 86,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/session-tool-result-guard.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/followup-runner.test.ts",
-            "additions": 144,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/followup-runner.ts",
-            "additions": 12,
+            "path": "src/tui/tui-event-handlers.ts",
+            "additions": 4,
             "deletions": 1,
             "changeType": "MODIFIED"
           }
@@ -129,19 +108,18 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83417",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83417.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-77375",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-77375.md",
         "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
         "review_decision": "",
         "checks": {
-          "total": 105,
+          "total": 15,
           "counts": {
             "CANCELLED": 2,
-            "SKIPPED": 26,
-            "SUCCESS": 75,
-            "IN_PROGRESS": 1,
+            "SKIPPED": 9,
+            "SUCCESS": 3,
             "NEUTRAL": 1
           },
           "blockers": [
@@ -192,23 +170,23 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3760,
+    "total_ms": 1817,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 373
+        "ms": 449
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2081
+        "ms": 1027
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 4
       },
       {
         "name": "execute_commands",
-        "ms": 1291
+        "ms": 323
       },
       {
         "name": "append_ledger",
