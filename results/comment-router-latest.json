@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-18T16:29:45.817Z",
+  "generated_at": "2026-05-18T16:29:56.654Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-18T13:29:43.065Z",
+  "since": "2026-05-18T13:29:54.726Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    83685
+    83684
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:83685:4479656416:2026-05-18T16:29:35Z:clawsweeper_needs_human",
-      "comment_id": "4479656416",
-      "comment_version_key": "4479656416:2026-05-18T16:29:35Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83685#issuecomment-4479656416",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:83684:4479653746:2026-05-18T16:29:51Z:clawsweeper_needs_human",
+      "comment_id": "4479653746",
+      "comment_version_key": "4479653746:2026-05-18T16:29:51Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83684#issuecomment-4479653746",
       "repo": "openclaw/openclaw",
-      "issue_number": 83685,
+      "issue_number": 83684,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-18T16:23:05Z",
-      "comment_updated_at": "2026-05-18T16:29:35Z",
+      "comment_created_at": "2026-05-18T16:22:42Z",
+      "comment_updated_at": "2026-05-18T16:29:51Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -51,70 +51,159 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "The remaining blocker is contributor-supplied real behavior proof and maintainer confirmation that the scoped guard is enough to land separately from the companion availability bugs.; Cleared: The diff is limited to gateway restart scheduling and tests, with no new dependency, workflow, secret-handling, or package-resolution surface. (sha=b60c4d8665ef39e7eeaf0fa9f7fe401c69a49151)",
-      "review_summary": "The PR adds a zero-changed-paths guard before config-write restart scheduling and adds gateway regression tests for rejected config.patch/config.apply requests.\n\nReproducibility: no. not for the full production symptom: current main source shows rejected config.patch/config.apply paths return before the config commit and restart helper. The narrower invariant is source-checkable, but the reported zombie state likely needs the separate successful-write or SIGUSR1 race path to reproduce.",
-      "review_followup": "The remaining blocker is contributor-supplied real behavior proof and maintainer confirmation that the scoped guard is enough to land separately from the companion availability bugs.",
+      "repair_reason": "The remaining action is maintainer security/compatibility judgment plus a targeted retry-path fix, not autonomous cleanup on an unapproved auth-boundary change.; Needs attention: The diff intentionally changes setup-code bootstrap token issuance, so the bounded operator handoff needs explicit maintainer acceptance before merge.; Review finding: [P2] Preserve operator handoff on restored bootstrap retries — src/gatew... (sha=eb6d47c600481dd9b4a58ced52ce621b41ea2d27)",
+      "review_summary": "The PR restores setup-code QR bootstrap to return a node token plus a bounded operator handoff token, updates native client scope handling, documents the contract, and adds focused gateway/bootstrap tests.\n\nReproducibility: yes. Current main is source-reproducible as node-only setup-code bootstrap with no operator deviceTokens, and the PR body plus related merged commits trace how that regressed the native handoff contract.",
+      "review_followup": "The remaining action is maintainer security/compatibility judgment plus a targeted retry-path fix, not autonomous cleanup on an unapproved auth-boundary change.",
       "freeform_prompt": null,
-      "expected_head_sha": "b60c4d8665ef39e7eeaf0fa9f7fe401c69a49151",
+      "expected_head_sha": "eb6d47c600481dd9b4a58ced52ce621b41ea2d27",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(gateway): rejected config.patch/apply never queues SIGUSR1 restart",
-        "body": "## Summary\n\nPins the invariant that a **rejected** `config.patch` / `config.apply` RPC never schedules a gateway SIGUSR1 restart, with both a structural guard and regression tests. This is the upstream fix for [sandpaw-ai#326](https://github.com/gregstiehl/sandpaw-ai/issues/326) — a P1 production incident where a customer instance (`sandpaw-go-yard`) ended up in a permanent \\\"draining for restart\\\" zombie state after two rejected `config.patch`/`config.apply` calls.\n\n## Customer reproduction (sandpaw-ai#326)\n\nIn customer instance `sandpaw-go-yard` (2026-05-09):\n\n1. Ada (running inside the container) called `gateway config.patch` to inject Slack `channels.slack.botToken` / `appToken`.\n2. Gateway rejected: \\`gateway config.patch cannot change protected config paths: channels.slack.botToken, channels.slack.appToken, ...\\`\n3. Ada retried with `config.apply` (full file). Gateway rejected again.\n4. **Despite both patches being rejected**, the reload manager logged \\`config change requires gateway restart (channels.slack) — deferring until 2 operation(s), 1 reply(ies), 1 embedded run(s) complete\\` and queued two SIGUSR1s ~2s apart.\n5. The second SIGUSR1 arrived during the in-process restart window (after `ready` but before `starting channels and sidecars` finished). From that moment forward every model call returned \\`Gateway is draining for restart; new tasks are not accepted\\`. State persisted for **~75 minutes** until recovery via `docker stop && docker start`.\n\n## Diagnosis\n\nReading the current gateway code, the reload manager already only acts on *successfully-applied* writes:\n- The chokidar file-watcher path reads the on-disk snapshot via `readSnapshot()`.\n- The in-process write path goes through `notifyRuntimeConfigWriteListeners`, which fires *only* after `replaceConfigFile` commits.\n\nAnd `config.ts:configHandlers[\\\"config.patch\\\"]` and `[\\\"config.apply\\\"]` both validate (parseConfigJson5 → applyMergePatch → restoreRedactedValues → validateConfigObjectWithPlugins → ensureResolvableSecretRefsOrRespond → diffConfigPaths) **before** calling `commitGatewayConfigWrite` and `resolveGatewayConfigRestartWriteResult`. Any rejection branch calls `respond(false, ..., errorShape(...))` and returns without writing.\n\nSo the structural invariant *holds today* — but it's enforced by control flow alone, not by a structural guard, and the customer-observed correlation between rejected patches and a queued restart was nowhere covered by regression tests. The most likely actual mechanism in the incident is the companion bug flagged at the bottom of #326: an OAuth/Slack code path writing `channels.slack.*` directly to `openclaw.json` via `replaceConfigFile`, which is a *successful* write and a legitimate restart trigger — separate from the rejected patches but temporally correlated.\n\nThis PR locks the invariant in place so a future refactor can't break it.\n\n## Changes\n\n### `src/gateway/server-methods/config-write-flow.ts`\n\n`resolveGatewayConfigRestartWriteResult` now short-circuits when `changedPaths.length === 0`:\n- Refuses to write the restart sentinel.\n- Refuses to call `scheduleGatewaySigusr1Restart`.\n- Logs an audit warning with the control-plane actor.\n\nCallers (`config.patch` and `config.apply` handlers in `config.ts`) only invoke this helper after `commitGatewayConfigWrite` succeeds and a non-empty `changedPaths` is computed, so this guard is a defense-in-depth backstop, not a behavior change in any current code path.\n\n### `src/gateway/server.config-patch.test.ts`\n\nNew regression suite \\`gateway rejected config writes do not queue restart (sandpaw-ai#326)\\` spies on `scheduleGatewaySigusr1Restart` via `vi.spyOn(restartModule, ...)` and asserts no call happens when:\n\n- `config.patch` is rejected for invalid JSON (parse failure)\n- `config.patch` is rejected for `raw=null` (non-object)\n- `config.patch` is rejected for SecretRef resolution failure\n- `config.apply` is rejected for invalid raw (parse failure)\n- `config.apply` is rejected for SecretRef resolution failure\n- **Two rejected patches arrive consecutively** — direct replay of the customer scenario (config.patch rejected → config.apply rejected, neither queues a restart)\n\nEach test also asserts the on-disk config hash is unchanged across the rejection.\n\n## Acceptance criteria mapping (from sandpaw-ai#326)\n\n- [x] Rejected `config.patch`/`config.apply` calls do not trigger reload evaluation or restart queue → covered by 6 regression tests\n- [x] Reload manager only acts on successfully-applied config diffs → already enforced (reload reads disk / subscribes to post-commit notifications); now also backed by the `changedPaths.length === 0` guard\n- [x] Regression test: rejected protected-path patch → no reload, no restart, gateway state unchanged → covered (the agent-side `assertGatewayConfigMutationAllowed` protected-paths guard is already covered by `src/agents/openclaw-gateway-tool.test.ts`; this PR adds the server-side rejection coverage)\n- [ ] **Stretch:** detect & coalesce duplicate SIGUSR1 arriving during the in-process restart window — **not included in this PR**, see Out of scope below\n\n## Test results\n\n```\npnpm vitest --config test/vitest/vitest.gateway-server.config.ts\n  src/gateway/server.config-patch.test.ts\n    gateway rejected config writes do not queue restart (sandpaw-ai#326)\n      ✓ does not schedule SIGUSR1 when config.patch is rejected for invalid JSON\n      ✓ does not schedule SIGUSR1 when config.patch is rejected for non-object raw\n      ✓ does not schedule SIGUSR1 when config.patch is rejected for SecretRef resolution failure\n      ✓ does not schedule SIGUSR1 when config.apply is rejected for invalid raw\n      ✓ does not schedule SIGUSR1 when config.apply is rejected for SecretRef resolution failure\n      ✓ does not schedule SIGUSR1 when two rejected patches arrive consecutively\n```\n\nFull `vitest.gateway-server` config: **1045 passing**, 1 pre-existing failure in `gateway config methods > returns noop for config.patch when config is unchanged` (asserts `res.payload?.noop` is `true` but server returns `noop` differently; verified on `main` at `9657b8e8ce`). Not introduced by this PR.\n\nFull `vitest.gateway-methods`: **831 passing**.  \nFull `vitest.gateway-core`: **1938 passing** (includes all `config-reload.test.ts` and `server-reload-handlers.test.ts`).  \n`src/agents/openclaw-gateway-tool.test.ts`: **26 passing × 2 projects** (existing agent-side protected-path coverage unchanged).  \n`src/infra/infra-runtime.test.ts`: **27 passing** (existing SIGUSR1 coalescing coverage unchanged).\n\n## Out of scope (companion bugs filed for follow-up)\n\n1. **Slack OAuth writes Slack tokens directly to `openclaw.json` bypassing the `integrations` table** — flagged in sandpaw-ai#326 already. That's a legitimate successful `replaceConfigFile` write that correctly triggers a `channels.slack` reload; the hardening lives in the Slack OAuth setup flow, not in the reload manager.\n2. **Coalescing duplicate SIGUSR1 arriving during in-process restart startup window** — \\`scheduleGatewaySigusr1Restart\\` in `src/infra/restart.ts` already coalesces against `pendingRestartTimer`/`hasUnconsumedRestartSignal`, but `run-loop.ts` resets `shuttingDown=false` when a new lifecycle iteration begins, which is what let the second SIGUSR1 from the original incident race into the new lifecycle's startup window. Fixing this requires deeper changes to the run-loop's signal acceptance window and warrants a separate PR with its own test plan.\n\n## Links\n\n- Issue: gregstiehl/sandpaw-ai#326\n- Customer incident: Todd (go-yard) DM 2026-05-09 17:18 CST\n- Diagnosis Slack thread: sipsocial #D0ADAHJ3VJN — p1778347290165389\n\n## Follow-up\n\nAfter this merges, sandpaw-ai will pin to the new openclaw version via a follow-up PR. Not in this PR's scope.",
-        "branch": "fix/sandpaw-ai-326-reject-no-reload",
-        "head_sha": "b60c4d8665ef39e7eeaf0fa9f7fe401c69a49151",
-        "author": "adapepper",
+        "title": "[codex] restore QR bootstrap operator handoff",
+        "body": "## Summary\n- restore QR/setup-code bootstrap handoff so native onboarding receives both the primary node token and a bounded operator token\n- keep the QR operator token limited to `operator.approvals`, `operator.read`, and `operator.write`\n- document the native mobile contract and cover the gateway/client handoff with focused tests\n\n## Root Cause\nPR #81292 / commit `b17e77a22b` changed the built-in setup-code bootstrap profile to node-only and removed the `hello-ok.auth.deviceTokens` handoff. That reversed the mobile onboarding behavior restored by PR #58382 / commit `69fe999373`, where iOS and Android suppress the operator loop during bootstrap auth and only start it after persisting an operator token from the trusted bootstrap handoff.\n\n## Verification\n- `pnpm docs:list`\n- `git diff --check`\n- `node scripts/run-vitest.mjs src/shared/device-bootstrap-profile.test.ts src/infra/device-bootstrap.test.ts src/infra/device-pairing.test.ts`\n- `node scripts/run-vitest.mjs src/gateway/server.auth.control-ui.test.ts`\n- `swift test --package-path apps/shared/OpenClawKit --filter GatewayNodeSessionTests`\n- `CODEX_REVIEW_AUTO_TESTS=0 bash /Users/guti/.codex/skills/codex-review/scripts/codex-review --mode local`\n\n## Real Behavior Proof\nBehavior addressed: mobile QR/setup-code onboarding again receives a node token plus a minimally scoped operator token from the trusted bootstrap handoff.\nReal environment tested: local Codex worktree on macOS, gateway/bootstrap Vitest suites, shared Swift package tests.\nExact steps or command run after this patch: `node scripts/run-vitest.mjs src/shared/device-bootstrap-profile.test.ts src/infra/device-bootstrap.test.ts src/infra/device-pairing.test.ts`; `node scripts/run-vitest.mjs src/gateway/server.auth.control-ui.test.ts`; `swift test --package-path apps/shared/OpenClawKit --filter GatewayNodeSessionTests`; `git diff --check`; `pnpm docs:list`; `codex-review --mode local`.\nEvidence after fix: gateway tests assert `hello-ok.auth.deviceTokens` includes the operator handoff token for QR bootstrap, paired devices have node + operator tokens, allowed operator scopes are bounded, and admin/pairing replay paths still fail.\nObserved result after fix: focused gateway/bootstrap tests, Swift handoff tests, docs listing, diff check, and codex-review all passed.\nWhat was not tested: Android Gradle unit tests could not start because this worktree has no configured Android SDK location (`ANDROID_HOME` or `apps/android/local.properties`).\n",
+        "branch": "codex/restore-qr-bootstrap-handoff",
+        "head_sha": "eb6d47c600481dd9b4a58ced52ce621b41ea2d27",
+        "author": "ngutman",
         "labels": [
+          "docs",
+          "app: android",
           "gateway",
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
+          "maintainer",
+          "size: M",
+          "rating: 🦐 gold shrimp",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/gateway/server-methods/config-write-flow.ts",
-            "additions": 26,
+            "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/android/app/src/main/java/ai/openclaw/app/node/ConnectionManager.kt",
+            "additions": 8,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/android/app/src/test/java/ai/openclaw/app/gateway/GatewaySessionInvokeTest.kt",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/android/app/src/test/java/ai/openclaw/app/node/ConnectionManagerTest.kt",
+            "additions": 14,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server.config-patch.test.ts",
-            "additions": 133,
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayChannel.swift",
+            "additions": 0,
             "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/shared/OpenClawKit/Tests/OpenClawKitTests/GatewayNodeSessionTests.swift",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/channels/pairing.md",
+            "additions": 7,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/qr.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/protocol.md",
+            "additions": 24,
+            "deletions": 16,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.auth.control-ui.suite.ts",
+            "additions": 64,
+            "deletions": 66,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server/ws-connection/message-handler.ts",
+            "additions": 121,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/device-bootstrap.test.ts",
+            "additions": 22,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/device-pairing.test.ts",
+            "additions": 32,
+            "deletions": 16,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/shared/device-bootstrap-profile.test.ts",
+            "additions": 3,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/shared/device-bootstrap-profile.ts",
+            "additions": 5,
+            "deletions": 3,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83685",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83685.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83684",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83684.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 102,
+          "total": 52,
           "counts": {
-            "FAILURE": 3,
-            "SUCCESS": 71,
-            "SKIPPED": 27,
-            "NEUTRAL": 1
+            "SUCCESS": 7,
+            "CANCELLED": 1,
+            "SKIPPED": 38,
+            "IN_PROGRESS": 4,
+            "QUEUED": 2
           },
           "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-agentic-control-plane-runtime:FAILURE",
-            "check-lint:FAILURE"
+            "Real behavior proof:CANCELLED",
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "Security High (actions):IN_PROGRESS"
           ],
-          "pending": [],
+          "pending": [
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "Security High (actions):IN_PROGRESS"
+          ],
           "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-agentic-control-plane-runtime:FAILURE",
-            "check-lint:FAILURE"
+            "Real behavior proof:CANCELLED"
           ]
         }
       },
@@ -123,23 +212,23 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3158,
+    "total_ms": 2138,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 538
+        "ms": 343
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2173
+        "ms": 1569
       },
       {
         "name": "classify_commands",
-        "ms": 28
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 367
+        "ms": 198
       },
       {
         "name": "append_ledger",
