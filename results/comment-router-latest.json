@@ -1,22 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-18T04:45:47.779Z",
+  "generated_at": "2026-05-18T04:45:51.202Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-18T01:45:45.351Z",
+  "since": "2026-05-18T01:45:50.764Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    83436
+    83437
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,133 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:83436:4474433585:2026-05-18T04:45:39Z:automerge",
-      "comment_id": "4474433585",
-      "comment_version_key": "4474433585:2026-05-18T04:45:39Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83436#issuecomment-4474433585",
-      "repo": "openclaw/openclaw",
-      "issue_number": 83436,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-18T04:38:54Z",
-      "comment_updated_at": "2026-05-18T04:45:39Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": "The PR adds a model-fallback carve-out so embedded session takeover and session write-lock timeout errors are rethrown before candidate fallback classification, with a regression test for the embedded takeover path.\n\nReproducibility: Do we have a high-confidence way to reproduce the issue? Source inspection supports the core path: current main has no embedded takeover carve-out before model fallback classification, but I did not reproduce the reported live Discord cadence or run the patch.",
-      "review_followup": "This needs contributor real behavior proof and a small code/test revision on the source PR; ClawSweeper should not open a repair lane while the proof gate remains contributor-owned.",
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-18T04:45:44.310Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 83435
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-18T04:45:45.220Z",
-          "response_comment_id": null,
-          "response_comment_mode": "created"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): rethrow EmbeddedAttemptSessionTakeoverError before model fallback",
-        "body": "## Summary\n\n`EmbeddedAttemptSessionTakeoverError` (the embedded-attempt fingerprint guard that fires when the session JSONL changes during the released-lock window) is currently routed through `runWithModelFallback` as an ordinary candidate failure. Every model candidate fails with the same takeover error, the chain exhausts, the last fallback succeeds, and the session ends up effectively pinned to that fallback model — with no provider error and no normal fallback receipt.\n\nThis PR extends the existing carve-out family (`isCommandLaneTaskTimeoutError`, `shouldRethrowAbort`) to also rethrow `EmbeddedAttemptSessionTakeoverError` and `SessionWriteLockTimeoutError` before fallback classification.\n\n## Repro\n\nObserved on Discord-channel-bound sessions under normal traffic. journalctl shows:\n\n```\n[diagnostic] lane task error: lane=main durationMs=... error=\"EmbeddedAttemptSessionTakeoverError: session file changed while embedded prompt lock was released: .../sessions/<id>.jsonl\"\n[model-fallback/decision] decision=candidate_failed\n  requested=github-copilot/claude-opus-4.7-1m-internal\n  candidate=github-copilot/claude-opus-4.7-1m-internal\n  reason=unknown\n  next=github-copilot/claude-opus-4.6\n  detail=session file changed while embedded prompt lock was released\n... chain repeats for each fallback ...\n[model-fallback/decision] decision=candidate_succeeded candidate=openai-codex/gpt-5.5\n```\n\nThen the successful fallback persists as `modelOverrideSource: auto`. Manual re-pins decay back to the same fallback within minutes.\n\nFour complete chain-walks observed on one seat between 20:13 and 20:30 PDT, cadence ~5 min.\n\n## Why this presents as silent reassertion\n\n- `EmbeddedAttemptSessionTakeoverError` is a *local* session-state guard (introduced in #82891). It is not a provider failure.\n- `describeFailoverError()` does not classify it as a provider-class failure, so `[model-fallback/decision]` logs `reason=unknown`. The clue only survives in `detail=...`.\n- Manual model re-pins are not stale state — they decay because the next attempt re-hits the takeover race.\n- Seats with quieter session-file write cadence (no concurrent JSONL writes during the lock-release window) do not trigger the race and hold canon.\n\n## Relation to #66646 / #78633\n\nIssue #66646 (`Session file lock errors cascade through model fallback chain`) was fixed by #78633, which exported `hasSessionWriteLockTimeout` and the carve-out narrative. However, the runtime intercept for `runWithModelFallback` was not retained on `main`: `hasSessionWriteLockTimeout` is only referenced from `failover-error.ts` describe/classify paths, not from the fallback runner itself. `EmbeddedAttemptSessionTakeoverError` (introduced by #82891) extends the same family but does not yet have an interceptor anywhere in the model-fallback chain. This PR adds both interceptors in `runFallbackCandidate`.\n\n## Change\n\n```diff\n+function isEmbeddedAttemptSessionTakeoverError(err: unknown): boolean { ... }\n+function shouldRethrowSessionOwnershipError(err: unknown): boolean {\n+  return isEmbeddedAttemptSessionTakeoverError(err) || isSessionWriteLockTimeoutError(err);\n+}\n\n // in runFallbackCandidate\n if (isCommandLaneTaskTimeoutError(err)) {\n   throw err;\n }\n+if (shouldRethrowSessionOwnershipError(err)) {\n+  throw err;\n+}\n```\n\nThe pattern matches the existing `isCommandLaneTaskTimeoutError` carve-out exactly.\n\n## Tests\n\nAdded regression in `src/agents/model-fallback.test.ts`:\n\n- session takeover error rethrown before second fallback candidate is invoked\n- session takeover error does **not** call `onError` (the candidate-failed receipt path)\n\nLocal verification on this branch:\n- `pnpm vitest run src/agents/model-fallback.test.ts -t \"session takeover|command-lane watchdog|unrecognized errors\"` → 6 passed / 108 skipped (114 total)\n- `pnpm vitest run src/agents/model-fallback.test.ts` → 2 files / 114 tests passed\n\n## Search key for future operators\n\n`session file changed while embedded prompt lock was released`\n\nThis is the signature in journalctl. With this fix it stays a session-takeover error and is handled by the embedded runner / retry path instead of poisoning model fallback.\n\n## Out of scope (follow-up lanes)\n\n- `[model-fallback/decision] reason=unknown` should preserve the underlying error class in the decision-line reason field. The detail string carries it, but the reason field collapses to `unknown`. Surfacing-(2) prevents the next masked-as-unknown bug from being invisible.\n- Identifying which writer concurrently mutates the session JSONL during the embedded-prompt-lock-release window. The race itself is reduced (#82891 releases the lock before model I/O) but takeover still fires under traffic.\n\ncc @sallyom (author of #78633, related fix)\n",
-        "branch": "cael/upstream-session-takeover-no-fallback",
-        "head_sha": "f95dc0a85649b6b4df03ae044986dc35bab5e938",
-        "author": "cael-dandelion-cult",
-        "labels": [
-          "agents",
-          "size: XS",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "impact:session-state",
-          "impact:auth-provider",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 session-state"
-        ],
-        "files": [
-          {
-            "path": "src/agents/model-fallback.test.ts",
-            "additions": 23,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/model-fallback.ts",
-            "additions": 21,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83436",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83436.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 106,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 27,
-            "SUCCESS": 76,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      }
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2718,
+    "total_ms": 790,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 418
+        "ms": 426
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1996
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 291
+        "ms": 352
       },
       {
         "name": "append_ledger",
