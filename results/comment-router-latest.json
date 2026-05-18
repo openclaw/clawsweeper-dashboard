@@ -1,22 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-18T09:54:10.601Z",
+  "generated_at": "2026-05-18T09:55:01.043Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-18T06:54:10.137Z",
+  "since": "2026-05-18T06:54:57.985Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    83546
+    83370
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
-  "actionable": 0,
+  "scanned_comments": 4,
+  "commands_seen": 3,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,30 +29,331 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:83370:4473388904:2026-05-18T09:54:53Z:clawsweeper_needs_human",
+      "comment_id": "4473388904",
+      "comment_version_key": "4473388904:2026-05-18T09:54:53Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83370#issuecomment-4473388904",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83370,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-18T01:27:23Z",
+      "comment_updated_at": "2026-05-18T09:54:53Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "No repair lane is needed because the PR already contains the focused implementation, tests, and sufficient proof; the remaining action is maintainer review and merge gating.; Cleared: No concrete security or supply-chain concern found; the diff only changes restart result metadata and focused tests. (sha=e15e7f920a95bcb257fd111c64c59534ff0ec1c8)",
+      "review_summary": "The PR adds `emitHooksQueued` to scheduled restart results and exposes `continuationQueued` from the gateway restart tool when a restart continuation exists.\n\nReproducibility: yes. Current-main source shows the already-emitted coalescing branch returns before hook registration, and the PR body supplies after-fix terminal proof for that scheduler/tool path.",
+      "review_followup": "No repair lane is needed because the PR already contains the focused implementation, tests, and sufficient proof; the remaining action is maintainer review and merge gating.",
+      "freeform_prompt": null,
+      "expected_head_sha": "e15e7f920a95bcb257fd111c64c59534ff0ec1c8",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): report unqueued restart continuations",
+        "body": "Closes #74424.\n\n## Behavior addressed\n\nWhen a gateway restart request coalesces with an in-flight restart, the caller should be told that its continuation hook was not queued. The continuation must not be silently dropped while the user-visible result implies that follow-up work will still run.\n\n## Root cause\n\n`scheduleGatewaySigusr1Restart` returned only the coalesced restart state. Callers could not distinguish “restart already in-flight and continuation queued” from “restart already in-flight and this continuation was not queued,” so the gateway tool could report success even though the continuation hook would never run.\n\n## Fix\n\nReturn an explicit `emitHooksQueued` flag from restart scheduling and surface the unqueued-continuation case through the gateway restart tool. Regression coverage is in `src/infra/infra-runtime.test.ts` and `src/agents/tools/gateway-tool.test.ts`.\n\n## Real behavior proof\n\n**Behavior or issue addressed:** Coalesced restart requests now report that their continuation hooks were not queued when a restart has already been emitted.\n\n**Real environment tested:** PR head `e15e7f920a95bcb257fd111c64c59534ff0ec1c8`, rebased onto `upstream/main` `3b5d30b5fdfd2d9e1e2f1c97242444467dce53c0`; source checkout with Node 22 for the targeted proof command.\n\n**Exact steps or command run after this patch:**\n\n```bash\nnode --import tsx -e 'const restart = await import(\"./src/infra/restart.ts\"); const { scheduleGatewaySigusr1Restart, emitGatewayRestart, __testing } = restart; __testing.resetSigusr1State(); const beforeEmitCalls = []; const handler = () => {}; process.on(\"SIGUSR1\", handler); try { const emitted = emitGatewayRestart(\"already-emitted\"); const second = scheduleGatewaySigusr1Restart({ delayMs: 0, reason: \"second\", emitHooks: { beforeEmit: async () => { beforeEmitCalls.push(\"called\"); } } }); console.log(JSON.stringify({ emitted, coalesced: second.coalesced, emitHooksQueued: second.emitHooksQueued, beforeEmitCalls: beforeEmitCalls.length }, null, 2)); } finally { process.removeListener(\"SIGUSR1\", handler); __testing.resetSigusr1State(); }'\n```\n\n**Evidence after fix:** Terminal output from the direct after-fix command:\n\n```text\n[restart] request coalesced (already in-flight) reason=second actor=<unknown>\n{\n  \"emitted\": true,\n  \"coalesced\": true,\n  \"emitHooksQueued\": false,\n  \"beforeEmitCalls\": 0\n}\n```\n\n**Observed result after fix:** The first restart emits successfully. The second restart coalesces, reports `emitHooksQueued: false`, and the continuation hook is not called. That is the state the gateway tool now uses to alert the user instead of implying the continuation was queued.\n\n**What was not tested:** I did not restart a live Gateway process because this proof intentionally avoids sending SIGUSR1 to the developer machine; there is no visual surface, so screenshots are not applicable. The terminal proof exercises the production restart scheduling seam with a process signal handler installed.\n\nAdditional checks after the rebase:\n\n- `pnpm docs:list` ran before touching the PRs.\n- `node scripts/run-vitest.mjs src/infra/infra-runtime.test.ts src/agents/tools/gateway-tool.test.ts` passed: `Test Files 3 passed (3)`, `Tests 42 passed (42)`.\n- `git diff --check upstream/main...HEAD` passed.\n- `./node_modules/.bin/oxfmt --check --threads=1 src/agents/tools/gateway-tool.test.ts src/agents/tools/gateway-tool.ts src/infra/infra-runtime.test.ts src/infra/restart.ts` passed.\n",
+        "branch": "fix/gateway-restart-continuation-queued",
+        "head_sha": "e15e7f920a95bcb257fd111c64c59534ff0ec1c8",
+        "author": "stainlu",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/tools/gateway-tool.test.ts",
+            "additions": 63,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/gateway-tool.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/infra-runtime.test.ts",
+            "additions": 24,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/restart.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83370",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83370.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "SUCCESS": 74,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83370:4476316441:2026-05-18T09:32:03Z:re_review",
+      "comment_id": "4476316441",
+      "comment_version_key": "4476316441:2026-05-18T09:32:03Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83370#issuecomment-4476316441",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83370,
+      "author": "stainlu",
+      "author_id": 109842185,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-18T09:32:03Z",
+      "comment_updated_at": "2026-05-18T09:32:03Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): report unqueued restart continuations",
+        "body": "Closes #74424.\n\n## Behavior addressed\n\nWhen a gateway restart request coalesces with an in-flight restart, the caller should be told that its continuation hook was not queued. The continuation must not be silently dropped while the user-visible result implies that follow-up work will still run.\n\n## Root cause\n\n`scheduleGatewaySigusr1Restart` returned only the coalesced restart state. Callers could not distinguish “restart already in-flight and continuation queued” from “restart already in-flight and this continuation was not queued,” so the gateway tool could report success even though the continuation hook would never run.\n\n## Fix\n\nReturn an explicit `emitHooksQueued` flag from restart scheduling and surface the unqueued-continuation case through the gateway restart tool. Regression coverage is in `src/infra/infra-runtime.test.ts` and `src/agents/tools/gateway-tool.test.ts`.\n\n## Real behavior proof\n\n**Behavior or issue addressed:** Coalesced restart requests now report that their continuation hooks were not queued when a restart has already been emitted.\n\n**Real environment tested:** PR head `e15e7f920a95bcb257fd111c64c59534ff0ec1c8`, rebased onto `upstream/main` `3b5d30b5fdfd2d9e1e2f1c97242444467dce53c0`; source checkout with Node 22 for the targeted proof command.\n\n**Exact steps or command run after this patch:**\n\n```bash\nnode --import tsx -e 'const restart = await import(\"./src/infra/restart.ts\"); const { scheduleGatewaySigusr1Restart, emitGatewayRestart, __testing } = restart; __testing.resetSigusr1State(); const beforeEmitCalls = []; const handler = () => {}; process.on(\"SIGUSR1\", handler); try { const emitted = emitGatewayRestart(\"already-emitted\"); const second = scheduleGatewaySigusr1Restart({ delayMs: 0, reason: \"second\", emitHooks: { beforeEmit: async () => { beforeEmitCalls.push(\"called\"); } } }); console.log(JSON.stringify({ emitted, coalesced: second.coalesced, emitHooksQueued: second.emitHooksQueued, beforeEmitCalls: beforeEmitCalls.length }, null, 2)); } finally { process.removeListener(\"SIGUSR1\", handler); __testing.resetSigusr1State(); }'\n```\n\n**Evidence after fix:** Terminal output from the direct after-fix command:\n\n```text\n[restart] request coalesced (already in-flight) reason=second actor=<unknown>\n{\n  \"emitted\": true,\n  \"coalesced\": true,\n  \"emitHooksQueued\": false,\n  \"beforeEmitCalls\": 0\n}\n```\n\n**Observed result after fix:** The first restart emits successfully. The second restart coalesces, reports `emitHooksQueued: false`, and the continuation hook is not called. That is the state the gateway tool now uses to alert the user instead of implying the continuation was queued.\n\n**What was not tested:** I did not restart a live Gateway process because this proof intentionally avoids sending SIGUSR1 to the developer machine; there is no visual surface, so screenshots are not applicable. The terminal proof exercises the production restart scheduling seam with a process signal handler installed.\n\nAdditional checks after the rebase:\n\n- `pnpm docs:list` ran before touching the PRs.\n- `node scripts/run-vitest.mjs src/infra/infra-runtime.test.ts src/agents/tools/gateway-tool.test.ts` passed: `Test Files 3 passed (3)`, `Tests 42 passed (42)`.\n- `git diff --check upstream/main...HEAD` passed.\n- `./node_modules/.bin/oxfmt --check --threads=1 src/agents/tools/gateway-tool.test.ts src/agents/tools/gateway-tool.ts src/infra/infra-runtime.test.ts src/infra/restart.ts` passed.\n",
+        "branch": "fix/gateway-restart-continuation-queued",
+        "head_sha": "e15e7f920a95bcb257fd111c64c59534ff0ec1c8",
+        "author": "stainlu",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/tools/gateway-tool.test.ts",
+            "additions": 63,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/gateway-tool.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/infra-runtime.test.ts",
+            "additions": 24,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/restart.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83370",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83370.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "SUCCESS": 74,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83370:4476240436:2026-05-18T09:24:09Z:re_review",
+      "comment_id": "4476240436",
+      "comment_version_key": "4476240436:2026-05-18T09:24:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83370#issuecomment-4476240436",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83370,
+      "author": "stainlu",
+      "author_id": 109842185,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-18T09:24:09Z",
+      "comment_updated_at": "2026-05-18T09:24:09Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-05-18T09:55:01.914Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 83370
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-18T09:55:03.006Z",
+          "response_comment_id": "4476259004",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): report unqueued restart continuations",
+        "body": "Closes #74424.\n\n## Behavior addressed\n\nWhen a gateway restart request coalesces with an in-flight restart, the caller should be told that its continuation hook was not queued. The continuation must not be silently dropped while the user-visible result implies that follow-up work will still run.\n\n## Root cause\n\n`scheduleGatewaySigusr1Restart` returned only the coalesced restart state. Callers could not distinguish “restart already in-flight and continuation queued” from “restart already in-flight and this continuation was not queued,” so the gateway tool could report success even though the continuation hook would never run.\n\n## Fix\n\nReturn an explicit `emitHooksQueued` flag from restart scheduling and surface the unqueued-continuation case through the gateway restart tool. Regression coverage is in `src/infra/infra-runtime.test.ts` and `src/agents/tools/gateway-tool.test.ts`.\n\n## Real behavior proof\n\n**Behavior or issue addressed:** Coalesced restart requests now report that their continuation hooks were not queued when a restart has already been emitted.\n\n**Real environment tested:** PR head `e15e7f920a95bcb257fd111c64c59534ff0ec1c8`, rebased onto `upstream/main` `3b5d30b5fdfd2d9e1e2f1c97242444467dce53c0`; source checkout with Node 22 for the targeted proof command.\n\n**Exact steps or command run after this patch:**\n\n```bash\nnode --import tsx -e 'const restart = await import(\"./src/infra/restart.ts\"); const { scheduleGatewaySigusr1Restart, emitGatewayRestart, __testing } = restart; __testing.resetSigusr1State(); const beforeEmitCalls = []; const handler = () => {}; process.on(\"SIGUSR1\", handler); try { const emitted = emitGatewayRestart(\"already-emitted\"); const second = scheduleGatewaySigusr1Restart({ delayMs: 0, reason: \"second\", emitHooks: { beforeEmit: async () => { beforeEmitCalls.push(\"called\"); } } }); console.log(JSON.stringify({ emitted, coalesced: second.coalesced, emitHooksQueued: second.emitHooksQueued, beforeEmitCalls: beforeEmitCalls.length }, null, 2)); } finally { process.removeListener(\"SIGUSR1\", handler); __testing.resetSigusr1State(); }'\n```\n\n**Evidence after fix:** Terminal output from the direct after-fix command:\n\n```text\n[restart] request coalesced (already in-flight) reason=second actor=<unknown>\n{\n  \"emitted\": true,\n  \"coalesced\": true,\n  \"emitHooksQueued\": false,\n  \"beforeEmitCalls\": 0\n}\n```\n\n**Observed result after fix:** The first restart emits successfully. The second restart coalesces, reports `emitHooksQueued: false`, and the continuation hook is not called. That is the state the gateway tool now uses to alert the user instead of implying the continuation was queued.\n\n**What was not tested:** I did not restart a live Gateway process because this proof intentionally avoids sending SIGUSR1 to the developer machine; there is no visual surface, so screenshots are not applicable. The terminal proof exercises the production restart scheduling seam with a process signal handler installed.\n\nAdditional checks after the rebase:\n\n- `pnpm docs:list` ran before touching the PRs.\n- `node scripts/run-vitest.mjs src/infra/infra-runtime.test.ts src/agents/tools/gateway-tool.test.ts` passed: `Test Files 3 passed (3)`, `Tests 42 passed (42)`.\n- `git diff --check upstream/main...HEAD` passed.\n- `./node_modules/.bin/oxfmt --check --threads=1 src/agents/tools/gateway-tool.test.ts src/agents/tools/gateway-tool.ts src/infra/infra-runtime.test.ts src/infra/restart.ts` passed.\n",
+        "branch": "fix/gateway-restart-continuation-queued",
+        "head_sha": "e15e7f920a95bcb257fd111c64c59534ff0ec1c8",
+        "author": "stainlu",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/tools/gateway-tool.test.ts",
+            "additions": 63,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/gateway-tool.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/infra-runtime.test.ts",
+            "additions": 24,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/restart.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83370",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83370.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "SUCCESS": 74,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      }
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 842,
+    "total_ms": 5547,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 451
+        "ms": 472
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 2570
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 378
+        "ms": 2477
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
