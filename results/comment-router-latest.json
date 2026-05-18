@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-18T04:50:12.945Z",
+  "generated_at": "2026-05-18T04:50:21.831Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-18T01:50:10.528Z",
+  "since": "2026-05-18T01:50:14.181Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    83304
+    83301
   ],
   "comment_ids": [
-    4472792484
+    4472753351
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,17 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:83304:4472792484:2026-05-18T04:48:41Z:automerge",
-      "comment_id": "4472792484",
-      "comment_version_key": "4472792484:2026-05-18T04:48:41Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83304#issuecomment-4472792484",
+      "idempotency_key": "comment-router:openclaw/openclaw:83301:4472753351:2026-05-18T04:48:32Z:automerge",
+      "comment_id": "4472753351",
+      "comment_version_key": "4472753351:2026-05-18T04:48:32Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83301#issuecomment-4472753351",
       "repo": "openclaw/openclaw",
-      "issue_number": 83304,
+      "issue_number": 83301,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-17T23:09:04Z",
-      "comment_updated_at": "2026-05-18T04:48:41Z",
+      "comment_created_at": "2026-05-17T22:50:04Z",
+      "comment_updated_at": "2026-05-18T04:48:32Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "automerge",
@@ -54,8 +54,8 @@
       "trusted_bot_author": null,
       "automation_source": null,
       "repair_reason": null,
-      "review_summary": "The PR enables Telegram undici TCP keepalive, changes polling-start status patches to preserve `connected`, updates polling tests, and widens shared channel connect grace to 300s.\n\nReproducibility: yes. for the PR-introduced regression: source inspection shows a prior `connected:true` can survive restart, have transport timestamps cleared, and then pass health after grace if no first `getUpdates` succeeds. The original NAT-expiry stall was not independently reproduced in this read-only review.",
-      "review_followup": "The remaining blockers are narrow Telegram status and diagnostic repairs that an automated worker can attempt on the PR branch with focused regression coverage.",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "Review did not complete, so no work-lane recommendation was made.",
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
@@ -64,35 +64,31 @@
       "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix(telegram): prevent polling stalls via TCP keepalive and widened connect grace",
-        "body": "## Summary\n\nTwo complementary fixes for Telegram polling stalls observed in production where the long-poll `getUpdates` connection silently dies and the gateway either hangs until the stall watchdog fires (~90s) or self-flags `disconnected` during a healthy poll-cycle restart.\n\n### 1. TCP keepalive on getUpdates (`extensions/telegram/src/fetch.ts`)\n\n**Root cause:** Long-poll connections to `api.telegram.org` stay idle for up to the `getUpdates` timeout (~900s). Most home/office NAT tables expire idle TCP entries after 60-1800s (commonly ~1000s). When the NAT entry is silently dropped the TCP connection hangs rather than returning an error, leaving the grammY runner stuck until the 90s stall watchdog fires and forces a restart cycle.\n\n**Fix:** Unconditionally set `keepAlive: true` and `keepAliveInitialDelay: 30_000` (30s) on the undici Agent `connect` options built in `buildTelegramConnectOptions`. OS-level TCP keepalive probes sent every ~75s (OS default) will:\n1. Refresh the NAT table entry before it expires.\n2. Surface dead connections immediately with `ETIMEDOUT` instead of hanging forever.\n\nThis is the transport-layer prevention complement to upstream's existing detection-layer work (#78646 watchdog, #81746 event-loop stall detection, #82256 spool recovery, #82227 outbound drain). Detection mechanisms still catch any failure mode that escapes the keepalive; this PR cuts the volume of stalls that those mechanisms have to handle.\n\n### 2. Stop self-flagging disconnected on poll-cycle start; widen channel connect grace to 300s\n\n**Root cause:**\n- `notePollingStart` was unconditionally setting `connected: false` at the start of every poll cycle, including legitimate reconnect cycles where polling never actually dropped. The downstream health monitor then saw an apparent disconnect and could trigger an unnecessary restart.\n- `DEFAULT_CHANNEL_CONNECT_GRACE_MS` was 120s. Slow-startup channels (e.g. bots with many commands, large first-page payloads) finish the full handshake after 2-3 minutes. The health monitor evaluated them as `disconnected` before they finished connecting, causing premature restart cycles.\n\n**Fix:**\n- `polling-status.ts`: `notePollingStart` no longer stomps the `connected` flag. Only `notePollingStop` writes `connected: false`. Telemetry fields (lastConnectedAt, lastEventAt, lastTransportActivityAt) are reset at cycle start so the health monitor sees fresh state.\n- `channel-health-policy.ts`: `DEFAULT_CHANNEL_CONNECT_GRACE_MS` widened from 120_000 to 300_000. This is in core (shared across channels) because the underlying property — long handshake time before stable connection — is not telegram-specific. Any channel with a slow first connect benefits.\n\n## Test plan\n\n- [x] Verified TCP keepalive activates: `keepAlive: true` confirmed in undici Agent connect options via existing `polling-fetch.test.ts` assertions on the Agent config.\n- [x] `polling-status.test.ts` updated: covers the new `notePollingStart`-does-not-stomp-connected behavior and the cycle-start telemetry reset.\n- [x] `polling-session.test.ts` updated: covers the resulting single disconnect patch (was two) when a stall-and-recover cycle runs.\n- [x] `channel-health-policy.ts`: constant change only, existing tests unchanged.\n- [x] Verified stable in production on two hosts (mac-mini, rh-bot) over 3+ days with zero telegram polling stalls.\n\n## Diagnosis signature this PR resolves\n\n`~/.openclaw/logs/gateway.err.log` repeated entries of the form:\n\n```\n[telegram] [diag] polling cycle error reason=getUpdates ... err=Call to 'getUpdates' failed! ... timeout\n[fetch-timeout] fetch timeout after 10000ms ... operation=fetchWithTimeout url=https://api.telegram.org/.../getMe\n```\n\npaired with `gateway-health-monitor` restarting the telegram channel due to a \"disconnected\" reading shortly after a normal poll-cycle start.\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Telegram long-poll `getUpdates` connection hangs silently after NAT-table entry expires; gateway either waits ~90s for the in-process stall watchdog or self-flags `disconnected` during a legitimate poll-cycle restart, triggering unnecessary channel restart cycles.\n- **Real environment tested**: 2 production gateway hosts running this branch as part of `upgrade-2026.5.12` (which carries both commits): `mac-mini.lan` (Kbot / @Kebablebot + @RattyMcRatfaceBot) and `rh-bot.lan` (Requesty / @requestymcrequestfacebot). macOS Darwin 25.5.0, Node 22+, undici via grammY runner long-poll.\n- **Exact steps or command run after this patch**:\n  ```bash\n  # On each host:\n  openclaw gateway status            # confirm 2026.5.12 runtime\n  openclaw channels status           # confirm telegram polling status + last-activity timestamps\n  ```\n- **Evidence after fix (live terminal output, mac-mini.lan, 2026-05-18)**:\n  ```\n  CLI version: 2026.5.12 (/opt/homebrew/bin/openclaw)\n  Gateway version: 2026.5.12\n  Runtime: running (pid 50650, state active)\n  Connectivity probe: ok\n  - Telegram default: enabled, configured, running, connected, in:12h ago, out:16m ago, mode:polling, token:config, groups:unmentioned\n  - Telegram ratbot: enabled, configured, running, connected, in:28h ago, out:28h ago, mode:polling, token:config, groups:unmentioned\n  ```\n  Same gateway pid (50650) has now held for over 24h continuously, with telegram outbound activity within the last 16 minutes for the default account. Pre-fix observation log signature `[fetch-timeout] fetch timeout after 10000ms ... operation=fetchWithTimeout url=https://api.telegram.org/...` no longer appears in `~/.openclaw/logs/gateway.err.log` post-fix on either host.\n- **Observed result after fix**: Both gateways' telegram channels report `running, connected` continuously since deploy; no `[telegram] [diag] polling cycle error reason=getUpdates ... err=...timeout` repeats; no health-monitor-initiated channel restarts; runtime uptime measured in days not minutes.\n- **What was not tested**: Behavior under deliberately-induced NAT entry expiry (would need a NAT/router scenario I can't reproduce on the LAN). Behavior under a host with `KeepAlive` already disabled at the OS level — undici docs imply OS default kicks in regardless, but I haven't verified that path explicitly.\n\n",
-        "branch": "fix/telegram-polling-nat-keepalive",
-        "head_sha": "c97dca47737e2d52cd7fa7345ffa3217c2685025",
-        "author": "amittell",
+        "title": "[Perf] Overlap gateway startup work before ready",
+        "body": "## Summary\n\n- Problem: Gateway startup waited for some independent startup work serially before ready, even when ACPX probe semantics still required plugin services to complete before readiness.\n- Why it matters: ACPX probe must stay default-on and awaited, but unrelated startup work can be overlapped to reduce restart ready latency without weakening the ready contract.\n- What changed: Starts plugin services earlier, overlaps startup logging with sidecar startup, reports plugin service handles as soon as they are available, and keeps ready blocked until sidecars complete.\n- What did NOT change (scope boundary): ACPX probe remains enabled and awaited before ready. Channel startup, sidecar readiness, and startup log completion are still awaited before returning ready.\n- AI-assisted: Yes.\n\n## Change Type (select all)\n\n- [ ] Bug fix\n- [ ] Feature\n- [x] Refactor required for the fix\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [ ] Skills / tool execution\n- [ ] Auth / tokens\n- [ ] Memory / storage\n- [ ] Integrations\n- [ ] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- Related: #82396\n- Related: #82603\n- Related: #79596\n- [ ] This PR fixes a bug or regression\n\n## Real behavior proof (required for external PRs)\n\n- Behavior addressed: Reduces Gateway startup ready latency by overlapping independent post-attach startup work while preserving sidecar and ACPX readiness semantics.\n- Real environment tested: Local macOS/Darwin arm64 checkout, Node v25.9.0, built `dist/entry.js` from this PR branch.\n- Exact steps or command run after this patch: `node --import tsx scripts/bench-gateway-startup.ts --case skipChannels --runs 1 --warmup 0 --timeout-ms 30000 --json`\n- Evidence after fix: Terminal output from live Gateway startup benchmark from this branch:\n\n  ```text\n  [gateway-startup-bench] skipChannels run 1/1: healthz=2944.9ms readyz=6721.9ms httpListen=2846.4ms gatewayReady=6638.0ms cpu=3930.0ms cpuCore=0.585 rss=697.5MB heap=294.1MB\n  gatewayReadyLogLine: 2026-05-18T07:14:44.652+08:00 [gateway] ready\n  httpListenLogLine: 2026-05-18T07:14:40.860+08:00 [gateway] http server listening (8 plugins: acpx, bonjour, canvas, device-pair, file-transfer, memory-core, phone-control, talk-voice; 2.1s)\n  healthz.status=200 readyz.status=200 exitCode=0 signal=null\n  outputTail included: sidecars.ready, runtime.post-attach, ready, heartbeat started, SIGTERM shutdown completed cleanly in 11ms\n  ```\n- Observed result after fix: The real Gateway process reached ready with sidecars complete, `/healthz` and `/readyz` returned 200, and shutdown stopped cleanly after the benchmark probe.\n- What was not tested: Cross-OS behavior and multi-run benchmark statistics were not run locally.\n- Before evidence (optional but encouraged): Pre-overlap benchmark from the earlier combined local change set recorded `skipChannelsAcpxProbe` `restart.ready` p50 at 812.2ms.\n\n## Root Cause (if applicable)\n\n- Root cause: Some startup work was serialized even though it did not need to block plugin service startup from beginning.\n- Missing detection / guardrail: Existing tests checked ready ordering but did not assert that plugin services can start before channel startup completes, that startup logging can overlap sidecars, or that deferred early plugin-service handles survive the post-attach return path.\n- Contributing context (if known): ACPX probe must stay on the ready path because earlier fixes made Gateway ready wait for ACPX registration.\n\n## Regression Test Plan (if applicable)\n\n- Coverage level that should have caught this:\n  - [x] Unit test\n  - [x] Seam / integration test\n  - [ ] End-to-end test\n  - [ ] Existing coverage already sufficient\n- Target test or file: `src/gateway/server-startup-post-attach.test.ts`\n- Scenario the test should lock in: sidecars start while startup logging is pending, plugin services start/report before channel startup completion, deferred early plugin-service handles are preserved, and ready still waits for sidecar completion.\n- Why this is the smallest reliable guardrail: The change is scheduling inside `startGatewayPostAttachRuntime` and `startGatewaySidecars`; focused lifecycle tests directly control pending promises and ordering.\n- Existing test that already covers this (if any): Existing post-attach tests covered sidecar readiness but not this overlap ordering.\n- If no new test is added, why not: N/A.\n\n## User-visible / Behavior Changes\n\nGateway restart readiness can complete sooner in the ACPX-probe-on path. No defaults, config, permissions, or ACPX behavior change.\n\n## Diagram (if applicable)\n\n```text\nBefore:\nstartup log -> sidecars -> plugin services -> channels -> ready\n\nAfter:\nstartup log -----------\\\nplugin services ----\\   -> sidecars complete -> ready\nchannels ------------/\n```\n\n## Security Impact (required)\n\n- New permissions/capabilities? (`Yes/No`) No\n- Secrets/tokens handling changed? (`Yes/No`) No\n- New/changed network calls? (`Yes/No`) No\n- Command/tool execution surface changed? (`Yes/No`) No\n- Data access scope changed? (`Yes/No`) No\n- If any `Yes`, explain risk + mitigation: N/A\n\n## Repro + Verification\n\n### Environment\n\n- OS: Darwin arm64\n- Runtime/container: Local Node v25.9.0 checkout\n- Model/provider: N/A\n- Integration/channel (if any): Gateway startup sidecars and ACPX startup probe path\n- Relevant config (redacted): `OPENCLAW_SKIP_CHANNELS=1`, Gateway auth none in benchmark config\n\n### Steps\n\n1. Run the targeted Gateway post-attach lifecycle tests.\n2. Run core TS wrapper check.\n3. Run a live Gateway startup benchmark against built `dist/entry.js`.\n\n### Expected\n\n- Startup logging and plugin service startup can overlap independent work.\n- Ready still waits for sidecar completion and ACPX startup probe semantics remain intact.\n- Deferred-sidecar startup does not overwrite an early plugin-services handle with `null`.\n\n### Actual\n\n- Targeted tests and core TS wrapper check passed.\n- Live Gateway startup benchmark reached ready, `/healthz` 200, `/readyz` 200, and clean shutdown.\n\n## Evidence\n\nAttach at least one:\n\n- [ ] Failing test/log before + passing after\n- [x] Trace/log snippets\n- [ ] Screenshot/recording\n- [x] Perf numbers (if relevant)\n\n## Human Verification (required)\n\nWhat you personally verified (not just CI), and how:\n\n- Verified scenarios: startup log overlap, plugin service early start/report, deferred early plugin-service handle preservation, no unstaged work, core TS wrapper check, live Gateway startup readiness.\n- Edge cases checked: plugin service handle is reported before channel startup finishes and the deferred post-attach return preserves it for shutdown paths.\n- What you did **not** verify: Cross-OS behavior and multi-run benchmark statistics.\n\nVerification commands:\n\n- `node scripts/run-vitest.mjs src/gateway/server-startup-post-attach.test.ts`: passed, 34 tests\n- `node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo`: passed\n- `git diff --check`: passed\n- `node scripts/run-node.mjs gateway run --help`: passed; rebuilt stale `dist/entry.js` before printing CLI help\n- `node --import tsx scripts/bench-gateway-startup.ts --case skipChannels --runs 1 --warmup 0 --timeout-ms 30000 --json`: passed; live Gateway reached ready, `/healthz` 200, `/readyz` 200, clean shutdown\n- `codex review --base main`: attempted locally before this update but tool-blocked; no clean Codex review verdict was produced.\n\n## Review Conversations\n\n- [x] I replied to or resolved every bot review conversation I addressed in this PR.\n- [x] I left unresolved only the conversations that still need reviewer or maintainer judgment.\n\nAutomated review feedback about preserving deferred early plugin-service handles was addressed in code and covered by `src/gateway/server-startup-post-attach.test.ts`.\n\n## Compatibility / Migration\n\n- Backward compatible? (`Yes/No`) Yes\n- Config/env changes? (`Yes/No`) No\n- Migration needed? (`Yes/No`) No\n- If yes, exact upgrade steps: N/A\n\n## Risks and Mitigations\n\n- Risk: More concurrency in startup can hide ordering assumptions.\n  - Mitigation: Added lifecycle tests for startup logging overlap, plugin services starting/reporting before channel completion, preserving deferred early plugin-service handles, and ready still waiting for sidecar completion.\n\n",
+        "branch": "feat/gateway-restart-startup-overlap",
+        "head_sha": "6167023133f0df312db81bfd71b323891b5b83ed",
+        "author": "samzong",
         "labels": [
-          "channel: telegram",
           "gateway",
-          "size: S",
+          "size: M",
+          "triage: blank-template",
           "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "impact:message-loss",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
+          "P2",
+          "rating: 🌊 off-meta tidepool",
           "merge-risk: 🚨 availability"
         ],
         "files": [
           {
-            "path": "extensions/telegram/src/fetch.ts",
-            "additions": 11,
-            "deletions": 2,
+            "path": "src/gateway/server-startup-post-attach.test.ts",
+            "additions": 145,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/telegram/src/polling-session.test.ts",
-            "additions": 17,
-            "deletions": 7,
+            "path": "src/gateway/server-startup-post-attach.ts",
+            "additions": 45,
+            "deletions": 19,
             "changeType": "MODIFIED"
           },
           {
@@ -117,8 +113,8 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83304",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83304.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83301",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83301.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
@@ -126,9 +122,9 @@
         "checks": {
           "total": 118,
           "counts": {
-            "SUCCESS": 88,
-            "SKIPPED": 27,
-            "NEUTRAL": 2
+            "SUCCESS": 91,
+            "SKIPPED": 26,
+            "NEUTRAL": 1
           },
           "blockers": [],
           "pending": [],
@@ -140,15 +136,15 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2623,
+    "total_ms": 7883,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 506
+        "ms": 5259
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1898
+        "ms": 2371
       },
       {
         "name": "classify_commands",
@@ -156,7 +152,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 207
+        "ms": 234
       },
       {
         "name": "append_ledger",
