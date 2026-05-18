@@ -1,20 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-18T09:52:17.472Z",
+  "generated_at": "2026-05-18T09:52:21.013Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-18T06:52:14.725Z",
+  "since": "2026-05-18T06:52:17.708Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     83545
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4473388185
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
+  "scanned_comments": 1,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -48,97 +50,84 @@
       "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=8fa8307050a8b3f7b92aab32c6cad6357e12073d)",
-      "review_summary": null,
-      "review_followup": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": "The PR updates gateway session-store migration to keep structured raw external keys alongside canonical `agent:<id>:` keys and adds focused regression coverage.\n\nReproducibility: yes. at source level. Current main canonicalizes a structured raw key to `agent:main:<raw>`, includes the raw key in `target.storeKeys`, and prunes that raw candidate during migration.",
+      "review_followup": "A narrow automated repair can address the blocking alias lifecycle bug in this PR without a product decision.",
       "freeform_prompt": null,
-      "expected_head_sha": "8fa8307050a8b3f7b92aab32c6cad6357e12073d",
+      "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
+      "status": "ignored",
       "actions": [],
+      "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "Strip provider api keys from generated models.json",
-        "body": "## Summary\r\n\r\nAddresses Layer 1 of #11829 by stripping provider-level `apiKey` values before serializing `models.json`.\r\n\r\nThis keeps provider metadata such as `baseUrl`, `api`, and model catalog entries available to the agent, while preventing auth credentials or env-var markers from being included in prompt-serialized model context.\r\n\r\n## Tests\r\n\r\n```text\r\npnpm exec vitest run src/agents/models-config.applies-config-env-vars.test.ts src/agents/models-config.skips-writing-models-json-no-env-token.test.ts\r\nTest Files 4 passed\r\nTests 24 passed",
-        "branch": "codex/strip-models-json-api-keys",
-        "head_sha": "8fa8307050a8b3f7b92aab32c6cad6357e12073d",
-        "author": "afcrafter",
+        "title": "fix(gateway): preserve raw external session aliases",
+        "body": "Closes #63005.\n\n## Behavior addressed\n\nExternal raw session keys such as `conversation:pair:...` should survive gateway session-key canonicalization. A nested `sessions_send` or agent-scoped lookup should resolve to the same stored session instead of splitting history across raw and `agent:<id>:` aliases.\n\n## Root cause\n\n`migrateAndPruneGatewaySessionStoreKey` canonicalized raw external keys before ensuring the raw-key store entry was copied to the canonical agent key. When the store only had the raw key, later canonical lookups could miss the existing session and create a separate session history.\n\n## Fix\n\nCopy a raw external session entry onto the canonical agent key while preserving the raw alias, then prune only stale aliases. The regression coverage is in `src/gateway/session-utils.test.ts`.\n\n## Real behavior proof\n\n**Behavior or issue addressed:** Raw external session aliases are preserved during canonicalization, so the canonical key and raw key reference the same stored session.\n\n**Real environment tested:** PR head `87ecc789b95a4aeab08c89fa86d7c4eacc607cf7`, rebased onto `upstream/main` `3b5d30b5fdfd2d9e1e2f1c97242444467dce53c0`; source checkout with Node 22 for the targeted proof command.\n\n**Exact steps or command run after this patch:**\n\n```bash\nnode --import tsx -e 'const { migrateAndPruneGatewaySessionStoreKey } = await import(\"./src/gateway/session-utils.ts\"); const rawKey = \"conversation:pair:user_a::user_b:space:space_123\"; const canonicalKey = `agent:main:${rawKey}`; const store = { [rawKey]: { sessionId: \"sess-raw\", updatedAt: 2 } }; const result = migrateAndPruneGatewaySessionStoreKey({ cfg: { session: { mainKey: \"main\" }, agents: { list: [{ id: \"main\", default: true }] } }, key: rawKey, store }); console.log(JSON.stringify({ primaryKey: result.primaryKey, entrySessionId: result.entry?.sessionId, canonicalSessionId: store[canonicalKey]?.sessionId, rawSessionId: store[rawKey]?.sessionId, sameSession: store[canonicalKey]?.sessionId === store[rawKey]?.sessionId }, null, 2));'\n```\n\n**Evidence after fix:** Terminal output from the direct after-fix command:\n\n```json\n{\n  \"primaryKey\": \"agent:main:conversation:pair:user_a::user_b:space:space_123\",\n  \"entrySessionId\": \"sess-raw\",\n  \"canonicalSessionId\": \"sess-raw\",\n  \"rawSessionId\": \"sess-raw\",\n  \"sameSession\": true\n}\n```\n\n**Observed result after fix:** The migrated primary key is the canonical `agent:main:` key, and both the canonical alias and the raw external alias still point at `sess-raw`. That is the expected non-splitting behavior for nested/external session lookups.\n\n**What was not tested:** I did not run a full live chat-channel round trip for this backend store migration; there is no visual surface, so screenshots are not applicable. The real terminal proof above exercises the production session-key migration helper directly.\n\nAdditional checks after the rebase:\n\n- `pnpm docs:list` ran before touching the PRs.\n- `node scripts/run-vitest.mjs src/gateway/session-utils.test.ts` passed: `Test Files 3 passed (3)`, `Tests 264 passed (264)`.\n- `git diff --check upstream/main...HEAD` passed.\n- `./node_modules/.bin/oxfmt --check --threads=1 src/gateway/session-utils.ts src/gateway/session-utils.test.ts` passed.\n",
+        "branch": "fix/session-raw-external-alias",
+        "head_sha": "87ecc789b95a4aeab08c89fa86d7c4eacc607cf7",
+        "author": "stainlu",
         "labels": [
-          "agents",
+          "gateway",
           "size: S",
-          "triage: needs-real-behavior-proof",
-          "P1",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "status: 📣 needs proof"
+          "merge-risk: 🚨 session-state",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/agents/models-config.applies-config-env-vars.test.ts",
-            "additions": 57,
+            "path": "src/gateway/session-utils.test.ts",
+            "additions": 26,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/models-config.plan.ts",
-            "additions": 15,
+            "path": "src/gateway/session-utils.ts",
+            "additions": 35,
             "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/models-config.skips-writing-models-json-no-env-token.test.ts",
-            "additions": 2,
-            "deletions": 4,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83545",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83545.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83368",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83368.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
           "total": 102,
           "counts": {
-            "CANCELLED": 2,
+            "SUCCESS": 73,
             "SKIPPED": 28,
-            "SUCCESS": 70,
-            "FAILURE": 1,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-core-fast:FAILURE"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-core-fast:FAILURE"
-          ]
+          "terminalBlockers": []
         }
       },
-      "reason": "target is not open"
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3075,
+    "total_ms": 3662,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 453
+        "ms": 722
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2280
+        "ms": 2568
       },
       {
         "name": "classify_commands",
@@ -146,11 +135,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 316
+        "ms": 357
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
