@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-18T16:08:04.973Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-05-18T16:08:04.285Z",
+  "repo": "openclaw/fs-safe",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-18T13:08:04.677Z",
+  "since": "2026-05-18T13:08:02.270Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    83674
+    19
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -29,26 +29,116 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/fs-safe:19:4479491358:2026-05-18T16:07:57Z:clawsweeper_needs_human",
+      "comment_id": "4479491358",
+      "comment_version_key": "4479491358:2026-05-18T16:07:57Z",
+      "comment_url": "https://github.com/openclaw/fs-safe/pull/19#issuecomment-4479491358",
+      "repo": "openclaw/fs-safe",
+      "issue_number": 19,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-18T16:02:50Z",
+      "comment_updated_at": "2026-05-18T16:07:57Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "A contributor needs to add real behavior proof; automation cannot produce evidence from their reported multi-client setup.; Cleared: The diff adds no dependencies, scripts, secret handling, or broader filesystem permissions, and the retry is limited to the existing regular-file identity-mismatch guard. (sha=1417f5d021a658b82aa1c83a8882b7628aa00b39)",
+      "review_summary": "The branch tags regular-file identity mismatches as `FsSafeError(\"path-mismatch\")`, retries async JSON read helpers up to three times on that code, and adds changelog plus JSON regression tests.\n\nReproducibility: yes. from source inspection and the PR's targeted regression tests: current main throws a raw identity-change error and the async JSON readers do not retry it. I did not run the tests because this review is read-only.",
+      "review_followup": "A contributor needs to add real behavior proof; automation cannot produce evidence from their reported multi-client setup.",
+      "freeform_prompt": null,
+      "expected_head_sha": "1417f5d021a658b82aa1c83a8882b7628aa00b39",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(json): retry async JSON reads when atomic rename races",
+        "body": "## Summary\n\n- Tag the regular-file identity-change throw as `FsSafeError(\"path-mismatch\")` instead of a raw `Error`, matching the sentinel already used in `file-store.ts:149`, `directory-guard.ts:35`, `pinned-write.ts:292`, and `pinned-python.ts:514` for the same temp-file + rename race semantic.\n- Wrap `readJson`, `readJsonIfExists`, and `tryReadJson` in a bounded retry (max 3 attempts, 50ms exponential backoff) that only retries on `path-mismatch`, so a concurrent atomic rewrite no longer surfaces as `JsonFileReadError` to callers while parse errors and other read failures still fail fast on the first attempt.\n- Add two regression tests in `test/json.test.ts`: one verifying retry-then-success when the file is rotated twice mid-read, one verifying that exceeding the retry budget surfaces `JsonFileReadError { reason: \"read\" }`.\n\n## Why\n\n`openclaw/openclaw` (and any other consumer of `@openclaw/fs-safe/json`) is hitting `JsonFileReadError: Failed to read JSON file: .../paired.json` under normal multi-client operation. The writer uses temp-file + `rename` (atomic, by design). Concurrent readers race: `statRegularFile` reads the pre-rename inode, `fs.open` then resolves to the post-rename inode, `verifyStableReadTarget` detects the identity mismatch in `src/regular-file.ts:174-179` and throws.\n\nThat throw is correct - the read genuinely landed on a different file - but it is a transient state, not corruption. Today the only error type bubbled up is a generic `Error`, so callers cannot retry without doing fragile message matching. The fix typifies it with the existing `path-mismatch` code and adds the bounded retry the issue asks for, scoped to the async public readers.\n\nTracks openclaw/openclaw#83657.\n\n## Scope notes\n\n- Sync readers (`readJsonSync`, `readRootJsonSync`, `tryReadJsonSync`) are intentionally unchanged - they cannot `await` and the issue's pseudocode is async. A sync retry on top of `Atomics.wait` or a tight spin loop is a separate decision and can land in a follow-up if anyone hits the race on the sync paths.\n- `readRegularFile`/`readRegularFileSync` themselves are unchanged in behavior; only the error type the race emits is tightened. Callers that previously string-matched on the message still match the same message.\n\n## Real behavior proof\n\nBehavior addressed: `readJson(paired.json)` failing with `JsonFileReadError { reason: \"read\", cause: Error(\"File changed during read: ...\") }` whenever another component performs a temp-file + rename on the same path during the read window.\n\nReal environment tested: focused regression tests in this checkout against the real `readJson`/`readJsonIfExists` paths and the production `readRegularFile` identity check.\n\nReproduction without the fix (after reverting the two `src/*` edits in this branch, leaving only the new tests in place):\n\n```\n$ pnpm test test/json.test.ts\n FAIL  test/json.test.ts > json file helpers > retries readJson when atomic rename races with the read\nJsonFileReadError: Failed to read JSON file: ...paired.json\n ❯ readJson src/json.ts:253:11\nCaused by: Error: File changed during read: ...paired.json\n ❯ verifyStableReadTarget src/regular-file.ts:178:11\n FAIL  test/json.test.ts > json file helpers > surfaces JsonFileReadError when read races exceed retry budget\nAssertionError: expected 1 to be greater than or equal to 3\n Test Files  1 failed (1)\n      Tests  2 failed | 12 passed (14)\n```\n\nThe first failure is the exact bug report. The second failure shows the unfixed code only attempts the read once (no retry budget).\n\nVerification after the fix:\n\n```\n$ pnpm test\n Test Files  35 passed (35)\n      Tests  383 passed | 2 skipped (385)\n$ pnpm build\n$ pnpm lint:fs-boundary\n$ pnpm lint:file-size\n```\n\nAll clean.\n\nObserved result after fix: `readJson` survives two back-to-back atomic rename rotations and returns the post-race value; a sustained rotation storm still terminates after the retry budget with the same `JsonFileReadError { reason: \"read\" }` so corruption and exhaustion remain distinguishable from a successful retry.\n\nWhat was not tested: a real multi-process Discord + Control UI + CLI reproduction against `openclaw/openclaw`'s gateway, and the sync read paths (out of scope for this PR per the scope note above).\n\n## Verification\n\n- `pnpm test test/json.test.ts`\n- `pnpm test`\n- `pnpm build`\n- `pnpm lint:fs-boundary`\n- `pnpm lint:file-size`",
+        "branch": "fix/json-read-retry-on-race",
+        "head_sha": "1417f5d021a658b82aa1c83a8882b7628aa00b39",
+        "author": "yetval",
+        "labels": [
+          "rating: 🦐 gold shrimp",
+          "status: 📣 needs proof",
+          "P2"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/json.ts",
+            "additions": 31,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/regular-file.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/json.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-fs-safe-19",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-fs-safe-19.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 3,
+          "counts": {
+            "SKIPPED": 1,
+            "SUCCESS": 2
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 507,
+    "total_ms": 2390,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 283
+        "ms": 472
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1528
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 211
+        "ms": 365
       },
       {
         "name": "append_ledger",
