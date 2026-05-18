@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-18T04:27:51.134Z",
+  "generated_at": "2026-05-18T04:28:01.785Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-18T01:27:47.758Z",
+  "since": "2026-05-18T01:27:58.996Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    83417
+    81443
   ],
-  "comment_ids": [
-    4474062694
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 11,
+  "commands_seen": 5,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:83417:4474062694:2026-05-18T04:26:11Z:automerge",
-      "comment_id": "4474062694",
-      "comment_version_key": "4474062694:2026-05-18T04:26:11Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83417#issuecomment-4474062694",
+      "idempotency_key": "comment-router:openclaw/openclaw:81443:4442263128:2026-05-18T04:27:53Z:automerge",
+      "comment_id": "4442263128",
+      "comment_version_key": "4442263128:2026-05-18T04:27:53Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/81443#issuecomment-4442263128",
       "repo": "openclaw/openclaw",
-      "issue_number": 83417,
+      "issue_number": 81443,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-18T03:40:53Z",
-      "comment_updated_at": "2026-05-18T04:26:11Z",
+      "comment_created_at": "2026-05-13T14:51:46Z",
+      "comment_updated_at": "2026-05-18T04:27:53Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "automerge",
@@ -54,8 +52,8 @@
       "trusted_bot_author": null,
       "automation_source": null,
       "repair_reason": null,
-      "review_summary": "The PR adds GitHub App token minting to the real-behavior-proof workflow, checks the PR author’s `openclaw/maintainer` team membership before enforcing proof, and adds tests for the membership helper.\n\nReproducibility: yes. A direct current-main Node probe of `evaluateRealBehaviorProof` with a `CONTRIBUTOR` PR author and no proof section returns `missing`, and the source path shows no private-team-membership check before the gate.",
-      "review_followup": "A narrow workflow-only repair can address the blocking security finding without changing the proof-gate semantics.",
+      "review_summary": "The branch updates Windows QMD shim resolution and scoped QMD fallback handling, then adds guarded URL-backed OpenAI-compatible image response parsing with focused tests.\n\nReproducibility: yes. at source level: current main skips quoted absolute `.cmd` shim entrypoints and only parses `data[].b64_json`, while the PR body supplies after-fix Windows resolver output and live image generation output. I did not run a local Windows or live-provider repro in this read-only review.",
+      "review_followup": "No repair lane is needed because I found no discrete automated code defect; the remaining action is maintainer review of the security-sensitive fetch boundary and current check state.",
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
@@ -64,113 +62,684 @@
       "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix(followup): stop model-fallback retries duplicating queued user messages and assistant error stubs",
-        "body": "## Summary\n\n- Followup queue + model fallback: latch queued user-message persistence so only the first fallback candidate writes the queued user message to the session JSONL.\n- Followup queue + model fallback: suppress the `[assistant turn failed before producing content]` stub on every fallback candidate after the first, so the JSONL never gains consecutive assistant-error entries.\n- Add `suppressAssistantErrorPersistence` to the session tool-result guard and wrapper; plumb through pi-embedded-runner params, the embedded attempt, and the run-time overload loop.\n- Regression tests: contract-level (the runner receives the right suppress flags on each fallback candidate) and behavior-level (real `SessionManager` + guard cascade ends with exactly `[user, assistant]` and zero consecutive same-role pairs).\n\n## Why\n\nWith `messages.queue.mode: \"followup\"`, `runWithModelFallback` invokes its run callback once per candidate model. Each invocation re-passed `queued.transcriptPrompt` into the embedded runner, the session manager re-appended the queued user message, and every failed candidate wrote an `[assistant turn failed before producing content]` stub. The session ended up with consecutive same-role entries (4x user in followup mode, 4x assistant in steer mode); the next request was rejected because Anthropic does not accept consecutive same-role messages, OpenRouter masked the upstream 400 as a 500, and the failover loop ran again — death spiral, ~4KB session growth per cycle, unrecoverable without manual session deletion.\n\nThe fix is two latches in `createFollowupRunner`'s `runWithModelFallback` run callback:\n\n1. `queuedUserMessagePersistedAcrossFallback` — flipped by `onUserMessagePersisted`. ORed into `suppressNextUserMessagePersistence` so the second+ candidate skips re-appending the queued user message.\n2. `fallbackCandidateAttemptIndex` — counter; passes `suppressAssistantErrorPersistence: true` on every candidate after the first. The session tool-result guard then skips assistant messages with `stopReason === \"error\"`.\n\nCLI runner branch is untouched: it does not accept either suppression flag and owns its own transcript management. Scope limited to the embedded path described in the issue.\n\nCloses #83404\n\n## Real behavior proof\n\nBehavior addressed: queued followup user messages and per-candidate assistant error stubs duplicated in the session JSONL on model-fallback retry, producing consecutive same-role entries that the provider then rejects (https://github.com/openclaw/openclaw/issues/83404).\n\nReal environment tested: behavior-level integration against the real `SessionManager` (`@earendil-works/pi-coding-agent`) plus `installSessionToolResultGuard` from this branch. A four-candidate failover cascade is driven through the real persistence stack in both `followup` and `steer` queue modes, with the new suppression flags forced off versus on, and the resulting session journal is read back and inspected. The terminal output below is the captured stdout of that integration cascade.\n\nExact steps or command run after this patch:\n\n    node scripts/run-vitest.mjs src/agents/session-tool-result-guard.test.ts \\\n      -t \"four-candidate followup fallback cascade\"\n    node scripts/run-vitest.mjs src/auto-reply/reply/followup-runner.test.ts \\\n      -t \"queued user message idempotency across fallback\"\n    node scripts/run-vitest.mjs src/auto-reply/reply/followup-runner.test.ts \\\n      -t \"only persists assistant error stub on the first fallback candidate\"\n\nEvidence after fix: redacted terminal capture of the session journal contents for each scenario, taken directly from the integration cascade's debug print of the persisted entries:\n\n    mode=followup applyFix=false\n      entries=8 role-sequence=[user, assistant, user, assistant, user, assistant, user, assistant]\n      consecutive same-role pairs=0\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n\n    mode=followup applyFix=true\n      entries=2 role-sequence=[user, assistant]\n      consecutive same-role pairs=0\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n\n    mode=steer applyFix=false\n      entries=5 role-sequence=[user, assistant, assistant, assistant, assistant]\n      consecutive same-role pairs=3\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n        assistant stopReason=error: [assistant turn failed before producing content]\n        assistant stopReason=error: [assistant turn failed before producing content]\n        assistant stopReason=error: [assistant turn failed before producing content]\n\n    mode=steer applyFix=true\n      entries=2 role-sequence=[user, assistant]\n      consecutive same-role pairs=0\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n\nObserved result after fix: session journal collapses from 8 entries (followup) / 5 entries with 3 consecutive same-role pairs (steer) down to exactly 2 entries with zero consecutive same-role pairs in both modes. The exact session-JSONL shape from the issue — `user, user, user, user` in followup and `assistant, assistant, assistant, assistant` in steer — is no longer produced. Subsequent inbound messages will no longer hit the provider's consecutive-same-role validation and the death-spiral re-failover described in the issue cannot start.\n\nWhat was not tested: a live OpenRouter run against four real anthropic fallback models on a real channel. Reporter's exact configuration was reproduced through the real session-persistence stack but not against a live provider; a maintainer with provider credentials should run the same flow end-to-end on a real account before merge.\n\n## Verification\n\nBuild:\n\n    pnpm build\n\npasses (required because `params.ts` and the guard wrapper grew a new public field).\n\nTargeted tests:\n\n    node scripts/run-vitest.mjs src/agents/session-tool-result-guard.test.ts src/auto-reply/reply/followup-runner.test.ts\n\nResult: `Test Files 2 passed (2) | Tests 76 passed (76)`.\n\nThe new `installSessionToolResultGuard > models a four-candidate followup fallback cascade producing exactly one user and one assistant-error entry` test asserts the same invariant the runtime journal above shows, executed inside CI on every push.",
-        "branch": "fix/followup-fallback-dup-user",
-        "head_sha": "a417d190a64c7db34de382a27c82a4fe52dd2f89",
-        "author": "yetval",
+        "title": "fix: resolve QMD Windows shims and guard image URL downloads",
+        "body": "## Summary\r\n\r\nFix two Windows / provider-compatibility issues:\r\n\r\n1. QMD binary resolution on Windows when `memory.qmd.command` resolves to a `.cmd` shim instead of a native executable.\r\n2. OpenAI-compatible image generation responses that return `data[].url` instead of `data[].b64_json`.\r\n\r\nThe QMD issue was found with QMD installed via:\r\n\r\n```bash\r\nnpm install -g @tobilu/qmd\r\n```\r\n\r\nIn the affected Windows environment, the working `qmd` command was provided by a `.cmd` wrapper like:\r\n\r\n```bat\r\n@echo off\r\nnode \"E:\\software\\encoding\\common\\nodeJs\\node_global\\node_modules\\@tobilu\\qmd\\dist\\cli\\qmd.js\" %*\r\n```\r\n\r\nRunning this wrapper from the shell worked normally, but OpenClaw's Windows wrapper resolver only handled `%~dp0`-relative shim targets. Quoted absolute JS/EXE entrypoints were skipped, so QMD availability checks failed closed with:\r\n\r\n```text\r\nqmd.CMD wrapper resolved, but no executable/Node entrypoint could be resolved without shell execution\r\n```\r\n\r\nThis PR allows Windows `.cmd` wrappers to resolve quoted absolute JS/EXE entrypoints without enabling shell execution.\r\n\r\nIt also updates QMD package fallback resolution from `qmd` to the actual npm package name, `@tobilu/qmd`.\r\n\r\nFor image generation, some OpenAI-compatible providers such as NewAPI return generated images as hosted URLs:\r\n\r\n```json\r\n{\r\n  \"data\": [\r\n    {\r\n      \"url\": \"https://provider.example/generated-image.png\"\r\n    }\r\n  ]\r\n}\r\n```\r\n\r\nOpenClaw previously only parsed `data[].b64_json`, so these responses produced no generated image assets.\r\n\r\nThis PR adds support for `data[].url` while routing provider-controlled URL downloads through guarded provider HTTP.\r\n\r\n## Changes\r\n\r\n### QMD / Windows\r\n\r\n- Support quoted absolute Windows entrypoints in `.cmd` shim parsing\r\n- Preserve the existing `%~dp0`-relative shim handling\r\n- Apply the same resolver fix to both:\r\n  - plugin SDK Windows spawn resolver\r\n  - memory host SDK Windows spawn resolver\r\n- Use `@tobilu/qmd` for QMD package fallback resolution\r\n- Add unit coverage for `.cmd` shims that quote an absolute JavaScript entrypoint\r\n\r\n### OpenAI-compatible image generation\r\n\r\n- Parse OpenAI-compatible image responses that include `data[].url`\r\n- Prefer `data[].b64_json` when both `b64_json` and `url` are present\r\n- Download URL-based image assets and infer MIME/file extension from response headers and image bytes\r\n- Route provider-returned image URL downloads through `fetchWithTimeoutGuarded(...)`\r\n- Preserve provider HTTP guardrails for:\r\n  - timeout\r\n  - SSRF/private-network policy\r\n  - dispatcher/proxy policy\r\n  - audit context\r\n  - guarded response release handling\r\n- Add unit coverage proving URL downloads use guarded provider HTTP instead of raw fetch\r\n\r\n## Security\r\n\r\nProvider-controlled image URLs are not fetched with raw `fetch`.\r\n\r\nThe follow-up URL download path uses `fetchWithTimeoutGuarded(...)` and carries the same provider HTTP controls used for image generation requests:\r\n\r\n- request timeout\r\n- SSRF policy\r\n- private-network opt-in\r\n- dispatcher/proxy policy\r\n- audit context\r\n- guarded response release handling\r\n\r\nThis avoids bypassing SSRF/private-network policy, proxy/dispatcher policy, and timeout handling.\r\n\r\n## Real behavior proof\r\n\r\n- Behavior or issue addressed: QMD Windows `.cmd` shim resolution for quoted absolute JavaScript entrypoints and scoped `@tobilu/qmd` fallback resolution.\r\n- Real environment tested: Windows_NT 10.0.22631, Node v24.9.0, branch `fix/qmd-newapi-real-proof`, repo `E:\\sourceCode\\java\\my\\openclaw\\openclaw`.\r\n- Exact steps or command run after this patch: Ran a local Node/tsx proof script from `E:\\sourceCode\\java\\my\\openclaw\\openclaw` that created a temporary Windows-style `node_modules\\.bin\\qmd.cmd` wrapper pointing at a quoted absolute `node_modules\\@tobilu\\qmd\\dist\\cli.js` entrypoint, then called `resolveWindowsSpawnProgram(...)`, `materializeWindowsSpawnProgram(...)`, and `resolveCliSpawnInvocation(...)`.\r\n- Evidence after fix:\r\n  \r\n  ```json\r\n  {\r\n    \"cwd\": \"E:\\\\sourceCode\\\\java\\\\my\\\\openclaw\\\\openclaw\",\r\n    \"platform\": \"win32\",\r\n    \"node\": \"v24.9.0\",\r\n    \"shimPath\": \"C:\\\\Users\\\\JiaLe\\\\AppData\\\\Local\\\\Temp\\\\openclaw-qmd-proof-oOIzQo\\\\node_modules\\\\.bin\\\\qmd.cmd\",\r\n    \"shimContainsAbsoluteJsEntrypointWithoutDp0\": true,\r\n    \"packageName\": \"@tobilu/qmd\",\r\n    \"program\": {\r\n      \"command\": \"E:\\\\software\\\\encoding\\\\common\\\\nodeJs\\\\node.exe\",\r\n      \"leadingArgv\": [\r\n        \"C:\\\\Users\\\\JiaLe\\\\AppData\\\\Local\\\\Temp\\\\openclaw-qmd-proof-oOIzQo\\\\node_modules\\\\@tobilu\\\\qmd\\\\dist\\\\cli.js\"\r\n      ],\r\n      \"resolution\": \"node-entrypoint\",\r\n      \"windowsHide\": true\r\n    },\r\n    \"invocation\": {\r\n      \"command\": \"E:\\\\software\\\\encoding\\\\common\\\\nodeJs\\\\node.exe\",\r\n      \"argv\": [\r\n        \"C:\\\\Users\\\\JiaLe\\\\AppData\\\\Local\\\\Temp\\\\openclaw-qmd-proof-oOIzQo\\\\node_modules\\\\@tobilu\\\\qmd\\\\dist\\\\cli.js\",\r\n        \"--version\"\r\n      ],\r\n      \"resolution\": \"node-entrypoint\",\r\n      \"windowsHide\": true\r\n    },\r\n    \"cliInvocation\": {\r\n      \"command\": \"E:\\\\software\\\\encoding\\\\common\\\\nodeJs\\\\node.exe\",\r\n      \"argv\": [\r\n        \"C:\\\\Users\\\\JiaLe\\\\AppData\\\\Local\\\\Temp\\\\openclaw-qmd-proof-oOIzQo\\\\node_modules\\\\@tobilu\\\\qmd\\\\dist\\\\cli.js\",\r\n        \"--help\"\r\n      ],\r\n      \"resolution\": \"node-entrypoint\",\r\n      \"windowsHide\": true\r\n    },\r\n    \"shellFallbackUsed\": false\r\n  }\r\n  ```\r\n- Observed result after fix: The quoted absolute `.cmd` shim entrypoint resolves to direct Node execution of the `@tobilu/qmd` JavaScript entrypoint, and `shellFallbackUsed` is `false`.\r\n- What was not tested: Full live QMD memory indexing/search workflow and macOS were not tested in this proof run. Image URL guarded fetching is covered by targeted unit tests and code inspection rather than this Windows runtime proof.\r\n\r\n## Image generation validation\r\n\r\nValidated the OpenAI-compatible URL-response parser and guarded download path with targeted tests.\r\n\r\nBefore this fix, OpenClaw parsed only `data[].b64_json`, causing URL-only image responses to fail with no generated image assets.\r\n\r\nAfter this fix:\r\n\r\n- URL-only OpenAI-compatible image responses produce generated image assets\r\n- `b64_json` remains preferred when present\r\n- URL downloads go through guarded provider HTTP instead of raw `fetch`\r\n\r\nFor the OpenAI-compatible image URL path, I also ran `image_generate` locally through the configured OpenAI-compatible image provider after this patch.\r\nEvidence after fix:\r\n```text\r\nGenerated 1 image with openai/gpt-image-2.\r\n\r\nObserved result after fix: URL-backed OpenAI-compatible image generation completed successfully and produced a generated image asset in the local OpenClaw setup.\r\n\r\n\r\n## Testing\r\n\r\n```bash\r\npnpm exec vitest run src/plugin-sdk/windows-spawn.test.ts\r\n```\r\n\r\n```bash\r\npnpm exec vitest run src/image-generation/image-assets.test.ts src/plugin-sdk/windows-spawn.test.ts\r\n```\r\n\r\nResult:\r\n\r\n```text\r\n2 test files passed\r\n10 tests passed\r\n```\r\n\r\n```bash\r\npnpm exec vitest run extensions/memory-core/src/memory/qmd-manager.test.ts -t \"resolves bare qmd command through the scoped QMD package fallback on Windows\"\r\n```\r\n\r\nResult:\r\n\r\n```text\r\n1 test passed\r\n```\r\n\r\n```bash\r\npnpm format:check src/image-generation/image-assets.ts src/image-generation/image-assets.test.ts src/image-generation/openai-compatible-image-provider.ts extensions/openai/image-generation-provider.ts src/plugin-sdk/windows-spawn.ts src/plugin-sdk/windows-spawn.test.ts extensions/memory-core/src/memory/qmd-manager.ts extensions/memory-core/src/memory/qmd-manager.test.ts packages/memory-host-sdk/src/host/qmd-process.ts packages/memory-host-sdk/src/host/windows-spawn.ts\r\n```\r\n\r\nResult:\r\n\r\n```text\r\nAll matched files use the correct format.\r\n```\r\n\r\n```bash\r\ngit diff --check\r\npnpm tsgo:core\r\npnpm tsgo:extensions\r\n```\r\n\r\nResult:\r\n\r\n```text\r\npassed\r\n```\r\n\r\n## Platform notes\r\n\r\nThe QMD wrapper-resolution change has been validated on Windows.\r\n\r\nmacOS was not tested. The changed QMD wrapper-resolution path is Windows-only (`platform === \"win32\"`), and non-Windows platforms continue to use the existing direct command path.\r\n\r\nThe OpenAI-compatible image response parsing change is platform-independent.",
+        "branch": "fix/qmd-newapi-real-proof",
+        "head_sha": "9cde586769033ca03c1294614d3a4a50aabe2048",
+        "author": "knightplat-blip",
         "labels": [
-          "agents",
+          "extensions: memory-core",
           "size: M",
+          "extensions: openai",
           "proof: supplied",
-          "P1",
-          "impact:session-state",
-          "impact:message-loss",
-          "rating: 🌊 off-meta tidepool"
+          "proof: sufficient",
+          "P2",
+          "impact:security",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 security-boundary"
         ],
         "files": [
           {
-            "path": "src/agents/pi-embedded-runner/run.ts",
+            "path": "extensions/memory-core/src/memory/qmd-manager.test.ts",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/qmd-manager.ts",
             "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run/params.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/session-tool-result-guard-wrapper.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/session-tool-result-guard.test.ts",
-            "additions": 86,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/session-tool-result-guard.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/followup-runner.test.ts",
-            "additions": 144,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/followup-runner.ts",
-            "additions": 12,
             "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/openai/image-generation-provider.ts",
+            "additions": 14,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/memory-host-sdk/src/host/qmd-process.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/image-generation/image-assets.test.ts",
+            "additions": 94,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/image-generation/image-assets.ts",
+            "additions": 125,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/image-generation/openai-compatible-image-provider.ts",
+            "additions": 19,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/image-generation.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/windows-spawn.test.ts",
+            "additions": 27,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/windows-spawn.ts",
+            "additions": 15,
+            "deletions": 6,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83417",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83417.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-81443",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-81443.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
           "total": 106,
           "counts": {
-            "SUCCESS": 78,
-            "SKIPPED": 27,
+            "CANCELLED": 2,
+            "SKIPPED": 24,
+            "SUCCESS": 79,
             "NEUTRAL": 1
           },
-          "blockers": [],
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
           "pending": [],
-          "terminalBlockers": []
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
         }
       },
       "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:81443:4447577704:2026-05-14T04:38:52Z:re_review",
+      "comment_id": "4447577704",
+      "comment_version_key": "4447577704:2026-05-14T04:38:52Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/81443#issuecomment-4447577704",
+      "repo": "openclaw/openclaw",
+      "issue_number": 81443,
+      "author": "knightplat-blip",
+      "author_id": 271784033,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-14T04:38:52Z",
+      "comment_updated_at": "2026-05-14T04:38:52Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: resolve QMD Windows shims and guard image URL downloads",
+        "body": "## Summary\r\n\r\nFix two Windows / provider-compatibility issues:\r\n\r\n1. QMD binary resolution on Windows when `memory.qmd.command` resolves to a `.cmd` shim instead of a native executable.\r\n2. OpenAI-compatible image generation responses that return `data[].url` instead of `data[].b64_json`.\r\n\r\nThe QMD issue was found with QMD installed via:\r\n\r\n```bash\r\nnpm install -g @tobilu/qmd\r\n```\r\n\r\nIn the affected Windows environment, the working `qmd` command was provided by a `.cmd` wrapper like:\r\n\r\n```bat\r\n@echo off\r\nnode \"E:\\software\\encoding\\common\\nodeJs\\node_global\\node_modules\\@tobilu\\qmd\\dist\\cli\\qmd.js\" %*\r\n```\r\n\r\nRunning this wrapper from the shell worked normally, but OpenClaw's Windows wrapper resolver only handled `%~dp0`-relative shim targets. Quoted absolute JS/EXE entrypoints were skipped, so QMD availability checks failed closed with:\r\n\r\n```text\r\nqmd.CMD wrapper resolved, but no executable/Node entrypoint could be resolved without shell execution\r\n```\r\n\r\nThis PR allows Windows `.cmd` wrappers to resolve quoted absolute JS/EXE entrypoints without enabling shell execution.\r\n\r\nIt also updates QMD package fallback resolution from `qmd` to the actual npm package name, `@tobilu/qmd`.\r\n\r\nFor image generation, some OpenAI-compatible providers such as NewAPI return generated images as hosted URLs:\r\n\r\n```json\r\n{\r\n  \"data\": [\r\n    {\r\n      \"url\": \"https://provider.example/generated-image.png\"\r\n    }\r\n  ]\r\n}\r\n```\r\n\r\nOpenClaw previously only parsed `data[].b64_json`, so these responses produced no generated image assets.\r\n\r\nThis PR adds support for `data[].url` while routing provider-controlled URL downloads through guarded provider HTTP.\r\n\r\n## Changes\r\n\r\n### QMD / Windows\r\n\r\n- Support quoted absolute Windows entrypoints in `.cmd` shim parsing\r\n- Preserve the existing `%~dp0`-relative shim handling\r\n- Apply the same resolver fix to both:\r\n  - plugin SDK Windows spawn resolver\r\n  - memory host SDK Windows spawn resolver\r\n- Use `@tobilu/qmd` for QMD package fallback resolution\r\n- Add unit coverage for `.cmd` shims that quote an absolute JavaScript entrypoint\r\n\r\n### OpenAI-compatible image generation\r\n\r\n- Parse OpenAI-compatible image responses that include `data[].url`\r\n- Prefer `data[].b64_json` when both `b64_json` and `url` are present\r\n- Download URL-based image assets and infer MIME/file extension from response headers and image bytes\r\n- Route provider-returned image URL downloads through `fetchWithTimeoutGuarded(...)`\r\n- Preserve provider HTTP guardrails for:\r\n  - timeout\r\n  - SSRF/private-network policy\r\n  - dispatcher/proxy policy\r\n  - audit context\r\n  - guarded response release handling\r\n- Add unit coverage proving URL downloads use guarded provider HTTP instead of raw fetch\r\n\r\n## Security\r\n\r\nProvider-controlled image URLs are not fetched with raw `fetch`.\r\n\r\nThe follow-up URL download path uses `fetchWithTimeoutGuarded(...)` and carries the same provider HTTP controls used for image generation requests:\r\n\r\n- request timeout\r\n- SSRF policy\r\n- private-network opt-in\r\n- dispatcher/proxy policy\r\n- audit context\r\n- guarded response release handling\r\n\r\nThis avoids bypassing SSRF/private-network policy, proxy/dispatcher policy, and timeout handling.\r\n\r\n## Real behavior proof\r\n\r\n- Behavior or issue addressed: QMD Windows `.cmd` shim resolution for quoted absolute JavaScript entrypoints and scoped `@tobilu/qmd` fallback resolution.\r\n- Real environment tested: Windows_NT 10.0.22631, Node v24.9.0, branch `fix/qmd-newapi-real-proof`, repo `E:\\sourceCode\\java\\my\\openclaw\\openclaw`.\r\n- Exact steps or command run after this patch: Ran a local Node/tsx proof script from `E:\\sourceCode\\java\\my\\openclaw\\openclaw` that created a temporary Windows-style `node_modules\\.bin\\qmd.cmd` wrapper pointing at a quoted absolute `node_modules\\@tobilu\\qmd\\dist\\cli.js` entrypoint, then called `resolveWindowsSpawnProgram(...)`, `materializeWindowsSpawnProgram(...)`, and `resolveCliSpawnInvocation(...)`.\r\n- Evidence after fix:\r\n  \r\n  ```json\r\n  {\r\n    \"cwd\": \"E:\\\\sourceCode\\\\java\\\\my\\\\openclaw\\\\openclaw\",\r\n    \"platform\": \"win32\",\r\n    \"node\": \"v24.9.0\",\r\n    \"shimPath\": \"C:\\\\Users\\\\JiaLe\\\\AppData\\\\Local\\\\Temp\\\\openclaw-qmd-proof-oOIzQo\\\\node_modules\\\\.bin\\\\qmd.cmd\",\r\n    \"shimContainsAbsoluteJsEntrypointWithoutDp0\": true,\r\n    \"packageName\": \"@tobilu/qmd\",\r\n    \"program\": {\r\n      \"command\": \"E:\\\\software\\\\encoding\\\\common\\\\nodeJs\\\\node.exe\",\r\n      \"leadingArgv\": [\r\n        \"C:\\\\Users\\\\JiaLe\\\\AppData\\\\Local\\\\Temp\\\\openclaw-qmd-proof-oOIzQo\\\\node_modules\\\\@tobilu\\\\qmd\\\\dist\\\\cli.js\"\r\n      ],\r\n      \"resolution\": \"node-entrypoint\",\r\n      \"windowsHide\": true\r\n    },\r\n    \"invocation\": {\r\n      \"command\": \"E:\\\\software\\\\encoding\\\\common\\\\nodeJs\\\\node.exe\",\r\n      \"argv\": [\r\n        \"C:\\\\Users\\\\JiaLe\\\\AppData\\\\Local\\\\Temp\\\\openclaw-qmd-proof-oOIzQo\\\\node_modules\\\\@tobilu\\\\qmd\\\\dist\\\\cli.js\",\r\n        \"--version\"\r\n      ],\r\n      \"resolution\": \"node-entrypoint\",\r\n      \"windowsHide\": true\r\n    },\r\n    \"cliInvocation\": {\r\n      \"command\": \"E:\\\\software\\\\encoding\\\\common\\\\nodeJs\\\\node.exe\",\r\n      \"argv\": [\r\n        \"C:\\\\Users\\\\JiaLe\\\\AppData\\\\Local\\\\Temp\\\\openclaw-qmd-proof-oOIzQo\\\\node_modules\\\\@tobilu\\\\qmd\\\\dist\\\\cli.js\",\r\n        \"--help\"\r\n      ],\r\n      \"resolution\": \"node-entrypoint\",\r\n      \"windowsHide\": true\r\n    },\r\n    \"shellFallbackUsed\": false\r\n  }\r\n  ```\r\n- Observed result after fix: The quoted absolute `.cmd` shim entrypoint resolves to direct Node execution of the `@tobilu/qmd` JavaScript entrypoint, and `shellFallbackUsed` is `false`.\r\n- What was not tested: Full live QMD memory indexing/search workflow and macOS were not tested in this proof run. Image URL guarded fetching is covered by targeted unit tests and code inspection rather than this Windows runtime proof.\r\n\r\n## Image generation validation\r\n\r\nValidated the OpenAI-compatible URL-response parser and guarded download path with targeted tests.\r\n\r\nBefore this fix, OpenClaw parsed only `data[].b64_json`, causing URL-only image responses to fail with no generated image assets.\r\n\r\nAfter this fix:\r\n\r\n- URL-only OpenAI-compatible image responses produce generated image assets\r\n- `b64_json` remains preferred when present\r\n- URL downloads go through guarded provider HTTP instead of raw `fetch`\r\n\r\nFor the OpenAI-compatible image URL path, I also ran `image_generate` locally through the configured OpenAI-compatible image provider after this patch.\r\nEvidence after fix:\r\n```text\r\nGenerated 1 image with openai/gpt-image-2.\r\n\r\nObserved result after fix: URL-backed OpenAI-compatible image generation completed successfully and produced a generated image asset in the local OpenClaw setup.\r\n\r\n\r\n## Testing\r\n\r\n```bash\r\npnpm exec vitest run src/plugin-sdk/windows-spawn.test.ts\r\n```\r\n\r\n```bash\r\npnpm exec vitest run src/image-generation/image-assets.test.ts src/plugin-sdk/windows-spawn.test.ts\r\n```\r\n\r\nResult:\r\n\r\n```text\r\n2 test files passed\r\n10 tests passed\r\n```\r\n\r\n```bash\r\npnpm exec vitest run extensions/memory-core/src/memory/qmd-manager.test.ts -t \"resolves bare qmd command through the scoped QMD package fallback on Windows\"\r\n```\r\n\r\nResult:\r\n\r\n```text\r\n1 test passed\r\n```\r\n\r\n```bash\r\npnpm format:check src/image-generation/image-assets.ts src/image-generation/image-assets.test.ts src/image-generation/openai-compatible-image-provider.ts extensions/openai/image-generation-provider.ts src/plugin-sdk/windows-spawn.ts src/plugin-sdk/windows-spawn.test.ts extensions/memory-core/src/memory/qmd-manager.ts extensions/memory-core/src/memory/qmd-manager.test.ts packages/memory-host-sdk/src/host/qmd-process.ts packages/memory-host-sdk/src/host/windows-spawn.ts\r\n```\r\n\r\nResult:\r\n\r\n```text\r\nAll matched files use the correct format.\r\n```\r\n\r\n```bash\r\ngit diff --check\r\npnpm tsgo:core\r\npnpm tsgo:extensions\r\n```\r\n\r\nResult:\r\n\r\n```text\r\npassed\r\n```\r\n\r\n## Platform notes\r\n\r\nThe QMD wrapper-resolution change has been validated on Windows.\r\n\r\nmacOS was not tested. The changed QMD wrapper-resolution path is Windows-only (`platform === \"win32\"`), and non-Windows platforms continue to use the existing direct command path.\r\n\r\nThe OpenAI-compatible image response parsing change is platform-independent.",
+        "branch": "fix/qmd-newapi-real-proof",
+        "head_sha": "9cde586769033ca03c1294614d3a4a50aabe2048",
+        "author": "knightplat-blip",
+        "labels": [
+          "extensions: memory-core",
+          "size: M",
+          "extensions: openai",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "impact:security",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 security-boundary"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-core/src/memory/qmd-manager.test.ts",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/qmd-manager.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/openai/image-generation-provider.ts",
+            "additions": 14,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/memory-host-sdk/src/host/qmd-process.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/image-generation/image-assets.test.ts",
+            "additions": 94,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/image-generation/image-assets.ts",
+            "additions": 125,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/image-generation/openai-compatible-image-provider.ts",
+            "additions": 19,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/image-generation.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/windows-spawn.test.ts",
+            "additions": 27,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/windows-spawn.ts",
+            "additions": 15,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-81443",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-81443.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 106,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 24,
+            "SUCCESS": 79,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:81443:4443494478:2026-05-13T17:09:00Z:re_review",
+      "comment_id": "4443494478",
+      "comment_version_key": "4443494478:2026-05-13T17:09:00Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/81443#issuecomment-4443494478",
+      "repo": "openclaw/openclaw",
+      "issue_number": 81443,
+      "author": "knightplat-blip",
+      "author_id": 271784033,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-13T17:09:00Z",
+      "comment_updated_at": "2026-05-13T17:09:00Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: resolve QMD Windows shims and guard image URL downloads",
+        "body": "## Summary\r\n\r\nFix two Windows / provider-compatibility issues:\r\n\r\n1. QMD binary resolution on Windows when `memory.qmd.command` resolves to a `.cmd` shim instead of a native executable.\r\n2. OpenAI-compatible image generation responses that return `data[].url` instead of `data[].b64_json`.\r\n\r\nThe QMD issue was found with QMD installed via:\r\n\r\n```bash\r\nnpm install -g @tobilu/qmd\r\n```\r\n\r\nIn the affected Windows environment, the working `qmd` command was provided by a `.cmd` wrapper like:\r\n\r\n```bat\r\n@echo off\r\nnode \"E:\\software\\encoding\\common\\nodeJs\\node_global\\node_modules\\@tobilu\\qmd\\dist\\cli\\qmd.js\" %*\r\n```\r\n\r\nRunning this wrapper from the shell worked normally, but OpenClaw's Windows wrapper resolver only handled `%~dp0`-relative shim targets. Quoted absolute JS/EXE entrypoints were skipped, so QMD availability checks failed closed with:\r\n\r\n```text\r\nqmd.CMD wrapper resolved, but no executable/Node entrypoint could be resolved without shell execution\r\n```\r\n\r\nThis PR allows Windows `.cmd` wrappers to resolve quoted absolute JS/EXE entrypoints without enabling shell execution.\r\n\r\nIt also updates QMD package fallback resolution from `qmd` to the actual npm package name, `@tobilu/qmd`.\r\n\r\nFor image generation, some OpenAI-compatible providers such as NewAPI return generated images as hosted URLs:\r\n\r\n```json\r\n{\r\n  \"data\": [\r\n    {\r\n      \"url\": \"https://provider.example/generated-image.png\"\r\n    }\r\n  ]\r\n}\r\n```\r\n\r\nOpenClaw previously only parsed `data[].b64_json`, so these responses produced no generated image assets.\r\n\r\nThis PR adds support for `data[].url` while routing provider-controlled URL downloads through guarded provider HTTP.\r\n\r\n## Changes\r\n\r\n### QMD / Windows\r\n\r\n- Support quoted absolute Windows entrypoints in `.cmd` shim parsing\r\n- Preserve the existing `%~dp0`-relative shim handling\r\n- Apply the same resolver fix to both:\r\n  - plugin SDK Windows spawn resolver\r\n  - memory host SDK Windows spawn resolver\r\n- Use `@tobilu/qmd` for QMD package fallback resolution\r\n- Add unit coverage for `.cmd` shims that quote an absolute JavaScript entrypoint\r\n\r\n### OpenAI-compatible image generation\r\n\r\n- Parse OpenAI-compatible image responses that include `data[].url`\r\n- Prefer `data[].b64_json` when both `b64_json` and `url` are present\r\n- Download URL-based image assets and infer MIME/file extension from response headers and image bytes\r\n- Route provider-returned image URL downloads through `fetchWithTimeoutGuarded(...)`\r\n- Preserve provider HTTP guardrails for:\r\n  - timeout\r\n  - SSRF/private-network policy\r\n  - dispatcher/proxy policy\r\n  - audit context\r\n  - guarded response release handling\r\n- Add unit coverage proving URL downloads use guarded provider HTTP instead of raw fetch\r\n\r\n## Security\r\n\r\nProvider-controlled image URLs are not fetched with raw `fetch`.\r\n\r\nThe follow-up URL download path uses `fetchWithTimeoutGuarded(...)` and carries the same provider HTTP controls used for image generation requests:\r\n\r\n- request timeout\r\n- SSRF policy\r\n- private-network opt-in\r\n- dispatcher/proxy policy\r\n- audit context\r\n- guarded response release handling\r\n\r\nThis avoids bypassing SSRF/private-network policy, proxy/dispatcher policy, and timeout handling.\r\n\r\n## Real behavior proof\r\n\r\n- Behavior or issue addressed: QMD Windows `.cmd` shim resolution for quoted absolute JavaScript entrypoints and scoped `@tobilu/qmd` fallback resolution.\r\n- Real environment tested: Windows_NT 10.0.22631, Node v24.9.0, branch `fix/qmd-newapi-real-proof`, repo `E:\\sourceCode\\java\\my\\openclaw\\openclaw`.\r\n- Exact steps or command run after this patch: Ran a local Node/tsx proof script from `E:\\sourceCode\\java\\my\\openclaw\\openclaw` that created a temporary Windows-style `node_modules\\.bin\\qmd.cmd` wrapper pointing at a quoted absolute `node_modules\\@tobilu\\qmd\\dist\\cli.js` entrypoint, then called `resolveWindowsSpawnProgram(...)`, `materializeWindowsSpawnProgram(...)`, and `resolveCliSpawnInvocation(...)`.\r\n- Evidence after fix:\r\n  \r\n  ```json\r\n  {\r\n    \"cwd\": \"E:\\\\sourceCode\\\\java\\\\my\\\\openclaw\\\\openclaw\",\r\n    \"platform\": \"win32\",\r\n    \"node\": \"v24.9.0\",\r\n    \"shimPath\": \"C:\\\\Users\\\\JiaLe\\\\AppData\\\\Local\\\\Temp\\\\openclaw-qmd-proof-oOIzQo\\\\node_modules\\\\.bin\\\\qmd.cmd\",\r\n    \"shimContainsAbsoluteJsEntrypointWithoutDp0\": true,\r\n    \"packageName\": \"@tobilu/qmd\",\r\n    \"program\": {\r\n      \"command\": \"E:\\\\software\\\\encoding\\\\common\\\\nodeJs\\\\node.exe\",\r\n      \"leadingArgv\": [\r\n        \"C:\\\\Users\\\\JiaLe\\\\AppData\\\\Local\\\\Temp\\\\openclaw-qmd-proof-oOIzQo\\\\node_modules\\\\@tobilu\\\\qmd\\\\dist\\\\cli.js\"\r\n      ],\r\n      \"resolution\": \"node-entrypoint\",\r\n      \"windowsHide\": true\r\n    },\r\n    \"invocation\": {\r\n      \"command\": \"E:\\\\software\\\\encoding\\\\common\\\\nodeJs\\\\node.exe\",\r\n      \"argv\": [\r\n        \"C:\\\\Users\\\\JiaLe\\\\AppData\\\\Local\\\\Temp\\\\openclaw-qmd-proof-oOIzQo\\\\node_modules\\\\@tobilu\\\\qmd\\\\dist\\\\cli.js\",\r\n        \"--version\"\r\n      ],\r\n      \"resolution\": \"node-entrypoint\",\r\n      \"windowsHide\": true\r\n    },\r\n    \"cliInvocation\": {\r\n      \"command\": \"E:\\\\software\\\\encoding\\\\common\\\\nodeJs\\\\node.exe\",\r\n      \"argv\": [\r\n        \"C:\\\\Users\\\\JiaLe\\\\AppData\\\\Local\\\\Temp\\\\openclaw-qmd-proof-oOIzQo\\\\node_modules\\\\@tobilu\\\\qmd\\\\dist\\\\cli.js\",\r\n        \"--help\"\r\n      ],\r\n      \"resolution\": \"node-entrypoint\",\r\n      \"windowsHide\": true\r\n    },\r\n    \"shellFallbackUsed\": false\r\n  }\r\n  ```\r\n- Observed result after fix: The quoted absolute `.cmd` shim entrypoint resolves to direct Node execution of the `@tobilu/qmd` JavaScript entrypoint, and `shellFallbackUsed` is `false`.\r\n- What was not tested: Full live QMD memory indexing/search workflow and macOS were not tested in this proof run. Image URL guarded fetching is covered by targeted unit tests and code inspection rather than this Windows runtime proof.\r\n\r\n## Image generation validation\r\n\r\nValidated the OpenAI-compatible URL-response parser and guarded download path with targeted tests.\r\n\r\nBefore this fix, OpenClaw parsed only `data[].b64_json`, causing URL-only image responses to fail with no generated image assets.\r\n\r\nAfter this fix:\r\n\r\n- URL-only OpenAI-compatible image responses produce generated image assets\r\n- `b64_json` remains preferred when present\r\n- URL downloads go through guarded provider HTTP instead of raw `fetch`\r\n\r\nFor the OpenAI-compatible image URL path, I also ran `image_generate` locally through the configured OpenAI-compatible image provider after this patch.\r\nEvidence after fix:\r\n```text\r\nGenerated 1 image with openai/gpt-image-2.\r\n\r\nObserved result after fix: URL-backed OpenAI-compatible image generation completed successfully and produced a generated image asset in the local OpenClaw setup.\r\n\r\n\r\n## Testing\r\n\r\n```bash\r\npnpm exec vitest run src/plugin-sdk/windows-spawn.test.ts\r\n```\r\n\r\n```bash\r\npnpm exec vitest run src/image-generation/image-assets.test.ts src/plugin-sdk/windows-spawn.test.ts\r\n```\r\n\r\nResult:\r\n\r\n```text\r\n2 test files passed\r\n10 tests passed\r\n```\r\n\r\n```bash\r\npnpm exec vitest run extensions/memory-core/src/memory/qmd-manager.test.ts -t \"resolves bare qmd command through the scoped QMD package fallback on Windows\"\r\n```\r\n\r\nResult:\r\n\r\n```text\r\n1 test passed\r\n```\r\n\r\n```bash\r\npnpm format:check src/image-generation/image-assets.ts src/image-generation/image-assets.test.ts src/image-generation/openai-compatible-image-provider.ts extensions/openai/image-generation-provider.ts src/plugin-sdk/windows-spawn.ts src/plugin-sdk/windows-spawn.test.ts extensions/memory-core/src/memory/qmd-manager.ts extensions/memory-core/src/memory/qmd-manager.test.ts packages/memory-host-sdk/src/host/qmd-process.ts packages/memory-host-sdk/src/host/windows-spawn.ts\r\n```\r\n\r\nResult:\r\n\r\n```text\r\nAll matched files use the correct format.\r\n```\r\n\r\n```bash\r\ngit diff --check\r\npnpm tsgo:core\r\npnpm tsgo:extensions\r\n```\r\n\r\nResult:\r\n\r\n```text\r\npassed\r\n```\r\n\r\n## Platform notes\r\n\r\nThe QMD wrapper-resolution change has been validated on Windows.\r\n\r\nmacOS was not tested. The changed QMD wrapper-resolution path is Windows-only (`platform === \"win32\"`), and non-Windows platforms continue to use the existing direct command path.\r\n\r\nThe OpenAI-compatible image response parsing change is platform-independent.",
+        "branch": "fix/qmd-newapi-real-proof",
+        "head_sha": "9cde586769033ca03c1294614d3a4a50aabe2048",
+        "author": "knightplat-blip",
+        "labels": [
+          "extensions: memory-core",
+          "size: M",
+          "extensions: openai",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "impact:security",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 security-boundary"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-core/src/memory/qmd-manager.test.ts",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/qmd-manager.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/openai/image-generation-provider.ts",
+            "additions": 14,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/memory-host-sdk/src/host/qmd-process.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/image-generation/image-assets.test.ts",
+            "additions": 94,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/image-generation/image-assets.ts",
+            "additions": 125,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/image-generation/openai-compatible-image-provider.ts",
+            "additions": 19,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/image-generation.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/windows-spawn.test.ts",
+            "additions": 27,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/windows-spawn.ts",
+            "additions": 15,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-81443",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-81443.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 106,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 24,
+            "SUCCESS": 79,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:81443:4442567244:2026-05-13T15:23:24Z:re_review",
+      "comment_id": "4442567244",
+      "comment_version_key": "4442567244:2026-05-13T15:23:24Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/81443#issuecomment-4442567244",
+      "repo": "openclaw/openclaw",
+      "issue_number": 81443,
+      "author": "knightplat-blip",
+      "author_id": 271784033,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-13T15:23:24Z",
+      "comment_updated_at": "2026-05-13T15:23:24Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: resolve QMD Windows shims and guard image URL downloads",
+        "body": "## Summary\r\n\r\nFix two Windows / provider-compatibility issues:\r\n\r\n1. QMD binary resolution on Windows when `memory.qmd.command` resolves to a `.cmd` shim instead of a native executable.\r\n2. OpenAI-compatible image generation responses that return `data[].url` instead of `data[].b64_json`.\r\n\r\nThe QMD issue was found with QMD installed via:\r\n\r\n```bash\r\nnpm install -g @tobilu/qmd\r\n```\r\n\r\nIn the affected Windows environment, the working `qmd` command was provided by a `.cmd` wrapper like:\r\n\r\n```bat\r\n@echo off\r\nnode \"E:\\software\\encoding\\common\\nodeJs\\node_global\\node_modules\\@tobilu\\qmd\\dist\\cli\\qmd.js\" %*\r\n```\r\n\r\nRunning this wrapper from the shell worked normally, but OpenClaw's Windows wrapper resolver only handled `%~dp0`-relative shim targets. Quoted absolute JS/EXE entrypoints were skipped, so QMD availability checks failed closed with:\r\n\r\n```text\r\nqmd.CMD wrapper resolved, but no executable/Node entrypoint could be resolved without shell execution\r\n```\r\n\r\nThis PR allows Windows `.cmd` wrappers to resolve quoted absolute JS/EXE entrypoints without enabling shell execution.\r\n\r\nIt also updates QMD package fallback resolution from `qmd` to the actual npm package name, `@tobilu/qmd`.\r\n\r\nFor image generation, some OpenAI-compatible providers such as NewAPI return generated images as hosted URLs:\r\n\r\n```json\r\n{\r\n  \"data\": [\r\n    {\r\n      \"url\": \"https://provider.example/generated-image.png\"\r\n    }\r\n  ]\r\n}\r\n```\r\n\r\nOpenClaw previously only parsed `data[].b64_json`, so these responses produced no generated image assets.\r\n\r\nThis PR adds support for `data[].url` while routing provider-controlled URL downloads through guarded provider HTTP.\r\n\r\n## Changes\r\n\r\n### QMD / Windows\r\n\r\n- Support quoted absolute Windows entrypoints in `.cmd` shim parsing\r\n- Preserve the existing `%~dp0`-relative shim handling\r\n- Apply the same resolver fix to both:\r\n  - plugin SDK Windows spawn resolver\r\n  - memory host SDK Windows spawn resolver\r\n- Use `@tobilu/qmd` for QMD package fallback resolution\r\n- Add unit coverage for `.cmd` shims that quote an absolute JavaScript entrypoint\r\n\r\n### OpenAI-compatible image generation\r\n\r\n- Parse OpenAI-compatible image responses that include `data[].url`\r\n- Prefer `data[].b64_json` when both `b64_json` and `url` are present\r\n- Download URL-based image assets and infer MIME/file extension from response headers and image bytes\r\n- Route provider-returned image URL downloads through `fetchWithTimeoutGuarded(...)`\r\n- Preserve provider HTTP guardrails for:\r\n  - timeout\r\n  - SSRF/private-network policy\r\n  - dispatcher/proxy policy\r\n  - audit context\r\n  - guarded response release handling\r\n- Add unit coverage proving URL downloads use guarded provider HTTP instead of raw fetch\r\n\r\n## Security\r\n\r\nProvider-controlled image URLs are not fetched with raw `fetch`.\r\n\r\nThe follow-up URL download path uses `fetchWithTimeoutGuarded(...)` and carries the same provider HTTP controls used for image generation requests:\r\n\r\n- request timeout\r\n- SSRF policy\r\n- private-network opt-in\r\n- dispatcher/proxy policy\r\n- audit context\r\n- guarded response release handling\r\n\r\nThis avoids bypassing SSRF/private-network policy, proxy/dispatcher policy, and timeout handling.\r\n\r\n## Real behavior proof\r\n\r\n- Behavior or issue addressed: QMD Windows `.cmd` shim resolution for quoted absolute JavaScript entrypoints and scoped `@tobilu/qmd` fallback resolution.\r\n- Real environment tested: Windows_NT 10.0.22631, Node v24.9.0, branch `fix/qmd-newapi-real-proof`, repo `E:\\sourceCode\\java\\my\\openclaw\\openclaw`.\r\n- Exact steps or command run after this patch: Ran a local Node/tsx proof script from `E:\\sourceCode\\java\\my\\openclaw\\openclaw` that created a temporary Windows-style `node_modules\\.bin\\qmd.cmd` wrapper pointing at a quoted absolute `node_modules\\@tobilu\\qmd\\dist\\cli.js` entrypoint, then called `resolveWindowsSpawnProgram(...)`, `materializeWindowsSpawnProgram(...)`, and `resolveCliSpawnInvocation(...)`.\r\n- Evidence after fix:\r\n  \r\n  ```json\r\n  {\r\n    \"cwd\": \"E:\\\\sourceCode\\\\java\\\\my\\\\openclaw\\\\openclaw\",\r\n    \"platform\": \"win32\",\r\n    \"node\": \"v24.9.0\",\r\n    \"shimPath\": \"C:\\\\Users\\\\JiaLe\\\\AppData\\\\Local\\\\Temp\\\\openclaw-qmd-proof-oOIzQo\\\\node_modules\\\\.bin\\\\qmd.cmd\",\r\n    \"shimContainsAbsoluteJsEntrypointWithoutDp0\": true,\r\n    \"packageName\": \"@tobilu/qmd\",\r\n    \"program\": {\r\n      \"command\": \"E:\\\\software\\\\encoding\\\\common\\\\nodeJs\\\\node.exe\",\r\n      \"leadingArgv\": [\r\n        \"C:\\\\Users\\\\JiaLe\\\\AppData\\\\Local\\\\Temp\\\\openclaw-qmd-proof-oOIzQo\\\\node_modules\\\\@tobilu\\\\qmd\\\\dist\\\\cli.js\"\r\n      ],\r\n      \"resolution\": \"node-entrypoint\",\r\n      \"windowsHide\": true\r\n    },\r\n    \"invocation\": {\r\n      \"command\": \"E:\\\\software\\\\encoding\\\\common\\\\nodeJs\\\\node.exe\",\r\n      \"argv\": [\r\n        \"C:\\\\Users\\\\JiaLe\\\\AppData\\\\Local\\\\Temp\\\\openclaw-qmd-proof-oOIzQo\\\\node_modules\\\\@tobilu\\\\qmd\\\\dist\\\\cli.js\",\r\n        \"--version\"\r\n      ],\r\n      \"resolution\": \"node-entrypoint\",\r\n      \"windowsHide\": true\r\n    },\r\n    \"cliInvocation\": {\r\n      \"command\": \"E:\\\\software\\\\encoding\\\\common\\\\nodeJs\\\\node.exe\",\r\n      \"argv\": [\r\n        \"C:\\\\Users\\\\JiaLe\\\\AppData\\\\Local\\\\Temp\\\\openclaw-qmd-proof-oOIzQo\\\\node_modules\\\\@tobilu\\\\qmd\\\\dist\\\\cli.js\",\r\n        \"--help\"\r\n      ],\r\n      \"resolution\": \"node-entrypoint\",\r\n      \"windowsHide\": true\r\n    },\r\n    \"shellFallbackUsed\": false\r\n  }\r\n  ```\r\n- Observed result after fix: The quoted absolute `.cmd` shim entrypoint resolves to direct Node execution of the `@tobilu/qmd` JavaScript entrypoint, and `shellFallbackUsed` is `false`.\r\n- What was not tested: Full live QMD memory indexing/search workflow and macOS were not tested in this proof run. Image URL guarded fetching is covered by targeted unit tests and code inspection rather than this Windows runtime proof.\r\n\r\n## Image generation validation\r\n\r\nValidated the OpenAI-compatible URL-response parser and guarded download path with targeted tests.\r\n\r\nBefore this fix, OpenClaw parsed only `data[].b64_json`, causing URL-only image responses to fail with no generated image assets.\r\n\r\nAfter this fix:\r\n\r\n- URL-only OpenAI-compatible image responses produce generated image assets\r\n- `b64_json` remains preferred when present\r\n- URL downloads go through guarded provider HTTP instead of raw `fetch`\r\n\r\nFor the OpenAI-compatible image URL path, I also ran `image_generate` locally through the configured OpenAI-compatible image provider after this patch.\r\nEvidence after fix:\r\n```text\r\nGenerated 1 image with openai/gpt-image-2.\r\n\r\nObserved result after fix: URL-backed OpenAI-compatible image generation completed successfully and produced a generated image asset in the local OpenClaw setup.\r\n\r\n\r\n## Testing\r\n\r\n```bash\r\npnpm exec vitest run src/plugin-sdk/windows-spawn.test.ts\r\n```\r\n\r\n```bash\r\npnpm exec vitest run src/image-generation/image-assets.test.ts src/plugin-sdk/windows-spawn.test.ts\r\n```\r\n\r\nResult:\r\n\r\n```text\r\n2 test files passed\r\n10 tests passed\r\n```\r\n\r\n```bash\r\npnpm exec vitest run extensions/memory-core/src/memory/qmd-manager.test.ts -t \"resolves bare qmd command through the scoped QMD package fallback on Windows\"\r\n```\r\n\r\nResult:\r\n\r\n```text\r\n1 test passed\r\n```\r\n\r\n```bash\r\npnpm format:check src/image-generation/image-assets.ts src/image-generation/image-assets.test.ts src/image-generation/openai-compatible-image-provider.ts extensions/openai/image-generation-provider.ts src/plugin-sdk/windows-spawn.ts src/plugin-sdk/windows-spawn.test.ts extensions/memory-core/src/memory/qmd-manager.ts extensions/memory-core/src/memory/qmd-manager.test.ts packages/memory-host-sdk/src/host/qmd-process.ts packages/memory-host-sdk/src/host/windows-spawn.ts\r\n```\r\n\r\nResult:\r\n\r\n```text\r\nAll matched files use the correct format.\r\n```\r\n\r\n```bash\r\ngit diff --check\r\npnpm tsgo:core\r\npnpm tsgo:extensions\r\n```\r\n\r\nResult:\r\n\r\n```text\r\npassed\r\n```\r\n\r\n## Platform notes\r\n\r\nThe QMD wrapper-resolution change has been validated on Windows.\r\n\r\nmacOS was not tested. The changed QMD wrapper-resolution path is Windows-only (`platform === \"win32\"`), and non-Windows platforms continue to use the existing direct command path.\r\n\r\nThe OpenAI-compatible image response parsing change is platform-independent.",
+        "branch": "fix/qmd-newapi-real-proof",
+        "head_sha": "9cde586769033ca03c1294614d3a4a50aabe2048",
+        "author": "knightplat-blip",
+        "labels": [
+          "extensions: memory-core",
+          "size: M",
+          "extensions: openai",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "impact:security",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 security-boundary"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-core/src/memory/qmd-manager.test.ts",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/qmd-manager.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/openai/image-generation-provider.ts",
+            "additions": 14,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/memory-host-sdk/src/host/qmd-process.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/image-generation/image-assets.test.ts",
+            "additions": 94,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/image-generation/image-assets.ts",
+            "additions": 125,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/image-generation/openai-compatible-image-provider.ts",
+            "additions": 19,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/image-generation.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/windows-spawn.test.ts",
+            "additions": 27,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/windows-spawn.ts",
+            "additions": 15,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-81443",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-81443.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 106,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 24,
+            "SUCCESS": 79,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:81443:4442261961:2026-05-13T14:51:39Z:re_review",
+      "comment_id": "4442261961",
+      "comment_version_key": "4442261961:2026-05-13T14:51:39Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/81443#issuecomment-4442261961",
+      "repo": "openclaw/openclaw",
+      "issue_number": 81443,
+      "author": "knightplat-blip",
+      "author_id": 271784033,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-13T14:51:39Z",
+      "comment_updated_at": "2026-05-13T14:51:39Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: resolve QMD Windows shims and guard image URL downloads",
+        "body": "## Summary\r\n\r\nFix two Windows / provider-compatibility issues:\r\n\r\n1. QMD binary resolution on Windows when `memory.qmd.command` resolves to a `.cmd` shim instead of a native executable.\r\n2. OpenAI-compatible image generation responses that return `data[].url` instead of `data[].b64_json`.\r\n\r\nThe QMD issue was found with QMD installed via:\r\n\r\n```bash\r\nnpm install -g @tobilu/qmd\r\n```\r\n\r\nIn the affected Windows environment, the working `qmd` command was provided by a `.cmd` wrapper like:\r\n\r\n```bat\r\n@echo off\r\nnode \"E:\\software\\encoding\\common\\nodeJs\\node_global\\node_modules\\@tobilu\\qmd\\dist\\cli\\qmd.js\" %*\r\n```\r\n\r\nRunning this wrapper from the shell worked normally, but OpenClaw's Windows wrapper resolver only handled `%~dp0`-relative shim targets. Quoted absolute JS/EXE entrypoints were skipped, so QMD availability checks failed closed with:\r\n\r\n```text\r\nqmd.CMD wrapper resolved, but no executable/Node entrypoint could be resolved without shell execution\r\n```\r\n\r\nThis PR allows Windows `.cmd` wrappers to resolve quoted absolute JS/EXE entrypoints without enabling shell execution.\r\n\r\nIt also updates QMD package fallback resolution from `qmd` to the actual npm package name, `@tobilu/qmd`.\r\n\r\nFor image generation, some OpenAI-compatible providers such as NewAPI return generated images as hosted URLs:\r\n\r\n```json\r\n{\r\n  \"data\": [\r\n    {\r\n      \"url\": \"https://provider.example/generated-image.png\"\r\n    }\r\n  ]\r\n}\r\n```\r\n\r\nOpenClaw previously only parsed `data[].b64_json`, so these responses produced no generated image assets.\r\n\r\nThis PR adds support for `data[].url` while routing provider-controlled URL downloads through guarded provider HTTP.\r\n\r\n## Changes\r\n\r\n### QMD / Windows\r\n\r\n- Support quoted absolute Windows entrypoints in `.cmd` shim parsing\r\n- Preserve the existing `%~dp0`-relative shim handling\r\n- Apply the same resolver fix to both:\r\n  - plugin SDK Windows spawn resolver\r\n  - memory host SDK Windows spawn resolver\r\n- Use `@tobilu/qmd` for QMD package fallback resolution\r\n- Add unit coverage for `.cmd` shims that quote an absolute JavaScript entrypoint\r\n\r\n### OpenAI-compatible image generation\r\n\r\n- Parse OpenAI-compatible image responses that include `data[].url`\r\n- Prefer `data[].b64_json` when both `b64_json` and `url` are present\r\n- Download URL-based image assets and infer MIME/file extension from response headers and image bytes\r\n- Route provider-returned image URL downloads through `fetchWithTimeoutGuarded(...)`\r\n- Preserve provider HTTP guardrails for:\r\n  - timeout\r\n  - SSRF/private-network policy\r\n  - dispatcher/proxy policy\r\n  - audit context\r\n  - guarded response release handling\r\n- Add unit coverage proving URL downloads use guarded provider HTTP instead of raw fetch\r\n\r\n## Security\r\n\r\nProvider-controlled image URLs are not fetched with raw `fetch`.\r\n\r\nThe follow-up URL download path uses `fetchWithTimeoutGuarded(...)` and carries the same provider HTTP controls used for image generation requests:\r\n\r\n- request timeout\r\n- SSRF policy\r\n- private-network opt-in\r\n- dispatcher/proxy policy\r\n- audit context\r\n- guarded response release handling\r\n\r\nThis avoids bypassing SSRF/private-network policy, proxy/dispatcher policy, and timeout handling.\r\n\r\n## Real behavior proof\r\n\r\n- Behavior or issue addressed: QMD Windows `.cmd` shim resolution for quoted absolute JavaScript entrypoints and scoped `@tobilu/qmd` fallback resolution.\r\n- Real environment tested: Windows_NT 10.0.22631, Node v24.9.0, branch `fix/qmd-newapi-real-proof`, repo `E:\\sourceCode\\java\\my\\openclaw\\openclaw`.\r\n- Exact steps or command run after this patch: Ran a local Node/tsx proof script from `E:\\sourceCode\\java\\my\\openclaw\\openclaw` that created a temporary Windows-style `node_modules\\.bin\\qmd.cmd` wrapper pointing at a quoted absolute `node_modules\\@tobilu\\qmd\\dist\\cli.js` entrypoint, then called `resolveWindowsSpawnProgram(...)`, `materializeWindowsSpawnProgram(...)`, and `resolveCliSpawnInvocation(...)`.\r\n- Evidence after fix:\r\n  \r\n  ```json\r\n  {\r\n    \"cwd\": \"E:\\\\sourceCode\\\\java\\\\my\\\\openclaw\\\\openclaw\",\r\n    \"platform\": \"win32\",\r\n    \"node\": \"v24.9.0\",\r\n    \"shimPath\": \"C:\\\\Users\\\\JiaLe\\\\AppData\\\\Local\\\\Temp\\\\openclaw-qmd-proof-oOIzQo\\\\node_modules\\\\.bin\\\\qmd.cmd\",\r\n    \"shimContainsAbsoluteJsEntrypointWithoutDp0\": true,\r\n    \"packageName\": \"@tobilu/qmd\",\r\n    \"program\": {\r\n      \"command\": \"E:\\\\software\\\\encoding\\\\common\\\\nodeJs\\\\node.exe\",\r\n      \"leadingArgv\": [\r\n        \"C:\\\\Users\\\\JiaLe\\\\AppData\\\\Local\\\\Temp\\\\openclaw-qmd-proof-oOIzQo\\\\node_modules\\\\@tobilu\\\\qmd\\\\dist\\\\cli.js\"\r\n      ],\r\n      \"resolution\": \"node-entrypoint\",\r\n      \"windowsHide\": true\r\n    },\r\n    \"invocation\": {\r\n      \"command\": \"E:\\\\software\\\\encoding\\\\common\\\\nodeJs\\\\node.exe\",\r\n      \"argv\": [\r\n        \"C:\\\\Users\\\\JiaLe\\\\AppData\\\\Local\\\\Temp\\\\openclaw-qmd-proof-oOIzQo\\\\node_modules\\\\@tobilu\\\\qmd\\\\dist\\\\cli.js\",\r\n        \"--version\"\r\n      ],\r\n      \"resolution\": \"node-entrypoint\",\r\n      \"windowsHide\": true\r\n    },\r\n    \"cliInvocation\": {\r\n      \"command\": \"E:\\\\software\\\\encoding\\\\common\\\\nodeJs\\\\node.exe\",\r\n      \"argv\": [\r\n        \"C:\\\\Users\\\\JiaLe\\\\AppData\\\\Local\\\\Temp\\\\openclaw-qmd-proof-oOIzQo\\\\node_modules\\\\@tobilu\\\\qmd\\\\dist\\\\cli.js\",\r\n        \"--help\"\r\n      ],\r\n      \"resolution\": \"node-entrypoint\",\r\n      \"windowsHide\": true\r\n    },\r\n    \"shellFallbackUsed\": false\r\n  }\r\n  ```\r\n- Observed result after fix: The quoted absolute `.cmd` shim entrypoint resolves to direct Node execution of the `@tobilu/qmd` JavaScript entrypoint, and `shellFallbackUsed` is `false`.\r\n- What was not tested: Full live QMD memory indexing/search workflow and macOS were not tested in this proof run. Image URL guarded fetching is covered by targeted unit tests and code inspection rather than this Windows runtime proof.\r\n\r\n## Image generation validation\r\n\r\nValidated the OpenAI-compatible URL-response parser and guarded download path with targeted tests.\r\n\r\nBefore this fix, OpenClaw parsed only `data[].b64_json`, causing URL-only image responses to fail with no generated image assets.\r\n\r\nAfter this fix:\r\n\r\n- URL-only OpenAI-compatible image responses produce generated image assets\r\n- `b64_json` remains preferred when present\r\n- URL downloads go through guarded provider HTTP instead of raw `fetch`\r\n\r\nFor the OpenAI-compatible image URL path, I also ran `image_generate` locally through the configured OpenAI-compatible image provider after this patch.\r\nEvidence after fix:\r\n```text\r\nGenerated 1 image with openai/gpt-image-2.\r\n\r\nObserved result after fix: URL-backed OpenAI-compatible image generation completed successfully and produced a generated image asset in the local OpenClaw setup.\r\n\r\n\r\n## Testing\r\n\r\n```bash\r\npnpm exec vitest run src/plugin-sdk/windows-spawn.test.ts\r\n```\r\n\r\n```bash\r\npnpm exec vitest run src/image-generation/image-assets.test.ts src/plugin-sdk/windows-spawn.test.ts\r\n```\r\n\r\nResult:\r\n\r\n```text\r\n2 test files passed\r\n10 tests passed\r\n```\r\n\r\n```bash\r\npnpm exec vitest run extensions/memory-core/src/memory/qmd-manager.test.ts -t \"resolves bare qmd command through the scoped QMD package fallback on Windows\"\r\n```\r\n\r\nResult:\r\n\r\n```text\r\n1 test passed\r\n```\r\n\r\n```bash\r\npnpm format:check src/image-generation/image-assets.ts src/image-generation/image-assets.test.ts src/image-generation/openai-compatible-image-provider.ts extensions/openai/image-generation-provider.ts src/plugin-sdk/windows-spawn.ts src/plugin-sdk/windows-spawn.test.ts extensions/memory-core/src/memory/qmd-manager.ts extensions/memory-core/src/memory/qmd-manager.test.ts packages/memory-host-sdk/src/host/qmd-process.ts packages/memory-host-sdk/src/host/windows-spawn.ts\r\n```\r\n\r\nResult:\r\n\r\n```text\r\nAll matched files use the correct format.\r\n```\r\n\r\n```bash\r\ngit diff --check\r\npnpm tsgo:core\r\npnpm tsgo:extensions\r\n```\r\n\r\nResult:\r\n\r\n```text\r\npassed\r\n```\r\n\r\n## Platform notes\r\n\r\nThe QMD wrapper-resolution change has been validated on Windows.\r\n\r\nmacOS was not tested. The changed QMD wrapper-resolution path is Windows-only (`platform === \"win32\"`), and non-Windows platforms continue to use the existing direct command path.\r\n\r\nThe OpenAI-compatible image response parsing change is platform-independent.",
+        "branch": "fix/qmd-newapi-real-proof",
+        "head_sha": "9cde586769033ca03c1294614d3a4a50aabe2048",
+        "author": "knightplat-blip",
+        "labels": [
+          "extensions: memory-core",
+          "size: M",
+          "extensions: openai",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "impact:security",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 security-boundary"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-core/src/memory/qmd-manager.test.ts",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/qmd-manager.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/openai/image-generation-provider.ts",
+            "additions": 14,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/memory-host-sdk/src/host/qmd-process.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/image-generation/image-assets.test.ts",
+            "additions": 94,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/image-generation/image-assets.ts",
+            "additions": 125,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/image-generation/openai-compatible-image-provider.ts",
+            "additions": 19,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/image-generation.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/windows-spawn.test.ts",
+            "additions": 27,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/windows-spawn.ts",
+            "additions": 15,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-81443",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-81443.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 106,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 24,
+            "SUCCESS": 79,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3707,
+    "total_ms": 3129,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 693
+        "ms": 459
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2666
+        "ms": 2315
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 331
+        "ms": 340
       },
       {
         "name": "append_ledger",
