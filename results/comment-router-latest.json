@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-18T21:19:02.561Z",
+  "generated_at": "2026-05-18T21:19:12.969Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-18T18:19:02.256Z",
+  "since": "2026-05-18T18:19:10.885Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    83759
+    83758
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,130 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:83758:4482137790:2026-05-18T21:19:07Z:clawsweeper_needs_human",
+      "comment_id": "4482137790",
+      "comment_version_key": "4482137790:2026-05-18T21:19:07Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83758#issuecomment-4482137790",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83758,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-18T20:58:04Z",
+      "comment_updated_at": "2026-05-18T21:19:07Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "No repair lane is needed; the remaining action is maintainer validation and merge review for the focused PR.; Cleared: The diff is limited to memory-core search scheduling, tests, and changelog text, with no new dependencies, permissions, network calls, secret handling, or CI/package execution changes. (sha=8272c9f0c92305bb4757558203b736afca6f2297)",
+      "review_summary": "The branch updates memory-core fallback vector search to scan chunks in rowid batches with event-loop yields, adds regression and boundary tests, and adds a changelog entry.\n\nReproducibility: yes. from source and supplied proof. Current main synchronously scans fallback vector rows when the sqlite-vec path is unavailable, and the PR body shows pre-fix heartbeat starvation plus after-fix interleaving through the changed path.",
+      "review_followup": "No repair lane is needed; the remaining action is maintainer validation and merge review for the focused PR.",
+      "freeform_prompt": null,
+      "expected_head_sha": "8272c9f0c92305bb4757558203b736afca6f2297",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(memory-core): yield event loop during fallback vector search (#81172)",
+        "body": "## Summary\n\n- **Problem:** `memory_search`'s fallback vector path scans every row of the `chunks` table with a synchronous JS-side cosine-similarity loop. With no usable sqlite-vec index (extension missing, dimension mismatch with the active embedding model, or build in progress) and a large memory corpus, that loop pins the Node.js main thread for tens of seconds. The Discord/Telegram gateway misses heartbeats, the gateway connection closes, and the agent appears hung — exactly the symptom reported in #81172 (event loop delay reaching 62,746 ms, gateway timeout, agent unresponsive).\n- **Why it matters:** 17 agents affected in the reporter's fleet, 100% reproducible on Discord DMs, requires watchdog-driven restart to recover. Same root-cause family as the related closed bugs (#65517, #52231) but the fallback vector path was not previously yielded.\n- **What changed:** `searchChunksByEmbedding` now scans rows in bounded `LIMIT 256` batches using a `rowid > lastRowid` cursor, and `await`s `setImmediate(...)` between batches so timers, gateway sockets, and other event-loop work can interleave. Also keeps the prepared statement rooted in a local so node:sqlite cannot finalize it mid-scan (a latent race that yielding would otherwise surface deterministically).\n- **What did NOT change (scope boundary):** the sqlite-vec fast path, FTS keyword search, hybrid merge, temporal decay, MMR, or any scoring logic. Same cosine algorithm, same top-K selection, same result ordering. The fix is purely cooperative scheduling for the fallback path.\n\n## Change Type\n\n- [x] Bug fix\n- [x] Refactor required for the fix (only the loop control flow — algorithm unchanged)\n- [ ] Feature\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope\n\n- [x] Memory / storage\n- [x] Skills / tool execution\n\n## Linked Issue/PR\n\n- Closes #81172\n- Related: #76978 (precedent — `setImmediate`-based yielding during session indexing, merged 5/10), #65517, #52231 (closed — same event-loop-starvation family)\n- [x] This PR fixes a bug or regression\n\n## Root Cause\n\n- **Root cause:** `extensions/memory-core/src/memory/manager-search.ts:searchChunksByEmbedding` performed a single anonymous `db.prepare(...).iterate(...)` chain followed by `for (const row of rows) { cosineSimilarity(...); parseEmbedding(...) }`. The loop was synchronous: every row was parsed and scored in one un-yielded JS tick. For a corpus with thousands of chunks × 768/1536-dim embeddings, the per-row work (`JSON.parse` of a ~6 KB embedding string + 2N float multiplies) compounds to multi-second windows where no other event-loop task can run. Discord/Telegram gateway WebSocket heartbeats miss their deadline → connection closes → agent appears hung.\n- **Missing detection/guardrail:** There was no contract test asserting that fallback memory search yields to the event loop; the existing test (\"streams fallback chunk scoring without materializing candidates\") stub-spied `db.prepare` to throw on `.all()` and used `.iterate()`, which made the test green even though the production path could pin the main thread for arbitrary durations.\n- **Contributing context:** Same class of bug as #76978 (session-indexing batches starving the event loop), which already introduced the cooperative-yielding pattern in `manager-sync-ops.ts:createSessionSyncYield` / `SESSION_SYNC_YIELD_EVERY`. This PR ports that pattern to the search fallback path.\n\n## Regression Test Plan\n\n- Coverage level that should have caught this:\n  - [x] Unit test\n- **Target tests** (all in `extensions/memory-core/src/memory/manager-search.test.ts`):\n  - `batches fallback chunk scoring without materializing all candidates` — existing test rewritten to assert the bounded `LIMIT 256` cadence (`batchSizes === [256, 256, 1]` for 513 rows) and the `SELECT rowid, id, path, ...` shape.\n  - `yields to the event loop during large fallback scans (issue #81172)` — inserts 1024 chunks (>4× the yield batch), runs `searchVector` with `ensureVectorReady: async () => false`, and asserts a background `setInterval` heartbeat fires at least once during the search (would be 0 with the pre-fix sync loop).\n  - `returns an empty result set when no chunks match the provider model` — N=0 model-match branch.\n  - `handles a single matching row (below the yield batch size)` — N=1 fast path; single batch ends before any yield.\n  - `handles an exact batch-size boundary (FALLBACK_VECTOR_BATCH_SIZE rows)` — N=256 boundary; one full batch then a harmless empty-batch step, no row dropped or double-counted, top-K scores strictly decreasing.\n  - `preserves top-K ordering vs. a naive reference cosine implementation` — N=200 chunks with deterministic synthetic vectors; compares our patched fallback against a straight-line JS reference (independent cosine) and asserts the top-K matches by id and order. Guards against algorithmic regressions slipping in via the control-flow refactor.\n  - `picks up rows inserted during the inter-batch event-loop yield (rowid cursor)` — schedules a `setImmediate`-driven `INSERT` to land during the search's first inter-batch yield; asserts the new rows (rowid > `lastRowid`) appear in batch 2 and dominate the top-K. Proves rowid pagination is concurrency-safe under writes-during-search.\n- **Why this set is the smallest reliable guardrail:** together the seven tests cover (a) batching cadence, (b) event-loop yielding, (c) all three obvious row-count boundaries, (d) algorithmic parity against an independent reference, and (e) concurrent-insert robustness through the yield. Any regression that reverts to a single-pass loop, breaks the rowid cursor, or accidentally changes scoring would fail at least one of these.\n\n## User-visible / Behavior Changes\n\n- Agents using `memory_search` on large corpora no longer freeze the gateway connection. Discord DMs continue working under memory load; Telegram polling does not stall.\n- **No change** to search result ordering, scoring, or selection. Same algorithm, same results.\n- No config flags, no env vars, no schema changes.\n\n## Security Impact\n\n- New permissions/capabilities? **No.**\n- Secrets/tokens handling changed? **No.**\n- New/changed network calls? **No** — purely an in-process scheduling change.\n- Command/tool execution surface changed? **No.**\n- Data access scope changed? **No** — same `WHERE model = ?` filter, same sources.\n\n## Real Behavior Proof\n\n**Behavior or issue addressed:** Per #81172, `memory_search` on real production corpora blocks the Node.js event loop for 60+ seconds (reporter measured `eventLoopDelayMaxMs=62,746.8`), causing Discord gateway connection drop. Reproducible on Ubuntu 24.04 with Node v22.x on OpenClaw 2026.5.7. This PR scans the fallback vector path in bounded batches that yield between iterations, keeping the event loop responsive at production scale without changing search result correctness.\n\n**Real environment tested:** Node v22.14.0 + `node:sqlite` `:memory:` databases primed with `ensureMemoryIndexSchema` from `openclaw/plugin-sdk/memory-core-host-engine-storage` (same helper the production manager uses). Three corpus sizes — 20k, 50k, and 100k chunks × 1536-dim embeddings (matches OpenAI `text-embedding-3-small`). Driven by a focused Node harness that imports the actual exported `searchVector` from this PR's `manager-search.ts`, with `ensureVectorReady: async () => false` to force the changed fallback code path. Event-loop responsiveness measured by an independent `setInterval(50)` heartbeat counter run in parallel with the search.\n\n**Exact steps or command run after this patch:**\n1. Checked out branch off current `origin/main`, applied fix in `manager-search.ts` and updated `manager-search.test.ts`.\n2. Wrote a Node driver that for each scale: built `:memory:` chunks via `ensureMemoryIndexSchema` + `INSERT`, started a 50 ms `setInterval` heartbeat, ran `await searchVector({...ensureVectorReady: async()=>false})`, then reported wall time + heartbeat count + max gap.\n3. Also ran `EXPLAIN QUERY PLAN` on the batched select to verify the rowid cursor uses the implicit `INTEGER PRIMARY KEY` index.\n4. `pnpm test extensions/memory-core/src/memory/manager-search.test.ts` for the unit suite.\n5. `pnpm test extensions/memory-core` for the full extension suite.\n6. `pnpm check:changed` for lint, typecheck, and import-cycle gates.\n\n**Evidence after fix:**\n\n1. **`EXPLAIN QUERY PLAN`** for the batched select used by the patched code (real `node:sqlite` `:memory:` db with the production schema):\n\n```text\nEXPLAIN QUERY PLAN\nSELECT rowid, id, path, start_line, end_line, text, embedding, source\n  FROM chunks\n WHERE model = ? AND rowid > ?\n ORDER BY rowid ASC\n LIMIT ?\n\n  [6] SEARCH chunks USING INTEGER PRIMARY KEY (rowid>?)\n```\n\nThe `rowid > lastRowid` cursor uses the implicit `INTEGER PRIMARY KEY` index. No full table scan, no temporary B-tree, no `OFFSET` rescan cost. The `model = ?` filter is applied during the indexed scan.\n\n2. **Scale stress** (run on the patched branch — single Node process, in-memory db, no other load):\n\n```text\n=== 20000 chunks × 1536-dim ===\n  search: returned 5 results in 3021 ms\n  event loop: 39/60 heartbeats (65.0%); max gap 86 ms\n\n=== 50000 chunks × 1536-dim ===\n  search: returned 5 results in 9255 ms\n  event loop: 107/185 heartbeats (57.8%); max gap 389 ms\n\n=== 100000 chunks × 1536-dim ===\n  search: returned 5 results in 17575 ms\n  event loop: 204/351 heartbeats (58.1%); max gap 174 ms\n```\n\nBucketed as an event-loop-delay histogram (gap between consecutive 50 ms heartbeats during the 20k × 1536-dim search):\n\n```text\nBefore fix (origin/main, sync loop):                After fix (this PR):\n\n   0-50ms │                                          0-50ms │\n  50-100ms│                                         50-100ms│ ████████████████████████████████████████  39 (100%)\n 100-500ms│                                        100-500ms│\n   500ms+ │ ████████  1 gap (~2884ms, entire           500ms+│\n          │           search blocked)\n```\n\nFor reference, the same harness on `origin/main` (pre-fix, sync loop) at 20000 chunks × 1536-dim:\n\n```text\n  search: returned 5 results in 2884 ms\n  event loop: 0/57 heartbeats (0.0%); event loop blocked for entire search\n```\n\nWall-time scales linearly with `N` as expected (the actual cosine work is unchanged). Event-loop responsiveness is consistent ~58–65% across all scales. Max gap stays under 1 second even at 100k chunks — well under the Discord/Telegram gateway heartbeat deadlines that the reporter observed missing.\n\n3. **Test suite** (run on the patched branch):\n\n```text\npnpm test extensions/memory-core/src/memory/manager-search.test.ts\n Test Files  1 passed (1)\n      Tests  3 passed | 10 skipped (13)\n   Start at  13:41:38\n\npnpm test extensions/memory-core\n Test Files  56 passed (56)\n      Tests  668 passed | 10 skipped (678)\n   Start at  14:10:27\n```\n\nThe 10 skipped tests are the sqlite-vec native-extension-dependent tests that don't load on this macOS dev host; unrelated to this change. The 8 passing search tests cover (a) batching cadence, (b) event-loop yielding, (c) N=0/N=1/N=256 row-count boundaries, (d) top-K parity vs. an independent reference cosine implementation, and (e) rowid-cursor robustness against rows inserted during the inter-batch yield.\n\n4. **Full search-path audit** (no other unbounded JS-side hot loop found in the `memory_search` tool call chain): `searchKeyword` uses FTS5 native index, the vec0 fast path uses `vec_distance_cosine` natively, `embedQueryWithTimeout` already runs async with explicit `AbortController` timeouts (60 s remote / 5 min local), `mergeHybridResults`/`applyTemporalDecayToHybridResults`/`applyMMRToHybridResults` all operate on the bounded `candidates = Math.min(200, ...)` set. The fallback cosine scan was the only unbounded synchronous JS loop in the chain.\n\n**Observed result after fix:** With identical CPU work, the event loop now gets ~58–65% of its scheduled `setInterval(50)` heartbeats and never goes more than ~500 ms without firing across 20k–100k corpora at 1536-dim. At the reporter's implied production scale (extrapolation from their 62-second symptom: ~340k chunks), the projected max gap stays well below the Discord gateway heartbeat deadline, so the connection no longer drops. Search results are unchanged (same algorithm, same top-K, same ordering) — only the scheduling shape differs.\n\n**What was not tested:**\n- Live agent loop against a real OpenAI/Anthropic provider. The fallback path triggers based on local sqlite/vec0 state, not on provider behavior, and the embedding work that this PR does not touch is already wrapped in `runEmbeddingOperationWithTimeout`. End-to-end coverage relies on the existing tool-level integration tests in `extensions/memory-core/src/tools.test.ts` and on the search-path audit above.\n- Pi-class hardware. The reporter's environment is x86 Ubuntu; another related issue (#83456) calls out Pi specifically. The fix is purely scheduling — yielding fires per N rows regardless of CPU speed — so the heartbeat ratio (proportion of fired vs. scheduled heartbeats) is CPU-independent by design. At a 4× slower CPU each batch takes 4× longer but the inter-batch yield gap stays bounded. Did not run on a physical Pi.\n- Worker-thread / off-main-thread alternatives. The issue body suggested those as one possible fix shape; this PR uses the lighter cooperative-yielding approach that matches the repo's precedent in #76978 for the session-indexing path in the same file family. Worker-thread refactor would be a larger, follow-up change. If maintainers prefer that direction, the cosine loop in this PR is the obvious unit to push off-thread later — the bounded-batch shape makes the off-thread boundary straightforward to draw.\n\n## Compatibility / Migration\n\n- Backward compatible? **Yes** — function signature change is contained: `searchChunksByEmbedding` is a module-private function only called from the already-async `searchVector`. No exported API surface changes.\n- Config/env changes? **No.**\n- Migration needed? **No.**\n\n## Risks and Mitigations\n\n- **Risk:** Yielding mid-scan exposes the existing `model = ?` rows to concurrent writes (e.g., an indexing pass adding new chunks during a search).\n  - **Mitigation:** The new pagination is by `rowid` ascending. New inserts get higher rowids than the cursor, so a concurrent insert produces *at-worst* one extra row in the next batch, never a missed row or a duplicate. The previous `.iterate()` approach had the same concurrent-read semantics in WAL mode; pagination does not regress it.\n- **Risk:** `LIMIT 256` per batch is arbitrary.\n  - **Mitigation:** 256 was chosen to bound each batch's CPU window to roughly a single 50–80 ms tick at 1536-dim embeddings, matching what the OS scheduler considers acceptable interactive latency. Larger batches lengthen the unyielded window; smaller batches add yield overhead with diminishing returns. Easy to tune in a follow-up if needed.\n- **Risk:** Maintainers may prefer a worker-thread off-main-thread design over cooperative yielding.\n  - **Mitigation:** The repo's accepted precedent for this exact class of bug is `setImmediate`-based yielding (#76978 in the same file family). This PR matches that pattern. If maintainers prefer the worker-thread approach as a future refactor, this fix is forward-compatible — the cosine loop becomes the obvious unit to push off-thread later.\n\n---\n\nAI-assisted: yes (Cursor). I read the full `memory_search` call chain (`tools.ts`, `manager.ts`, `manager-search.ts`, `hybrid.ts`, `temporal-decay.ts`, `manager-embedding-ops.ts`), verified the only unbounded JS hot loop is the fallback cosine scan, ported the `setImmediate`-yield pattern from the recent #76978 fix (same file family, same bug class), restructured to bounded rowid-paginated batches to avoid holding a sqlite iterator across the yield, and confirmed the query plan uses the implicit rowid index. Built the live repro harness from scratch and removed it before commit per the repo's \"no PR-only assets in the repo\" rule.\n\n",
+        "branch": "fix/memory-search-event-loop-yield-81172",
+        "head_sha": "8272c9f0c92305bb4757558203b736afca6f2297",
+        "author": "nitinjwadhawan",
+        "labels": [
+          "extensions: memory-core",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🦞 diamond lobster",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-search.test.ts",
+            "additions": 315,
+            "deletions": 46,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-search.ts",
+            "additions": 67,
+            "deletions": 33,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83758",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83758.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "counts": {
+            "SUCCESS": 65,
+            "SKIPPED": 27,
+            "IN_PROGRESS": 1,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
+          ],
+          "pending": [
+            "checks-node-agentic-control-plane-runtime:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
+          ]
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 556,
+    "total_ms": 2302,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 292
+        "ms": 341
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1727
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 252
+        "ms": 206
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
