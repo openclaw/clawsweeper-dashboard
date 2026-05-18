@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-18T07:49:42.067Z",
+  "generated_at": "2026-05-18T07:49:52.387Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-18T04:49:39.979Z",
+  "since": "2026-05-18T04:49:51.761Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    83489
+    83476
   ],
   "comment_ids": [
-    4475508808
+    4475509419
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,140 +31,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:83489:4475508808:2026-05-18T07:48:06Z:re_review",
-      "comment_id": "4475508808",
-      "comment_version_key": "4475508808:2026-05-18T07:48:06Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83489#issuecomment-4475508808",
-      "repo": "openclaw/openclaw",
-      "issue_number": 83489,
-      "author": "ThiagoCAltoe",
-      "author_id": 71539514,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-18T07:48:06Z",
-      "comment_updated_at": "2026-05-18T07:48:06Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-18T07:49:42.784Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 83489
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-18T07:49:43.685Z",
-          "response_comment_id": null,
-          "response_comment_mode": "created"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "Fix gateway service startup race",
-        "body": "## Summary\n- Fix a gateway service startup race where one service-mode gateway can kill another healthy gateway listener before the normal gateway lock/startup path runs.\n- Move service-mode stale listener cleanup behind bind resolution and a `/healthz` probe so duplicate boot entries leave the already healthy gateway in control.\n- Add regressions covering the healthy service-mode early exit, including the systemd restart-prevent exit 78 path.\n\n## Real behavior proof\n\nBehavior or issue addressed: On the affected Raspberry Pi, two boot-managed OpenClaw gateway entries targeted the same port (`18789`). During startup, each service-mode gateway process treated the other gateway process as stale, killed it before the lock/startup path could arbitrate ownership, and then restarted. This produced a repeated boot/restart loop and made the gateway appear stopped or unstable.\n\nReal environment tested: Raspberry Pi running Linux/systemd. Gateway port `18789`. Old duplicate system unit `/etc/systemd/system/openclaw-gateway.service` was enabled before cleanup and ran OpenClaw service v2026.5.5 with command shape `gateway --port 18789`. Intended user unit `~/.config/systemd/user/openclaw-gateway.service` was enabled through root linger and ran OpenClaw service v2026.5.12 with command shape `gateway run --port 18789`. `loginctl show-user root -p Linger` returned `Linger=yes`. The after-fix proof ran the patched branch via `pnpm openclaw gateway run` from this PR checkout, with `OPENCLAW_SERVICE_MARKER=openclaw`, `INVOCATION_ID=codex-proof`, and `SYSTEMD_EXEC_PID=999999` to exercise the systemd service-mode path without re-enabling the duplicate persistent service.\n\nExact steps or command run after this patch:\n1. Checked live gateway processes with `pgrep -af '[o]penclaw.*gateway|[n]ode .*openclaw.*gateway'`.\n2. Checked the gateway listener with `ss -ltnp 'sport = :18789'`.\n3. Checked the system/user service state and the gateway with `openclaw gateway status --deep`.\n4. Ran the patched duplicate service-mode command against the existing healthy gateway:\n\n```bash\nOPENCLAW_ALLOW_ROOT=1 OPENCLAW_SERVICE_MARKER=openclaw INVOCATION_ID=codex-proof SYSTEMD_EXEC_PID=999999 pnpm openclaw gateway run --allow-unconfigured\n```\n\n5. Rechecked process count, listener state, and `openclaw gateway status --deep` after the patched command exited.\n\nEvidence after fix: Before cleanup, live process checks showed two gateway processes at the same time, one with command shape `gateway run --port 18789` and one with command shape `gateway --port 18789`.\n\nThe live gateway log showed repeated service-mode stale cleanup and termination. Representative redacted runtime log excerpt:\n\n```text\nkilling 1 stale gateway process(es) before restart: <pid>\nservice-mode: cleared 1 stale gateway pid(s) before bind on port 18789\nsignal SIGTERM received\n```\n\nAfter operational cleanup, the same machine had one user-service gateway process and one listener before the patched proof command:\n\n```text\npgrep -af '[o]penclaw.*gateway|[n]ode .*openclaw.*gateway'\n253345 /usr/bin/node .../openclaw/dist/index.js gateway run --port 18789\n\nss -ltnp 'sport = :18789'\nState  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess\nLISTEN 0      511          0.0.0.0:18789      0.0.0.0:*    users:((\"node\",pid=253345,fd=25))\n```\n\nPatched duplicate service-mode command output:\n\n```text\n$ node scripts/run-node.mjs gateway run --allow-unconfigured\n2026-05-18T04:44:17.564-03:00 [gateway] loading configuration…\n2026-05-18T04:44:19.571-03:00 [gateway] service-mode: existing healthy gateway is already listening on port 18789; leaving it in control\n[ELIFECYCLE] Command failed with exit code 78.\nPATCHED_GATEWAY_RUN_EXIT:78\n```\n\nAfter that patched command exited, the original listener was still the same PID and the gateway remained reachable:\n\n```text\npgrep -af '[o]penclaw.*gateway|[n]ode .*openclaw.*gateway'\n253345 /usr/bin/node .../openclaw/dist/index.js gateway run --port 18789\n\nss -ltnp 'sport = :18789'\nState  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess\nLISTEN 0      511          0.0.0.0:18789      0.0.0.0:*    users:((\"node\",pid=253345,fd=25))\n```\n\nCopied live output from the OpenClaw gateway status probe after the patched proof command:\n\n```text\nConnectivity probe: ok\nCapability: admin-capable\nGateway version: 2026.5.12\nListening: *:18789\n```\n\nObserved result after fix: The patched duplicate service-mode gateway hit the new healthy-listener branch, logged that an existing healthy gateway already owned port `18789`, exited with systemd restart-prevent code `78`, did not kill the existing gateway process, and did not start a second gateway listener. The original gateway process stayed on PID `253345` before and after the patched command, and `openclaw gateway status --deep` still reported `Connectivity probe: ok`.\n\nWhat was not tested: I did not re-enable the old duplicate persistent system unit because that was the production hazard that caused the restart loop. Instead, I exercised the same patched service-mode/systemd branch with explicit systemd marker environment variables against the real healthy gateway. I did not run broad local gates (`pnpm check`) on the Raspberry Pi because that is too heavy for this host and previously destabilized it.\n\n## Verification\n- `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test src/cli/gateway-cli/run.option-collisions.test.ts -- --reporter=verbose` (21 tests passed)\n- `pnpm exec oxfmt --write --threads=1 src/cli/gateway-cli/run.option-collisions.test.ts`\n- `git diff --check`\n",
-        "branch": "fix-gateway-service-start-race",
-        "head_sha": "10705b1d8e1631ebb541e90efecb63627797d64b",
-        "author": "thiagocaltoe",
-        "labels": [
-          "cli",
-          "size: S",
-          "triage: refactor-only",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/cli/gateway-cli/run.option-collisions.test.ts",
-            "additions": 141,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/run.ts",
-            "additions": 21,
-            "deletions": 14,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83489",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83489.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 97,
-          "counts": {
-            "SUCCESS": 73,
-            "SKIPPED": 20,
-            "IN_PROGRESS": 3,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-core-fast:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime:IN_PROGRESS"
-          ],
-          "pending": [
-            "checks-node-core-fast:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime:IN_PROGRESS"
-          ],
-          "terminalBlockers": []
-        }
-      }
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4260,
+    "total_ms": 850,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 499
+        "ms": 615
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1574
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2158
+        "ms": 224
       },
       {
         "name": "append_ledger",
-        "ms": 2
+        "ms": 0
       }
     ]
   }
