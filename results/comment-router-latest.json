@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-18T04:36:16.653Z",
+  "generated_at": "2026-05-18T04:37:14.675Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-18T01:36:14.701Z",
+  "since": "2026-05-18T01:37:12.801Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    83417
+    71652
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4321504480
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 6,
@@ -31,17 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:83417:4474062694:2026-05-18T04:36:10Z:automerge",
-      "comment_id": "4474062694",
-      "comment_version_key": "4474062694:2026-05-18T04:36:10Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83417#issuecomment-4474062694",
+      "idempotency_key": "comment-router:openclaw/openclaw:71652:4321504480:2026-05-18T04:35:39Z:automerge",
+      "comment_id": "4321504480",
+      "comment_version_key": "4321504480:2026-05-18T04:35:39Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/71652#issuecomment-4321504480",
       "repo": "openclaw/openclaw",
-      "issue_number": 83417,
+      "issue_number": 71652,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-18T03:40:53Z",
-      "comment_updated_at": "2026-05-18T04:36:10Z",
+      "comment_created_at": "2026-04-26T07:11:47Z",
+      "comment_updated_at": "2026-05-18T04:35:39Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "automerge",
@@ -52,8 +54,8 @@
       "trusted_bot_author": null,
       "automation_source": null,
       "repair_reason": null,
-      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
-      "review_followup": "Review did not complete, so no work-lane recommendation was made.",
+      "review_summary": "The branch adds local heavy-check pressure/refusal helpers and wires tsgo, oxlint, sharded oxlint, and direct tsgo helper scripts to avoid native type-aware checks on local hosts unless explicitly allowed.\n\nReproducibility: yes. by source inspection. At PR head, metadata-only sharded oxlint args skip refusal/locking but still fall through to artifact preparation and shard spawning.",
+      "review_followup": "The remaining blocker is a narrow script-control-flow repair in the PR branch, while the compatibility policy still needs maintainer awareness before merge.",
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
@@ -62,30 +64,86 @@
       "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix(followup): stop model-fallback retries duplicating queued user messages and assistant error stubs",
-        "body": "## Summary\n\n- Followup queue + model fallback: latch queued user-message persistence so only the first fallback candidate writes the queued user message to the session JSONL.\n- Followup queue + model fallback: suppress the `[assistant turn failed before producing content]` stub on every fallback candidate after the first, so the JSONL never gains consecutive assistant-error entries.\n- Add `suppressAssistantErrorPersistence` to the session tool-result guard and wrapper; plumb through pi-embedded-runner params, the embedded attempt, and the run-time overload loop.\n- Regression tests: contract-level (the runner receives the right suppress flags on each fallback candidate) and behavior-level (real `SessionManager` + guard cascade ends with exactly `[user, assistant]` and zero consecutive same-role pairs).\n\n## Why\n\nWith `messages.queue.mode: \"followup\"`, `runWithModelFallback` invokes its run callback once per candidate model. Each invocation re-passed `queued.transcriptPrompt` into the embedded runner, the session manager re-appended the queued user message, and every failed candidate wrote an `[assistant turn failed before producing content]` stub. The session ended up with consecutive same-role entries (4x user in followup mode, 4x assistant in steer mode); the next request was rejected because Anthropic does not accept consecutive same-role messages, OpenRouter masked the upstream 400 as a 500, and the failover loop ran again — death spiral, ~4KB session growth per cycle, unrecoverable without manual session deletion.\n\nThe fix is two latches in `createFollowupRunner`'s `runWithModelFallback` run callback:\n\n1. `queuedUserMessagePersistedAcrossFallback` — flipped by `onUserMessagePersisted`. ORed into `suppressNextUserMessagePersistence` so the second+ candidate skips re-appending the queued user message.\n2. `fallbackCandidateAttemptIndex` — counter; passes `suppressAssistantErrorPersistence: true` on every candidate after the first. The session tool-result guard then skips assistant messages with `stopReason === \"error\"`.\n\nCLI runner branch is untouched: it does not accept either suppression flag and owns its own transcript management. Scope limited to the embedded path described in the issue.\n\nCloses #83404\n\n## Real behavior proof\n\nBehavior addressed: queued followup user messages and per-candidate assistant error stubs duplicated in the session JSONL on model-fallback retry, producing consecutive same-role entries that the provider then rejects (https://github.com/openclaw/openclaw/issues/83404).\n\nReal environment tested: behavior-level integration against the real `SessionManager` (`@earendil-works/pi-coding-agent`) plus `installSessionToolResultGuard` from this branch. A four-candidate failover cascade is driven through the real persistence stack in both `followup` and `steer` queue modes, with the new suppression flags forced off versus on, and the resulting session journal is read back and inspected. The terminal output below is the captured stdout of that integration cascade.\n\nExact steps or command run after this patch:\n\n    node scripts/run-vitest.mjs src/agents/session-tool-result-guard.test.ts \\\n      -t \"four-candidate followup fallback cascade\"\n    node scripts/run-vitest.mjs src/auto-reply/reply/followup-runner.test.ts \\\n      -t \"queued user message idempotency across fallback\"\n    node scripts/run-vitest.mjs src/auto-reply/reply/followup-runner.test.ts \\\n      -t \"only persists assistant error stub on the first fallback candidate\"\n\nEvidence after fix: redacted terminal capture of the session journal contents for each scenario, taken directly from the integration cascade's debug print of the persisted entries:\n\n    mode=followup applyFix=false\n      entries=8 role-sequence=[user, assistant, user, assistant, user, assistant, user, assistant]\n      consecutive same-role pairs=0\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n\n    mode=followup applyFix=true\n      entries=2 role-sequence=[user, assistant]\n      consecutive same-role pairs=0\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n\n    mode=steer applyFix=false\n      entries=5 role-sequence=[user, assistant, assistant, assistant, assistant]\n      consecutive same-role pairs=3\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n        assistant stopReason=error: [assistant turn failed before producing content]\n        assistant stopReason=error: [assistant turn failed before producing content]\n        assistant stopReason=error: [assistant turn failed before producing content]\n\n    mode=steer applyFix=true\n      entries=2 role-sequence=[user, assistant]\n      consecutive same-role pairs=0\n        user: queued user message\n        assistant stopReason=error: [assistant turn failed before producing content]\n\nObserved result after fix: session journal collapses from 8 entries (followup) / 5 entries with 3 consecutive same-role pairs (steer) down to exactly 2 entries with zero consecutive same-role pairs in both modes. The exact session-JSONL shape from the issue — `user, user, user, user` in followup and `assistant, assistant, assistant, assistant` in steer — is no longer produced. Subsequent inbound messages will no longer hit the provider's consecutive-same-role validation and the death-spiral re-failover described in the issue cannot start.\n\nWhat was not tested: a live OpenRouter run against four real anthropic fallback models on a real channel. Reporter's exact configuration was reproduced through the real session-persistence stack but not against a live provider; a maintainer with provider credentials should run the same flow end-to-end on a real account before merge.\n\n## Verification\n\nBuild:\n\n    pnpm build\n\npasses (required because `params.ts` and the guard wrapper grew a new public field).\n\nTargeted tests:\n\n    node scripts/run-vitest.mjs src/agents/session-tool-result-guard.test.ts src/auto-reply/reply/followup-runner.test.ts\n\nResult: `Test Files 2 passed (2) | Tests 76 passed (76)`.\n\nThe new `installSessionToolResultGuard > models a four-candidate followup fallback cascade producing exactly one user and one assistant-error entry` test asserts the same invariant the runtime journal above shows, executed inside CI on every push.",
-        "branch": "fix/followup-fallback-dup-user",
-        "head_sha": "a417d190a64c7db34de382a27c82a4fe52dd2f89",
-        "author": "yetval",
+        "title": "fix: refuse local tsgo under host pressure",
+        "body": "## Summary\n- refuse local native type-aware checks by default on developer/agent hosts\n- cover `tsgo`, type-aware `oxlint`, and sharded type-aware `oxlint`\n- cover direct raw `tsgo` helper scripts: extension package boundary, core boundary, and tsgo profiling\n- keep metadata commands cheap and unblocked (`--help`, `--version`, etc.)\n- keep CI/GitHub Actions unblocked so broad native checks run online instead of on constrained hosts\n- preserve explicit break-glass overrides for local runs\n- keep pressure refusal and effective heavy-check temp-dir checks from the earlier patch\n- rebase onto current `main` and preserve upstream serial shard support\n\n## Why\nA constrained Raspberry Pi/agent host repeatedly became unstable when native type-aware checks (`tsgo`/`tsgolint` via type-aware oxlint) ran locally. Serialization and throttling reduce concurrency, but they still let the same memory-hungry native check run on the same fragile host. That is the wrong failure mode.\n\nThis PR now makes the safer default explicit: local wrappers and repo helper scripts refuse native type-aware checks unless the operator opts in. CI, Blacksmith/Testbox, or another remote worker should own those broad checks.\n\n## Behavior\nLocal native type-aware checks refuse by default when local heavy-check policy is active and mode is not `full`:\n\n- `scripts/run-tsgo.mjs`\n- `scripts/run-oxlint.mjs` when it runs type-aware oxlint, including explicit file-target runs\n- `scripts/run-oxlint-shards.mjs` before artifact prep or child shard spawning\n- `scripts/check-extension-package-tsc-boundary.mjs`\n- `scripts/check-tsgo-core-boundary.mjs`\n- `scripts/profile-tsgo.mjs`\n\nBypasses / allowed cases:\n\n- GitHub Actions / CI are not blocked\n- metadata-only commands are not blocked\n- `OPENCLAW_LOCAL_CHECK_MODE=full` allows the local run\n- `OPENCLAW_HEAVY_CHECK_FORCE=1` allows the local run\n- `OPENCLAW_ALLOW_LOCAL_NATIVE_TYPECHECK=1` allows the local run\n- child processes already covered by a parent heavy-check lock can continue without self-deadlock\n\nExisting pressure checks still refuse local heavy checks when headroom is too low:\n\n- `OPENCLAW_HEAVY_CHECK_MIN_MEM_AVAILABLE_BYTES` defaults to `1.5 GiB`\n- `OPENCLAW_HEAVY_CHECK_MIN_TMP_AVAILABLE_BYTES` defaults to `1 GiB`\n- `OPENCLAW_HEAVY_CHECK_MAX_TMP_USED_PERCENT` defaults to `80`\n\n## GitHub CI note\nGitHub CI means these checks run online on GitHub/runner machines after pushing the branch, not on the local Raspberry Pi. The PR gets pass/fail status from those remote runners.\n\n## Test Plan\nFinal head: `21425d2a82eba1f6900f7c58a9129ba234a2ef68`\n\nLocal checks intentionally stayed narrow and refusal-only. Broad lint/test/type-aware gates are left to GitHub CI.\n\nNarrow local syntax/refusal probes run after the latest patch:\n\n- `node --check scripts/check-extension-package-tsc-boundary.mjs`\n- `node --check scripts/profile-tsgo.mjs`\n- `node --check scripts/check-tsgo-core-boundary.mjs`\n- `OPENCLAW_LOCAL_CHECK_MODE=throttled node scripts/check-extension-package-tsc-boundary.mjs --mode=compile`\n- `OPENCLAW_LOCAL_CHECK_MODE=throttled node scripts/profile-tsgo.mjs core --json`\n- `OPENCLAW_LOCAL_CHECK_MODE=throttled node scripts/check-tsgo-core-boundary.mjs`\n\nPreviously passed locally before this direct-script follow-up:\n\n- syntax checks for `run-tsgo`, `run-oxlint`, `run-oxlint-shards`, and local heavy-check runtime\n- scoped formatter/lint checks on touched wrapper files\n- `OPENCLAW_LOCAL_CHECK_MODE=throttled pnpm test test/scripts/local-heavy-check-runtime.test.ts test/scripts/run-oxlint.test.ts --run`\n- result: `Test Files 2 passed`, `Tests 34 passed`\n\n## Real behavior proof\n- **Behavior or issue addressed:** Local OpenClaw script entry points that can start native `tsgo`/`tsgolint` now refuse on this Raspberry Pi/agent host by default, so accidental local type-aware checks are pushed to GitHub CI/Blacksmith/Testbox instead of consuming local memory.\n- **Real environment tested:** Raspberry Pi OpenClaw checkout on branch `fix/local-tsgo-pressure-guard`, head `21425d2a82eba1f6900f7c58a9129ba234a2ef68`, with `OPENCLAW_LOCAL_CHECK_MODE=throttled`.\n- **Exact steps or command run after this patch:**\n\n```bash\nnode --check scripts/check-extension-package-tsc-boundary.mjs\nnode --check scripts/profile-tsgo.mjs\nnode --check scripts/check-tsgo-core-boundary.mjs\nOPENCLAW_LOCAL_CHECK_MODE=throttled node scripts/check-extension-package-tsc-boundary.mjs --mode=compile\nOPENCLAW_LOCAL_CHECK_MODE=throttled node scripts/profile-tsgo.mjs core --json\nOPENCLAW_LOCAL_CHECK_MODE=throttled node scripts/check-tsgo-core-boundary.mjs\npgrep -a -f 'tsgolint|typescript/native-preview/bin/tsgo|node_modules/.bin/tsgo' || true\n```\n\n- **Evidence after fix:** Copied terminal output from the real Raspberry Pi checkout:\n\n```text\nsyntax ok\nboundary=1 profile=1 core=1\nRefusing to start extension package boundary tsgo on this local host.\nNative type-aware checks can exhaust constrained developer/agent machines; run them in GitHub CI, Blacksmith/Testbox, or another remote worker instead.\n[tsgo-profile] profiling core\nRefusing to start tsgo profile on this local host.\nNative type-aware checks can exhaust constrained developer/agent machines; run them in GitHub CI, Blacksmith/Testbox, or another remote worker instead.\nRefusing to start core boundary tsgo on this local host.\nNative type-aware checks can exhaust constrained developer/agent machines; run them in GitHub CI, Blacksmith/Testbox, or another remote worker instead.\n```\n\n- **Observed result after fix:** The direct local `tsgo` helper scripts exited non-zero with refusal messages before spawning `tsgo`/`tsgolint`; the process check found no real native `tsgo`/`tsgolint` worker running.\n- **What was not tested:** Broad local CI was intentionally not run on the Raspberry Pi. Full lint/test/type-aware validation is delegated to GitHub CI/remote runners.\n",
+        "branch": "fix/local-tsgo-pressure-guard",
+        "head_sha": "38f45068049fa7d1956b2d5f389a82dab95468ca",
+        "author": "andyylin",
         "labels": [
-          "agents",
-          "size: M",
+          "scripts",
+          "size: L",
           "proof: supplied",
-          "P1",
-          "impact:session-state",
-          "impact:message-loss",
-          "rating: 🌊 off-meta tidepool"
+          "proof: sufficient",
+          "P2",
+          "impact:crash-loop",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 automation",
+          "merge-risk: 🚨 compatibility"
         ],
         "files": [
           {
-            "path": "src/agents/pi-embedded-runner/run.ts",
-            "additions": 1,
+            "path": "scripts/check-extension-package-tsc-boundary.mjs",
+            "additions": 12,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
-            "additions": 1,
+            "path": "scripts/check-tsgo-core-boundary.mjs",
+            "additions": 21,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/lib/local-heavy-check-runtime.mjs",
+            "additions": 174,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/profile-tsgo.mjs",
+            "additions": 13,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/run-oxlint-shards.mjs",
+            "additions": 53,
+            "deletions": 44,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/run-oxlint.mjs",
+            "additions": 27,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/run-tsgo.mjs",
+            "additions": 26,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/local-heavy-check-pressure.test.ts",
+            "additions": 53,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "test/scripts/local-heavy-check-runtime.test.ts",
+            "additions": 53,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/run-oxlint.test.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/run-tsgo.test.ts",
+            "additions": 135,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
@@ -129,22 +187,26 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83417",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83417.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-71652",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-71652.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 106,
+          "total": 84,
           "counts": {
-            "SUCCESS": 78,
-            "SKIPPED": 27,
-            "NEUTRAL": 1
+            "SKIPPED": 12,
+            "SUCCESS": 71,
+            "FAILURE": 1
           },
-          "blockers": [],
+          "blockers": [
+            "build-artifacts:FAILURE"
+          ],
           "pending": [],
-          "terminalBlockers": []
+          "terminalBlockers": [
+            "build-artifacts:FAILURE"
+          ]
         }
       },
       "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
@@ -302,15 +364,15 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2887,
+    "total_ms": 2056,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 309
+        "ms": 527
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1627
+        "ms": 1334
       },
       {
         "name": "classify_commands",
@@ -318,7 +380,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 935
+        "ms": 182
       },
       {
         "name": "append_ledger",
