@@ -1,6 +1,6 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-05-18T17:58:05.420Z
+Generated: 2026-05-18T18:03:06.664Z
 
 ## Summary
 
@@ -30,6 +30,6 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#83717](https://github.com/openclaw/openclaw/pull/83717) | test(qa-lab): add personal share-safe diagnostics scenario | automerge-openclaw-openclaw-83578 | MERGEABLE | UNSTABLE | CANCELLED:14 SKIPPED:90 SUCCESS:67 IN_PROGRESS:4; blockers:11 | needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
+| [#83717](https://github.com/openclaw/openclaw/pull/83717) | test(qa-lab): add personal share-safe diagnostics scenario | automerge-openclaw-openclaw-83578 | MERGEABLE | CLEAN | CANCELLED:14 SKIPPED:91 SUCCESS:71 NEUTRAL:1; blockers:7 | needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
 | [#83707](https://github.com/openclaw/openclaw/pull/83707) | fix(browser): preserve explicit cdpPort when cdpUrl omits port | automerge-openclaw-openclaw-82166 | CONFLICTING | DIRTY | CANCELLED:14 SKIPPED:102 SUCCESS:72 NEUTRAL:1; blockers:7 | needs_rebase:CONFLICTING, needs_merge_state:DIRTY, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | resume branch, rebase onto current main, repair conflicts, run changed checks, rerun review |
 | [#83691](https://github.com/openclaw/openclaw/pull/83691) | fix(models): respect auth order in picker label | automerge-openclaw-openclaw-83581 | MERGEABLE | CLEAN | CANCELLED:8 SKIPPED:80 SUCCESS:80 NEUTRAL:1; blockers:3 | needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
