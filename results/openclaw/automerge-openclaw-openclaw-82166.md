@@ -2,19 +2,19 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-82166"
 mode: "autonomous"
-run_id: "26047987068"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26047987068"
+run_id: "26051112037"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26051112037"
 head_sha: "58ac11959cadbccb61aad2455601c8c8788cde00"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-18T17:15:27.754Z"
-canonical: "#82166"
-canonical_issue: null
-canonical_pr: "#82166"
-actions_total: 1
+published_at: "2026-05-18T18:22:46.459Z"
+canonical: "https://github.com/openclaw/openclaw/pull/83707"
+canonical_issue: "https://github.com/openclaw/openclaw/issues/65204"
+canonical_pr: "https://github.com/openclaw/openclaw/pull/83707"
+actions_total: 4
 fix_executed: 0
 fix_failed: 0
-fix_blocked: 1
+fix_blocked: 0
 apply_executed: 0
 apply_blocked: 1
 apply_skipped: 0
@@ -25,26 +25,26 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/26047987068](https://github.com/openclaw/clawsweeper/actions/runs/26047987068)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/26051112037](https://github.com/openclaw/clawsweeper/actions/runs/26051112037)
 
 Workflow conclusion: success
 
 Worker result: planned
 
-Canonical: #82166
+Canonical: https://github.com/openclaw/openclaw/pull/83707
 
 ## Summary
 
-Make PR #82166 merge-ready for ClawSweeper automerge. Rebase onto latest main, address PR comments and review findings, fix CI/check failures, add required changelog if needed, and validate before returning.
+The original contributor PR #82166 is already closed as superseded by the writable replacement PR #83707. The replacement PR is the canonical repair path, but it is currently dirty/unmergeable against main, so the next deterministic step is to repair/rebase #83707, preserve @Marvae credit, rerun review and validation, and leave #65204 open until the fix lands.
 
 ## Impact
 
 | Metric | Count |
 | --- | ---: |
-| Worker actions | 1 |
+| Worker actions | 4 |
 | Fix executed | 0 |
 | Fix failed | 0 |
-| Fix blocked | 1 |
+| Fix blocked | 0 |
 | Applied executions | 0 |
 | Apply blocked | 1 |
 | Apply skipped | 0 |
@@ -54,8 +54,7 @@ Make PR #82166 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | blocked | https://github.com/openclaw/openclaw/pull/82166 |  | GitHub rejected the repair branch push because it updates workflow files and the ClawSweeper app token does not have workflows permission |
-| open_fix_pr | opened | https://github.com/openclaw/openclaw/pull/83707 | clawsweeper/automerge-openclaw-openclaw-82166 |  |
+| repair_contributor_branch | pushed | https://github.com/openclaw/openclaw/pull/83707 |  |  |
 
 ## Apply Actions
 
@@ -67,7 +66,10 @@ Make PR #82166 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #82166 | build_fix_artifact | planned | canonical | Maintainer opted this PR into ClawSweeper automerge/autofix repair; run the direct Codex edit loop after live hydration instead of a separate read-only planning pass. |
+| #82166 | keep_closed | skipped | superseded | Already closed source PR superseded by hydrated replacement PR #83707. |
+| #83707 | fix_needed | planned | canonical | Repair/rebase the canonical replacement PR before any future merge-capable applicator can consider it. |
+| #65204 | keep_related | planned | fixed_by_candidate | Issue is covered by the open canonical candidate #83707 but should not be closed until the fix lands. |
+| cluster:automerge-openclaw-openclaw-82166 | build_fix_artifact | planned | canonical | Canonical replacement PR is repairable but dirty/unmergeable. |
 
 ## Needs Human
 
