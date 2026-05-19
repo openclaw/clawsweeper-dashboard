@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-19T15:06:07.360Z",
+  "generated_at": "2026-05-19T15:12:12.415Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-19T12:06:06.892Z",
+  "since": "2026-05-19T12:12:09.957Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    84185
+    84195
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,18 +29,115 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:84195:4489140915:2026-05-19T15:12:05Z:clawsweeper_needs_human",
+      "comment_id": "4489140915",
+      "comment_version_key": "4489140915:2026-05-19T15:12:05Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84195#issuecomment-4489140915",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84195,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-19T15:07:59Z",
+      "comment_updated_at": "2026-05-19T15:12:05Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "No repair lane is needed because the open PR already contains the narrow code and test fix; maintainer action is normal review, CI, and merge.; Cleared: The diff only changes an in-memory Twitch handler cleanup guard and related tests; it does not touch secrets, dependencies, CI, packaging, or other security-sensitive surfaces. (sha=0709a1ab778a5cfdf677e5784b7ff64a04a81574)",
+      "review_summary": "The PR updates `TwitchClientManager.onMessage` cleanup to delete only its own registered handler and adds regression tests for stale cleanup and lone-handler cleanup.\n\nReproducibility: yes. Source inspection gives a high-confidence reproduction path: register handler A, register handler B for the same account key, then call cleanup A and current main deletes handler B from the map.",
+      "review_followup": "No repair lane is needed because the open PR already contains the narrow code and test fix; maintainer action is normal review, CI, and merge.",
+      "freeform_prompt": null,
+      "expected_head_sha": "0709a1ab778a5cfdf677e5784b7ff64a04a81574",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(twitch): guard onMessage cleanup against newer handler (#83888)",
+        "body": "Fixes #83888.\n\n`TwitchClientManager.onMessage` (`extensions/twitch/src/twitch-client.ts:197`) registers a handler under `getAccountKey(account)` and returns a cleanup closure that captures `key`. The closure calls `this.messageHandlers.delete(key)` unconditionally. If a second `onMessage(account, h2)` call overwrites the first handler — which `messageHandlers.set` silently does — and the first caller's cleanup then fires, it evicts the live `h2`. The account is left with no handler and the next inbound chat message — and every one after — is silently dropped. The bug is invisible to existing tests because none register two handlers for the same account key and then exercise the first cleanup.\n\n## Changes\n\n- `extensions/twitch/src/twitch-client.ts`: guard the cleanup closure with `if (this.messageHandlers.get(key) === handler) { this.messageHandlers.delete(key); }`. The lone-handler case is unchanged; the only difference is that a stale cleanup is now a no-op instead of yanking a newer handler out from under a second caller.\n- `extensions/twitch/src/twitch-client.test.ts`: two new regression cases under the existing `describe(\"onMessage\", …)` block. (i) Register `h1` → register `h2` (overwrites) → invoke `cleanup1` → assert `h2` is still the registered handler. (ii) Register `h_solo` → invoke `cleanup_solo` → assert the entry is removed (no regression on the single-handler path).\n\nDiff stat: 2 files, +32 / -1.\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** `messageHandlers` is the per-key `Map<string, (msg) => void>` at `twitch-client.ts:~70-80`; `getAccountKey(account)` derives a stable `{bot}:{channel}` string used for both `set` and the captured cleanup `key`. The new identity check makes the cleanup closure idempotent w.r.t. unrelated overwrites — only the exact registered handler is removed.\n\n- **Real environment tested:** Local Node 22.x. Probe at `/tmp/probe_83888.mjs` does both halves of the proof. (a) Parses the patched `twitch-client.ts` and verifies the cleanup closure contains `this.messageHandlers.get(key) === handler` and that the `set(key, handler)` precedes the guarded cleanup. (b) Replays the buggy and patched shapes in pure JS — registers two handlers for the same key, invokes the first cleanup, dispatches a message, and asserts: pre-fix shape silently drops the dispatch (confirms #83888's exact symptom: \"Inbound messages are silently dropped\"), patched shape preserves the second handler and delivers the dispatch, and the single-handler regression case still removes the lone entry on cleanup.\n\n- **Exact steps or command run after this patch:** `node /tmp/probe_83888.mjs`\n\n- **Evidence after fix:**\n\n```\nPASS: cleanup closure guards delete with identity check (this.messageHandlers.get(key) === handler)\nPASS: handler is registered via set() before the guarded cleanup closure is returned\nPASS: replay (buggy): cleanup1 deleted the live handler — message silently dropped (confirms #83888)\nPASS: replay (patched): cleanup1 saw mismatched handler and skipped — h2 still receives dispatch\nPASS: replay (patched, sole handler): cleanup of the only registered handler still removes it — no regression\n\nALL CASES PASS\n```\n\n- **Observed result after fix:** Stale cleanups from earlier `onMessage` registrations are now no-ops when a newer handler is in place. Inbound chat messages for the account continue to reach the newest registered handler. Single-handler unregister behavior is unchanged.\n\n- **What was not tested:** Live `tmi.js` Twitch chat connection — that requires an OAuth token + channel and is outside the scope of a handler-registration race fix. The new vitest cases drive the exact same public boundary the original test (`\"should replace existing handler for same account\"`) uses, plus the cleanup invocation and a dispatch-equivalent identity assertion.\n\n## Audit (per CLAUDE rules — all 5 steps)\n\n- **Existing-helper check:** No helper is needed for a `Map.get(key) === value` identity check — this is the canonical pattern for handler-table deregistration. PASS\n- **Shared-helper caller check:** `onMessage` has one production caller (`extensions/twitch/src/monitor.ts:266`, `monitorTwitchProvider`'s `unregisterHandler = clientManager.onMessage(...)`) plus six test sites. The new behavior is strictly a superset: same outcome on a single-handler timeline, no eviction of a newer handler on stale cleanup. PASS\n- **Broader-fix rival scan:** `gh pr list --search '83888 in:title,body'` and `gh pr list --search 'onMessage cleanup in:title,body'` return no open PRs. PASS\n- **Recent-merge audit:** `git log --oneline -5 -- extensions/twitch/src/twitch-client.ts` shows `4f4d108639 chore(lint): remove underscore-dangle allow list (#83542)` and `e1061a8b46 test(live): tolerate provider drift in release checks` — unrelated to handler registration. PASS\n- **Prototype-pollution scan:** N/A — single `Map.get` + `Map.delete` call.\n",
+        "branch": "fix-twitch-onmessage-cleanup-handler-check-83888",
+        "head_sha": "0709a1ab778a5cfdf677e5784b7ff64a04a81574",
+        "author": "hclsys",
+        "labels": [
+          "channel: twitch",
+          "size: XS",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "extensions/twitch/src/twitch-client.test.ts",
+            "additions": 24,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/twitch/src/twitch-client.ts",
+            "additions": 8,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84195",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84195.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 24,
+          "counts": {
+            "CANCELLED": 2,
+            "QUEUED": 4,
+            "SKIPPED": 12,
+            "SUCCESS": 6
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "preflight:QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 882,
+    "total_ms": 2832,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 456
+        "ms": 493
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1951
       },
       {
         "name": "classify_commands",
@@ -48,11 +145,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 415
+        "ms": 357
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
