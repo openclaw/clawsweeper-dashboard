@@ -1,22 +1,25 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-19T21:38:38.527Z",
+  "generated_at": "2026-05-19T21:39:16.640Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-19T18:38:36.269Z",
+  "since": "2026-05-19T18:39:14.692Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    84328
+    84224
+  ],
+  "comment_ids": [
+    4492268075
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,17 +34,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:84328:4492244765:2026-05-19T21:38:32Z:clawsweeper_needs_human",
-      "comment_id": "4492244765",
-      "comment_version_key": "4492244765:2026-05-19T21:38:32Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84328#issuecomment-4492244765",
+      "idempotency_key": "comment-router:openclaw/openclaw:84224:4492268075:2026-05-19T21:37:35Z:re_review",
+      "comment_id": "4492268075",
+      "comment_version_key": "4492268075:2026-05-19T21:37:35Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84224#issuecomment-4492268075",
       "repo": "openclaw/openclaw",
       "issue_number": 84328,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-19T21:34:01Z",
-      "comment_updated_at": "2026-05-19T21:38:32Z",
+      "comment_created_at": "2026-05-19T21:37:35Z",
+      "comment_updated_at": "2026-05-19T21:37:35Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -57,38 +60,75 @@
       "freeform_prompt": null,
       "expected_head_sha": "4c5aaf767f8bda69de9aa2e6f0a6657cf19bc036",
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-05-19T21:39:17.551Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 84224
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-19T21:39:18.530Z",
+          "response_comment_id": "4492256673",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(agent-runner): deliver assistant text as fallback when model skips message tool",
-        "body": "## Summary\n\nFixes #84327\n\nWhen `sourceReplyDeliveryMode` is `\"message_tool_only\"` (the default for Telegram group/channel chats), model responses were silently dropped if the model generated text without calling the `message` tool. This marks those payloads for fallback delivery so the user always sees the response.\n\n## Problem\n\nThe dispatch layer in `dispatch-from-config.ts` suppresses all reply payloads that lack `deliverDespiteSourceReplySuppression` metadata when `suppressDelivery` is true. Payloads from the `message` tool get this flag via `markReplyPayloadForSourceSuppressionDelivery`, but plain assistant text payloads from `buildEmbeddedRunPayloads` never do.\n\nWhen the model intermittently skips calling the `message` tool (observed after long idle periods when the Anthropic prompt cache goes cold), the response text is generated but silently discarded at the dispatch layer.\n\n## Fix\n\nIn `agent-runner.ts`, after the agent run completes: if `sourceReplyDeliveryMode` is `\"message_tool_only\"`, the model produced text payloads, and no side-effect delivery occurred (no message tool call, no block streaming, no cron adds), mark those payloads with `deliverDespiteSourceReplySuppression` so they bypass the dispatch suppression.\n\nUses the existing `hasSuccessfulSideEffectDelivery` helper so the fallback only activates when no other delivery path succeeded.\n\n## Real behavior proof\n\nTested on a live Telegram bot (OpenClaw v2026.5.12, `claude-opus-4-7` via Anthropic API, group chat with queue mode `steer`).\n\n**Before fix** — three consecutive turns with trajectory evidence:\n\n| Time (UTC) | outputTokens | toolMetas | didSend | assistantTexts | messagingToolSentTexts |\n|---|---|---|---|---|---|\n| 20:16 | 196 | `[]` | `false` | Full relevant response about meal planning | `[]` |\n| 20:17 | 96 | `[]` | `false` | \\\"Hey — did you see the lunch rec?\\\" | `[]` |\n| 20:19 | 56 | `[]` | `false` | Shortened repeat of lunch recommendation | `[]` |\n\nAll three responses were silently discarded. User saw nothing.\n\n**After fix** — deployed the fix and restarted gateway:\n\n| Time (UTC) | outputTokens | toolMetas | didSend | assistantTexts | delivered? |\n|---|---|---|---|---|---|\n| 21:19 | 11 | `[]` | `false` | \\\"Pong. Here.\\\" | **Yes** — delivered to Telegram |\n\nSame pattern (model skipped message tool), but the fallback delivery kicked in and the user received the response.\n\n**What was not tested:** Block streaming interaction (block streaming was enabled but the model didn't stream in the broken turns). The fix checks `hasSuccessfulSideEffectDelivery` which covers block streaming, so there should be no double-delivery when block streaming succeeds.\n\n## Verification\n\n```\npnpm test src/auto-reply/reply/agent-runner-payloads.test.ts     # 36 passed\npnpm test src/auto-reply/reply/agent-runner-execution.test.ts    # 72 passed\npnpm test src/auto-reply/reply/agent-runner-direct-runtime-config.test.ts  # 5 passed\npnpm test src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts     # 38 passed\npnpm test src/auto-reply/reply/dispatch-from-config.test.ts      # 107 passed\npnpm test src/auto-reply/reply/source-reply-delivery-mode.test.ts # 17 passed\npnpm build  # clean\n```\n\n🤖 AI-assisted: diagnosis and fix authored with Claude Code (Opus 4.6). Human confirmed the fix works via live Telegram testing.",
-        "branch": "fix/message-tool-fallback-delivery",
-        "head_sha": "4c5aaf767f8bda69de9aa2e6f0a6657cf19bc036",
-        "author": "billehunt",
+        "title": "fix(doctor): handle gateway SecretRefs in auth checks",
+        "body": "## Summary\n\n- Problem: doctor gateway-auth checks can treat a resolving `gateway.auth.token` SecretRef as unavailable because `resolveGatewayAuth()` does not materialize SecretRef object values.\n- Solution: resolve safe gateway token SecretRefs through the existing SecretRef-aware resolver before emitting the gateway-auth warning.\n- What changed: both the lint/core health check and interactive doctor health path resolve non-exec SecretRefs before warning, preserve the default no-exec doctor boundary, and include clearer diagnostics.\n- What did NOT change (scope boundary): this does not change gateway startup auth, SecretRef provider behavior, service install behavior, token storage, or add a doctor `--allow-exec` option.\n\nAI-assisted: prepared with Codex.\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor required for the fix\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [ ] Skills / tool execution\n- [x] Auth / tokens\n- [ ] Memory / storage\n- [ ] Integrations\n- [ ] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- Related #77687\n- Related #65201\n- Related #77698\n- [x] This PR fixes a bug or regression\n\n## Motivation\n\n- SecretRef-backed gateway auth is supported, but doctor and doctor lint were checking the raw auth config through a synchronous resolver that intentionally does not materialize SecretRef values.\n- #77698 fixes the same general interactive doctor warning direction. This PR extends the fix shape to `doctor-core-checks.ts` for `openclaw doctor --lint --json`, while preserving the existing no-exec default for diagnostic commands.\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: false `core/doctor/gateway-auth` warning for a successfully resolving env/file-style SecretRef, plus safer wording for exec-backed SecretRefs that doctor intentionally does not execute by default.\n- Real environment tested: macOS, local OpenClaw source checkout used by the CLI and gateway service.\n- Exact steps or command run after this patch:\n  - `node scripts/run-vitest.mjs run src/commands/doctor.warns-state-directory-is-missing.e2e.test.ts src/flows/doctor-core-checks.test.ts`\n  - `pnpm exec vitest run src/commands/doctor-gateway-auth-token.test.ts`\n  - `pnpm build`\n  - `openclaw doctor --lint --json` against a temporary config with `gateway.auth.token` as a resolving env SecretRef\n  - `openclaw doctor --lint --json` against the real local setup with `gateway.auth.token` as an intentional 1Password-backed exec SecretRef\n- Evidence after fix:\n\n```shell\nnode scripts/run-vitest.mjs run src/commands/doctor.warns-state-directory-is-missing.e2e.test.ts src/flows/doctor-core-checks.test.ts\nTest Files  2 passed (2)\nTests       21 passed (21)\n\npnpm exec vitest run src/commands/doctor-gateway-auth-token.test.ts\nTest Files  1 passed (1)\nTests       13 passed (13)\n\npnpm build\npassed\n```\n\nResolving env SecretRef behavior, using a temporary redacted config and filtering for only gateway-auth findings:\n\n```shell\nOPENCLAW_CONFIG_PATH=\"$tmpdir/openclaw.json\" \\\nOPENCLAW_STATE_DIR=\"$tmpdir/state\" \\\nOPENCLAW_TEST_GATEWAY_TOKEN=\"resolved-test-token\" \\\nopenclaw doctor --lint --json | <filter core/doctor/gateway-auth findings>\n\n[]\n```\n\nDefault exec SecretRef behavior on the real setup, filtered to only the gateway-auth finding:\n\n```json\n[\n  {\n    \"checkId\": \"core/doctor/gateway-auth\",\n    \"severity\": \"warning\",\n    \"message\": \"Gateway token SecretRef uses an exec provider and was not verified by doctor.\",\n    \"path\": \"gateway.auth.token\",\n    \"fixHint\": \"Run `openclaw secrets audit --allow-exec` to verify exec SecretRefs, or use an env/file SecretRef if doctor should verify it by default.\"\n  }\n]\n```\n\n- Observed result after fix:\n  - A resolving env SecretRef no longer emits `core/doctor/gateway-auth`.\n  - A configured exec SecretRef is not executed by default and now reports that doctor did not verify it, instead of saying it is unavailable.\n- What was not tested: a live unresolved external env/file provider path; existing unresolved coverage remains and this PR preserves the warning path.\n- Before evidence (optional but encouraged):\n\n```json\n{\n  \"checkId\": \"core/doctor/gateway-auth\",\n  \"severity\": \"warning\",\n  \"message\": \"Gateway token is managed via SecretRef and is currently unavailable.\",\n  \"path\": \"gateway.auth.token\"\n}\n```\n\nThe real local setup's SecretRef-aware token resolver returned this redacted result before the exec boundary was restored, without printing the token:\n\n```json\n{\n  \"hasToken\": true,\n  \"source\": \"secretRef\",\n  \"secretRefConfigured\": true\n}\n```\n\n## Root Cause (if applicable)\n\n- Root cause: doctor checked gateway auth through `resolveGatewayAuth()`, which intentionally does not materialize SecretRef object values. For SecretRef-backed token auth, that left `auth.token` unset and made doctor report the configured token as unavailable.\n- Missing detection / guardrail: existing doctor coverage asserted the unresolved SecretRef warning branch, but did not cover a resolved SecretRef no-warning case or the default no-exec boundary.\n- Contributing context (if known): #77698 identified the same interactive doctor warning path. This PR extends the fix shape to the lint/core health check path and adds no-exec coverage.\n\n## Regression Test Plan (if applicable)\n\n- Coverage level that should have caught this:\n  - [ ] Unit test\n  - [ ] Seam / integration test\n  - [x] End-to-end test\n  - [ ] Existing coverage already sufficient\n- Target test or file:\n  - `src/commands/doctor.warns-state-directory-is-missing.e2e.test.ts`\n  - `src/flows/doctor-core-checks.test.ts`\n- Scenario the test should lock in:\n  - A local token-auth gateway config with `gateway.auth.token` as an env SecretRef should not emit the Gateway auth SecretRef warning when the SecretRef resolves.\n  - A local token-auth gateway config with `gateway.auth.token` as an exec SecretRef should not execute the exec provider during default lint checks.\n- Why this is the smallest reliable guardrail: it exercises the doctor command and structured health check paths around gateway auth without needing a live external credential provider.\n- Existing test that already covers this (if any): `src/commands/doctor-gateway-auth-token.test.ts` already covers token resolver behavior; the new tests cover doctor behavior.\n- If no new test is added, why not: N/A\n\n## User-visible / Behavior Changes\n\n- Doctor no longer warns that a resolving non-exec SecretRef-managed gateway token is unavailable.\n- If an exec SecretRef is configured, default doctor checks do not execute it and now say it was not verified by doctor.\n- If a non-exec SecretRef does not resolve, doctor still warns and includes the resolver's concrete failure reason when available.\n\n## Diagram (if applicable)\n\n```text\nBefore:\ngateway.auth.token SecretRef -> resolveGatewayAuth() -> no materialized token -> unavailable warning\n\nAfter:\ngateway.auth.token env/file SecretRef -> resolveGatewayAuthToken() -> resolved token -> no warning\ngateway.auth.token env/file SecretRef -> resolveGatewayAuthToken() -> unresolved -> warning with reason\ngateway.auth.token exec SecretRef -> no default execution -> not-verified warning\n```\n\n## Security Impact (required)\n\n- New permissions/capabilities? (`Yes/No`) No\n- Secrets/tokens handling changed? (`Yes/No`) Yes\n- New/changed network calls? (`Yes/No`) No\n- Command/tool execution surface changed? (`Yes/No`) No\n- Data access scope changed? (`Yes/No`) No\n- If any `Yes`, explain risk + mitigation:\n  - The change resolves configured non-exec `gateway.auth.token` SecretRefs through the existing gateway token resolver after doctor determines token auth needs a token. It does not print or persist the token.\n  - Exec SecretRefs are explicitly not executed during default doctor checks. They keep a warning with an actionable `openclaw secrets audit --allow-exec` verification path.\n\n## Repro + Verification\n\n### Environment\n\n- OS: macOS\n- Runtime/container: local source checkout / Node CLI\n- Model/provider: not model-dependent\n- Integration/channel (if any): local gateway auth / doctor CLI\n- Relevant config (redacted): `gateway.auth.mode: \"token\"` and `gateway.auth.token` as a SecretRef.\n\n### Steps\n\n1. Configure local gateway token auth with `gateway.auth.token` as a resolving env/file SecretRef.\n2. Run `openclaw doctor --lint --json` on current main.\n3. Observe `core/doctor/gateway-auth` warning.\n4. Apply this patch and rebuild.\n5. Run `openclaw doctor --lint --json` again.\n6. Configure `gateway.auth.token` as an exec SecretRef and run doctor lint.\n\n### Expected\n\n- A resolving non-exec SecretRef-backed gateway token should not produce an unavailable-token warning.\n- An exec SecretRef should not execute during default doctor lint.\n\n### Actual\n\n- After this patch, the env SecretRef test config emits no `core/doctor/gateway-auth` finding.\n- The real exec SecretRef setup emits a clearer not-verified warning and points to `openclaw secrets audit --allow-exec`.\n\n## Evidence\n\n- [x] Failing test/log before + passing after\n- [x] Trace/log snippets\n- [ ] Screenshot/recording\n- [ ] Perf numbers (if relevant)\n\n## Human Verification (required)\n\nWhat you personally verified (not just CI), and how:\n\n- Verified scenarios:\n  - Resolved env SecretRef-backed gateway token no longer emits `core/doctor/gateway-auth`.\n  - Exec SecretRef-backed gateway token is not executed during default lint checks.\n  - Existing unresolved SecretRef read-only doctor behavior remains covered.\n  - Gateway token resolver tests still pass.\n- Edge cases checked:\n  - Lint/JSON doctor path and interactive doctor path both apply the same message/fix-hint helper.\n- What you did **not** verify:\n  - A live unresolved external env/file SecretRef provider failure path.\n  - A new doctor `--allow-exec` flow, because this PR intentionally does not add one.\n\n## Review Conversations\n\n- [x] I replied to or resolved every bot review conversation I addressed in this PR.\n- [x] I left unresolved only the conversations that still need reviewer or maintainer judgment.\n\nIf a bot review conversation is addressed by this PR, resolve that conversation yourself. Do not leave bot review conversation cleanup for maintainers.\n\n## Compatibility / Migration\n\n- Backward compatible? (`Yes/No`) Yes\n- Config/env changes? (`Yes/No`) No\n- Migration needed? (`Yes/No`) No\n- If yes, exact upgrade steps: N/A\n\n## Risks and Mitigations\n\n- Risk: exec-backed setups still see a warning.\n  - Mitigation: the warning now says doctor did not verify the exec SecretRef by default and points to `openclaw secrets audit --allow-exec`. Adding a doctor exec opt-in can be handled separately if maintainers want that behavior.\n",
+        "branch": "fix/doctor-gateway-secretref-lint",
+        "head_sha": "132e6d22921f4fac05d7a9bc930f29b4ae7fdafe",
+        "author": "funmerlin",
         "labels": [
-          "size: XS",
-          "triage: needs-real-behavior-proof",
-          "proof: sufficient",
-          "mantis: telegram-visible-proof",
+          "commands",
+          "size: M",
+          "proof: supplied",
           "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look"
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/auto-reply/reply/agent-runner.ts",
-            "additions": 25,
+            "path": "src/commands/doctor.warns-state-directory-is-missing.e2e.test.ts",
+            "additions": 46,
             "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-core-checks.test.ts",
+            "additions": 85,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-core-checks.ts",
+            "additions": 49,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-health-contributions.ts",
+            "additions": 25,
+            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84328",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84328.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84224",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84224.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
@@ -96,10 +136,9 @@
         "checks": {
           "total": 51,
           "counts": {
-            "CANCELLED": 2,
-            "QUEUED": 10,
-            "SKIPPED": 11,
-            "SUCCESS": 7
+            "SUCCESS": 8,
+            "SKIPPED": 12,
+            "QUEUED": 10
           },
           "blockers": [
             "Real behavior proof:CANCELLED",
@@ -123,21 +162,20 @@
             "Real behavior proof:CANCELLED"
           ]
         }
-      },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      }
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2470,
+    "total_ms": 4438,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 302
+        "ms": 539
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1941
+        "ms": 1389
       },
       {
         "name": "classify_commands",
@@ -145,7 +183,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 201
+        "ms": 2479
       },
       {
         "name": "append_ledger",
