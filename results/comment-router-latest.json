@@ -1,15 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-19T17:23:35.913Z",
+  "generated_at": "2026-05-19T17:23:32.291Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-19T14:23:33.514Z",
+  "since": "2026-05-19T14:23:29.832Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    84046
+    40782
+  ],
+  "comment_ids": [
+    4490277224
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,17 +34,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:84046:4485703837:2026-05-19T17:23:27Z:automerge",
-      "comment_id": "4485703837",
-      "comment_version_key": "4485703837:2026-05-19T17:23:27Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84046#issuecomment-4485703837",
+      "idempotency_key": "comment-router:openclaw/openclaw:83169:4490277224:2026-05-19T17:21:51Z:re_review",
+      "comment_id": "4490277224",
+      "comment_version_key": "4490277224:2026-05-19T17:21:51Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83169#issuecomment-4490277224",
       "repo": "openclaw/openclaw",
       "issue_number": 84046,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-19T08:09:03Z",
-      "comment_updated_at": "2026-05-19T17:23:27Z",
+      "comment_created_at": "2026-05-19T17:21:51Z",
+      "comment_updated_at": "2026-05-19T17:21:51Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "automerge",
@@ -57,23 +60,39 @@
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "ignored",
-      "actions": [],
-      "author_repository_permission": "none",
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-05-19T17:23:33.115Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 83169
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-19T17:23:34.175Z",
+          "response_comment_id": "4490267215",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): count user turns instead of stat for embedded session takeover fence",
-        "body": "## Summary\n\nThe embedded attempt session-lock fence uses a `stat()`-based fingerprint (`dev`, `ino`, `size`, `mtimeNs`, `ctimeNs`) to detect \"another lane queued a new user turn against this session\" while the runner releases its coarse lock for the LLM prompt window. The fingerprint is a proxy that overfires: every transcript-append the runner itself performs during the released window — `appendSessionTranscriptMessageLocked` writes tool calls, tool results, and assistant replies via `acquireSessionWriteLock(..., allowReentrant: true)` — changes the file's `size`/`mtimeNs`/`ctimeNs` without going through `refreshSessionFileFence`. Long DM turns with tool calls then trip `assertSessionFileFence` and throw `EmbeddedAttemptSessionTakeoverError` after the reply has already been delivered, surfacing a misleading \"Agent failed before reply\" message on top of a successful turn.\n\nKeep the stat fingerprint as the fast path. On mismatch, only tolerate the runner's append-only assistant/tool transcript shape; treat everything else as a real takeover. The verification requires ALL of:\n\n- **dev/ino match** — no atomic replacement onto a new inode.\n- **birthtimeNs matches** — catches the unlink+recreate-same-inode case (common on tmpfs/ext4 with rapid recreation, where dev and ino are reused but the inode itself is fresh).\n- **size grew** — file is append-only between fence-set and assert.\n- **bytes `[0, fenceSize)` hash identical to the fenced prefix hash** — no in-place rewrite of earlier transcript content (catches compaction-style rewrites that happen to land on a same-byte boundary).\n- **bytes `[fenceSize, currentSize)` are message entries with role `assistant` or `tool`** — no new user-role turn, no malformed tail.\n\nAnything else — replacement, shrink, in-place rewrite, new user turn, or compaction — remains a real takeover. The fence snapshot captures the prefix SHA-256 alongside the fingerprint at `releaseForPrompt` and `refreshSessionFileFence` so the slow path can verify rigorously without keeping a file handle open.\n\nCloses #83436.\nRefs #83615 (this PR addresses the EmbeddedAttemptSessionTakeoverError surface; the issue also tracks unrelated kimi-k2.6 schema and DNS-fetch failures).\n\n## Real behavior proof\n\n**Behavior addressed**: Embedded runner false-positive `EmbeddedAttemptSessionTakeoverError` fires after long Telegram DM turns whose reply was already delivered, surfacing a misleading \"Agent failed before reply\" message on top of a successful run.\n\n**Real environment tested**: OpenClaw 2026.5.19-beta.1, Linux x86_64, Node 24.13.0. Long-running Telegram DM session against `claude-opus-4-7` (~3.5 min turn with multiple `exec` and `message` tool calls), reproduced reliably before this patch. Production behavior probed via runtime-patched `dist/selection-BpjGe-Y0.js` carrying the same fix semantics, then long DM runs (41s–122s) exercised through the Telegram channel post-restart.\n\n**Exact steps or command run after this patch**:\n```\nCI=true pnpm test src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts\nCI=true pnpm check:changed --staged=false\nopenclaw gateway restart\n```\n\n**Evidence after fix**:\n\nPre-patch failure mode, redacted runtime log from gateway (`/tmp/openclaw/openclaw-2026-05-19.log`):\n```\n03:30:06.971  embedded run agent end: runId=bbd7d487 isError=false\n03:30:07.008  embedded run prompt end: runId=bbd7d487 sessionId=<session-id> durationMs=217236\n03:30:07.054  lane task error: lane=main durationMs=219867 error=\"EmbeddedAttemptSessionTakeoverError: session file changed while embedded prompt lock was released: /home/.../agents/main/sessions/<session-id>.jsonl\"\n03:30:07.071  Embedded agent failed before reply: session file changed while embedded prompt lock was released: /home/.../<session-id>.jsonl\n```\nNote `isError=false` at `03:30:06.971` — the assistant turn and `message` tool delivery both succeeded — followed 47ms later by the takeover throw, surfacing as a misleading Telegram error on top of a delivered reply.\n\nPost-patch behavior on the same gateway, four long DM runs after gateway restart at 03:46 EDT, every one delivering cleanly with zero takeover errors (redacted runtime log):\n```\n03:51:18  embedded run prompt end: runId=62395ffd  durationMs=122344  (no takeover)\n03:52:39  embedded run prompt end: runId=67e21652  durationMs=41345   (no takeover)\n04:05:05  embedded run prompt end: runId=a5994980  durationMs=101810  (no takeover)\n04:07:34  embedded run prompt end: runId=a837440b  durationMs=94395   (no takeover)\n```\nThe post-patch window contains only two \"Embedded agent failed before reply\" entries (at 04:05:06 and 04:07:35), both with cause `LLM request timed out` — unrelated to the takeover path. Zero `SessionTakeoverError` occurrences post-patch.\n\n**Observed result after fix**: The renamed existing test (`rejects post-prompt writes when another owner queues a new user turn`) still asserts the takeover when a `role: \"user\"` entry is appended during the released window. Three new tests cover the runner's own assistant/tool appends (pass cleanly), in-place rewrite (rejected via prefix hash mismatch), and unlink+recreate-same-inode replacement (rejected via `birthtimeNs` mismatch even when the prefix bytes coincidentally match and the tail looks runner-owned). Targeted Vitest output:\n```\n Test Files  1 passed (1)\n      Tests  16 passed (16)\n   Start at  04:24:31\n   Duration  884ms\n```\n`check:changed --staged=false` is clean: 0 lint warnings/errors across 8647 files, 0 import cycles, all typecheck/build/security/quality lanes pass.\n\n**What was not tested**: Multi-process write contention on the same `sessionFile` from a different gateway process (no test infrastructure for cross-process locks in this surface). The prefix-hash check is `O(fenceSize)` I/O per fence-set; in production sessions seen so far (≤ ~150 KB) this is sub-millisecond.\n\n## Notes\n\n- Adds three helpers near `readSessionFileFingerprint`: `FenceSnapshot` type, `snapshotSessionFileFence` (used at `releaseForPrompt` and `refreshSessionFileFence`), and `verifyAppendOnlyRunnerOwnedExtension` (used in the slow path of `assertSessionFileFence`). No new module-level dependencies beyond `node:crypto`'s `createHash`.\n- Replaces one piece of controller state (`fenceFingerprint: SessionFileFingerprint | undefined`) with `fenceSnapshot: FenceSnapshot | undefined`. No new long-lived resources (no held file handles).\n- This is the second revision of #84046; the first revision (count-only check) was flagged P1 by ClawSweeper for accepting same-user-count rewrites/replacements. This revision addresses that finding directly.\n",
-        "branch": "kevin/fix-session-takeover-falsepositive",
-        "head_sha": "f86881c87ae6686fd20f43deb36efbe3bf38f476",
-        "author": "kays0x",
+        "title": "Discord: add reaction notification wake policy",
+        "body": "## Summary\n\n- Add shared `notificationWake.reactions` policy support so notification-backed reaction events queue by default, can opt into immediate wake, or can be disabled with `off`.\n- Wire Discord reaction notifications through that shared helper after existing Discord ingress authorization and routing.\n- Preserve stable `reaction_key` values for standard/custom emoji and keep deduped reaction events from waking.\n- Add heartbeat preflight handling so `notification-wake:*` wakes still run when `HEARTBEAT.md` is empty, while generic notification events continue to honor the empty-file skip.\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [x] Feature\n- [ ] Refactor required for the fix\n- [x] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [ ] Skills / tool execution\n- [ ] Auth / tokens\n- [ ] Memory / storage\n- [x] Integrations\n- [x] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- Closes #83164\n- Related #47687\n- Related #83611\n- [x] This PR fixes a bug or regression\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: Discord reaction notifications now pass through a shared notification wake policy. Accepted reactions enqueue routed system events by default, `notificationWake.reactions: \"wake\"` requests a targeted `notification-wake:discord-reaction` heartbeat only after successful enqueue, `off` skips enqueue after ingress authorization, and deduped events do not wake.\n- Real environment tested: redacted OpenClaw source checkout on PR head `31de50ea3b8e`. Earlier redacted Discord API canary proof on this PR verified the Discord bot/API reaction path and listener event shape without publishing secrets, usernames, chat titles, local paths, or raw IDs; the current head was reverified with focused policy/runtime regression tests and project checks below.\n- Exact steps or command run after this patch:\n  - `node scripts/run-vitest.mjs src/infra/notification-system-events.test.ts extensions/discord/src/monitor.test.ts src/infra/heartbeat-runner.returns-default-unset.test.ts`\n  - `pnpm config:channels:check`\n  - `pnpm config:docs:check`\n  - `pnpm exec oxfmt --check --threads=1 CHANGELOG.md docs/channels/discord.md extensions/discord/src/monitor.test.ts extensions/discord/src/monitor/listeners.reactions.ts src/config/types.agent-defaults.ts src/config/types.agents.ts src/config/types.channels.ts src/config/types.discord.ts src/config/types.notifications.ts src/config/types.openclaw.ts src/config/zod-schema.agent-defaults.ts src/config/zod-schema.agent-runtime.ts src/config/zod-schema.channels-config.ts src/config/zod-schema.notifications.ts src/config/zod-schema.providers-core.ts src/config/zod-schema.ts src/infra/heartbeat-runner.returns-default-unset.test.ts src/infra/heartbeat-runner.ts src/infra/notification-system-events.test.ts src/infra/notification-system-events.ts src/plugin-sdk/system-event-runtime.ts`\n  - `git diff --check && git diff --cached --check`\n  - `pnpm tsgo:prod`\n  - `pnpm test:contracts:plugins`\n- Evidence after fix:\n  Redacted terminal output from the live Discord API canary for this PR's reaction listener path:\n\n```json\n{\n  \"discordBotIdentity\": \"verified_with_getCurrentUser\",\n  \"canaryMessagePosted\": true,\n  \"botReactionAddedViaRest\": true,\n  \"guildHash\": \"01738befea7f\",\n  \"channelHash\": \"5e33a98adfea\",\n  \"messageHash\": \"9464114d77b7\",\n  \"actorHash\": \"ab848dd6c34a\",\n  \"systemEventQueued\": true,\n  \"heartbeatRequestCallPresent\": true,\n  \"sessionKeyHash\": \"7fbbcb1140b0\",\n  \"eventTextShape\": \"Discord reaction added: <emoji> by <actor> on <guild> <channel> msg <message-id> (reaction_key=emoji:<emoji>) from <message-author>\",\n  \"contextKeyHash\": \"d99c9ca6122b\",\n  \"forceSenderIsOwnerFalse\": true,\n  \"listenerLogs\": []\n}\n```\n\n  - Focused regression tests passed: 3 files, 92 tests.\n  - Generated channel config check passed.\n  - Generated docs baseline check passed with `OK docs/.generated/config-baseline.sha256`.\n  - Formatter reported all 21 touched files use the correct format.\n  - Git whitespace checks exited cleanly.\n  - Typecheck passed for core and extensions through `pnpm tsgo:prod`.\n  - Plugin contracts passed: 62 files, 857 tests.\n- Observed result after fix: default Discord reaction handling queues exactly one system event and does not request heartbeat; opt-in `notificationWake.reactions: \"wake\"` requests `source: \"notifications-event\"`, `intent: \"immediate\"`, `reason: \"notification-wake:discord-reaction\"`, the routed `agentId`, and routed `sessionKey`; `off` skips enqueue; duplicate enqueue does not wake; custom emoji retain stable `reaction_key=custom_emoji:<id>` context keys; `notification-wake:*` preflight bypasses empty `HEARTBEAT.md` skip while generic notification events do not.\n- What was not tested: no production Discord Gateway restart was performed after this follow-up refactor. The prior redacted live Discord API canary on this PR covered external bot/API reaction reachability; this update adds exact current-head local runtime proof for the wake policy and heartbeat preflight behavior.\n- Before evidence (optional but encouraged): the previous patch woke every accepted Discord reaction immediately, which made the behavior too aggressive and inconsistent with the shared notification policy in #83611.\n\n## Root Cause (if applicable)\n\n- Root cause: Discord reaction notification enqueue was wired directly to heartbeat wake behavior instead of going through a configurable notification wake policy.\n- Missing detection / guardrail: tests covered reaction enqueue/routing but did not distinguish queue-by-default, opt-in wake, disabled enqueue, deduped no-wake, or empty-`HEARTBEAT.md` notification wake preflight.\n- Contributing context (if known): Discord and Telegram reaction PRs were converging on similar semantics without a shared helper.\n\n## Regression Test Plan (if applicable)\n\n- Coverage level that should have caught this:\n  - [x] Unit test\n  - [x] Seam / integration test\n  - [ ] End-to-end test\n  - [ ] Existing coverage already sufficient\n- Target tests or files:\n  - `src/infra/notification-system-events.test.ts`\n  - `extensions/discord/src/monitor.test.ts`\n  - `src/infra/heartbeat-runner.returns-default-unset.test.ts`\n- Scenario the tests lock in: shared policy resolution precedence, queue default, explicit wake, explicit off, deduped no-wake, Discord listener wiring, custom emoji stable keys, and notification wake preflight through empty `HEARTBEAT.md`.\n- Why this is the smallest reliable guardrail: these tests exercise the shared helper and Discord listener seam directly without broad channel startup or live gateway flake.\n- Existing test that already covers this (if any): existing Discord reaction tests covered authorization/routing and enqueue shape; this PR adds the missing wake-policy assertions.\n\n## User-visible / Behavior Changes\n\nDiscord reaction notifications that pass existing access controls are queued on the routed session by default. Operators can set `channels.discord.notificationWake.reactions: \"wake\"` for immediate reaction-only turns or `\"off\"` to suppress reaction notification enqueueing after authorization. System event text keeps stable `reaction_key=emoji:<emoji>` and `reaction_key=custom_emoji:<id>` markers.\n\n## Diagram (if applicable)\n\n```text\nDefault:\n[Discord reaction] -> [existing ingress authorization] -> [routed system event queued]\n\nOpt-in wake:\n[Discord reaction] -> [existing ingress authorization] -> [routed system event queued] -> [notification-wake heartbeat]\n\nDisabled:\n[Discord reaction] -> [existing ingress authorization] -> [notificationWake.reactions=off] -> [skip enqueue]\n```\n\n## Security Impact (required)\n\n- New permissions/capabilities? No\n- Secrets/tokens handling changed? No\n- New/changed network calls? No\n- Command/tool execution surface changed? No\n- Data access scope changed? No\n- If any `Yes`, explain risk + mitigation: N/A\n\n## Repro + Verification\n\n### Environment\n\n- OS: redacted local development environment\n- Runtime/container: local source checkout\n- Model/provider: N/A\n- Integration/channel (if any): Discord monitor harness and shared notification/heartbeat runtime tests\n- Relevant config (redacted): default reaction policy, `notificationWake.reactions: \"wake\"`, and `notificationWake.reactions: \"off\"`\n\n### Steps\n\n1. Run the focused notification, Discord monitor, and heartbeat preflight tests.\n2. Run generated config/docs checks.\n3. Run formatter, whitespace, typecheck, and plugin contract checks.\n\n### Expected\n\n- Accepted reactions queue by default.\n- Explicit wake policy requests the routed notification heartbeat after enqueue.\n- Disabled policy skips enqueue.\n- Deduped events do not wake.\n- Empty `HEARTBEAT.md` does not suppress `notification-wake:*` turns.\n\n### Actual\n\n- Passed as described in the proof section.\n\n## Evidence\n\n- [x] Failing test/log before + passing after\n- [x] Trace/log snippets\n- [ ] Screenshot/recording\n- [ ] Perf numbers (if relevant)\n\n## Human Verification (required)\n\n- Verified scenarios: shared policy default/override resolution, Discord queue default, opt-in wake, off skip, deduped no-wake, custom emoji stable key, heartbeat preflight for notification wake, generated config/docs consistency, typecheck, plugin contract suite.\n- Edge cases checked: blocked DM/guild/group reactions remain blocked by existing tests, reaction notification modes still gate behavior, generic notification events still skip when `HEARTBEAT.md` is empty.\n- What you did **not** verify: production Discord Gateway delivery after this follow-up refactor.\n\n## Review Conversations\n\n- [x] I replied to or resolved every bot review conversation I addressed in this PR.\n- [ ] I left unresolved only the conversations that still need reviewer or maintainer judgment.\n\n## Compatibility / Migration\n\n- Backward compatible? Yes\n- Config/env changes? Optional new `notificationWake.reactions` config\n- Migration needed? No\n- If yes, exact upgrade steps: N/A\n\n## Risks and Mitigations\n\n- Risk: operators expecting every reaction to wake immediately need an explicit opt-in.\n  - Mitigation: default queue preserves visibility without surprise model wakes; `notificationWake.reactions: \"wake\"` restores immediate processing intentionally.\n- Risk: notification wake preflight could over-bypass empty `HEARTBEAT.md` gating.\n  - Mitigation: the bypass is limited to `source: \"notifications-event\"` plus `reason` prefix `notification-wake:`; generic notification events still skip.\n",
+        "branch": "codex/discord-reaction-wake",
+        "head_sha": "31de50ea3b8e362eba0724b47e39c473d704a92c",
+        "author": "100menotu001",
         "labels": [
-          "agents",
-          "size: M",
+          "docs",
+          "channel: discord",
+          "size: L",
           "proof: supplied",
-          "proof: sufficient",
-          "mantis: telegram-visible-proof",
-          "P1",
+          "P2",
           "rating: 🧂 unranked krab",
           "merge-risk: 🚨 session-state",
           "status: ⏳ waiting on author"
@@ -110,12 +129,34 @@
         "checks": {
           "total": 102,
           "counts": {
-            "SUCCESS": 74,
-            "SKIPPED": 27,
-            "NEUTRAL": 1
+            "SUCCESS": 8,
+            "QUEUED": 10,
+            "SKIPPED": 12
           },
-          "blockers": [],
-          "pending": [],
+          "blockers": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
           "terminalBlockers": []
         }
       },
@@ -488,15 +529,15 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2650,
+    "total_ms": 4884,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 399
+        "ms": 513
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1985
+        "ms": 1931
       },
       {
         "name": "classify_commands",
@@ -504,7 +545,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 251
+        "ms": 2414
       },
       {
         "name": "append_ledger",
