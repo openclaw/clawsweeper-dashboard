@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-19T04:17:46.906Z",
+  "generated_at": "2026-05-19T04:18:58.955Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-19T01:17:44.925Z",
+  "since": "2026-05-19T01:18:56.611Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    83980
+    82572
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4484331055
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,117 +31,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:83980:4484312208:2026-05-19T04:17:40Z:clawsweeper_needs_human",
-      "comment_id": "4484312208",
-      "comment_version_key": "4484312208:2026-05-19T04:17:40Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83980#issuecomment-4484312208",
-      "repo": "openclaw/openclaw",
-      "issue_number": 83980,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-19T04:12:27Z",
-      "comment_updated_at": "2026-05-19T04:17:40Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "This needs contributor proof and maintainer validation of the shared timeout behavior rather than an automated repair.; Cleared: The diff only changes local pairing-state read serialization and a Swift timeout constant; no dependency, CI, secret, permission, or code-download surface is added. (sha=7fc4cabcd07798596d81a01bbe03648867ba3d23)",
-      "review_summary": "The PR serializes node-pairing read helpers under the existing lock and increases `GatewayNodeSession`'s post-connect snapshot wait from 500 ms to 5000 ms.\n\nReproducibility: no. high-confidence live reproduction was run in this read-only review. The linked issue has concrete commands/logs and current source shows the implicated node-pairing reads are outside the existing lock, so the race is source-reproducible but not locally reproduced.",
-      "review_followup": "This needs contributor proof and maintainer validation of the shared timeout behavior rather than an automated repair.",
-      "freeform_prompt": null,
-      "expected_head_sha": "7fc4cabcd07798596d81a01bbe03648867ba3d23",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: stabilize macOS app node connection and eliminate pairing file read/write race",
-        "body": "## Summary\n\nFixes #83958 — macOS app node flaps online/offline and gateway invokes time out.\n\n## Root Cause\n\n1. **`pending.json` read/write race**: `node-pairing.ts` read-only operations (`listNodePairing()`, `getPairedNode()`, `verifyNodeToken()`) called `loadState()` **outside** the `withLock()` mutex. Concurrent writes to `pending.json`/`paired.json` could cause \"File changed during read\" errors.\n\n2. **`waitForSnapshot` timeout too short**: `GatewayNodeSession.swift` only waited 500ms for the gateway snapshot after connecting. On slower networks or when the gateway is under load, this caused the node to proceed before registration completed, leading to \"closed before connect\" and failed invokes.\n\n## Changes\n\n### `src/infra/node-pairing.ts`\n- Move `loadState()` **inside** `withLock()` for all read-only operations:\n  - `listNodePairing()`\n  - `getPairedNode()`\n  - `verifyNodeToken()`\n- Ensures all file reads/writes are serialized under the same mutex, eliminating the \"File changed during read\" race.\n\n### `apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayNodeSession.swift`\n- Increase `waitForSnapshot` timeout from **500ms → 5000ms** (5 seconds)\n- Gives the gateway sufficient time to complete registration and deliver the snapshot before the node proceeds.\n\n## Real behavior proof\n\n### Before Fix (Issue Reproduction)\n\n**Environment**: macOS 14.5, OpenClaw Gateway running locally, OpenClaw macOS App\n\n**Observed Behavior**:\n```\n[2024-05-19 10:23:45] ERROR: File changed during read: pending.json\n[2024-05-19 10:23:46] WARN: Node \"macbook-pro\" status changed: online -> offline\n[2024-05-19 10:23:47] INFO: Node \"macbook-pro\" status changed: offline -> online\n[2024-05-19 10:23:48] ERROR: Gateway invoke timeout: nodes.invoke\n[2024-05-19 10:23:49] ERROR: Connection closed before connect completed\n```\n\n**Terminal Screenshot Evidence**:\n- Node status flapping between online/offline every 1-2 seconds\n- Pairing file read errors appearing in gateway logs\n- Gateway invoke commands timing out consistently\n- Connection instability causing failed node operations\n\n### After Fix (Verification)\n\n**Environment**: Same macOS 14.5, OpenClaw Gateway running locally, OpenClaw macOS App\n\n**Observed Behavior**:\n```\n[2024-05-19 11:45:12] INFO: Node \"macbook-pro\" connected successfully\n[2024-05-19 11:45:13] INFO: Gateway snapshot received (523ms)\n[2024-05-19 11:45:14] INFO: Node \"macbook-pro\" status: online\n[2024-05-19 11:45:30] INFO: Gateway invoke completed: nodes.invoke (success)\n[2024-05-19 11:46:00] INFO: Node \"macbook-pro\" status: online (stable)\n```\n\n**Evidence of Fix**:\n- Node maintains stable online status (no flapping for 60+ minutes)\n- No pairing file read/write race errors in logs\n- Gateway invoke commands complete successfully\n- Connection remains stable under normal load\n- `waitForSnapshot` consistently completes within 500-2000ms (well under 5000ms timeout)\n\n**Comparison Metrics**:\n| Metric | Before Fix | After Fix |\n|--------|------------|-----------|\n| Node status stability | 0-5 minutes | 60+ minutes (ongoing) |\n| Pairing file errors | 15+ per hour | 0 |\n| Gateway invoke success rate | ~30% | 100% |\n| Connection flaps | 20+ per hour | 0 |\n| Average snapshot wait | Timeout (500ms) | 523ms |\n\n**Test Procedure**:\n1. Fresh install of OpenClaw Gateway and macOS App\n2. Initiate node pairing process\n3. Monitor node status for 60 minutes\n4. Execute 20+ gateway invoke commands\n5. Check logs for pairing file errors and connection issues\n6. Verify stable online status throughout test period\n\n**Additional Testing**:\n- Tested under network load (simulated slow connection)\n- Tested with multiple concurrent gateway operations\n- Tested node reconnection scenarios\n- All tests passed with stable behavior\n\n## Testing\n\n- [ ] `node scripts/run-vitest.mjs src/gateway/node-registry.test.ts`\n- [ ] `node scripts/run-vitest.mjs src/gateway/server-methods/nodes.invoke-wake.test.ts`\n- [ ] `node scripts/run-vitest.mjs src/gateway/node-connect-reconcile.test.ts`\n- [ ] `node scripts/run-vitest.mjs src/infra/pairing-files.test.ts`\n- [ ] `cd apps/macos && swift test --filter GatewayNodeSessionTests`\n\n## Checklist\n\n- [x] `loadState()` moved inside `withLock()` for all read operations\n- [x] `waitForSnapshot` timeout increased to 5000ms\n- [x] Real behavior proof added with before/after comparison\n- [ ] Tests added/updated for pairing file race condition\n- [ ] Swift tests updated for new timeout value",
-        "branch": "fix/macos-node-connection-stabilization",
-        "head_sha": "7fc4cabcd07798596d81a01bbe03648867ba3d23",
-        "author": "allynsheep",
-        "labels": [
-          "size: XS",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayNodeSession.swift",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/node-pairing.ts",
-            "additions": 23,
-            "deletions": 17,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83980",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83980.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 106,
-          "counts": {
-            "CANCELLED": 1,
-            "SUCCESS": 77,
-            "SKIPPED": 27,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2205,
+    "total_ms": 2572,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 339
+        "ms": 2328
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1626
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 211
+        "ms": 228
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
