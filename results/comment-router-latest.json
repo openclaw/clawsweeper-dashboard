@@ -1,19 +1,17 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-19T09:15:43.847Z",
+  "generated_at": "2026-05-19T09:16:51.537Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-19T06:15:40.845Z",
+  "since": "2026-05-19T06:16:49.139Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    84046
+    84067
   ],
-  "comment_ids": [
-    4485703837
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -33,108 +31,144 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:84046:4485703837:2026-05-19T09:13:59Z:automerge",
-      "comment_id": "4485703837",
-      "comment_version_key": "4485703837:2026-05-19T09:13:59Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84046#issuecomment-4485703837",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:84067:4486187125:2026-05-19T09:16:44Z:clawsweeper_auto_repair",
+      "comment_id": "4486187125",
+      "comment_version_key": "4486187125:2026-05-19T09:16:44Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84067#issuecomment-4486187125",
       "repo": "openclaw/openclaw",
-      "issue_number": 84046,
+      "issue_number": 84067,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-19T08:09:03Z",
-      "comment_updated_at": "2026-05-19T09:13:59Z",
+      "comment_created_at": "2026-05-19T09:09:02Z",
+      "comment_updated_at": "2026-05-19T09:16:44Z",
       "status_comment_id": null,
-      "trigger": "mention",
-      "command": "automerge",
-      "intent": "automerge",
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
       "autoclose_message": null,
       "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": "The PR changes embedded attempt session-lock fencing to tolerate verified append-only runner-owned transcript growth during the released prompt window and adds session-lock regression tests.\n\nReproducibility: yes. Source inspection shows current main throws on any session-file fingerprint mismatch after prompt-lock release, while the runner's own reentrant transcript append path can update the same JSONL during that window; the PR body also includes redacted before/after live Telegram logs.",
-      "review_followup": "There is a narrow code-and-test repair available: tighten the tail validator and add malformed accepted-role regression coverage before normal maintainer review.",
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=93935075245b09018b0593fb4aa9c0d4e84f6ea7)",
+      "review_summary": "The PR removes prose-token cron denial classification, adds `errorCode` to tool error summaries, extracts structured tool error codes from failed tool results, and updates regression coverage.\n\nReproducibility: yes. Current main source and tests show `resolveCronPayloadOutcome` promotes denial-looking prose to fatal cron output; I did not run tests because this review is read-only.",
+      "review_followup": "Needs contributor or maintainer review to fix real thrown-error code propagation and add real cron proof; automation should not take over while contributor proof is missing.",
       "freeform_prompt": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "93935075245b09018b0593fb4aa9c0d4e84f6ea7",
       "finding_id": null,
-      "status": "ignored",
+      "status": "skipped",
       "actions": [],
-      "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): count user turns instead of stat for embedded session takeover fence",
-        "body": "## Summary\n\nThe embedded attempt session-lock fence uses a `stat()`-based fingerprint (`dev`, `ino`, `size`, `mtimeNs`, `ctimeNs`) to detect \"another lane queued a new user turn against this session\" while the runner releases its coarse lock for the LLM prompt window. The fingerprint is a proxy that overfires: every transcript-append the runner itself performs during the released window — `appendSessionTranscriptMessageLocked` writes tool calls, tool results, and assistant replies via `acquireSessionWriteLock(..., allowReentrant: true)` — changes the file's `size`/`mtimeNs`/`ctimeNs` without going through `refreshSessionFileFence`. Long DM turns with tool calls then trip `assertSessionFileFence` and throw `EmbeddedAttemptSessionTakeoverError` after the reply has already been delivered, surfacing a misleading \"Agent failed before reply\" message on top of a successful turn.\n\nKeep the stat fingerprint as the fast path. On mismatch, only tolerate the runner's append-only assistant/tool transcript shape; treat everything else as a real takeover. The verification requires ALL of:\n\n- **dev/ino match** — no atomic replacement onto a new inode.\n- **birthtimeNs matches** — catches the unlink+recreate-same-inode case (common on tmpfs/ext4 with rapid recreation, where dev and ino are reused but the inode itself is fresh).\n- **size grew** — file is append-only between fence-set and assert.\n- **bytes `[0, fenceSize)` hash identical to the fenced prefix hash** — no in-place rewrite of earlier transcript content (catches compaction-style rewrites that happen to land on a same-byte boundary).\n- **bytes `[fenceSize, currentSize)` are message entries with role `assistant` or `tool`** — no new user-role turn, no malformed tail.\n\nAnything else — replacement, shrink, in-place rewrite, new user turn, or compaction — remains a real takeover. The fence snapshot captures the prefix SHA-256 alongside the fingerprint at `releaseForPrompt` and `refreshSessionFileFence` so the slow path can verify rigorously without keeping a file handle open.\n\nCloses #83436.\nCloses #83615.\n\n## Real behavior proof\n\n**Behavior addressed**: Embedded runner false-positive `EmbeddedAttemptSessionTakeoverError` fires after long Telegram DM turns whose reply was already delivered, surfacing a misleading \"Agent failed before reply\" message on top of a successful run.\n\n**Real environment tested**: OpenClaw 2026.5.19-beta.1, Linux x86_64, Node 24.13.0. Long-running Telegram DM session against `claude-max-20x/claude-opus-4-7` (~3.5 min turn with multiple `exec` and `message` tool calls), reproduced reliably before this patch. Production behavior probed via runtime-patched `dist/selection-BpjGe-Y0.js` carrying the same fix semantics, then long DM runs (41s–122s) exercised through the Telegram channel post-restart.\n\n**Exact steps or command run after this patch**:\n```\nCI=true pnpm test src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts\nCI=true pnpm check:changed --staged=false\nopenclaw gateway restart\n```\n\n**Evidence after fix**:\n\nPre-patch failure mode, redacted runtime log from gateway (`/tmp/openclaw/openclaw-2026-05-19.log`):\n```\n03:30:06.971  embedded run agent end: runId=bbd7d487 isError=false\n03:30:07.008  embedded run prompt end: runId=bbd7d487 sessionId=<session-id> durationMs=217236\n03:30:07.054  lane task error: lane=main durationMs=219867 error=\"EmbeddedAttemptSessionTakeoverError: session file changed while embedded prompt lock was released: /home/.../agents/main/sessions/<session-id>.jsonl\"\n03:30:07.071  Embedded agent failed before reply: session file changed while embedded prompt lock was released: /home/.../<session-id>.jsonl\n```\nNote `isError=false` at `03:30:06.971` — the assistant turn and `message` tool delivery both succeeded — followed 47ms later by the takeover throw, surfacing as a misleading Telegram error on top of a delivered reply.\n\nPost-patch behavior on the same gateway, four long DM runs after gateway restart at 03:46 EDT, every one delivering cleanly with zero takeover errors (redacted runtime log):\n```\n03:51:18  embedded run prompt end: runId=62395ffd  durationMs=122344  (no takeover)\n03:52:39  embedded run prompt end: runId=67e21652  durationMs=41345   (no takeover)\n04:05:05  embedded run prompt end: runId=a5994980  durationMs=101810  (no takeover)\n04:07:34  embedded run prompt end: runId=a837440b  durationMs=94395   (no takeover)\n```\nThe post-patch window contains only two \"Embedded agent failed before reply\" entries (at 04:05:06 and 04:07:35), both with cause `LLM request timed out` — unrelated to the takeover path. Zero `SessionTakeoverError` occurrences post-patch.\n\n**Observed result after fix**: The renamed existing test (`rejects post-prompt writes when another owner queues a new user turn`) still asserts the takeover when a `role: \"user\"` entry is appended during the released window. Three new tests cover the runner's own assistant/tool appends (pass cleanly), in-place rewrite (rejected via prefix hash mismatch), and unlink+recreate-same-inode replacement (rejected via `birthtimeNs` mismatch even when the prefix bytes coincidentally match and the tail looks runner-owned). Targeted Vitest output:\n```\n Test Files  1 passed (1)\n      Tests  16 passed (16)\n   Start at  04:24:31\n   Duration  884ms\n```\n`check:changed --staged=false` is clean: 0 lint warnings/errors across 8647 files, 0 import cycles, all typecheck/build/security/quality lanes pass.\n\n**What was not tested**: Multi-process write contention on the same `sessionFile` from a different gateway process (no test infrastructure for cross-process locks in this surface). The prefix-hash check is `O(fenceSize)` I/O per fence-set; in production sessions seen so far (≤ ~150 KB) this is sub-millisecond.\n\n## Notes\n\n- Adds three helpers near `readSessionFileFingerprint`: `FenceSnapshot` type, `snapshotSessionFileFence` (used at `releaseForPrompt` and `refreshSessionFileFence`), and `verifyAppendOnlyRunnerOwnedExtension` (used in the slow path of `assertSessionFileFence`). No new module-level dependencies beyond `node:crypto`'s `createHash`.\n- Replaces one piece of controller state (`fenceFingerprint: SessionFileFingerprint | undefined`) with `fenceSnapshot: FenceSnapshot | undefined`. No new long-lived resources (no held file handles).\n- This is the second revision of #84046; the first revision (count-only check) was flagged P1 by ClawSweeper for accepting same-user-count rewrites/replacements. This revision addresses that finding directly.\n",
-        "branch": "kevin/fix-session-takeover-falsepositive",
-        "head_sha": "a69732f30986b1a54b0cd030ee714edcc7b5e8c1",
-        "author": "kays0x",
+        "title": "fix(cron): use structured denial signals",
+        "body": "## Summary\n\n- Remove cron outcome classification based on denial tokens found in summary, output text, final assistant text, or payload prose.\n- Preserve fatal cron denial handling through typed `failureSignal` metadata sourced from structured tool error codes.\n- Add regression coverage so prose-only denial text is not promoted to fatal, while structured denial signals still are.\n\n## Real behavior proof\n\nBehavior addressed: cron diagnostic classification no longer treats ordinary assistant/tool prose containing denial-looking phrases as a fatal cron failure unless structured error metadata marks the run as fatal.\n\nReal environment: local OpenClaw checkout in an isolated worktree on this branch.\n\nExact commands after the patch:\n\n```sh\npnpm install\nnode scripts/run-vitest.mjs src/cron/isolated-agent.helpers.test.ts src/agents/pi-embedded-runner/failure-signal.test.ts src/agents/pi-embedded-subscribe.tools.test.ts src/agents/pi-embedded-subscribe.handlers.tools.test.ts\npnpm tsgo:test:src\npnpm check:changed\ngit diff --check\n```\n\nEvidence after fix:\n\n- Focused vitest lane passed: 6 files, 141 tests.\n- `pnpm tsgo:test:src` passed.\n- `pnpm check:changed` passed the core/coreTests lane, lint, typechecks, dependency guards, import-cycle guard, and related changed-file checks.\n- `git diff --check` passed.\n\nObserved result: prose-only `SYSTEM_RUN_DENIED` / `could not run` text remains normal cron output, prose-only tool output does not synthesize an error code, and typed structured denial metadata still produces a fatal cron failure.\n\nNot tested: full baseline `pnpm build && pnpm check && pnpm test` was not run; this used the focused core lane for the touched classifier and tool-error surfaces.\n\n## Review\n\n`codex review --base origin/main` was attempted twice locally, but the local Codex CLI failed before review started with OpenAI API 401 auth errors. Manual review caught and fixed one extraction bug where a string `details.error` could have been mistaken for a code.\n\n## AI-assisted\n\nThis PR was AI-assisted. I reviewed the diff, understand the code path, and ran the proof above locally.",
+        "branch": "fix/error-token-classifier-structured-fields",
+        "head_sha": "93935075245b09018b0593fb4aa9c0d4e84f6ea7",
+        "author": "abnershang",
         "labels": [
           "agents",
           "size: M",
-          "proof: supplied",
-          "proof: sufficient",
-          "mantis: telegram-visible-proof",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 automation",
-          "merge-risk: 🚨 session-state",
-          "status: ⏳ waiting on author"
+          "triage: needs-real-behavior-proof",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts",
-            "additions": 112,
+            "path": "src/agents/pi-embedded-runner/failure-signal.test.ts",
+            "additions": 28,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/failure-signal.ts",
+            "additions": 6,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-subscribe.handlers.tools.test.ts",
+            "additions": 30,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-subscribe.handlers.tools.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-subscribe.tools.test.ts",
+            "additions": 45,
             "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.ts",
-            "additions": 132,
-            "deletions": 6,
+            "path": "src/agents/pi-embedded-subscribe.tools.ts",
+            "additions": 32,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tool-error-summary.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent.helpers.test.ts",
+            "additions": 9,
+            "deletions": 36,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/helpers.ts",
+            "additions": 3,
+            "deletions": 76,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84046",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84046.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84067",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84067.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
           "total": 102,
           "counts": {
+            "FAILURE": 1,
             "SUCCESS": 73,
             "SKIPPED": 27,
-            "CANCELLED": 1,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Security High (actions):CANCELLED"
+            "Real behavior proof:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "Security High (actions):CANCELLED"
+            "Real behavior proof:FAILURE"
           ]
         }
       },
-      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 3179,
+    "total_ms": 2689,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 566
+        "ms": 383
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2422
+        "ms": 2003
       },
       {
         "name": "classify_commands",
@@ -142,11 +176,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 178
+        "ms": 281
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
