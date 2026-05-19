@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-19T23:11:56.600Z",
+  "generated_at": "2026-05-19T23:12:47.826Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-19T20:11:55.875Z",
+  "since": "2026-05-19T20:12:45.799Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    84220
+    84351
   ],
-  "comment_ids": [
-    4490437980
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 2,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,26 +29,145 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:84351:4492855252:2026-05-19T23:12:41Z:clawsweeper_needs_human",
+      "comment_id": "4492855252",
+      "comment_version_key": "4492855252:2026-05-19T23:12:41Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84351#issuecomment-4492855252",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84351,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-19T23:07:07Z",
+      "comment_updated_at": "2026-05-19T23:12:41Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "A maintainer should decide the temporary fs-primitive cache trade-off after the concrete security-boundary defect is fixed or explicitly accepted on this PR.; Needs attention: The diff introduces a concrete plugin security-boundary regression in the proposed root JSON read cache.; Review finding: [P1] Key root-read cache by safety options — src/infra/json-files.ts:82-83 (sha=f8edb214fc2ed71c413e0d475bb7417c62f221fd)",
+      "review_summary": "The PR wraps sync JSON readers in `src/infra/json-files.ts` with a process-local stat-validated cache and routes two infra import sites through it.\n\nReproducibility: yes. for the PR-introduced defect: source inspection shows the cached root-read result is returned before fs-safe receives the later call's `rejectHardlinks`, `maxBytes`, or `rootRealPath`. I did not run a live repro because this review is read-only.",
+      "review_followup": "A maintainer should decide the temporary fs-primitive cache trade-off after the concrete security-boundary defect is fixed or explicitly accepted on this PR.",
+      "freeform_prompt": null,
+      "expected_head_sha": "f8edb214fc2ed71c413e0d475bb7417c62f221fd",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "perf(infra): cache sync JSON reads with stat validation",
+        "body": "## Summary\n\nSynchronous JSON reads dominate TUI cold-start work — profiled startup made ~210K `tryReadJsonSync` calls against ~380 unique paths, with each bundled plugin's `package.json` re-read ~1500 times. This adds a process-scoped memo at the fs layer that validates each cached parse against the file's `(mtime, size, inode)` on every lookup, so atomic writes, external edits, and deletions evict naturally without explicit invalidation hooks.\n\nThree files:\n- `src/infra/json-files.ts` — wraps `tryReadJsonSync` and `readRootJsonObjectSync`, stats once per call, returns cached value when the stat tuple matches the entry.\n- `src/infra/json-file.ts` — re-imports the sync readers from `./json-files.js` so all callers share the cache.\n- `src/infra/package-update-utils.ts` — same.\n\nDisable with `OPENCLAW_DISABLE_JSON_READ_CACHE=1` or call `clearJsonReadCache()` (intended for tests that mutate JSON mid-process).\n\n## Behavior addressed\n\nTUI cold start spent 20–30s in 200K+ sync JSON reads, almost all hammering the same plugin manifests. With this change, each unique file is read+parsed once, and subsequent calls do a single `statSync` instead of an open + read + parse.\n\n## Real environment tested\n\nmacOS, Node 24, `pnpm openclaw` cold launch.\n\n## Exact steps or command run after this patch\n\n```\npnpm build\npnpm openclaw\nnode scripts/run-oxlint.mjs src/infra/json-files.ts src/infra/json-file.ts src/infra/package-update-utils.ts\npnpm tsgo --noEmit\n```\n\n## Evidence after fix\n\n- Lint clean, tsgo clean on touched files.\n- Local cold-start: TUI becomes responsive in single-digit seconds vs. 20–30s freeze on `main`.\n\n## Observed result after fix\n\nThe startup freeze is gone in local testing. Cached `tryReadJsonSync` calls collapse to a single `statSync` (~5–10µs) instead of open + read + parse (~50–100µs).\n\n## What was not tested\n\n- Long-running session bugs around atomic writes / external edits (the mtime check is designed to handle these, but no end-to-end soak yet).\n- Crabbox / Testbox broader suites (PR opens for CI).\n\n## Trade-off notes\n\n`src/plugins/CLAUDE.md` cautions against persistent metadata caches at the fs primitive layer because such a cache has no semantic knowledge of *why* a read happens, and so can't always invalidate correctly. The mtime + size + inode check addresses the standard breakage modes (atomic writes change inode + mtime; external `fs.writeFileSync` changes mtime; deletions evict via missing-stat fallthrough). The remaining edge cases are narrow:\n\n- Same-mtime-tick rewrites (~1ms window on most filesystems) with identical size and inode would be missed — vanishingly rare in practice.\n- Cross-process drift between TUI / gateway / sidecars on shared config files still relies on each process's stat reflecting the writer's change (it does, via the underlying fs syscall).\n\nThe structurally cleaner fix is to memoize at the snapshot / registry layer where invalidation maps onto domain events — that work continues in #84283 / #84302 / #84339. This PR is the pragmatic floor that knocks the obvious startup freeze immediately.\n",
+        "branch": "dallin-perf-json-read-cache",
+        "head_sha": "f8edb214fc2ed71c413e0d475bb7417c62f221fd",
+        "author": "romneyda",
+        "labels": [
+          "maintainer",
+          "size: S",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 security-boundary",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/infra/json-file.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/json-files.ts",
+            "additions": 93,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/package-update-utils.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84351",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84351.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 103,
+          "counts": {
+            "SUCCESS": 59,
+            "SKIPPED": 30,
+            "IN_PROGRESS": 12,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
+            "checks-node-core-runtime-infra-state:IN_PROGRESS",
+            "checks-node-agentic-gateway-core:FAILURE",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
+            "checks-node-core-runtime-infra-state:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "checks-node-agentic-gateway-core:FAILURE"
+          ]
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1051,
+    "total_ms": 2251,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 714
+        "ms": 315
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1695
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 326
+        "ms": 211
       },
       {
         "name": "append_ledger",
