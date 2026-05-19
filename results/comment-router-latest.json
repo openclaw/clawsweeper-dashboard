@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-19T20:10:17.310Z",
+  "generated_at": "2026-05-19T20:10:37.396Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-19T17:10:13.460Z",
+  "since": "2026-05-19T17:10:36.972Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    84244
+    84291
   ],
-  "comment_ids": [
-    4491606619
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,134 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84244:4491606619:2026-05-19T20:08:22Z:hatch",
-      "comment_id": "4491606619",
-      "comment_version_key": "4491606619:2026-05-19T20:08:22Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84244#issuecomment-4491606619",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84244,
-      "author": "Takhoffman",
-      "author_id": 781889,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-19T20:08:22Z",
-      "comment_updated_at": "2026-05-19T20:08:22Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "hatch",
-      "intent": "hatch",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_hatch",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-19T20:10:18.186Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 84244
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-19T20:10:19.544Z",
-          "response_comment_id": null,
-          "response_comment_mode": "created"
-        }
-      ],
-      "author_repository_permission": "write",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(twitch): export clearRegistryForTest for cross-test isolation (#83887)",
-        "body": "Fixes #83887.\n\n`extensions/twitch/src/client-manager-registry.ts` holds `const registry = new Map<string, RegistryEntry>()` at module scope. The companion class `TwitchClientManager` (`twitch-client.ts:272`) already exports `clearForTest()` — an explicit acknowledgement that module-level state needs to be reset between tests. The registry has no such escape hatch.\n\nUnder vitest `--isolate=false` (or any harness that keeps the module graph hot across cases), a test that calls `getOrCreateClientManager('default', loggerA)` leaves its entry behind. The next test calling `getOrCreateClientManager('default', loggerB)` hits the cache branch (`if (existing) return existing.manager`) and silently receives test A's manager — bound to test A's logger, mocks, and assertion targets. The bug is latent today only because the included tests mock at the `resolveTwitchAccountContext` level and never exercise the registry factory directly. Any test that does will chase a phantom mock-assertion failure.\n\n## Changes\n\n- `extensions/twitch/src/client-manager-registry.ts`: add an exported `clearRegistryForTest(): void { registry.clear(); }`. Mirrors the existing `clearForTest` escape hatch on `TwitchClientManager` (same module convention, same naming). Documented as test-only with a comment explaining the `--isolate=false` failure mode.\n\nDiff stat: 1 file, +17 / -0. No production code is touched and no production caller is added.\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Sanitized issue evidence — the registry Map is module-scoped and survives across vitest cases unless explicitly cleared. `getOrCreateClientManager` short-circuits on `registry.get(accountId)` without comparing logger identity or any other freshness signal, so a stale entry from a prior test wins. The new helper gives a test's `afterEach` a way to reset the registry without resorting to `vi.resetModules()`.\n\n- **Real environment tested:** Local Node 22.x. Probe at `/tmp/probe_83887.mjs` does both halves of the proof. (a) Parses the patched `client-manager-registry.ts` and verifies `clearRegistryForTest` is exported with the exact body `registry.clear()` and that it is declared AFTER the module-level `registry` definition. (b) Replays the registry's get-or-create semantics in pure JS for four scenarios — buggy shape (no clear between tests → test B receives test A's manager+logger, confirming the #83887 symptom), patched shape with clear-between-tests (test B gets a fresh manager with loggerB), production cache-hit within a single test (same accountId returns cached manager — no regression), and clear-on-empty (safe no-op).\n\n- **Exact steps or command run after this patch:** `node /tmp/probe_83887.mjs`\n\n- **Evidence after fix:**\n\n```\nPASS: clearRegistryForTest is exported and calls registry.clear()\nPASS: clearRegistryForTest is declared AFTER the module-level registry\nPASS: replay (buggy): without registry clear, test B receives test A's manager+logger — confirms #83887 cross-test pollution\nPASS: replay (patched): clear between tests → test B gets fresh manager with loggerB\nPASS: replay (production cache-hit within a single test): same accountId returns the cached manager — no regression\nPASS: replay (patched, empty registry): clear() on empty Map is a safe no-op\n\nALL CASES PASS\n```\n\n- **Observed result after fix:** Any test file exercising `getOrCreateClientManager` can now call `clearRegistryForTest()` in `afterEach` (mirroring the pattern `twitch-client.test.ts:131` already uses for `manager.clearForTest()`). Production behavior is unchanged because production code does not import the new export.\n\n- **What was not tested:** A live vitest `--isolate=false` run inside the repo CI — the harness setup for that is outside the scope of an additive test-helper export. The vitest case shape this enables is identical to the existing `clearForTest` pattern proven elsewhere in the same module.\n\n## Audit (per CLAUDE rules — all 5 steps)\n\n- **Existing-helper check:** Mirrors the already-exported `TwitchClientManager.clearForTest()` (`twitch-client.ts:272-275`) — same module convention. The issue's `_clearRegistryForTest` naming with underscore prefix would have diverged from the live codebase; I used `clearRegistryForTest` to match the sibling. PASS\n- **Shared-helper caller check:** `clearRegistryForTest` has zero callers initially — it is a test-only export. Production code (`monitor.ts`, `send.ts`, `plugin.ts`) imports only `getOrCreateClientManager` / `getClientManager` / `removeClientManager`, none of which are affected by adding a new export. PASS\n- **Broader-fix rival scan:** `gh pr list --search '83887 in:title,body'` and `gh pr list --search 'clearRegistryForTest in:title,body'` return no open PRs. Issue timeline shows zero cross-references. PASS\n- **Recent-merge audit:** `git log --oneline -5 -- extensions/twitch/src/client-manager-registry.ts` shows no recent commits touching this file. PASS\n- **Prototype-pollution scan:** N/A — single `Map.clear()` call.\n",
-        "branch": "fix-twitch-registry-clear-for-test-83887",
-        "head_sha": "297274d48006a843ac15a7214cf1dbb0301613e5",
-        "author": "hclsys",
-        "labels": [
-          "channel: twitch",
-          "size: XS",
-          "clawsweeper:automerge",
-          "proof: supplied",
-          "proof: sufficient",
-          "rating: 🐚 platinum hermit",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "extensions/twitch/src/client-manager-registry.ts",
-            "additions": 17,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": "automerge-openclaw-openclaw-84244",
-        "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84244.md",
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84244",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84244.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 24,
-          "counts": {
-            "SUCCESS": 8,
-            "QUEUED": 4,
-            "SKIPPED": 12
-          },
-          "blockers": [
-            "preflight:QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "pending": [
-            "preflight:QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "terminalBlockers": []
-        }
-      }
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 7276,
+    "total_ms": 717,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2206
+        "ms": 415
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1625
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 3414
+        "ms": 293
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
