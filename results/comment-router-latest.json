@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-19T20:46:57.910Z",
+  "generated_at": "2026-05-19T20:48:43.686Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-19T17:46:56.074Z",
+  "since": "2026-05-19T17:48:40.175Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     84302
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4491852089
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -65,11 +67,11 @@
         "title": "perf(plugins): scan-scoped package.json cache in discovery",
         "body": "## Summary\n\nPursuing #3 from the PR comment on #84283: investigate and fix the inner amplifier — why each plugin's `package.json` was being read ~1,565 times per TUI startup.\n\n**Root cause identified:** `runPluginDiscovery` runs two `tracePluginLifecyclePhase(\"discovery scan\")` blocks (scoped + shared), each invoking multiple overlapping helpers (`discoverFromPath`, `discoverInDirectory`) that all call `readCandidatePackageManifest` per candidate. For bundled plugins reachable through multiple roots (stock root + source-checkout extensions + bundled overlays + installed paths + global root), the same `package.json` gets read once per code path per scan — and the per-helper `seen: Set<string>` dedup operates at the candidate level *after* the manifest read happens. The existing `realpathCache` only memoizes realpath resolution, not the JSON parse.\n\n**Fix:** add a per-scan `Map<string, PackageManifest | null>` threaded through the same chain as `realpathCache`, keyed by the directory's resolved real path. Within one scan, the first call to `readCandidatePackageManifest` for a given dir reads from disk; every subsequent call (from a different helper or root) hits the Map. Cache lifetime is one scan — created in `runPluginDiscovery` alongside the existing `seen`/`realpathCache`, dies when the scan returns. `discoverOpenClawPlugins` remains stateless externally.\n\nBuilt on top of #84283 (which threads `discovery?` through outer-scan orchestrators); the two fixes are complementary:\n- #84283: collapses multiple outer scans into one per `ensurePluginRegistryLoaded` invocation.\n- This PR: makes each remaining outer scan read each manifest once instead of N times.\n\n## Expected impact\n\nFrom the original profile (~1,565 reads per extension `package.json`):\n- The scan-scoped cache caps within-scan reads at 1 per file.\n- Combined with #84283, expected post-fix reads per file ≈ **1 × (# of `ensurePluginRegistryLoaded` invocations during one launch)** — typically 1-2 across one CLI/TUI startup.\n- Estimated reduction: from ~1,565 to ~1-2 per file. **~99% of the inner amplifier eliminated.**\n\nNot measured end-to-end yet — single-launch impact depends on overlap of roots in the user's environment. If most reads were already from a single root (no overlap), savings are smaller.\n\n## Test plan\n\n- [x] `node scripts/run-vitest.mjs src/plugins/discovery.test.ts` — 67/67 pass\n- [x] `pnpm tsgo --noEmit --project tsconfig.core.json` — clean\n- [x] `node scripts/run-oxlint.mjs --quiet` on touched file — 0/0\n- [x] `npx oxfmt --check` — clean\n- [ ] End-to-end TUI startup measurement with the perf-trace stash re-applied. Recommended verification before merging — pop the audit-branch perf-trace stash, rebuild, launch TUI, count `json.tryReadJsonSync` lines per `extensions/<id>/package.json` path in `/tmp/openclaw-perf.log`.\n\nBehavior addressed: each plugin's `package.json` was read N times per discovery scan (where N = number of overlapping discovery code paths touching that plugin's root). With this change, each `package.json` is read at most once per scan regardless of how many helpers reach it.\nReal environment tested: macOS, Node 22.22, source checkout. Unit suite passes; runtime measurement deferred to reviewer.\nExact steps or command run after this patch: `node scripts/run-vitest.mjs src/plugins/discovery.test.ts`; `pnpm tsgo --noEmit --project tsconfig.core.json`; `node scripts/run-oxlint.mjs --quiet src/plugins/discovery.ts`; `npx oxfmt --check src/plugins/discovery.ts`.\nEvidence after fix: discovery suite passes 67/67; lint/format/typecheck clean.\nObserved result after fix: cache populates on first read per dir per scan; subsequent reads of the same path within the same scan hit memory.\nWhat was not tested: end-to-end TUI launch read-count delta. The structural correctness of the cache is asserted by the discovery suite; the perf delta requires the maintainer (or me, on direction) to re-instrument and measure on the actual repro setup.\n",
         "branch": "dallin-perf-candidate-manifest-reuse",
-        "head_sha": "3334f43411bbdc19af5b464fd9f29dd75e2594ea",
+        "head_sha": "c909256d2e2c68c59e574740e0cc895a6e49fd75",
         "author": "romneyda",
         "labels": [
           "maintainer",
-          "size: S",
+          "size: M",
           "P2",
           "rating: 🧂 unranked krab",
           "merge-risk: 🚨 security-boundary",
@@ -97,7 +99,7 @@
           },
           {
             "path": "src/plugins/discovery.ts",
-            "additions": 25,
+            "additions": 27,
             "deletions": 3,
             "changeType": "MODIFIED"
           },
@@ -172,12 +174,11 @@
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 31,
+          "total": 30,
           "counts": {
-            "CANCELLED": 1,
-            "SUCCESS": 7,
+            "SUCCESS": 8,
             "QUEUED": 10,
-            "SKIPPED": 13
+            "SKIPPED": 12
           },
           "blockers": [
             "preflight:QUEUED",
@@ -211,15 +212,15 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2117,
+    "total_ms": 3882,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 413
+        "ms": 1808
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1410
+        "ms": 1687
       },
       {
         "name": "classify_commands",
@@ -227,7 +228,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 281
+        "ms": 372
       },
       {
         "name": "append_ledger",
