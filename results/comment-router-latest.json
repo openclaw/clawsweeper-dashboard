@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-19T00:01:49.331Z",
+  "generated_at": "2026-05-19T00:02:58.673Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-18T21:01:47.844Z",
+  "since": "2026-05-18T21:02:58.289Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    83802
+    83817
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,127 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:83802:4483052029:2026-05-19T00:01:42Z:clawsweeper_needs_human",
-      "comment_id": "4483052029",
-      "comment_version_key": "4483052029:2026-05-19T00:01:42Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83802#issuecomment-4483052029",
-      "repo": "openclaw/openclaw",
-      "issue_number": 83802,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-18T23:14:02Z",
-      "comment_updated_at": "2026-05-19T00:01:42Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "No repair lane is needed; the remaining blocker is contributor or maintainer live-proof review for the existing draft PR.; Cleared: The diff only changes Telegram runtime buffering/scheduling and tests; I found no new dependency, workflow, secret, install, or supply-chain surface. (sha=2edb1eb0121c381832bd89bf1b17b918ce1db87e)",
-      "review_summary": "The PR replaces Telegram global text/media buffer flush chains with per-key queues, scopes media groups by chat/thread/media_group_id, and adds per-group outbound lane fairness plus regression tests.\n\nReproducibility: yes. by source inspection. Current main uses process-wide buffered flush chains and a media_group_id-only media buffer key, and the PR supplies before/after focused tests that fail on main and pass on the branch; I did not run tests in this read-only review.",
-      "review_followup": "No repair lane is needed; the remaining blocker is contributor or maintainer live-proof review for the existing draft PR.",
-      "freeform_prompt": null,
-      "expected_head_sha": "2edb1eb0121c381832bd89bf1b17b918ce1db87e",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "Parallelize Telegram topic buffers and outbound fairness",
-        "body": "## Summary\n- Replace Telegram text-fragment and media-group global flush chains with per-buffer-key queues so independent forum topics can flush at the same time.\n- Scope media group buffering by chat + thread + Telegram media_group_id so identical album ids in different topics cannot merge or block each other.\n- Add a per-group fair outbound queue ahead of the existing grammY throttler so one topic/message lane cannot monopolize Telegram's shared group send pipe.\n- Add regression coverage for both handler-level topic buffer parallelism and outbound throttler lane fairness.\n\n## Root Cause\nTelegram long-text fragment flushing and media-group flushing each used one process-wide promise chain. That preserved ordering, but it serialized unrelated topics. Media groups also used only Telegram's `media_group_id` as the buffer key, so two topics with the same album id could share one buffer lane.\n\nAfter those ingress paths were parallelized, Telegram-visible output could still feel serialized because the account API throttler feeds all group sends for the same `chat_id` into grammY's group limiter. Telegram forum topics share that `chat_id`, so bursts of progress/edit traffic from one topic could sit ahead of another topic's outbound update even though the agent work was already running in parallel.\n\n## Real behavior proof\nBehavior addressed: Telegram forum topics no longer block each other's buffered text-fragment/media-group flushes, and same-group outbound API requests are fair-shared by topic/message lane before entering Telegram's rate-limit-preserving throttler.\n\nReal environment tested: local OpenClaw Telegram e2e harness and focused Telegram account-throttler tests in a temp worktree, exercising supergroup/forum `message_thread_id` payloads and group API payload ordering.\n\nExact steps or command run after this patch: `OPENCLAW_E2E_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts extensions/telegram/src/bot.media.stickers-and-fragments.e2e.test.ts extensions/telegram/src/bot.media.downloads-media-file-path-no-file-download.e2e.test.ts --testNamePattern 'flushes (different forum topic fragments|same-id forum topic media groups) in parallel'`\n\nEvidence after fix: `Test Files 2 passed (2); Tests 2 passed | 10 skipped (12)`.\n\nExact steps or command run after this patch: `node scripts/run-vitest.mjs extensions/telegram/src/account-throttler.test.ts`\n\nEvidence after fix: `Test Files 1 passed (1); Tests 3 passed (3)`.\n\nObserved result after fix: handler tests reached two reply starts while the first topic's reply was still held open; throttler tests admitted the other topic/message lane before the same lane's second queued request.\n\nWhat was not tested: live Telegram Desktop/manual transport proof was not rerun for this update; these are the closest deterministic Telegram handler and outbound scheduler proofs.\n\nBefore proof: applied only the new handler tests to unpatched `origin/main` and ran the same filtered e2e command. Result: `Test Files 2 failed (2); Tests 2 failed | 10 skipped (12)`, with both failures reporting `expected \"vi.fn()\" to be called 2 times, but got 1 times`.\n\n## Verification\n- `pnpm install --frozen-lockfile`\n- `git diff --check`\n- `git diff --check origin/main...HEAD`\n- `OPENCLAW_E2E_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts extensions/telegram/src/bot.media.stickers-and-fragments.e2e.test.ts extensions/telegram/src/bot.media.downloads-media-file-path-no-file-download.e2e.test.ts`\n  - `Test Files 2 passed (2); Tests 12 passed (12)`\n- `node scripts/run-vitest.mjs extensions/telegram/src/account-throttler.test.ts`\n  - `Test Files 1 passed (1); Tests 3 passed (3)`\n- `node scripts/run-tsgo.mjs -p tsconfig.extensions.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/extensions.tsbuildinfo`\n- `node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.extensions.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/extensions-test.tsbuildinfo`\n- `.agents/skills/autoreview/scripts/autoreview --mode branch --reviewer codex --fallback-reviewer none`\n  - `autoreview clean: no accepted/actionable findings reported`\n\n## What was not tested\n- Full repository test suite beyond autoreview's broad check path.\n- Live Telegram account proof for the outbound fairness update.",
-        "branch": "telegram-topic-buffer-parallel",
-        "head_sha": "2edb1eb0121c381832bd89bf1b17b918ce1db87e",
-        "author": "vacinc",
-        "labels": [
-          "channel: telegram",
-          "size: M",
-          "proof: supplied",
-          "mantis: telegram-visible-proof",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/telegram/src/account-throttler.test.ts",
-            "additions": 104,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/account-throttler.ts",
-            "additions": 148,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-handlers.runtime.ts",
-            "additions": 32,
-            "deletions": 30,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot.media.downloads-media-file-path-no-file-download.e2e.test.ts",
-            "additions": 91,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot.media.stickers-and-fragments.e2e.test.ts",
-            "additions": 87,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83802",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83802.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 38,
-          "counts": {
-            "SKIPPED": 29,
-            "SUCCESS": 9
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1699,
+    "total_ms": 593,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 297
+        "ms": 374
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1176
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 202
+        "ms": 209
       },
       {
         "name": "append_ledger",
