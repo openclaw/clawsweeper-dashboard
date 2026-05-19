@@ -1,15 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-19T04:13:50.571Z",
+  "generated_at": "2026-05-19T04:14:46.578Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-19T01:13:50.261Z",
+  "since": "2026-05-19T01:14:44.235Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    83978
+    83743
+  ],
+  "comment_ids": [
+    4484314780
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -29,18 +32,204 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83743:4484314780:2026-05-19T04:13:09Z:re_review",
+      "comment_id": "4484314780",
+      "comment_version_key": "4484314780:2026-05-19T04:13:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83743#issuecomment-4484314780",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83743,
+      "author": "Kaspre",
+      "author_id": 36520309,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-19T04:13:09Z",
+      "comment_updated_at": "2026-05-19T04:13:09Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-05-19T04:14:47.304Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 83743
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-19T04:14:48.331Z",
+          "response_comment_id": null,
+          "response_comment_mode": "created"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(core): route dmScope main event wakes to agent main",
+        "body": "Fixes #71581.\nReplaces #72648 with a narrower implementation.\n\n## Problem\nWhen `session.dmScope` is set to `main`, OpenClaw can still receive internal exec/cron event wakes carrying an old direct-DM session key such as `agent:main:telegram:default:direct:123`. Those events are enqueued and woken on a queue the main heartbeat no longer drains, so completion notifications can sit unseen until another action happens to wake the right session.\n\n## Change and value\nThis PR adds one shared event-session routing helper and uses it anywhere internal exec/cron event enqueue or heartbeat wake targets are resolved. Single-owner `dmScope=main` direct-DM event keys now route back to the drained agent main session, while existing cron-run remapping and explicit route-binding direct-session overrides remain intact.\n\n## Who is affected, and who is not\n- Affected: operators using `session.dmScope=main` with a single static DM owner allowlist, especially exec completion and cron-event wake flows.\n- Unchanged: multi-owner allowlists, wildcard allowlists, non-agent node fallback sessions, route-binding direct-session overrides, and existing cron-run global/main remapping behavior.\n\n## Why now\nThe original fix attempt in #72648 has stalled, but #71581 is still open and the current routing behavior still leaves a real wake/enqueue mismatch for main-scoped DM sessions. This replacement keeps the fix narrower and adds regression coverage around the shared routing boundary.\n\n## Implementation\n- Add `src/infra/event-session-routing.ts` for resolving event enqueue keys and heartbeat wake options from the same policy.\n- Apply the helper to exec completion events, gateway node exec events, cron forced-session resolution, heartbeat forced-session resolution, ACP parent-stream events, and CLI watchdog events.\n- Cover the new behavior in routing, exec runtime, heartbeat, and node event tests.\n\n## Duplicate check\nBefore opening this PR, I searched open PRs for `71581 dmScope exec-event cron-event heartbeat`, `session.dmScope heartbeat`, and `resolveHeartbeatSession resolveEventSessionKey scopedHeartbeatWakeOptions`. No active duplicate appeared other than the abandoned #72648.\n\n## Verification\n- Local: `pnpm exec oxfmt --write --threads=1 src/gateway/server-node-events.test.ts`\n- Local: `pnpm exec oxlint src/gateway/server-node-events.test.ts`\n- Local: `git diff --check`\n- Local: real background exec proof in the `## Real behavior proof` section below.\n- Remote GCP Crabbox Spot VM, `e2-standard-4`, `us-east1-b`, commit `8a2a08a47f`:\n\n```sh\nOPENCLAW_OXLINT_SKIP_PREPARE=1 pnpm check:changed -- --timed\nnode scripts/run-vitest.mjs run \\\n  src/gateway/server-node-events.test.ts \\\n  src/infra/event-session-routing.test.ts \\\n  src/agents/bash-tools.exec-runtime.test.ts \\\n  src/infra/heartbeat-runner.subagent-session-guard.test.ts \\\n  --reporter=verbose\n```\n\nRemote result: `check:changed` clean; targeted Vitest `5 passed`, `126 passed`.\n\n## Real behavior proof\nBehavior or issue addressed:\n- With `session.dmScope=main` and a single static DM owner allowlist, internal exec/cron event wakes can carry an old direct DM session key such as `agent:main:telegram:default:direct:123`. Those events need to enqueue and wake the agent main session that the heartbeat actually drains.\n\nReal environment tested:\n- Local PR-head checkout at commit `8a2a08a47f`\n- Node `24.15.0`\n- Real production modules exercised: `runExecProcess`, background exec completion notification, `enqueueSystemEvent`, `requestHeartbeat`, the heartbeat wake scheduler, and `drainSystemEventEntries`\n\nExact steps or command run after this patch:\n1. Reset heartbeat wake state and clear both the old direct-DM queue `agent:main:telegram:default:direct:123` and the agent main queue `agent:main:main`.\n2. Register the real heartbeat wake handler. The handler records the wake request, drains the old direct-DM queue, and drains the agent main queue.\n3. Start a real background exec with `runExecProcess`, command `sleep 0.2; printf proof-output`, `notifyOnExit: true`, session key `agent:main:telegram:default:direct:123`, and routing policy from config `{ session: { dmScope: \"main\" }, channels: { telegram: { allowFrom: [\"123\"] } } }`.\n4. Mark the exec session backgrounded, wait for the real process completion, then wait for the real heartbeat wake scheduler to call the registered handler.\n5. Fail the proof if the exec did not complete, if the heartbeat wake did not target `agent:main:main`, if the old direct-DM queue drained any events, or if the main queue did not drain exactly one exec completion event.\n\nEvidence after fix:\nCopied live console output transcript from the PR-head checkout:\n```json\n{\n  \"startSessionKey\": \"agent:main:telegram:default:direct:123\",\n  \"execOutcome\": \"completed\",\n  \"heartbeatWake\": {\n    \"source\": \"exec-event\",\n    \"intent\": \"event\",\n    \"reason\": \"exec-event\",\n    \"sessionKey\": \"agent:main:main\"\n  },\n  \"directQueueDrainedCount\": 0,\n  \"mainQueueDrainedCount\": 1,\n  \"mainEventText\": \"Exec completed (<exec-id>, code 0) :: proof-output\"\n}\n```\n\nObserved result after fix:\n- The real background exec started from the old direct-DM session key `agent:main:telegram:default:direct:123`.\n- The exec completion path enqueued no event to the old direct-DM queue.\n- The heartbeat wake scheduler fired an `exec-event` wake for `agent:main:main`.\n- The main-session drain consumed exactly one exec completion event: `Exec completed (<exec-id>, code 0) :: proof-output`.\n\nWhat was not tested:\n- A full local WSL Vitest run; local Vitest stalled before output on this host, so broad validation was run remotely.\n- A live Telegram/Discord transport run. The proof exercises the real background exec event, heartbeat wake, and in-memory system-event queue/drain path without sending an external chat message.\n- `pnpm check:changed` without `OPENCLAW_OXLINT_SKIP_PREPARE=1`; the raw VM previously hung in unrelated plugin SDK boundary-artifact lint preparation, so the final remote gate skipped only that preparation step while still running full core lint.",
+        "branch": "fix/dmscope-main-event-wakes",
+        "head_sha": "8a2a08a47fa0e12178c992f375c2a1224cf8adb8",
+        "author": "kaspre",
+        "labels": [
+          "gateway",
+          "agents",
+          "size: L",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/acp-spawn-parent-stream.ts",
+            "additions": 13,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/acp-spawn.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-process-registry.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.exec-runtime.test.ts",
+            "additions": 33,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.exec-runtime.ts",
+            "additions": 23,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.exec-types.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.exec.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-runner/execute.ts",
+            "additions": 14,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-tools.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-cron.ts",
+            "additions": 8,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-node-events.test.ts",
+            "additions": 24,
+            "deletions": 26,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-node-events.ts",
+            "additions": 9,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/event-session-routing.test.ts",
+            "additions": 127,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/event-session-routing.ts",
+            "additions": 271,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/heartbeat-runner.subagent-session-guard.test.ts",
+            "additions": 77,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/heartbeat-runner.ts",
+            "additions": 9,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83743",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83743.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "SUCCESS": 76,
+            "SKIPPED": 25,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      }
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 532,
+    "total_ms": 4600,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 298
+        "ms": 493
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1836
       },
       {
         "name": "classify_commands",
@@ -48,7 +237,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 223
+        "ms": 2245
       },
       {
         "name": "append_ledger",
