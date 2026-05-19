@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-19T14:20:32.123Z",
+  "generated_at": "2026-05-19T14:22:20.621Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-19T11:20:31.653Z",
+  "since": "2026-05-19T11:22:17.669Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    84162
+    84083
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4486692399
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 0,
-  "commands_seen": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +31,178 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84083:4486692399:2026-05-19T14:19:59Z:automerge",
+      "comment_id": "4486692399",
+      "comment_version_key": "4486692399:2026-05-19T14:19:59Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84083#issuecomment-4486692399",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84083,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-19T10:10:11Z",
+      "comment_updated_at": "2026-05-19T14:19:59Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "automerge",
+      "intent": "automerge",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": "The PR adds a shared safety-timeout wrapper for plugin-owned `ContextEngine.compact()` calls, wires it into pi-embedded and Codex ownsCompaction lanes, extends compact params with `abortSignal`, and adds focused tests.\n\nReproducibility: yes. Source inspection of current main shows the ownsCompaction lanes directly await `ContextEngine.compact()` without the safety wrapper, and a never-settling compact promise would block those awaits; the PR body also supplies after-fix terminal proof for the Codex path.",
+      "review_followup": "A narrow automated repair can update the helper cancellation semantics, align the CLI contract, and add focused regression coverage.",
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "ignored",
+      "actions": [],
+      "author_repository_permission": "none",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): bound plugin-owned context-engine compaction with a safety timeout",
+        "body": "## Summary\n\nA plugin context engine that advertises `ownsCompaction: true` (e.g. the\n`lossless-claw` LCM plugin) had its `ContextEngine.compact()` awaited by the\nhost with **no timeout, no watchdog, and no abort signal** on every\nengine-owned compaction lane — both the built-in pi-embedded runner and the\ncodex agent harness:\n\n- queued `/compact` (`compact.queued.ts`)\n- context-overflow / force-compaction recovery (`run.ts`)\n- timeout recovery (`run.ts`)\n- context-engine-owned Codex compaction (`extensions/codex/.../compact.ts`)\n- Codex force-compaction-on-overflow recovery (`extensions/codex/.../run-attempt.ts`)\n\nThe 900 s `compactWithSafetyTimeout` safety net (`EMBEDDED_COMPACTION_TIMEOUT_MS`)\nthat protects *native* pi-agent-core compaction was only ever applied to the\nnative `activeSession.compact()` call. A slow or hung plugin `compact()` would\nhang the agent turn indefinitely — the only backstop was the 48 h default run\ntimeout, which could not even interrupt the plugin call. The two codex-harness\nsites already had a `try/catch` that converts a *thrown* `compact()` error to a\nclean `{ ok: false }` result, but a hung promise that never settles was not\ncaught.\n\n## Changes\n\n- Add a `compactContextEngineWithSafetyTimeout` helper that wraps a plugin\n  `ContextEngine.compact()` in the same finite, host-resolved safety timeout\n  used for native compaction.\n- Wire it into all **five** engine-owned `contextEngine.compact()` call sites:\n  - **pi-embedded runner** — queued `/compact` (`compact.queued.ts`),\n    context-overflow recovery and timeout recovery (`run.ts`).\n  - **codex agent harness** — `compactOwningContextEngine`\n    (`extensions/codex/src/app-server/compact.ts`) and\n    `forceContextEngineCompactionForCodexOverflow`\n    (`extensions/codex/src/app-server/run-attempt.ts`). These are the lanes a\n    codex-harness agent with an `ownsCompaction` plugin actually uses.\n- Export `compactContextEngineWithSafetyTimeout` (+ `resolveCompactionTimeoutMs`)\n  through the existing `openclaw/plugin-sdk/agent-harness-runtime` surface that\n  the codex extension already imports, so the host and the codex harness share\n  one implementation rather than copy-pasting the watchdog across the package\n  boundary.\n- Add an optional `abortSignal` to the `ContextEngine.compact()` contract. The\n  run's abort signal is both raced against the call (so a non-cooperating\n  engine is still bounded) and threaded into the `compact()` params (so\n  cooperating engines can cancel their own in-flight work). The codex sites\n  thread `params.abortSignal` (`compact.ts`) and the run-level\n  `runAbortController.signal` (`run-attempt.ts`).\n- On timeout/abort the queued lane and both codex-harness lanes surface a clean\n  `{ ok: false }` result — matching how the overflow/timeout run lanes already\n  convert a thrown `compact()` — instead of hanging or throwing a raw rejection\n  at callers.\n\nThis is additive to `feat/context-engine-intercept-compaction`, which covers\nthe separate codex `session_before_compact` intercept lane (`interceptsCompaction`);\nthis PR covers the `ownsCompaction` queued/overflow/timeout lanes across both\nthe pi-embedded runner and the codex harness.\n\nFixes #84077\n\n## Test plan\n\n- [x] `pnpm tsgo:core` + `pnpm tsgo:core:test` clean\n- [x] `pnpm tsgo:extensions` + `pnpm tsgo:extensions:test` clean\n- [x] `oxlint` clean on all changed files; plugin-sdk boundary checks pass\n- [x] New unit tests: a plugin `compact()` exceeding the timeout is bounded and rejects with a timeout error; the abort signal is threaded into `compact()` params; abort fires before timeout and rejects promptly\n- [x] New integration tests: queued lane converts a hung/throwing `compact()` to a clean `ok:false`; run abort signal reaches engine-owned overflow compaction\n- [x] New codex-harness tests: a hung owning-engine `compact()` in the Codex compaction lane is bounded and surfaces as `ok:false`; a hung `compact()` during Codex overflow recovery is bounded so the run still proceeds; the caller / run-level abort signal is threaded into the codex-harness `compact()`\n- [x] Existing pi-embedded compaction suites pass (118 tests across the 5 affected files); existing codex compaction suites pass\n\n\n## Real behavior proof\n\n- Behavior addressed: A Codex harness session using an `ownsCompaction` context engine no longer waits forever when the plugin-owned `contextEngine.compact()` promise never settles. The host-resolved compaction timeout returns a clean failed compaction result instead of hanging the agent turn, and the caller abort signal is threaded into the plugin `compact()` params.\n- Real environment tested: Local OpenClaw source checkout on macOS in `/Volumes/LEXAR/repos/openclaw-fix-owns-compaction-timeout`, branch `fix/owns-compaction-safety-timeout`, Node runtime via `node --import tsx`, using the actual `extensions/codex/src/app-server/compact.ts` and session-binding implementation.\n- Exact steps or command run after this patch: `pwd && node --import tsx - <<'NODE' ...` from `/Volumes/LEXAR/repos/openclaw-fix-owns-compaction-timeout`; the script created a real Codex app-server session binding, supplied an `ownsCompaction` context engine whose `compact()` never settles, configured `agents.defaults.compaction.timeoutSeconds = 1`, and awaited `maybeCompactCodexAppServerSession()`.\n- Evidence after fix: Terminal output from the live command:\n\n```json\n{\n  \"branch\": \"fix/owns-compaction-safety-timeout\",\n  \"behavior\": \"hung ownsCompaction contextEngine.compact() is bounded by host timeout\",\n  \"elapsedMs\": 1026,\n  \"compactCalls\": 1,\n  \"receivedAbortSignal\": true,\n  \"result\": {\n    \"ok\": false,\n    \"compacted\": false,\n    \"reason\": \"context engine compaction failed: Compaction timed out\"\n  }\n}\n```\n\n- Observed result after fix: The live call returned in about 1.0s with `{ ok: false, compacted: false }` and `reason: \"context engine compaction failed: Compaction timed out\"`; the never-settling plugin `compact()` was called once and received the caller abort signal.\n- What was not tested: A real third-party plugin process intentionally wedged in production; the live proof uses an in-process `ownsCompaction` context-engine implementation to exercise the same OpenClaw host/Codex harness call path without external credentials.\n",
+        "branch": "fix/owns-compaction-safety-timeout",
+        "head_sha": "e487bdc739a1c1044673d0dfcbe61129d53a8ae4",
+        "author": "100yenadmin",
+        "labels": [
+          "agents",
+          "size: L",
+          "extensions: codex",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "extensions/codex/src/app-server/compact.test.ts",
+            "additions": 94,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/compact.ts",
+            "additions": 23,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/run-attempt.context-engine.test.ts",
+            "additions": 93,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/run-attempt.ts",
+            "additions": 27,
+            "deletions": 15,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner.compaction-safety-timeout.test.ts",
+            "additions": 95,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/compact.hooks.harness.ts",
+            "additions": 23,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/compact.hooks.test.ts",
+            "additions": 27,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/compact.queued.ts",
+            "additions": 39,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/compaction-safety-timeout.ts",
+            "additions": 36,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run.overflow-compaction.test.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run.ts",
+            "additions": 45,
+            "deletions": 21,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/context-engine/types.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/agent-harness-runtime.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84083",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84083.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "SUCCESS": 76,
+            "SKIPPED": 25,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
+    }
+  ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 818,
+    "total_ms": 3189,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 461
+        "ms": 561
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 2376
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 349
+        "ms": 237
       },
       {
         "name": "append_ledger",
