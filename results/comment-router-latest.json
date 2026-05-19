@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-19T18:58:55.844Z",
+  "generated_at": "2026-05-19T18:58:57.061Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-19T15:58:53.302Z",
+  "since": "2026-05-19T15:58:55.214Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    84056
+    84046
   ],
-  "comment_ids": [
-    4491043839
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 12,
+  "commands_seen": 6,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,21 +31,138 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:84056:4491043839:2026-05-19T18:57:15Z:automerge",
-      "comment_id": "4491043839",
-      "comment_version_key": "4491043839:2026-05-19T18:57:15Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84056#issuecomment-4491043839",
+      "idempotency_key": "comment-router:openclaw/openclaw:84046:4485703837:2026-05-19T18:58:50Z:automerge",
+      "comment_id": "4485703837",
+      "comment_version_key": "4485703837:2026-05-19T18:58:50Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84046#issuecomment-4485703837",
       "repo": "openclaw/openclaw",
-      "issue_number": 84056,
-      "author": "Takhoffman",
-      "author_id": 781889,
+      "issue_number": 84046,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-19T18:57:15Z",
-      "comment_updated_at": "2026-05-19T18:57:15Z",
+      "comment_created_at": "2026-05-19T08:09:03Z",
+      "comment_updated_at": "2026-05-19T18:58:50Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "automerge",
       "intent": "automerge",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": "The PR changes the embedded runner session-file fence to accept append-only canonical assistant/tool transcript entries written during the released prompt window while preserving takeover detection for user turns, rewrites, replacements, and malformed tails.\n\nReproducibility: yes. Current-main source shows any runner-owned transcript append during the released prompt window changes the file fingerprint, and the PR body plus production comment provide real logs of the false takeover on long tool-using channel turns.",
+      "review_followup": "There is one narrow, mechanical blocker in the PR branch: add a runtime object guard before the canonical session-entry validator and cover it with a focused test.",
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "ignored",
+      "actions": [],
+      "author_repository_permission": "none",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): stop false-positive session-takeover on runner's own transcript appends",
+        "body": "## Summary\n\nThe embedded attempt session-lock fence uses a `stat()`-based fingerprint (`dev`, `ino`, `size`, `mtimeNs`, `ctimeNs`) to detect \"another lane queued a new user turn against this session\" while the runner releases its coarse lock for the LLM prompt window. The fingerprint is a proxy that overfires: every transcript-append the runner itself performs during the released window (`appendSessionTranscriptMessageLocked` writes tool calls, tool results, and assistant replies via `acquireSessionWriteLock(..., allowReentrant: true)`) changes the file's `size`/`mtimeNs`/`ctimeNs` without going through `refreshSessionFileFence`. Long DM turns with tool calls then trip `assertSessionFileFence` and throw `EmbeddedAttemptSessionTakeoverError` after the reply has already been delivered, surfacing a misleading \"Agent failed before reply\" message on top of a successful turn.\n\nKeep the stat fingerprint as the fast path. On mismatch, only tolerate the runner's append-only assistant/tool transcript shape; treat everything else as a real takeover. The verification requires ALL of:\n\n- **dev/ino match**: no atomic replacement onto a new inode.\n- **birthtimeNs matches**: catches the unlink+recreate-same-inode case (common on tmpfs/ext4 with rapid recreation, where dev and ino are reused but the inode itself is fresh).\n- **size grew**: file is append-only between fence-set and assert.\n- **bytes `[0, fenceSize)` hash identical to the fenced prefix hash**: no in-place rewrite of earlier transcript content (catches compaction-style rewrites that happen to land on a same-byte boundary).\n- **bytes `[fenceSize, currentSize)` are canonical session entries**: every appended line must satisfy `isSessionEntry` from `transcript-file-state.ts` (`id`, `parentId`, `timestamp`, plus the per-type message-shape contract via `isAgentMessage`), with role narrowed to `assistant`, `toolResult`, or `bashExecution`. User-role entries, custom entries, branch_summary entries, and any entry missing the outer base fields remain a real takeover signal.\n\nAnything else (replacement, shrink, in-place rewrite, new user turn, compaction, or a malformed appended entry) remains a real takeover. The fence snapshot captures the prefix SHA-256 alongside the fingerprint at `releaseForPrompt` and `refreshSessionFileFence` so the slow path can verify rigorously without keeping a file handle open.\n\nThe slow-path tail validation delegates to the canonical `isSessionEntry` whole-entry validator (now `export`-visible from `transcript-file-state.ts`). No local mirror of the persisted message contract is maintained: if the upstream `FileEntry`/`SessionEntry` contract changes, the fence's accept-set tracks it automatically.\n\nCloses #83436.\nRefs #83615 (this PR addresses the EmbeddedAttemptSessionTakeoverError surface; the issue also tracks unrelated kimi-k2.6 schema and DNS-fetch failures).\n\n## Real behavior proof\n\n**Behavior addressed**: Embedded runner false-positive `EmbeddedAttemptSessionTakeoverError` fires after long Telegram DM turns whose reply was already delivered, surfacing a misleading \"Agent failed before reply\" message on top of a successful run.\n\n**Real environment tested**: OpenClaw 2026.5.19-beta.1, Linux x86_64, Node 24.13.0. Long-running Telegram DM session against `claude-opus-4-7` (~3.5 min turn with multiple `exec` and `message` tool calls), reproduced reliably before this patch. Production behavior probed via runtime-patched `dist/selection-BpjGe-Y0.js` carrying the same fix semantics, then long DM runs (41s to 122s) exercised through the Telegram channel post-restart.\n\n**Exact steps or command run after this patch**:\n```\nnode scripts/run-vitest.mjs src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts\nCI=true pnpm check:changed --staged=false\nopenclaw gateway restart\n```\n\n**Evidence after fix**:\n\nPre-patch failure mode, redacted runtime log from gateway (`/tmp/openclaw/openclaw-2026-05-19.log`):\n```\n03:30:06.971  embedded run agent end: runId=bbd7d487 isError=false\n03:30:07.008  embedded run prompt end: runId=bbd7d487 sessionId=<session-id> durationMs=217236\n03:30:07.054  lane task error: lane=main durationMs=219867 error=\"EmbeddedAttemptSessionTakeoverError: session file changed while embedded prompt lock was released: /home/.../agents/main/sessions/<session-id>.jsonl\"\n03:30:07.071  Embedded agent failed before reply: session file changed while embedded prompt lock was released: /home/.../<session-id>.jsonl\n```\nNote `isError=false` at `03:30:06.971`: the assistant turn and `message` tool delivery both succeeded, followed 47ms later by the takeover throw, surfacing as a misleading Telegram error on top of a delivered reply.\n\nPost-patch behavior on the same gateway, four long DM runs after gateway restart at 03:46 EDT, every one delivering cleanly with zero takeover errors (redacted runtime log):\n```\n03:51:18  embedded run prompt end: runId=62395ffd  durationMs=122344  (no takeover)\n03:52:39  embedded run prompt end: runId=67e21652  durationMs=41345   (no takeover)\n04:05:05  embedded run prompt end: runId=a5994980  durationMs=101810  (no takeover)\n04:07:34  embedded run prompt end: runId=a837440b  durationMs=94395   (no takeover)\n```\nThe post-patch window contains only two \"Embedded agent failed before reply\" entries (at 04:05:06 and 04:07:35), both with cause `LLM request timed out`, unrelated to the takeover path. Zero `SessionTakeoverError` occurrences post-patch.\n\n**Observed result after fix**: Existing acceptance test exercises all three runner-owned roles (`assistant`, `toolResult`, `bashExecution`) with their canonical persisted shapes. Rejection tests cover: another owner queueing a new user turn, a runner-owned role with malformed message contents, a runner-owned message entry missing its outer `id`, a non-message entry (e.g. `custom`/`branch_summary`/`compaction`), in-place rewrite (rejected via prefix hash mismatch), and unlink+recreate-same-inode replacement (rejected via `birthtimeNs` mismatch). Targeted Vitest output:\n```\nTest Files  2 passed (2)\n     Tests  38 passed (38)\n  Duration  5.12s\n```\n`check:changed --staged=false` is clean across the full repo lane (lint, typecheck, import-cycles, dependency guards, build artifacts, security/quality lanes).\n\n**What was not tested**: Multi-process write contention on the same `sessionFile` from a different gateway process (no test infrastructure for cross-process locks in this surface). The prefix-hash check is `O(fenceSize)` I/O per fence-set; in production sessions seen so far (~150 KB and below) this is sub-millisecond.\n\n## Notes\n\n- Adds three helpers near `readSessionFileFingerprint`: `FenceSnapshot` type, `snapshotSessionFileFence` (used at `releaseForPrompt` and `refreshSessionFileFence`), and `verifyAppendOnlyRunnerOwnedExtension` (used in the slow path of `assertSessionFileFence`). No new module-level dependencies beyond `node:crypto`'s `createHash`.\n- Replaces one piece of controller state (`fenceFingerprint: SessionFileFingerprint | undefined`) with `fenceSnapshot: FenceSnapshot | undefined`. No new long-lived resources (no held file handles).\n- Exports `isSessionEntry` from `transcript-file-state.ts` so the fence's slow path can delegate the whole-entry contract to the canonical validator instead of maintaining a parallel local check. `isAgentMessage` is not exported (the fence reaches it transitively through `isSessionEntry`).\n",
+        "branch": "kevin/fix-session-takeover-falsepositive",
+        "head_sha": "464cb15a5d0daba2369269a815c680430f65f63f",
+        "author": "kays0x",
+        "labels": [
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts",
+            "additions": 164,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.ts",
+            "additions": 132,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/transcript-file-state.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84046",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84046.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 30,
+          "counts": {
+            "SUCCESS": 7,
+            "SKIPPED": 12,
+            "CANCELLED": 1,
+            "QUEUED": 10
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84046:4490972517:2026-05-19T18:48:22Z:re_review",
+      "comment_id": "4490972517",
+      "comment_version_key": "4490972517:2026-05-19T18:48:22Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84046#issuecomment-4490972517",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84046,
+      "author": "kays0x",
+      "author_id": 48529172,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-19T18:48:22Z",
+      "comment_updated_at": "2026-05-19T18:48:22Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "trusted_bot": false,
@@ -59,120 +174,576 @@
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "waiting",
-      "actions": [
-        {
-          "action": "ensure_automerge_job",
-          "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84056.md",
-          "status": "executed",
-          "mode": "autonomous",
-          "cluster_id": "automerge-openclaw-openclaw-84056",
-          "status_detail": "written"
-        },
-        {
-          "action": "label",
-          "label": "clawsweeper:automerge",
-          "status": "executed"
-        },
-        {
-          "action": "dispatch_repair",
-          "workflow": "repair-cluster-worker.yml",
-          "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84056.md",
-          "mode": "autonomous",
-          "status": "waiting",
-          "reason": "adopted job must be committed before worker dispatch"
-        },
-        {
-          "action": "comment",
-          "status": "pending"
-        }
-      ],
-      "author_repository_permission": "write",
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(embedded-runner): preserve provider errors on cleanup takeover",
-        "body": "## Summary\n\n- Preserve the original prompt/provider error when embedded-attempt cleanup later reports `EmbeddedAttemptSessionTakeoverError`.\n- Keep cleanup-only takeover errors fatal when there is no prior prompt error to report.\n- Carry the takeover signal into fallback classification so the user-facing provider message remains visible but model fallback still aborts on local session takeover.\n- Add regressions for prompt-error preservation, cleanup-only takeover, and fallback abort behavior.\n\n## Real behavior proof\n\nBehavior addressed: embedded runner cleanup can race with a session takeover after a provider prompt failure; the user-facing failure should remain the provider/prompt error, but fallback must still see the takeover signal and stop instead of dispatching another model attempt into a taken-over session.\n\nReal environment tested: local OpenClaw source checkout in an isolated worktree on this branch, using the patched fallback classifier from the worktree root.\n\nExact steps or command run after the patch:\n\n```sh\nnode --import tsx -e '<construct a provider-message wrapper with EmbeddedAttemptSessionTakeoverError identity/cause and pass it to isNonProviderRuntimeCoordinationError>'\nnode scripts/run-vitest.mjs src/agents/pi-embedded-runner/run/attempt.spawn-workspace.context-engine.test.ts src/agents/model-fallback.test.ts\npnpm tsgo:test:src\npnpm check:changed\ngit diff --check origin/main...HEAD\n```\n\nEvidence after fix: terminal output from the one-shot runtime fallback-classifier probe:\n\n```json\n{\n  \"wrapperName\": \"EmbeddedAttemptSessionTakeoverError\",\n  \"userFacingMessage\": \"provider rejected request: HTTP 400\",\n  \"causeName\": \"EmbeddedAttemptSessionTakeoverError\",\n  \"abortsFallback\": true\n}\n```\n\nObserved result after fix: the wrapper preserves the provider-facing message while retaining the takeover identity/cause, and the fallback classifier returns `abortsFallback: true` for that runtime-shaped error.\n\nWhat was not tested: no live provider outage was forced against a production gateway. The runtime classifier probe exercises the non-mocked fallback boundary; the cleanup race itself is covered by the embedded-runner attempt harness that owns the cleanup/error precedence path.\n\nSupplemental checks:\n\n- Focused Vitest lane passed: 4 files, 218 tests.\n- `pnpm tsgo:test:src` passed.\n- `pnpm check:changed` passed the core/coreTests lane, lint, typechecks, dependency guards, import-cycle guard, and related changed-file checks.\n- `git diff --check origin/main...HEAD` passed.\n\n## Review\n\nCodex review initially flagged that preserving only the provider error could let fallback continue after session takeover. The second commit addresses that by carrying the takeover signal through fallback classification while keeping the provider message user-facing. ClawSweeper re-review now reports patch quality as acceptable; this body update uses the proof-field labels required by the repository gate.\n\nAI-assisted: yes. I understand the change and verified the narrow error-precedence and fallback-abort behavior locally.\n",
-        "branch": "fix/embedded-runner-provider-error-preservation",
-        "head_sha": "3240d6764653d9058583200f1c82a7333f6fa164",
-        "author": "abnershang",
+        "title": "fix(agents): stop false-positive session-takeover on runner's own transcript appends",
+        "body": "## Summary\n\nThe embedded attempt session-lock fence uses a `stat()`-based fingerprint (`dev`, `ino`, `size`, `mtimeNs`, `ctimeNs`) to detect \"another lane queued a new user turn against this session\" while the runner releases its coarse lock for the LLM prompt window. The fingerprint is a proxy that overfires: every transcript-append the runner itself performs during the released window (`appendSessionTranscriptMessageLocked` writes tool calls, tool results, and assistant replies via `acquireSessionWriteLock(..., allowReentrant: true)`) changes the file's `size`/`mtimeNs`/`ctimeNs` without going through `refreshSessionFileFence`. Long DM turns with tool calls then trip `assertSessionFileFence` and throw `EmbeddedAttemptSessionTakeoverError` after the reply has already been delivered, surfacing a misleading \"Agent failed before reply\" message on top of a successful turn.\n\nKeep the stat fingerprint as the fast path. On mismatch, only tolerate the runner's append-only assistant/tool transcript shape; treat everything else as a real takeover. The verification requires ALL of:\n\n- **dev/ino match**: no atomic replacement onto a new inode.\n- **birthtimeNs matches**: catches the unlink+recreate-same-inode case (common on tmpfs/ext4 with rapid recreation, where dev and ino are reused but the inode itself is fresh).\n- **size grew**: file is append-only between fence-set and assert.\n- **bytes `[0, fenceSize)` hash identical to the fenced prefix hash**: no in-place rewrite of earlier transcript content (catches compaction-style rewrites that happen to land on a same-byte boundary).\n- **bytes `[fenceSize, currentSize)` are canonical session entries**: every appended line must satisfy `isSessionEntry` from `transcript-file-state.ts` (`id`, `parentId`, `timestamp`, plus the per-type message-shape contract via `isAgentMessage`), with role narrowed to `assistant`, `toolResult`, or `bashExecution`. User-role entries, custom entries, branch_summary entries, and any entry missing the outer base fields remain a real takeover signal.\n\nAnything else (replacement, shrink, in-place rewrite, new user turn, compaction, or a malformed appended entry) remains a real takeover. The fence snapshot captures the prefix SHA-256 alongside the fingerprint at `releaseForPrompt` and `refreshSessionFileFence` so the slow path can verify rigorously without keeping a file handle open.\n\nThe slow-path tail validation delegates to the canonical `isSessionEntry` whole-entry validator (now `export`-visible from `transcript-file-state.ts`). No local mirror of the persisted message contract is maintained: if the upstream `FileEntry`/`SessionEntry` contract changes, the fence's accept-set tracks it automatically.\n\nCloses #83436.\nRefs #83615 (this PR addresses the EmbeddedAttemptSessionTakeoverError surface; the issue also tracks unrelated kimi-k2.6 schema and DNS-fetch failures).\n\n## Real behavior proof\n\n**Behavior addressed**: Embedded runner false-positive `EmbeddedAttemptSessionTakeoverError` fires after long Telegram DM turns whose reply was already delivered, surfacing a misleading \"Agent failed before reply\" message on top of a successful run.\n\n**Real environment tested**: OpenClaw 2026.5.19-beta.1, Linux x86_64, Node 24.13.0. Long-running Telegram DM session against `claude-opus-4-7` (~3.5 min turn with multiple `exec` and `message` tool calls), reproduced reliably before this patch. Production behavior probed via runtime-patched `dist/selection-BpjGe-Y0.js` carrying the same fix semantics, then long DM runs (41s to 122s) exercised through the Telegram channel post-restart.\n\n**Exact steps or command run after this patch**:\n```\nnode scripts/run-vitest.mjs src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts\nCI=true pnpm check:changed --staged=false\nopenclaw gateway restart\n```\n\n**Evidence after fix**:\n\nPre-patch failure mode, redacted runtime log from gateway (`/tmp/openclaw/openclaw-2026-05-19.log`):\n```\n03:30:06.971  embedded run agent end: runId=bbd7d487 isError=false\n03:30:07.008  embedded run prompt end: runId=bbd7d487 sessionId=<session-id> durationMs=217236\n03:30:07.054  lane task error: lane=main durationMs=219867 error=\"EmbeddedAttemptSessionTakeoverError: session file changed while embedded prompt lock was released: /home/.../agents/main/sessions/<session-id>.jsonl\"\n03:30:07.071  Embedded agent failed before reply: session file changed while embedded prompt lock was released: /home/.../<session-id>.jsonl\n```\nNote `isError=false` at `03:30:06.971`: the assistant turn and `message` tool delivery both succeeded, followed 47ms later by the takeover throw, surfacing as a misleading Telegram error on top of a delivered reply.\n\nPost-patch behavior on the same gateway, four long DM runs after gateway restart at 03:46 EDT, every one delivering cleanly with zero takeover errors (redacted runtime log):\n```\n03:51:18  embedded run prompt end: runId=62395ffd  durationMs=122344  (no takeover)\n03:52:39  embedded run prompt end: runId=67e21652  durationMs=41345   (no takeover)\n04:05:05  embedded run prompt end: runId=a5994980  durationMs=101810  (no takeover)\n04:07:34  embedded run prompt end: runId=a837440b  durationMs=94395   (no takeover)\n```\nThe post-patch window contains only two \"Embedded agent failed before reply\" entries (at 04:05:06 and 04:07:35), both with cause `LLM request timed out`, unrelated to the takeover path. Zero `SessionTakeoverError` occurrences post-patch.\n\n**Observed result after fix**: Existing acceptance test exercises all three runner-owned roles (`assistant`, `toolResult`, `bashExecution`) with their canonical persisted shapes. Rejection tests cover: another owner queueing a new user turn, a runner-owned role with malformed message contents, a runner-owned message entry missing its outer `id`, a non-message entry (e.g. `custom`/`branch_summary`/`compaction`), in-place rewrite (rejected via prefix hash mismatch), and unlink+recreate-same-inode replacement (rejected via `birthtimeNs` mismatch). Targeted Vitest output:\n```\nTest Files  2 passed (2)\n     Tests  38 passed (38)\n  Duration  5.12s\n```\n`check:changed --staged=false` is clean across the full repo lane (lint, typecheck, import-cycles, dependency guards, build artifacts, security/quality lanes).\n\n**What was not tested**: Multi-process write contention on the same `sessionFile` from a different gateway process (no test infrastructure for cross-process locks in this surface). The prefix-hash check is `O(fenceSize)` I/O per fence-set; in production sessions seen so far (~150 KB and below) this is sub-millisecond.\n\n## Notes\n\n- Adds three helpers near `readSessionFileFingerprint`: `FenceSnapshot` type, `snapshotSessionFileFence` (used at `releaseForPrompt` and `refreshSessionFileFence`), and `verifyAppendOnlyRunnerOwnedExtension` (used in the slow path of `assertSessionFileFence`). No new module-level dependencies beyond `node:crypto`'s `createHash`.\n- Replaces one piece of controller state (`fenceFingerprint: SessionFileFingerprint | undefined`) with `fenceSnapshot: FenceSnapshot | undefined`. No new long-lived resources (no held file handles).\n- Exports `isSessionEntry` from `transcript-file-state.ts` so the fence's slow path can delegate the whole-entry contract to the canonical validator instead of maintaining a parallel local check. `isAgentMessage` is not exported (the fence reaches it transitively through `isSessionEntry`).\n",
+        "branch": "kevin/fix-session-takeover-falsepositive",
+        "head_sha": "464cb15a5d0daba2369269a815c680430f65f63f",
+        "author": "kays0x",
         "labels": [
           "agents",
           "size: S",
           "proof: supplied",
           "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 auth-provider",
+          "P1",
+          "rating: 🧂 unranked krab",
           "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look",
-          "clawsweeper:automerge"
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/agents/failover-error.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/model-fallback.test.ts",
-            "additions": 32,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/model-fallback.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run/attempt.spawn-workspace.context-engine.test.ts",
-            "additions": 58,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
-            "additions": 43,
+            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts",
+            "additions": 164,
             "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.ts",
+            "additions": 132,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/transcript-file-state.ts",
+            "additions": 1,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
-        "cluster_id": "automerge-openclaw-openclaw-84056",
-        "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84056.md",
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84056",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84056.md",
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84046",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84046.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 102,
+          "total": 30,
           "counts": {
-            "SUCCESS": 74,
-            "SKIPPED": 27,
-            "NEUTRAL": 1
+            "SUCCESS": 7,
+            "SKIPPED": 12,
+            "CANCELLED": 1,
+            "QUEUED": 10
           },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
         }
-      }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84046:4486387435:2026-05-19T09:31:42Z:re_review",
+      "comment_id": "4486387435",
+      "comment_version_key": "4486387435:2026-05-19T09:31:42Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84046#issuecomment-4486387435",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84046,
+      "author": "kays0x",
+      "author_id": 48529172,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-19T09:31:42Z",
+      "comment_updated_at": "2026-05-19T09:31:42Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): stop false-positive session-takeover on runner's own transcript appends",
+        "body": "## Summary\n\nThe embedded attempt session-lock fence uses a `stat()`-based fingerprint (`dev`, `ino`, `size`, `mtimeNs`, `ctimeNs`) to detect \"another lane queued a new user turn against this session\" while the runner releases its coarse lock for the LLM prompt window. The fingerprint is a proxy that overfires: every transcript-append the runner itself performs during the released window (`appendSessionTranscriptMessageLocked` writes tool calls, tool results, and assistant replies via `acquireSessionWriteLock(..., allowReentrant: true)`) changes the file's `size`/`mtimeNs`/`ctimeNs` without going through `refreshSessionFileFence`. Long DM turns with tool calls then trip `assertSessionFileFence` and throw `EmbeddedAttemptSessionTakeoverError` after the reply has already been delivered, surfacing a misleading \"Agent failed before reply\" message on top of a successful turn.\n\nKeep the stat fingerprint as the fast path. On mismatch, only tolerate the runner's append-only assistant/tool transcript shape; treat everything else as a real takeover. The verification requires ALL of:\n\n- **dev/ino match**: no atomic replacement onto a new inode.\n- **birthtimeNs matches**: catches the unlink+recreate-same-inode case (common on tmpfs/ext4 with rapid recreation, where dev and ino are reused but the inode itself is fresh).\n- **size grew**: file is append-only between fence-set and assert.\n- **bytes `[0, fenceSize)` hash identical to the fenced prefix hash**: no in-place rewrite of earlier transcript content (catches compaction-style rewrites that happen to land on a same-byte boundary).\n- **bytes `[fenceSize, currentSize)` are canonical session entries**: every appended line must satisfy `isSessionEntry` from `transcript-file-state.ts` (`id`, `parentId`, `timestamp`, plus the per-type message-shape contract via `isAgentMessage`), with role narrowed to `assistant`, `toolResult`, or `bashExecution`. User-role entries, custom entries, branch_summary entries, and any entry missing the outer base fields remain a real takeover signal.\n\nAnything else (replacement, shrink, in-place rewrite, new user turn, compaction, or a malformed appended entry) remains a real takeover. The fence snapshot captures the prefix SHA-256 alongside the fingerprint at `releaseForPrompt` and `refreshSessionFileFence` so the slow path can verify rigorously without keeping a file handle open.\n\nThe slow-path tail validation delegates to the canonical `isSessionEntry` whole-entry validator (now `export`-visible from `transcript-file-state.ts`). No local mirror of the persisted message contract is maintained: if the upstream `FileEntry`/`SessionEntry` contract changes, the fence's accept-set tracks it automatically.\n\nCloses #83436.\nRefs #83615 (this PR addresses the EmbeddedAttemptSessionTakeoverError surface; the issue also tracks unrelated kimi-k2.6 schema and DNS-fetch failures).\n\n## Real behavior proof\n\n**Behavior addressed**: Embedded runner false-positive `EmbeddedAttemptSessionTakeoverError` fires after long Telegram DM turns whose reply was already delivered, surfacing a misleading \"Agent failed before reply\" message on top of a successful run.\n\n**Real environment tested**: OpenClaw 2026.5.19-beta.1, Linux x86_64, Node 24.13.0. Long-running Telegram DM session against `claude-opus-4-7` (~3.5 min turn with multiple `exec` and `message` tool calls), reproduced reliably before this patch. Production behavior probed via runtime-patched `dist/selection-BpjGe-Y0.js` carrying the same fix semantics, then long DM runs (41s to 122s) exercised through the Telegram channel post-restart.\n\n**Exact steps or command run after this patch**:\n```\nnode scripts/run-vitest.mjs src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts\nCI=true pnpm check:changed --staged=false\nopenclaw gateway restart\n```\n\n**Evidence after fix**:\n\nPre-patch failure mode, redacted runtime log from gateway (`/tmp/openclaw/openclaw-2026-05-19.log`):\n```\n03:30:06.971  embedded run agent end: runId=bbd7d487 isError=false\n03:30:07.008  embedded run prompt end: runId=bbd7d487 sessionId=<session-id> durationMs=217236\n03:30:07.054  lane task error: lane=main durationMs=219867 error=\"EmbeddedAttemptSessionTakeoverError: session file changed while embedded prompt lock was released: /home/.../agents/main/sessions/<session-id>.jsonl\"\n03:30:07.071  Embedded agent failed before reply: session file changed while embedded prompt lock was released: /home/.../<session-id>.jsonl\n```\nNote `isError=false` at `03:30:06.971`: the assistant turn and `message` tool delivery both succeeded, followed 47ms later by the takeover throw, surfacing as a misleading Telegram error on top of a delivered reply.\n\nPost-patch behavior on the same gateway, four long DM runs after gateway restart at 03:46 EDT, every one delivering cleanly with zero takeover errors (redacted runtime log):\n```\n03:51:18  embedded run prompt end: runId=62395ffd  durationMs=122344  (no takeover)\n03:52:39  embedded run prompt end: runId=67e21652  durationMs=41345   (no takeover)\n04:05:05  embedded run prompt end: runId=a5994980  durationMs=101810  (no takeover)\n04:07:34  embedded run prompt end: runId=a837440b  durationMs=94395   (no takeover)\n```\nThe post-patch window contains only two \"Embedded agent failed before reply\" entries (at 04:05:06 and 04:07:35), both with cause `LLM request timed out`, unrelated to the takeover path. Zero `SessionTakeoverError` occurrences post-patch.\n\n**Observed result after fix**: Existing acceptance test exercises all three runner-owned roles (`assistant`, `toolResult`, `bashExecution`) with their canonical persisted shapes. Rejection tests cover: another owner queueing a new user turn, a runner-owned role with malformed message contents, a runner-owned message entry missing its outer `id`, a non-message entry (e.g. `custom`/`branch_summary`/`compaction`), in-place rewrite (rejected via prefix hash mismatch), and unlink+recreate-same-inode replacement (rejected via `birthtimeNs` mismatch). Targeted Vitest output:\n```\nTest Files  2 passed (2)\n     Tests  38 passed (38)\n  Duration  5.12s\n```\n`check:changed --staged=false` is clean across the full repo lane (lint, typecheck, import-cycles, dependency guards, build artifacts, security/quality lanes).\n\n**What was not tested**: Multi-process write contention on the same `sessionFile` from a different gateway process (no test infrastructure for cross-process locks in this surface). The prefix-hash check is `O(fenceSize)` I/O per fence-set; in production sessions seen so far (~150 KB and below) this is sub-millisecond.\n\n## Notes\n\n- Adds three helpers near `readSessionFileFingerprint`: `FenceSnapshot` type, `snapshotSessionFileFence` (used at `releaseForPrompt` and `refreshSessionFileFence`), and `verifyAppendOnlyRunnerOwnedExtension` (used in the slow path of `assertSessionFileFence`). No new module-level dependencies beyond `node:crypto`'s `createHash`.\n- Replaces one piece of controller state (`fenceFingerprint: SessionFileFingerprint | undefined`) with `fenceSnapshot: FenceSnapshot | undefined`. No new long-lived resources (no held file handles).\n- Exports `isSessionEntry` from `transcript-file-state.ts` so the fence's slow path can delegate the whole-entry contract to the canonical validator instead of maintaining a parallel local check. `isAgentMessage` is not exported (the fence reaches it transitively through `isSessionEntry`).\n",
+        "branch": "kevin/fix-session-takeover-falsepositive",
+        "head_sha": "464cb15a5d0daba2369269a815c680430f65f63f",
+        "author": "kays0x",
+        "labels": [
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts",
+            "additions": 164,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.ts",
+            "additions": 132,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/transcript-file-state.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84046",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84046.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 30,
+          "counts": {
+            "SUCCESS": 7,
+            "SKIPPED": 12,
+            "CANCELLED": 1,
+            "QUEUED": 10
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84046:4486259064:2026-05-19T09:17:01Z:re_review",
+      "comment_id": "4486259064",
+      "comment_version_key": "4486259064:2026-05-19T09:17:01Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84046#issuecomment-4486259064",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84046,
+      "author": "kays0x",
+      "author_id": 48529172,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-19T09:17:01Z",
+      "comment_updated_at": "2026-05-19T09:17:01Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): stop false-positive session-takeover on runner's own transcript appends",
+        "body": "## Summary\n\nThe embedded attempt session-lock fence uses a `stat()`-based fingerprint (`dev`, `ino`, `size`, `mtimeNs`, `ctimeNs`) to detect \"another lane queued a new user turn against this session\" while the runner releases its coarse lock for the LLM prompt window. The fingerprint is a proxy that overfires: every transcript-append the runner itself performs during the released window (`appendSessionTranscriptMessageLocked` writes tool calls, tool results, and assistant replies via `acquireSessionWriteLock(..., allowReentrant: true)`) changes the file's `size`/`mtimeNs`/`ctimeNs` without going through `refreshSessionFileFence`. Long DM turns with tool calls then trip `assertSessionFileFence` and throw `EmbeddedAttemptSessionTakeoverError` after the reply has already been delivered, surfacing a misleading \"Agent failed before reply\" message on top of a successful turn.\n\nKeep the stat fingerprint as the fast path. On mismatch, only tolerate the runner's append-only assistant/tool transcript shape; treat everything else as a real takeover. The verification requires ALL of:\n\n- **dev/ino match**: no atomic replacement onto a new inode.\n- **birthtimeNs matches**: catches the unlink+recreate-same-inode case (common on tmpfs/ext4 with rapid recreation, where dev and ino are reused but the inode itself is fresh).\n- **size grew**: file is append-only between fence-set and assert.\n- **bytes `[0, fenceSize)` hash identical to the fenced prefix hash**: no in-place rewrite of earlier transcript content (catches compaction-style rewrites that happen to land on a same-byte boundary).\n- **bytes `[fenceSize, currentSize)` are canonical session entries**: every appended line must satisfy `isSessionEntry` from `transcript-file-state.ts` (`id`, `parentId`, `timestamp`, plus the per-type message-shape contract via `isAgentMessage`), with role narrowed to `assistant`, `toolResult`, or `bashExecution`. User-role entries, custom entries, branch_summary entries, and any entry missing the outer base fields remain a real takeover signal.\n\nAnything else (replacement, shrink, in-place rewrite, new user turn, compaction, or a malformed appended entry) remains a real takeover. The fence snapshot captures the prefix SHA-256 alongside the fingerprint at `releaseForPrompt` and `refreshSessionFileFence` so the slow path can verify rigorously without keeping a file handle open.\n\nThe slow-path tail validation delegates to the canonical `isSessionEntry` whole-entry validator (now `export`-visible from `transcript-file-state.ts`). No local mirror of the persisted message contract is maintained: if the upstream `FileEntry`/`SessionEntry` contract changes, the fence's accept-set tracks it automatically.\n\nCloses #83436.\nRefs #83615 (this PR addresses the EmbeddedAttemptSessionTakeoverError surface; the issue also tracks unrelated kimi-k2.6 schema and DNS-fetch failures).\n\n## Real behavior proof\n\n**Behavior addressed**: Embedded runner false-positive `EmbeddedAttemptSessionTakeoverError` fires after long Telegram DM turns whose reply was already delivered, surfacing a misleading \"Agent failed before reply\" message on top of a successful run.\n\n**Real environment tested**: OpenClaw 2026.5.19-beta.1, Linux x86_64, Node 24.13.0. Long-running Telegram DM session against `claude-opus-4-7` (~3.5 min turn with multiple `exec` and `message` tool calls), reproduced reliably before this patch. Production behavior probed via runtime-patched `dist/selection-BpjGe-Y0.js` carrying the same fix semantics, then long DM runs (41s to 122s) exercised through the Telegram channel post-restart.\n\n**Exact steps or command run after this patch**:\n```\nnode scripts/run-vitest.mjs src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts\nCI=true pnpm check:changed --staged=false\nopenclaw gateway restart\n```\n\n**Evidence after fix**:\n\nPre-patch failure mode, redacted runtime log from gateway (`/tmp/openclaw/openclaw-2026-05-19.log`):\n```\n03:30:06.971  embedded run agent end: runId=bbd7d487 isError=false\n03:30:07.008  embedded run prompt end: runId=bbd7d487 sessionId=<session-id> durationMs=217236\n03:30:07.054  lane task error: lane=main durationMs=219867 error=\"EmbeddedAttemptSessionTakeoverError: session file changed while embedded prompt lock was released: /home/.../agents/main/sessions/<session-id>.jsonl\"\n03:30:07.071  Embedded agent failed before reply: session file changed while embedded prompt lock was released: /home/.../<session-id>.jsonl\n```\nNote `isError=false` at `03:30:06.971`: the assistant turn and `message` tool delivery both succeeded, followed 47ms later by the takeover throw, surfacing as a misleading Telegram error on top of a delivered reply.\n\nPost-patch behavior on the same gateway, four long DM runs after gateway restart at 03:46 EDT, every one delivering cleanly with zero takeover errors (redacted runtime log):\n```\n03:51:18  embedded run prompt end: runId=62395ffd  durationMs=122344  (no takeover)\n03:52:39  embedded run prompt end: runId=67e21652  durationMs=41345   (no takeover)\n04:05:05  embedded run prompt end: runId=a5994980  durationMs=101810  (no takeover)\n04:07:34  embedded run prompt end: runId=a837440b  durationMs=94395   (no takeover)\n```\nThe post-patch window contains only two \"Embedded agent failed before reply\" entries (at 04:05:06 and 04:07:35), both with cause `LLM request timed out`, unrelated to the takeover path. Zero `SessionTakeoverError` occurrences post-patch.\n\n**Observed result after fix**: Existing acceptance test exercises all three runner-owned roles (`assistant`, `toolResult`, `bashExecution`) with their canonical persisted shapes. Rejection tests cover: another owner queueing a new user turn, a runner-owned role with malformed message contents, a runner-owned message entry missing its outer `id`, a non-message entry (e.g. `custom`/`branch_summary`/`compaction`), in-place rewrite (rejected via prefix hash mismatch), and unlink+recreate-same-inode replacement (rejected via `birthtimeNs` mismatch). Targeted Vitest output:\n```\nTest Files  2 passed (2)\n     Tests  38 passed (38)\n  Duration  5.12s\n```\n`check:changed --staged=false` is clean across the full repo lane (lint, typecheck, import-cycles, dependency guards, build artifacts, security/quality lanes).\n\n**What was not tested**: Multi-process write contention on the same `sessionFile` from a different gateway process (no test infrastructure for cross-process locks in this surface). The prefix-hash check is `O(fenceSize)` I/O per fence-set; in production sessions seen so far (~150 KB and below) this is sub-millisecond.\n\n## Notes\n\n- Adds three helpers near `readSessionFileFingerprint`: `FenceSnapshot` type, `snapshotSessionFileFence` (used at `releaseForPrompt` and `refreshSessionFileFence`), and `verifyAppendOnlyRunnerOwnedExtension` (used in the slow path of `assertSessionFileFence`). No new module-level dependencies beyond `node:crypto`'s `createHash`.\n- Replaces one piece of controller state (`fenceFingerprint: SessionFileFingerprint | undefined`) with `fenceSnapshot: FenceSnapshot | undefined`. No new long-lived resources (no held file handles).\n- Exports `isSessionEntry` from `transcript-file-state.ts` so the fence's slow path can delegate the whole-entry contract to the canonical validator instead of maintaining a parallel local check. `isAgentMessage` is not exported (the fence reaches it transitively through `isSessionEntry`).\n",
+        "branch": "kevin/fix-session-takeover-falsepositive",
+        "head_sha": "464cb15a5d0daba2369269a815c680430f65f63f",
+        "author": "kays0x",
+        "labels": [
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts",
+            "additions": 164,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.ts",
+            "additions": 132,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/transcript-file-state.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84046",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84046.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 30,
+          "counts": {
+            "SUCCESS": 7,
+            "SKIPPED": 12,
+            "CANCELLED": 1,
+            "QUEUED": 10
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84046:4486132625:2026-05-19T09:02:19Z:re_review",
+      "comment_id": "4486132625",
+      "comment_version_key": "4486132625:2026-05-19T09:02:19Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84046#issuecomment-4486132625",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84046,
+      "author": "kays0x",
+      "author_id": 48529172,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-19T09:02:19Z",
+      "comment_updated_at": "2026-05-19T09:02:19Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): stop false-positive session-takeover on runner's own transcript appends",
+        "body": "## Summary\n\nThe embedded attempt session-lock fence uses a `stat()`-based fingerprint (`dev`, `ino`, `size`, `mtimeNs`, `ctimeNs`) to detect \"another lane queued a new user turn against this session\" while the runner releases its coarse lock for the LLM prompt window. The fingerprint is a proxy that overfires: every transcript-append the runner itself performs during the released window (`appendSessionTranscriptMessageLocked` writes tool calls, tool results, and assistant replies via `acquireSessionWriteLock(..., allowReentrant: true)`) changes the file's `size`/`mtimeNs`/`ctimeNs` without going through `refreshSessionFileFence`. Long DM turns with tool calls then trip `assertSessionFileFence` and throw `EmbeddedAttemptSessionTakeoverError` after the reply has already been delivered, surfacing a misleading \"Agent failed before reply\" message on top of a successful turn.\n\nKeep the stat fingerprint as the fast path. On mismatch, only tolerate the runner's append-only assistant/tool transcript shape; treat everything else as a real takeover. The verification requires ALL of:\n\n- **dev/ino match**: no atomic replacement onto a new inode.\n- **birthtimeNs matches**: catches the unlink+recreate-same-inode case (common on tmpfs/ext4 with rapid recreation, where dev and ino are reused but the inode itself is fresh).\n- **size grew**: file is append-only between fence-set and assert.\n- **bytes `[0, fenceSize)` hash identical to the fenced prefix hash**: no in-place rewrite of earlier transcript content (catches compaction-style rewrites that happen to land on a same-byte boundary).\n- **bytes `[fenceSize, currentSize)` are canonical session entries**: every appended line must satisfy `isSessionEntry` from `transcript-file-state.ts` (`id`, `parentId`, `timestamp`, plus the per-type message-shape contract via `isAgentMessage`), with role narrowed to `assistant`, `toolResult`, or `bashExecution`. User-role entries, custom entries, branch_summary entries, and any entry missing the outer base fields remain a real takeover signal.\n\nAnything else (replacement, shrink, in-place rewrite, new user turn, compaction, or a malformed appended entry) remains a real takeover. The fence snapshot captures the prefix SHA-256 alongside the fingerprint at `releaseForPrompt` and `refreshSessionFileFence` so the slow path can verify rigorously without keeping a file handle open.\n\nThe slow-path tail validation delegates to the canonical `isSessionEntry` whole-entry validator (now `export`-visible from `transcript-file-state.ts`). No local mirror of the persisted message contract is maintained: if the upstream `FileEntry`/`SessionEntry` contract changes, the fence's accept-set tracks it automatically.\n\nCloses #83436.\nRefs #83615 (this PR addresses the EmbeddedAttemptSessionTakeoverError surface; the issue also tracks unrelated kimi-k2.6 schema and DNS-fetch failures).\n\n## Real behavior proof\n\n**Behavior addressed**: Embedded runner false-positive `EmbeddedAttemptSessionTakeoverError` fires after long Telegram DM turns whose reply was already delivered, surfacing a misleading \"Agent failed before reply\" message on top of a successful run.\n\n**Real environment tested**: OpenClaw 2026.5.19-beta.1, Linux x86_64, Node 24.13.0. Long-running Telegram DM session against `claude-opus-4-7` (~3.5 min turn with multiple `exec` and `message` tool calls), reproduced reliably before this patch. Production behavior probed via runtime-patched `dist/selection-BpjGe-Y0.js` carrying the same fix semantics, then long DM runs (41s to 122s) exercised through the Telegram channel post-restart.\n\n**Exact steps or command run after this patch**:\n```\nnode scripts/run-vitest.mjs src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts\nCI=true pnpm check:changed --staged=false\nopenclaw gateway restart\n```\n\n**Evidence after fix**:\n\nPre-patch failure mode, redacted runtime log from gateway (`/tmp/openclaw/openclaw-2026-05-19.log`):\n```\n03:30:06.971  embedded run agent end: runId=bbd7d487 isError=false\n03:30:07.008  embedded run prompt end: runId=bbd7d487 sessionId=<session-id> durationMs=217236\n03:30:07.054  lane task error: lane=main durationMs=219867 error=\"EmbeddedAttemptSessionTakeoverError: session file changed while embedded prompt lock was released: /home/.../agents/main/sessions/<session-id>.jsonl\"\n03:30:07.071  Embedded agent failed before reply: session file changed while embedded prompt lock was released: /home/.../<session-id>.jsonl\n```\nNote `isError=false` at `03:30:06.971`: the assistant turn and `message` tool delivery both succeeded, followed 47ms later by the takeover throw, surfacing as a misleading Telegram error on top of a delivered reply.\n\nPost-patch behavior on the same gateway, four long DM runs after gateway restart at 03:46 EDT, every one delivering cleanly with zero takeover errors (redacted runtime log):\n```\n03:51:18  embedded run prompt end: runId=62395ffd  durationMs=122344  (no takeover)\n03:52:39  embedded run prompt end: runId=67e21652  durationMs=41345   (no takeover)\n04:05:05  embedded run prompt end: runId=a5994980  durationMs=101810  (no takeover)\n04:07:34  embedded run prompt end: runId=a837440b  durationMs=94395   (no takeover)\n```\nThe post-patch window contains only two \"Embedded agent failed before reply\" entries (at 04:05:06 and 04:07:35), both with cause `LLM request timed out`, unrelated to the takeover path. Zero `SessionTakeoverError` occurrences post-patch.\n\n**Observed result after fix**: Existing acceptance test exercises all three runner-owned roles (`assistant`, `toolResult`, `bashExecution`) with their canonical persisted shapes. Rejection tests cover: another owner queueing a new user turn, a runner-owned role with malformed message contents, a runner-owned message entry missing its outer `id`, a non-message entry (e.g. `custom`/`branch_summary`/`compaction`), in-place rewrite (rejected via prefix hash mismatch), and unlink+recreate-same-inode replacement (rejected via `birthtimeNs` mismatch). Targeted Vitest output:\n```\nTest Files  2 passed (2)\n     Tests  38 passed (38)\n  Duration  5.12s\n```\n`check:changed --staged=false` is clean across the full repo lane (lint, typecheck, import-cycles, dependency guards, build artifacts, security/quality lanes).\n\n**What was not tested**: Multi-process write contention on the same `sessionFile` from a different gateway process (no test infrastructure for cross-process locks in this surface). The prefix-hash check is `O(fenceSize)` I/O per fence-set; in production sessions seen so far (~150 KB and below) this is sub-millisecond.\n\n## Notes\n\n- Adds three helpers near `readSessionFileFingerprint`: `FenceSnapshot` type, `snapshotSessionFileFence` (used at `releaseForPrompt` and `refreshSessionFileFence`), and `verifyAppendOnlyRunnerOwnedExtension` (used in the slow path of `assertSessionFileFence`). No new module-level dependencies beyond `node:crypto`'s `createHash`.\n- Replaces one piece of controller state (`fenceFingerprint: SessionFileFingerprint | undefined`) with `fenceSnapshot: FenceSnapshot | undefined`. No new long-lived resources (no held file handles).\n- Exports `isSessionEntry` from `transcript-file-state.ts` so the fence's slow path can delegate the whole-entry contract to the canonical validator instead of maintaining a parallel local check. `isAgentMessage` is not exported (the fence reaches it transitively through `isSessionEntry`).\n",
+        "branch": "kevin/fix-session-takeover-falsepositive",
+        "head_sha": "464cb15a5d0daba2369269a815c680430f65f63f",
+        "author": "kays0x",
+        "labels": [
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts",
+            "additions": 164,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.ts",
+            "additions": 132,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/transcript-file-state.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84046",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84046.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 30,
+          "counts": {
+            "SUCCESS": 7,
+            "SKIPPED": 12,
+            "CANCELLED": 1,
+            "QUEUED": 10
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84046:4485925262:2026-05-19T08:37:33Z:re_review",
+      "comment_id": "4485925262",
+      "comment_version_key": "4485925262:2026-05-19T08:37:33Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84046#issuecomment-4485925262",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84046,
+      "author": "kays0x",
+      "author_id": 48529172,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-19T08:37:33Z",
+      "comment_updated_at": "2026-05-19T08:37:33Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): stop false-positive session-takeover on runner's own transcript appends",
+        "body": "## Summary\n\nThe embedded attempt session-lock fence uses a `stat()`-based fingerprint (`dev`, `ino`, `size`, `mtimeNs`, `ctimeNs`) to detect \"another lane queued a new user turn against this session\" while the runner releases its coarse lock for the LLM prompt window. The fingerprint is a proxy that overfires: every transcript-append the runner itself performs during the released window (`appendSessionTranscriptMessageLocked` writes tool calls, tool results, and assistant replies via `acquireSessionWriteLock(..., allowReentrant: true)`) changes the file's `size`/`mtimeNs`/`ctimeNs` without going through `refreshSessionFileFence`. Long DM turns with tool calls then trip `assertSessionFileFence` and throw `EmbeddedAttemptSessionTakeoverError` after the reply has already been delivered, surfacing a misleading \"Agent failed before reply\" message on top of a successful turn.\n\nKeep the stat fingerprint as the fast path. On mismatch, only tolerate the runner's append-only assistant/tool transcript shape; treat everything else as a real takeover. The verification requires ALL of:\n\n- **dev/ino match**: no atomic replacement onto a new inode.\n- **birthtimeNs matches**: catches the unlink+recreate-same-inode case (common on tmpfs/ext4 with rapid recreation, where dev and ino are reused but the inode itself is fresh).\n- **size grew**: file is append-only between fence-set and assert.\n- **bytes `[0, fenceSize)` hash identical to the fenced prefix hash**: no in-place rewrite of earlier transcript content (catches compaction-style rewrites that happen to land on a same-byte boundary).\n- **bytes `[fenceSize, currentSize)` are canonical session entries**: every appended line must satisfy `isSessionEntry` from `transcript-file-state.ts` (`id`, `parentId`, `timestamp`, plus the per-type message-shape contract via `isAgentMessage`), with role narrowed to `assistant`, `toolResult`, or `bashExecution`. User-role entries, custom entries, branch_summary entries, and any entry missing the outer base fields remain a real takeover signal.\n\nAnything else (replacement, shrink, in-place rewrite, new user turn, compaction, or a malformed appended entry) remains a real takeover. The fence snapshot captures the prefix SHA-256 alongside the fingerprint at `releaseForPrompt` and `refreshSessionFileFence` so the slow path can verify rigorously without keeping a file handle open.\n\nThe slow-path tail validation delegates to the canonical `isSessionEntry` whole-entry validator (now `export`-visible from `transcript-file-state.ts`). No local mirror of the persisted message contract is maintained: if the upstream `FileEntry`/`SessionEntry` contract changes, the fence's accept-set tracks it automatically.\n\nCloses #83436.\nRefs #83615 (this PR addresses the EmbeddedAttemptSessionTakeoverError surface; the issue also tracks unrelated kimi-k2.6 schema and DNS-fetch failures).\n\n## Real behavior proof\n\n**Behavior addressed**: Embedded runner false-positive `EmbeddedAttemptSessionTakeoverError` fires after long Telegram DM turns whose reply was already delivered, surfacing a misleading \"Agent failed before reply\" message on top of a successful run.\n\n**Real environment tested**: OpenClaw 2026.5.19-beta.1, Linux x86_64, Node 24.13.0. Long-running Telegram DM session against `claude-opus-4-7` (~3.5 min turn with multiple `exec` and `message` tool calls), reproduced reliably before this patch. Production behavior probed via runtime-patched `dist/selection-BpjGe-Y0.js` carrying the same fix semantics, then long DM runs (41s to 122s) exercised through the Telegram channel post-restart.\n\n**Exact steps or command run after this patch**:\n```\nnode scripts/run-vitest.mjs src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts\nCI=true pnpm check:changed --staged=false\nopenclaw gateway restart\n```\n\n**Evidence after fix**:\n\nPre-patch failure mode, redacted runtime log from gateway (`/tmp/openclaw/openclaw-2026-05-19.log`):\n```\n03:30:06.971  embedded run agent end: runId=bbd7d487 isError=false\n03:30:07.008  embedded run prompt end: runId=bbd7d487 sessionId=<session-id> durationMs=217236\n03:30:07.054  lane task error: lane=main durationMs=219867 error=\"EmbeddedAttemptSessionTakeoverError: session file changed while embedded prompt lock was released: /home/.../agents/main/sessions/<session-id>.jsonl\"\n03:30:07.071  Embedded agent failed before reply: session file changed while embedded prompt lock was released: /home/.../<session-id>.jsonl\n```\nNote `isError=false` at `03:30:06.971`: the assistant turn and `message` tool delivery both succeeded, followed 47ms later by the takeover throw, surfacing as a misleading Telegram error on top of a delivered reply.\n\nPost-patch behavior on the same gateway, four long DM runs after gateway restart at 03:46 EDT, every one delivering cleanly with zero takeover errors (redacted runtime log):\n```\n03:51:18  embedded run prompt end: runId=62395ffd  durationMs=122344  (no takeover)\n03:52:39  embedded run prompt end: runId=67e21652  durationMs=41345   (no takeover)\n04:05:05  embedded run prompt end: runId=a5994980  durationMs=101810  (no takeover)\n04:07:34  embedded run prompt end: runId=a837440b  durationMs=94395   (no takeover)\n```\nThe post-patch window contains only two \"Embedded agent failed before reply\" entries (at 04:05:06 and 04:07:35), both with cause `LLM request timed out`, unrelated to the takeover path. Zero `SessionTakeoverError` occurrences post-patch.\n\n**Observed result after fix**: Existing acceptance test exercises all three runner-owned roles (`assistant`, `toolResult`, `bashExecution`) with their canonical persisted shapes. Rejection tests cover: another owner queueing a new user turn, a runner-owned role with malformed message contents, a runner-owned message entry missing its outer `id`, a non-message entry (e.g. `custom`/`branch_summary`/`compaction`), in-place rewrite (rejected via prefix hash mismatch), and unlink+recreate-same-inode replacement (rejected via `birthtimeNs` mismatch). Targeted Vitest output:\n```\nTest Files  2 passed (2)\n     Tests  38 passed (38)\n  Duration  5.12s\n```\n`check:changed --staged=false` is clean across the full repo lane (lint, typecheck, import-cycles, dependency guards, build artifacts, security/quality lanes).\n\n**What was not tested**: Multi-process write contention on the same `sessionFile` from a different gateway process (no test infrastructure for cross-process locks in this surface). The prefix-hash check is `O(fenceSize)` I/O per fence-set; in production sessions seen so far (~150 KB and below) this is sub-millisecond.\n\n## Notes\n\n- Adds three helpers near `readSessionFileFingerprint`: `FenceSnapshot` type, `snapshotSessionFileFence` (used at `releaseForPrompt` and `refreshSessionFileFence`), and `verifyAppendOnlyRunnerOwnedExtension` (used in the slow path of `assertSessionFileFence`). No new module-level dependencies beyond `node:crypto`'s `createHash`.\n- Replaces one piece of controller state (`fenceFingerprint: SessionFileFingerprint | undefined`) with `fenceSnapshot: FenceSnapshot | undefined`. No new long-lived resources (no held file handles).\n- Exports `isSessionEntry` from `transcript-file-state.ts` so the fence's slow path can delegate the whole-entry contract to the canonical validator instead of maintaining a parallel local check. `isAgentMessage` is not exported (the fence reaches it transitively through `isSessionEntry`).\n",
+        "branch": "kevin/fix-session-takeover-falsepositive",
+        "head_sha": "464cb15a5d0daba2369269a815c680430f65f63f",
+        "author": "kays0x",
+        "labels": [
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts",
+            "additions": 164,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.ts",
+            "additions": 132,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/transcript-file-state.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84046",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84046.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 30,
+          "counts": {
+            "SUCCESS": 7,
+            "SKIPPED": 12,
+            "CANCELLED": 1,
+            "QUEUED": 10
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 5219,
+    "total_ms": 2127,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 519
+        "ms": 436
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2005
+        "ms": 1395
       },
       {
         "name": "classify_commands",
@@ -180,7 +751,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2676
+        "ms": 281
       },
       {
         "name": "append_ledger",
