@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-19T19:02:47.482Z",
+  "generated_at": "2026-05-19T19:03:36.191Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-19T16:02:45.763Z",
+  "since": "2026-05-19T16:03:34.018Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    39060
+    82572
   ],
-  "comment_ids": [
-    4491072978
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 29,
+  "commands_seen": 11,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,17 +31,159 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:39060:4491072978:2026-05-19T19:01:00Z:re_review",
-      "comment_id": "4491072978",
-      "comment_version_key": "4491072978:2026-05-19T19:01:00Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/39060#issuecomment-4491072978",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:82572:4466829643:2026-05-19T19:03:29Z:clawsweeper_needs_human",
+      "comment_id": "4466829643",
+      "comment_version_key": "4466829643:2026-05-19T19:03:29Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4466829643",
       "repo": "openclaw/openclaw",
-      "issue_number": 39060,
-      "author": "Takhoffman",
-      "author_id": 781889,
+      "issue_number": 82572,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-19T19:01:00Z",
-      "comment_updated_at": "2026-05-19T19:01:00Z",
+      "comment_created_at": "2026-05-16T12:19:59Z",
+      "comment_updated_at": "2026-05-19T19:03:29Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "The remaining action is maintainer proof, design, and security-boundary judgment rather than a narrow automated code repair.; Needs attention: Needs maintainer attention because the patch intentionally writes queued prompts and routing/session metadata to a local state file. (sha=d301d9a76a7371449c74cad183a159caa3386983)",
+      "review_summary": "The PR adds JSON-backed followup queue persistence, restores queue state at module init, persists enqueue/drain/state mutations, and adds restart/persistence tests for the queue path.\n\nReproducibility: no. live high-confidence reproduction was established in this review. Source inspection and docs show current main keeps followup queues in process memory with no restore path, so a process restart loses queued map state.",
+      "review_followup": "The remaining action is maintainer proof, design, and security-boundary judgment rather than a narrow automated code repair.",
+      "freeform_prompt": null,
+      "expected_head_sha": "d301d9a76a7371449c74cad183a159caa3386983",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(queue): persist followup queues across gateway restarts",
+        "body": "## Problem\n\nWhen the gateway process restarts (npm update, crash, systemd restart), any\nmessages that arrived while an agent turn was in progress are silently lost.\nThe followup queue lives only in process memory — there is no recovery path.\n\nThis is particularly noticeable on channels that serialize messages (e.g.\nTelegram in queue mode): a message received during an active turn is queued\nfor delivery, then gone if the gateway restarts before that turn completes.\n\n## Solution\n\nAdd a JSON persistence layer for the `FOLLOWUP_QUEUES` global map.\n\n### New file: `src/auto-reply/reply/queue/persist.ts`\n\n- `persistFollowupQueues()` — serializes all non-empty queue entries to\n  `<stateDir>/live-chat-followup-queues.json`. Respects `OPENCLAW_STATE_DIR`\n  via the existing `resolveStateDir()` utility. State file is deleted when all\n  queues drain to empty.\n- `restoreFollowupQueues()` — reads the state file at module init and repopulates\n  `FOLLOWUP_QUEUES` before any enqueue or drain fires.\n- `PersistedFollowupRun` — a `Pick<FollowupRun, ...>` type that explicitly\n  excludes runtime-only, non-serializable fields: `abortSignal`,\n  `currentTurnContext`, `deliveryCorrelations`, `queuedLifecycle`. These are\n  transient and must not survive a restart.\n\n### Mutation hooks\n\n`persistFollowupQueues()` is called after every state-changing operation:\n\n| Site | File |\n|---|---|\n| `enqueueFollowupRun` — after `items.push` | `enqueue.ts` |\n| Drain `finally` block — both empty-queue delete and reschedule branches | `drain.ts` |\n| `clearFollowupQueue` — after `FOLLOWUP_QUEUES.delete` | `state.ts` |\n| `refreshQueuedFollowupSession` — after the run-rewrite loop | `state.ts` |\n\n### Tests\n\n`persist.test.ts` covers:\n- State file written when queue has items\n- State file deleted when all queues are empty\n- Full round-trip: enqueue → persist → simulated restart → restore → verify prompt + routing fields\n- Runtime-only `abortSignal` field not present after restore\n- No-op when state file does not exist\n- Malformed entries (non-array items, null key) are skipped\n\n## Notes\n\n- The `draining: false` invariant is enforced on restore — any in-flight drain\n  that was interrupted is restarted by the normal drain scheduler on next enqueue.\n- `summarySources` (contains `FollowupRun` objects, not serializable) is reset to\n  `[]` on restore. `summaryLines` (plain strings) is persisted and restored.\n- No schema migration needed for v1; unrecognized fields are ignored on restore.\n\n## Real behavior proof\n\n- Behavior addressed: Queued followup messages (received while an agent turn is active) now survive gateway restarts. Before this patch a process restart discarded all pending items silently; after it they are written to `~/.openclaw/state/live-chat-followup-queues.json` and re-delivered once the drain callback is registered on startup.\n- Real environment tested: Local dev, Node 22, Linux, openclaw source checkout (`jewseppi/openclaw` `feat/queue-followup-persistence`). Module loaded directly via `node --import tsx` — no test runner involved.\n- Exact steps or command run after this patch: Ran `node --import tsx --input-type=module` against the live queue module to exercise the full persist → simulated-restart → restore cycle against a real temp directory.\n- Evidence after fix: Terminal output from `node --import tsx` (live module, real filesystem I/O, no mocks):\n  ```\n  Step 1: persistFollowupQueues()\n  State file: /tmp/openclaw-persist-proof-SdQ5bE/live-chat-followup-queues.json\n  {\n    \"version\": 1,\n    \"updatedAt\": 1778974677687,\n    \"entries\": [\n      [\n        \"agent:main:dm:telegram-proof\",\n        {\n          \"items\": [\n            {\n              \"prompt\": \"did the gateway restart survive?\",\n              \"enqueuedAt\": 1778974677687,\n              \"originatingChannel\": \"telegram\",\n              \"originatingTo\": \"99999\",\n              \"run\": {\n                \"agentId\": \"main\",\n                \"agentDir\": \"/tmp/agent\",\n                \"sessionId\": \"sess-proof\",\n                \"sessionFile\": \"/tmp/sess.jsonl\",\n                \"workspaceDir\": \"/tmp/ws\",\n                \"provider\": \"anthropic\",\n                \"model\": \"claude-sonnet-4-6\",\n                \"timeoutMs\": 30000,\n                \"blockReplyBreak\": \"message_end\"\n              }\n            }\n          ],\n          \"mode\": \"steer\",\n          \"debounceMs\": 500,\n          \"cap\": 20,\n          \"dropPolicy\": \"summarize\",\n          \"droppedCount\": 0,\n          \"summaryLines\": []\n        }\n      ]\n    ]\n  }\n\n  Step 2: simulate restart — delete in-memory queue\n    FOLLOWUP_QUEUES.get(KEY): undefined\n\n  Step 3: restoreFollowupQueues()\n    restored.items.length: 1\n    restored.items[0].prompt: did the gateway restart survive?\n    restored.items[0].originatingChannel: telegram\n    restored.draining: false\n    peekRestoredPendingDrainKeys().has(KEY): true\n\n  Pass: queue survives a simulated process restart.\n  ```\n- Observed result after fix: 1 queued Telegram prompt survived the in-process restart simulation. `FOLLOWUP_QUEUES` was cleared to undefined, `restoreFollowupQueues()` re-populated it from the state file on disk, `draining` reset to `false`, and the key was registered in `restoredPendingDrainKeys` so drain scheduling fires when the callback is next registered. State file written and read by `node` against a real temp dir — no mocks, no vitest.\n- What was not tested: Full live Telegram→gateway→kill→restart→re-delivery end-to-end (requires a real inbound message arriving during an active agent turn followed by a real process restart).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+        "branch": "feat/queue-followup-persistence",
+        "head_sha": "d301d9a76a7371449c74cad183a159caa3386983",
+        "author": "jewseppi",
+        "labels": [
+          "size: XL",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/queue.drain-restart.test.ts",
+            "additions": 266,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.identity-guard.test.ts",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/enqueue.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.test.ts",
+            "additions": 415,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.ts",
+            "additions": 415,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/state.ts",
+            "additions": 7,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82572",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82572.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 24,
+          "counts": {
+            "QUEUED": 10,
+            "SUCCESS": 9,
+            "SKIPPED": 5
+          },
+          "blockers": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4484098386:2026-05-19T03:16:36Z:re_review",
+      "comment_id": "4484098386",
+      "comment_version_key": "4484098386:2026-05-19T03:16:36Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4484098386",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-19T03:16:36Z",
+      "comment_updated_at": "2026-05-19T03:16:36Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -59,76 +199,73 @@
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-19T19:02:48.376Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 39060
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-19T19:02:49.489Z",
-          "response_comment_id": null,
-          "response_comment_mode": "created"
-        }
-      ],
-      "author_repository_permission": "write",
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "feat(agent-files): add word wrap toggle functionality and related styles",
-        "body": "## Summary\r\n\r\nDescribe the problem and fix in 2–5 bullets:\r\n\r\n- Problem: Fix agent content viewer\r\n- Why it matters: Better usability\r\n- What changed: Added Word Wrap and Stretched File Content View\r\n- What did NOT change (scope boundary):\r\n\r\n## Change Type (select all)\r\n\r\n- [ ] Bug fix\r\n- [ x] Feature\r\n- [ ] Refactor\r\n- [ ] Docs\r\n- [ ] Security hardening\r\n- [ ] Chore/infra\r\n\r\n## Scope (select all touched areas)\r\n\r\n- [ ] Gateway / orchestration\r\n- [ ] Skills / tool execution\r\n- [ ] Auth / tokens\r\n- [ ] Memory / storage\r\n- [ ] Integrations\r\n- [ ] API / contracts\r\n- [x ] UI / DX\r\n- [ ] CI/CD / infra\r\n\r\n## Linked Issue/PR\r\n\r\n- Closes #\r\n- Related #\r\n\r\n## User-visible / Behavior Changes\r\n\r\nList user-visible changes (including defaults/config).  \r\nIf none, write `None`.\r\n\r\n## Security Impact (required)\r\n\r\n- New permissions/capabilities? (`Yes/No`) No\r\n- Secrets/tokens handling changed? (`Yes/No`)  No\r\n- New/changed network calls? (`Yes/No`) No\r\n- Command/tool execution surface changed? (`Yes/No`) No\r\n- Data access scope changed? (`Yes/No`) No\r\n- If any `Yes`, explain risk + mitigation:\r\n\r\n## Repro + Verification\r\n\r\n### Environment\r\n\r\n- OS:\r\n- Runtime/container:\r\n- Model/provider:\r\n- Integration/channel (if any):\r\n- Relevant config (redacted):\r\n\r\n### Steps\r\n\r\n1. Navigate to Agent Files > See File Content Word Wrap Toggle and Stretched window\r\n2.\r\n3.\r\n\r\n### Expected\r\n\r\n-\r\n\r\n### Actual\r\n\r\n-\r\n\r\n## Evidence\r\n\r\nAttach at least one:\r\n\r\n- [ ] Failing test/log before + passing after\r\n- [ ] Trace/log snippets\r\n- [ x] Screenshot/recording\r\n- [ ] Perf numbers (if relevant)\r\n\r\n<img width=\"1277\" height=\"889\" alt=\"image\" src=\"https://github.com/user-attachments/assets/c6e56aad-defb-47e2-98f6-1e7b5adf0f24\" />\r\n\r\n\r\n## Human Verification (required)\r\n\r\nWhat you personally verified (not just CI), and how:\r\n\r\n- Verified scenarios:\r\n- Edge cases checked:\r\n- What you did **not** verify:\r\n\r\n## Compatibility / Migration\r\n\r\n- Backward compatible? (`Yes/No`). \r\n- Config/env changes? (`Yes/No`)\r\n- Migration needed? (`Yes/No`)\r\n- If yes, exact upgrade steps:\r\n\r\n## Failure Recovery (if this breaks)\r\n\r\n- How to disable/revert this change quickly:\r\n- Files/config to restore:\r\n- Known bad symptoms reviewers should watch for:\r\n\r\n## Risks and Mitigations\r\n\r\nList only real risks for this PR. Add/remove entries as needed. If none, write `None`.\r\n\r\n- Risk:\r\n  - Mitigation:\r\n",
-        "branch": "fix-agent-content-files-view",
-        "head_sha": "56362f885defcbcc92815db8a5e68da10c1a8192",
-        "author": "clawdwalt",
+        "title": "feat(queue): persist followup queues across gateway restarts",
+        "body": "## Problem\n\nWhen the gateway process restarts (npm update, crash, systemd restart), any\nmessages that arrived while an agent turn was in progress are silently lost.\nThe followup queue lives only in process memory — there is no recovery path.\n\nThis is particularly noticeable on channels that serialize messages (e.g.\nTelegram in queue mode): a message received during an active turn is queued\nfor delivery, then gone if the gateway restarts before that turn completes.\n\n## Solution\n\nAdd a JSON persistence layer for the `FOLLOWUP_QUEUES` global map.\n\n### New file: `src/auto-reply/reply/queue/persist.ts`\n\n- `persistFollowupQueues()` — serializes all non-empty queue entries to\n  `<stateDir>/live-chat-followup-queues.json`. Respects `OPENCLAW_STATE_DIR`\n  via the existing `resolveStateDir()` utility. State file is deleted when all\n  queues drain to empty.\n- `restoreFollowupQueues()` — reads the state file at module init and repopulates\n  `FOLLOWUP_QUEUES` before any enqueue or drain fires.\n- `PersistedFollowupRun` — a `Pick<FollowupRun, ...>` type that explicitly\n  excludes runtime-only, non-serializable fields: `abortSignal`,\n  `currentTurnContext`, `deliveryCorrelations`, `queuedLifecycle`. These are\n  transient and must not survive a restart.\n\n### Mutation hooks\n\n`persistFollowupQueues()` is called after every state-changing operation:\n\n| Site | File |\n|---|---|\n| `enqueueFollowupRun` — after `items.push` | `enqueue.ts` |\n| Drain `finally` block — both empty-queue delete and reschedule branches | `drain.ts` |\n| `clearFollowupQueue` — after `FOLLOWUP_QUEUES.delete` | `state.ts` |\n| `refreshQueuedFollowupSession` — after the run-rewrite loop | `state.ts` |\n\n### Tests\n\n`persist.test.ts` covers:\n- State file written when queue has items\n- State file deleted when all queues are empty\n- Full round-trip: enqueue → persist → simulated restart → restore → verify prompt + routing fields\n- Runtime-only `abortSignal` field not present after restore\n- No-op when state file does not exist\n- Malformed entries (non-array items, null key) are skipped\n\n## Notes\n\n- The `draining: false` invariant is enforced on restore — any in-flight drain\n  that was interrupted is restarted by the normal drain scheduler on next enqueue.\n- `summarySources` (contains `FollowupRun` objects, not serializable) is reset to\n  `[]` on restore. `summaryLines` (plain strings) is persisted and restored.\n- No schema migration needed for v1; unrecognized fields are ignored on restore.\n\n## Real behavior proof\n\n- Behavior addressed: Queued followup messages (received while an agent turn is active) now survive gateway restarts. Before this patch a process restart discarded all pending items silently; after it they are written to `~/.openclaw/state/live-chat-followup-queues.json` and re-delivered once the drain callback is registered on startup.\n- Real environment tested: Local dev, Node 22, Linux, openclaw source checkout (`jewseppi/openclaw` `feat/queue-followup-persistence`). Module loaded directly via `node --import tsx` — no test runner involved.\n- Exact steps or command run after this patch: Ran `node --import tsx --input-type=module` against the live queue module to exercise the full persist → simulated-restart → restore cycle against a real temp directory.\n- Evidence after fix: Terminal output from `node --import tsx` (live module, real filesystem I/O, no mocks):\n  ```\n  Step 1: persistFollowupQueues()\n  State file: /tmp/openclaw-persist-proof-SdQ5bE/live-chat-followup-queues.json\n  {\n    \"version\": 1,\n    \"updatedAt\": 1778974677687,\n    \"entries\": [\n      [\n        \"agent:main:dm:telegram-proof\",\n        {\n          \"items\": [\n            {\n              \"prompt\": \"did the gateway restart survive?\",\n              \"enqueuedAt\": 1778974677687,\n              \"originatingChannel\": \"telegram\",\n              \"originatingTo\": \"99999\",\n              \"run\": {\n                \"agentId\": \"main\",\n                \"agentDir\": \"/tmp/agent\",\n                \"sessionId\": \"sess-proof\",\n                \"sessionFile\": \"/tmp/sess.jsonl\",\n                \"workspaceDir\": \"/tmp/ws\",\n                \"provider\": \"anthropic\",\n                \"model\": \"claude-sonnet-4-6\",\n                \"timeoutMs\": 30000,\n                \"blockReplyBreak\": \"message_end\"\n              }\n            }\n          ],\n          \"mode\": \"steer\",\n          \"debounceMs\": 500,\n          \"cap\": 20,\n          \"dropPolicy\": \"summarize\",\n          \"droppedCount\": 0,\n          \"summaryLines\": []\n        }\n      ]\n    ]\n  }\n\n  Step 2: simulate restart — delete in-memory queue\n    FOLLOWUP_QUEUES.get(KEY): undefined\n\n  Step 3: restoreFollowupQueues()\n    restored.items.length: 1\n    restored.items[0].prompt: did the gateway restart survive?\n    restored.items[0].originatingChannel: telegram\n    restored.draining: false\n    peekRestoredPendingDrainKeys().has(KEY): true\n\n  Pass: queue survives a simulated process restart.\n  ```\n- Observed result after fix: 1 queued Telegram prompt survived the in-process restart simulation. `FOLLOWUP_QUEUES` was cleared to undefined, `restoreFollowupQueues()` re-populated it from the state file on disk, `draining` reset to `false`, and the key was registered in `restoredPendingDrainKeys` so drain scheduling fires when the callback is next registered. State file written and read by `node` against a real temp dir — no mocks, no vitest.\n- What was not tested: Full live Telegram→gateway→kill→restart→re-delivery end-to-end (requires a real inbound message arriving during an active agent turn followed by a real process restart).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+        "branch": "feat/queue-followup-persistence",
+        "head_sha": "d301d9a76a7371449c74cad183a159caa3386983",
+        "author": "jewseppi",
         "labels": [
-          "app: web-ui",
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "P3",
+          "size: XL",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
           "rating: 🧂 unranked krab",
-          "status: 📣 needs proof",
-          "proof: 📸 screenshot"
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "ui/src/styles/components.css",
-            "additions": 43,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/ui/app-render.ts",
-            "additions": 4,
+            "path": "src/auto-reply/reply/queue.drain-restart.test.ts",
+            "additions": 266,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "ui/src/ui/app-view-state.ts",
-            "additions": 1,
+            "path": "src/auto-reply/reply/queue/drain.identity-guard.test.ts",
+            "additions": 48,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "ui/src/ui/app.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/ui/views/agents-panels-status-files.ts",
-            "additions": 17,
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 44,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "ui/src/ui/views/agents.ts",
-            "additions": 4,
+            "path": "src/auto-reply/reply/queue/enqueue.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.test.ts",
+            "additions": 415,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.ts",
+            "additions": 415,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/state.ts",
+            "additions": 7,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 14,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
@@ -136,53 +273,1247 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-39060",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-39060.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82572",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82572.md",
         "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 13,
+          "total": 24,
           "counts": {
-            "FAILURE": 1,
-            "SKIPPED": 8,
-            "SUCCESS": 4
+            "QUEUED": 10,
+            "SUCCESS": 9,
+            "SKIPPED": 5
           },
           "blockers": [
-            "Real behavior proof:FAILURE"
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
           ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": []
         }
-      }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4483989864:2026-05-19T02:50:11Z:re_review",
+      "comment_id": "4483989864",
+      "comment_version_key": "4483989864:2026-05-19T02:50:11Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4483989864",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-19T02:50:11Z",
+      "comment_updated_at": "2026-05-19T02:50:11Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(queue): persist followup queues across gateway restarts",
+        "body": "## Problem\n\nWhen the gateway process restarts (npm update, crash, systemd restart), any\nmessages that arrived while an agent turn was in progress are silently lost.\nThe followup queue lives only in process memory — there is no recovery path.\n\nThis is particularly noticeable on channels that serialize messages (e.g.\nTelegram in queue mode): a message received during an active turn is queued\nfor delivery, then gone if the gateway restarts before that turn completes.\n\n## Solution\n\nAdd a JSON persistence layer for the `FOLLOWUP_QUEUES` global map.\n\n### New file: `src/auto-reply/reply/queue/persist.ts`\n\n- `persistFollowupQueues()` — serializes all non-empty queue entries to\n  `<stateDir>/live-chat-followup-queues.json`. Respects `OPENCLAW_STATE_DIR`\n  via the existing `resolveStateDir()` utility. State file is deleted when all\n  queues drain to empty.\n- `restoreFollowupQueues()` — reads the state file at module init and repopulates\n  `FOLLOWUP_QUEUES` before any enqueue or drain fires.\n- `PersistedFollowupRun` — a `Pick<FollowupRun, ...>` type that explicitly\n  excludes runtime-only, non-serializable fields: `abortSignal`,\n  `currentTurnContext`, `deliveryCorrelations`, `queuedLifecycle`. These are\n  transient and must not survive a restart.\n\n### Mutation hooks\n\n`persistFollowupQueues()` is called after every state-changing operation:\n\n| Site | File |\n|---|---|\n| `enqueueFollowupRun` — after `items.push` | `enqueue.ts` |\n| Drain `finally` block — both empty-queue delete and reschedule branches | `drain.ts` |\n| `clearFollowupQueue` — after `FOLLOWUP_QUEUES.delete` | `state.ts` |\n| `refreshQueuedFollowupSession` — after the run-rewrite loop | `state.ts` |\n\n### Tests\n\n`persist.test.ts` covers:\n- State file written when queue has items\n- State file deleted when all queues are empty\n- Full round-trip: enqueue → persist → simulated restart → restore → verify prompt + routing fields\n- Runtime-only `abortSignal` field not present after restore\n- No-op when state file does not exist\n- Malformed entries (non-array items, null key) are skipped\n\n## Notes\n\n- The `draining: false` invariant is enforced on restore — any in-flight drain\n  that was interrupted is restarted by the normal drain scheduler on next enqueue.\n- `summarySources` (contains `FollowupRun` objects, not serializable) is reset to\n  `[]` on restore. `summaryLines` (plain strings) is persisted and restored.\n- No schema migration needed for v1; unrecognized fields are ignored on restore.\n\n## Real behavior proof\n\n- Behavior addressed: Queued followup messages (received while an agent turn is active) now survive gateway restarts. Before this patch a process restart discarded all pending items silently; after it they are written to `~/.openclaw/state/live-chat-followup-queues.json` and re-delivered once the drain callback is registered on startup.\n- Real environment tested: Local dev, Node 22, Linux, openclaw source checkout (`jewseppi/openclaw` `feat/queue-followup-persistence`). Module loaded directly via `node --import tsx` — no test runner involved.\n- Exact steps or command run after this patch: Ran `node --import tsx --input-type=module` against the live queue module to exercise the full persist → simulated-restart → restore cycle against a real temp directory.\n- Evidence after fix: Terminal output from `node --import tsx` (live module, real filesystem I/O, no mocks):\n  ```\n  Step 1: persistFollowupQueues()\n  State file: /tmp/openclaw-persist-proof-SdQ5bE/live-chat-followup-queues.json\n  {\n    \"version\": 1,\n    \"updatedAt\": 1778974677687,\n    \"entries\": [\n      [\n        \"agent:main:dm:telegram-proof\",\n        {\n          \"items\": [\n            {\n              \"prompt\": \"did the gateway restart survive?\",\n              \"enqueuedAt\": 1778974677687,\n              \"originatingChannel\": \"telegram\",\n              \"originatingTo\": \"99999\",\n              \"run\": {\n                \"agentId\": \"main\",\n                \"agentDir\": \"/tmp/agent\",\n                \"sessionId\": \"sess-proof\",\n                \"sessionFile\": \"/tmp/sess.jsonl\",\n                \"workspaceDir\": \"/tmp/ws\",\n                \"provider\": \"anthropic\",\n                \"model\": \"claude-sonnet-4-6\",\n                \"timeoutMs\": 30000,\n                \"blockReplyBreak\": \"message_end\"\n              }\n            }\n          ],\n          \"mode\": \"steer\",\n          \"debounceMs\": 500,\n          \"cap\": 20,\n          \"dropPolicy\": \"summarize\",\n          \"droppedCount\": 0,\n          \"summaryLines\": []\n        }\n      ]\n    ]\n  }\n\n  Step 2: simulate restart — delete in-memory queue\n    FOLLOWUP_QUEUES.get(KEY): undefined\n\n  Step 3: restoreFollowupQueues()\n    restored.items.length: 1\n    restored.items[0].prompt: did the gateway restart survive?\n    restored.items[0].originatingChannel: telegram\n    restored.draining: false\n    peekRestoredPendingDrainKeys().has(KEY): true\n\n  Pass: queue survives a simulated process restart.\n  ```\n- Observed result after fix: 1 queued Telegram prompt survived the in-process restart simulation. `FOLLOWUP_QUEUES` was cleared to undefined, `restoreFollowupQueues()` re-populated it from the state file on disk, `draining` reset to `false`, and the key was registered in `restoredPendingDrainKeys` so drain scheduling fires when the callback is next registered. State file written and read by `node` against a real temp dir — no mocks, no vitest.\n- What was not tested: Full live Telegram→gateway→kill→restart→re-delivery end-to-end (requires a real inbound message arriving during an active agent turn followed by a real process restart).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+        "branch": "feat/queue-followup-persistence",
+        "head_sha": "d301d9a76a7371449c74cad183a159caa3386983",
+        "author": "jewseppi",
+        "labels": [
+          "size: XL",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/queue.drain-restart.test.ts",
+            "additions": 266,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.identity-guard.test.ts",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/enqueue.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.test.ts",
+            "additions": 415,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.ts",
+            "additions": 415,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/state.ts",
+            "additions": 7,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82572",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82572.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 24,
+          "counts": {
+            "QUEUED": 10,
+            "SUCCESS": 9,
+            "SKIPPED": 5
+          },
+          "blockers": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4483604105:2026-05-19T01:15:29Z:re_review",
+      "comment_id": "4483604105",
+      "comment_version_key": "4483604105:2026-05-19T01:15:29Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4483604105",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-19T01:15:29Z",
+      "comment_updated_at": "2026-05-19T01:15:29Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(queue): persist followup queues across gateway restarts",
+        "body": "## Problem\n\nWhen the gateway process restarts (npm update, crash, systemd restart), any\nmessages that arrived while an agent turn was in progress are silently lost.\nThe followup queue lives only in process memory — there is no recovery path.\n\nThis is particularly noticeable on channels that serialize messages (e.g.\nTelegram in queue mode): a message received during an active turn is queued\nfor delivery, then gone if the gateway restarts before that turn completes.\n\n## Solution\n\nAdd a JSON persistence layer for the `FOLLOWUP_QUEUES` global map.\n\n### New file: `src/auto-reply/reply/queue/persist.ts`\n\n- `persistFollowupQueues()` — serializes all non-empty queue entries to\n  `<stateDir>/live-chat-followup-queues.json`. Respects `OPENCLAW_STATE_DIR`\n  via the existing `resolveStateDir()` utility. State file is deleted when all\n  queues drain to empty.\n- `restoreFollowupQueues()` — reads the state file at module init and repopulates\n  `FOLLOWUP_QUEUES` before any enqueue or drain fires.\n- `PersistedFollowupRun` — a `Pick<FollowupRun, ...>` type that explicitly\n  excludes runtime-only, non-serializable fields: `abortSignal`,\n  `currentTurnContext`, `deliveryCorrelations`, `queuedLifecycle`. These are\n  transient and must not survive a restart.\n\n### Mutation hooks\n\n`persistFollowupQueues()` is called after every state-changing operation:\n\n| Site | File |\n|---|---|\n| `enqueueFollowupRun` — after `items.push` | `enqueue.ts` |\n| Drain `finally` block — both empty-queue delete and reschedule branches | `drain.ts` |\n| `clearFollowupQueue` — after `FOLLOWUP_QUEUES.delete` | `state.ts` |\n| `refreshQueuedFollowupSession` — after the run-rewrite loop | `state.ts` |\n\n### Tests\n\n`persist.test.ts` covers:\n- State file written when queue has items\n- State file deleted when all queues are empty\n- Full round-trip: enqueue → persist → simulated restart → restore → verify prompt + routing fields\n- Runtime-only `abortSignal` field not present after restore\n- No-op when state file does not exist\n- Malformed entries (non-array items, null key) are skipped\n\n## Notes\n\n- The `draining: false` invariant is enforced on restore — any in-flight drain\n  that was interrupted is restarted by the normal drain scheduler on next enqueue.\n- `summarySources` (contains `FollowupRun` objects, not serializable) is reset to\n  `[]` on restore. `summaryLines` (plain strings) is persisted and restored.\n- No schema migration needed for v1; unrecognized fields are ignored on restore.\n\n## Real behavior proof\n\n- Behavior addressed: Queued followup messages (received while an agent turn is active) now survive gateway restarts. Before this patch a process restart discarded all pending items silently; after it they are written to `~/.openclaw/state/live-chat-followup-queues.json` and re-delivered once the drain callback is registered on startup.\n- Real environment tested: Local dev, Node 22, Linux, openclaw source checkout (`jewseppi/openclaw` `feat/queue-followup-persistence`). Module loaded directly via `node --import tsx` — no test runner involved.\n- Exact steps or command run after this patch: Ran `node --import tsx --input-type=module` against the live queue module to exercise the full persist → simulated-restart → restore cycle against a real temp directory.\n- Evidence after fix: Terminal output from `node --import tsx` (live module, real filesystem I/O, no mocks):\n  ```\n  Step 1: persistFollowupQueues()\n  State file: /tmp/openclaw-persist-proof-SdQ5bE/live-chat-followup-queues.json\n  {\n    \"version\": 1,\n    \"updatedAt\": 1778974677687,\n    \"entries\": [\n      [\n        \"agent:main:dm:telegram-proof\",\n        {\n          \"items\": [\n            {\n              \"prompt\": \"did the gateway restart survive?\",\n              \"enqueuedAt\": 1778974677687,\n              \"originatingChannel\": \"telegram\",\n              \"originatingTo\": \"99999\",\n              \"run\": {\n                \"agentId\": \"main\",\n                \"agentDir\": \"/tmp/agent\",\n                \"sessionId\": \"sess-proof\",\n                \"sessionFile\": \"/tmp/sess.jsonl\",\n                \"workspaceDir\": \"/tmp/ws\",\n                \"provider\": \"anthropic\",\n                \"model\": \"claude-sonnet-4-6\",\n                \"timeoutMs\": 30000,\n                \"blockReplyBreak\": \"message_end\"\n              }\n            }\n          ],\n          \"mode\": \"steer\",\n          \"debounceMs\": 500,\n          \"cap\": 20,\n          \"dropPolicy\": \"summarize\",\n          \"droppedCount\": 0,\n          \"summaryLines\": []\n        }\n      ]\n    ]\n  }\n\n  Step 2: simulate restart — delete in-memory queue\n    FOLLOWUP_QUEUES.get(KEY): undefined\n\n  Step 3: restoreFollowupQueues()\n    restored.items.length: 1\n    restored.items[0].prompt: did the gateway restart survive?\n    restored.items[0].originatingChannel: telegram\n    restored.draining: false\n    peekRestoredPendingDrainKeys().has(KEY): true\n\n  Pass: queue survives a simulated process restart.\n  ```\n- Observed result after fix: 1 queued Telegram prompt survived the in-process restart simulation. `FOLLOWUP_QUEUES` was cleared to undefined, `restoreFollowupQueues()` re-populated it from the state file on disk, `draining` reset to `false`, and the key was registered in `restoredPendingDrainKeys` so drain scheduling fires when the callback is next registered. State file written and read by `node` against a real temp dir — no mocks, no vitest.\n- What was not tested: Full live Telegram→gateway→kill→restart→re-delivery end-to-end (requires a real inbound message arriving during an active agent turn followed by a real process restart).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+        "branch": "feat/queue-followup-persistence",
+        "head_sha": "d301d9a76a7371449c74cad183a159caa3386983",
+        "author": "jewseppi",
+        "labels": [
+          "size: XL",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/queue.drain-restart.test.ts",
+            "additions": 266,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.identity-guard.test.ts",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/enqueue.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.test.ts",
+            "additions": 415,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.ts",
+            "additions": 415,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/state.ts",
+            "additions": 7,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82572",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82572.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 24,
+          "counts": {
+            "QUEUED": 10,
+            "SUCCESS": 9,
+            "SKIPPED": 5
+          },
+          "blockers": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4482829352:2026-05-18T22:33:17Z:re_review",
+      "comment_id": "4482829352",
+      "comment_version_key": "4482829352:2026-05-18T22:33:17Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4482829352",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-18T22:33:17Z",
+      "comment_updated_at": "2026-05-18T22:33:17Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(queue): persist followup queues across gateway restarts",
+        "body": "## Problem\n\nWhen the gateway process restarts (npm update, crash, systemd restart), any\nmessages that arrived while an agent turn was in progress are silently lost.\nThe followup queue lives only in process memory — there is no recovery path.\n\nThis is particularly noticeable on channels that serialize messages (e.g.\nTelegram in queue mode): a message received during an active turn is queued\nfor delivery, then gone if the gateway restarts before that turn completes.\n\n## Solution\n\nAdd a JSON persistence layer for the `FOLLOWUP_QUEUES` global map.\n\n### New file: `src/auto-reply/reply/queue/persist.ts`\n\n- `persistFollowupQueues()` — serializes all non-empty queue entries to\n  `<stateDir>/live-chat-followup-queues.json`. Respects `OPENCLAW_STATE_DIR`\n  via the existing `resolveStateDir()` utility. State file is deleted when all\n  queues drain to empty.\n- `restoreFollowupQueues()` — reads the state file at module init and repopulates\n  `FOLLOWUP_QUEUES` before any enqueue or drain fires.\n- `PersistedFollowupRun` — a `Pick<FollowupRun, ...>` type that explicitly\n  excludes runtime-only, non-serializable fields: `abortSignal`,\n  `currentTurnContext`, `deliveryCorrelations`, `queuedLifecycle`. These are\n  transient and must not survive a restart.\n\n### Mutation hooks\n\n`persistFollowupQueues()` is called after every state-changing operation:\n\n| Site | File |\n|---|---|\n| `enqueueFollowupRun` — after `items.push` | `enqueue.ts` |\n| Drain `finally` block — both empty-queue delete and reschedule branches | `drain.ts` |\n| `clearFollowupQueue` — after `FOLLOWUP_QUEUES.delete` | `state.ts` |\n| `refreshQueuedFollowupSession` — after the run-rewrite loop | `state.ts` |\n\n### Tests\n\n`persist.test.ts` covers:\n- State file written when queue has items\n- State file deleted when all queues are empty\n- Full round-trip: enqueue → persist → simulated restart → restore → verify prompt + routing fields\n- Runtime-only `abortSignal` field not present after restore\n- No-op when state file does not exist\n- Malformed entries (non-array items, null key) are skipped\n\n## Notes\n\n- The `draining: false` invariant is enforced on restore — any in-flight drain\n  that was interrupted is restarted by the normal drain scheduler on next enqueue.\n- `summarySources` (contains `FollowupRun` objects, not serializable) is reset to\n  `[]` on restore. `summaryLines` (plain strings) is persisted and restored.\n- No schema migration needed for v1; unrecognized fields are ignored on restore.\n\n## Real behavior proof\n\n- Behavior addressed: Queued followup messages (received while an agent turn is active) now survive gateway restarts. Before this patch a process restart discarded all pending items silently; after it they are written to `~/.openclaw/state/live-chat-followup-queues.json` and re-delivered once the drain callback is registered on startup.\n- Real environment tested: Local dev, Node 22, Linux, openclaw source checkout (`jewseppi/openclaw` `feat/queue-followup-persistence`). Module loaded directly via `node --import tsx` — no test runner involved.\n- Exact steps or command run after this patch: Ran `node --import tsx --input-type=module` against the live queue module to exercise the full persist → simulated-restart → restore cycle against a real temp directory.\n- Evidence after fix: Terminal output from `node --import tsx` (live module, real filesystem I/O, no mocks):\n  ```\n  Step 1: persistFollowupQueues()\n  State file: /tmp/openclaw-persist-proof-SdQ5bE/live-chat-followup-queues.json\n  {\n    \"version\": 1,\n    \"updatedAt\": 1778974677687,\n    \"entries\": [\n      [\n        \"agent:main:dm:telegram-proof\",\n        {\n          \"items\": [\n            {\n              \"prompt\": \"did the gateway restart survive?\",\n              \"enqueuedAt\": 1778974677687,\n              \"originatingChannel\": \"telegram\",\n              \"originatingTo\": \"99999\",\n              \"run\": {\n                \"agentId\": \"main\",\n                \"agentDir\": \"/tmp/agent\",\n                \"sessionId\": \"sess-proof\",\n                \"sessionFile\": \"/tmp/sess.jsonl\",\n                \"workspaceDir\": \"/tmp/ws\",\n                \"provider\": \"anthropic\",\n                \"model\": \"claude-sonnet-4-6\",\n                \"timeoutMs\": 30000,\n                \"blockReplyBreak\": \"message_end\"\n              }\n            }\n          ],\n          \"mode\": \"steer\",\n          \"debounceMs\": 500,\n          \"cap\": 20,\n          \"dropPolicy\": \"summarize\",\n          \"droppedCount\": 0,\n          \"summaryLines\": []\n        }\n      ]\n    ]\n  }\n\n  Step 2: simulate restart — delete in-memory queue\n    FOLLOWUP_QUEUES.get(KEY): undefined\n\n  Step 3: restoreFollowupQueues()\n    restored.items.length: 1\n    restored.items[0].prompt: did the gateway restart survive?\n    restored.items[0].originatingChannel: telegram\n    restored.draining: false\n    peekRestoredPendingDrainKeys().has(KEY): true\n\n  Pass: queue survives a simulated process restart.\n  ```\n- Observed result after fix: 1 queued Telegram prompt survived the in-process restart simulation. `FOLLOWUP_QUEUES` was cleared to undefined, `restoreFollowupQueues()` re-populated it from the state file on disk, `draining` reset to `false`, and the key was registered in `restoredPendingDrainKeys` so drain scheduling fires when the callback is next registered. State file written and read by `node` against a real temp dir — no mocks, no vitest.\n- What was not tested: Full live Telegram→gateway→kill→restart→re-delivery end-to-end (requires a real inbound message arriving during an active agent turn followed by a real process restart).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+        "branch": "feat/queue-followup-persistence",
+        "head_sha": "d301d9a76a7371449c74cad183a159caa3386983",
+        "author": "jewseppi",
+        "labels": [
+          "size: XL",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/queue.drain-restart.test.ts",
+            "additions": 266,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.identity-guard.test.ts",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/enqueue.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.test.ts",
+            "additions": 415,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.ts",
+            "additions": 415,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/state.ts",
+            "additions": 7,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82572",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82572.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 24,
+          "counts": {
+            "QUEUED": 10,
+            "SUCCESS": 9,
+            "SKIPPED": 5
+          },
+          "blockers": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4481548108:2026-05-18T20:00:43Z:re_review",
+      "comment_id": "4481548108",
+      "comment_version_key": "4481548108:2026-05-18T20:00:43Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4481548108",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-18T20:00:43Z",
+      "comment_updated_at": "2026-05-18T20:00:43Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(queue): persist followup queues across gateway restarts",
+        "body": "## Problem\n\nWhen the gateway process restarts (npm update, crash, systemd restart), any\nmessages that arrived while an agent turn was in progress are silently lost.\nThe followup queue lives only in process memory — there is no recovery path.\n\nThis is particularly noticeable on channels that serialize messages (e.g.\nTelegram in queue mode): a message received during an active turn is queued\nfor delivery, then gone if the gateway restarts before that turn completes.\n\n## Solution\n\nAdd a JSON persistence layer for the `FOLLOWUP_QUEUES` global map.\n\n### New file: `src/auto-reply/reply/queue/persist.ts`\n\n- `persistFollowupQueues()` — serializes all non-empty queue entries to\n  `<stateDir>/live-chat-followup-queues.json`. Respects `OPENCLAW_STATE_DIR`\n  via the existing `resolveStateDir()` utility. State file is deleted when all\n  queues drain to empty.\n- `restoreFollowupQueues()` — reads the state file at module init and repopulates\n  `FOLLOWUP_QUEUES` before any enqueue or drain fires.\n- `PersistedFollowupRun` — a `Pick<FollowupRun, ...>` type that explicitly\n  excludes runtime-only, non-serializable fields: `abortSignal`,\n  `currentTurnContext`, `deliveryCorrelations`, `queuedLifecycle`. These are\n  transient and must not survive a restart.\n\n### Mutation hooks\n\n`persistFollowupQueues()` is called after every state-changing operation:\n\n| Site | File |\n|---|---|\n| `enqueueFollowupRun` — after `items.push` | `enqueue.ts` |\n| Drain `finally` block — both empty-queue delete and reschedule branches | `drain.ts` |\n| `clearFollowupQueue` — after `FOLLOWUP_QUEUES.delete` | `state.ts` |\n| `refreshQueuedFollowupSession` — after the run-rewrite loop | `state.ts` |\n\n### Tests\n\n`persist.test.ts` covers:\n- State file written when queue has items\n- State file deleted when all queues are empty\n- Full round-trip: enqueue → persist → simulated restart → restore → verify prompt + routing fields\n- Runtime-only `abortSignal` field not present after restore\n- No-op when state file does not exist\n- Malformed entries (non-array items, null key) are skipped\n\n## Notes\n\n- The `draining: false` invariant is enforced on restore — any in-flight drain\n  that was interrupted is restarted by the normal drain scheduler on next enqueue.\n- `summarySources` (contains `FollowupRun` objects, not serializable) is reset to\n  `[]` on restore. `summaryLines` (plain strings) is persisted and restored.\n- No schema migration needed for v1; unrecognized fields are ignored on restore.\n\n## Real behavior proof\n\n- Behavior addressed: Queued followup messages (received while an agent turn is active) now survive gateway restarts. Before this patch a process restart discarded all pending items silently; after it they are written to `~/.openclaw/state/live-chat-followup-queues.json` and re-delivered once the drain callback is registered on startup.\n- Real environment tested: Local dev, Node 22, Linux, openclaw source checkout (`jewseppi/openclaw` `feat/queue-followup-persistence`). Module loaded directly via `node --import tsx` — no test runner involved.\n- Exact steps or command run after this patch: Ran `node --import tsx --input-type=module` against the live queue module to exercise the full persist → simulated-restart → restore cycle against a real temp directory.\n- Evidence after fix: Terminal output from `node --import tsx` (live module, real filesystem I/O, no mocks):\n  ```\n  Step 1: persistFollowupQueues()\n  State file: /tmp/openclaw-persist-proof-SdQ5bE/live-chat-followup-queues.json\n  {\n    \"version\": 1,\n    \"updatedAt\": 1778974677687,\n    \"entries\": [\n      [\n        \"agent:main:dm:telegram-proof\",\n        {\n          \"items\": [\n            {\n              \"prompt\": \"did the gateway restart survive?\",\n              \"enqueuedAt\": 1778974677687,\n              \"originatingChannel\": \"telegram\",\n              \"originatingTo\": \"99999\",\n              \"run\": {\n                \"agentId\": \"main\",\n                \"agentDir\": \"/tmp/agent\",\n                \"sessionId\": \"sess-proof\",\n                \"sessionFile\": \"/tmp/sess.jsonl\",\n                \"workspaceDir\": \"/tmp/ws\",\n                \"provider\": \"anthropic\",\n                \"model\": \"claude-sonnet-4-6\",\n                \"timeoutMs\": 30000,\n                \"blockReplyBreak\": \"message_end\"\n              }\n            }\n          ],\n          \"mode\": \"steer\",\n          \"debounceMs\": 500,\n          \"cap\": 20,\n          \"dropPolicy\": \"summarize\",\n          \"droppedCount\": 0,\n          \"summaryLines\": []\n        }\n      ]\n    ]\n  }\n\n  Step 2: simulate restart — delete in-memory queue\n    FOLLOWUP_QUEUES.get(KEY): undefined\n\n  Step 3: restoreFollowupQueues()\n    restored.items.length: 1\n    restored.items[0].prompt: did the gateway restart survive?\n    restored.items[0].originatingChannel: telegram\n    restored.draining: false\n    peekRestoredPendingDrainKeys().has(KEY): true\n\n  Pass: queue survives a simulated process restart.\n  ```\n- Observed result after fix: 1 queued Telegram prompt survived the in-process restart simulation. `FOLLOWUP_QUEUES` was cleared to undefined, `restoreFollowupQueues()` re-populated it from the state file on disk, `draining` reset to `false`, and the key was registered in `restoredPendingDrainKeys` so drain scheduling fires when the callback is next registered. State file written and read by `node` against a real temp dir — no mocks, no vitest.\n- What was not tested: Full live Telegram→gateway→kill→restart→re-delivery end-to-end (requires a real inbound message arriving during an active agent turn followed by a real process restart).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+        "branch": "feat/queue-followup-persistence",
+        "head_sha": "d301d9a76a7371449c74cad183a159caa3386983",
+        "author": "jewseppi",
+        "labels": [
+          "size: XL",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/queue.drain-restart.test.ts",
+            "additions": 266,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.identity-guard.test.ts",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/enqueue.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.test.ts",
+            "additions": 415,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.ts",
+            "additions": 415,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/state.ts",
+            "additions": 7,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82572",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82572.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 24,
+          "counts": {
+            "QUEUED": 10,
+            "SUCCESS": 9,
+            "SKIPPED": 5
+          },
+          "blockers": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4480968971:2026-05-18T19:01:27Z:re_review",
+      "comment_id": "4480968971",
+      "comment_version_key": "4480968971:2026-05-18T19:01:27Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4480968971",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-18T19:01:27Z",
+      "comment_updated_at": "2026-05-18T19:01:27Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4480889950:2026-05-18T18:52:12Z:re_review",
+      "comment_id": "4480889950",
+      "comment_version_key": "4480889950:2026-05-18T18:52:12Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4480889950",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-18T18:52:12Z",
+      "comment_updated_at": "2026-05-18T18:52:12Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(queue): persist followup queues across gateway restarts",
+        "body": "## Problem\n\nWhen the gateway process restarts (npm update, crash, systemd restart), any\nmessages that arrived while an agent turn was in progress are silently lost.\nThe followup queue lives only in process memory — there is no recovery path.\n\nThis is particularly noticeable on channels that serialize messages (e.g.\nTelegram in queue mode): a message received during an active turn is queued\nfor delivery, then gone if the gateway restarts before that turn completes.\n\n## Solution\n\nAdd a JSON persistence layer for the `FOLLOWUP_QUEUES` global map.\n\n### New file: `src/auto-reply/reply/queue/persist.ts`\n\n- `persistFollowupQueues()` — serializes all non-empty queue entries to\n  `<stateDir>/live-chat-followup-queues.json`. Respects `OPENCLAW_STATE_DIR`\n  via the existing `resolveStateDir()` utility. State file is deleted when all\n  queues drain to empty.\n- `restoreFollowupQueues()` — reads the state file at module init and repopulates\n  `FOLLOWUP_QUEUES` before any enqueue or drain fires.\n- `PersistedFollowupRun` — a `Pick<FollowupRun, ...>` type that explicitly\n  excludes runtime-only, non-serializable fields: `abortSignal`,\n  `currentTurnContext`, `deliveryCorrelations`, `queuedLifecycle`. These are\n  transient and must not survive a restart.\n\n### Mutation hooks\n\n`persistFollowupQueues()` is called after every state-changing operation:\n\n| Site | File |\n|---|---|\n| `enqueueFollowupRun` — after `items.push` | `enqueue.ts` |\n| Drain `finally` block — both empty-queue delete and reschedule branches | `drain.ts` |\n| `clearFollowupQueue` — after `FOLLOWUP_QUEUES.delete` | `state.ts` |\n| `refreshQueuedFollowupSession` — after the run-rewrite loop | `state.ts` |\n\n### Tests\n\n`persist.test.ts` covers:\n- State file written when queue has items\n- State file deleted when all queues are empty\n- Full round-trip: enqueue → persist → simulated restart → restore → verify prompt + routing fields\n- Runtime-only `abortSignal` field not present after restore\n- No-op when state file does not exist\n- Malformed entries (non-array items, null key) are skipped\n\n## Notes\n\n- The `draining: false` invariant is enforced on restore — any in-flight drain\n  that was interrupted is restarted by the normal drain scheduler on next enqueue.\n- `summarySources` (contains `FollowupRun` objects, not serializable) is reset to\n  `[]` on restore. `summaryLines` (plain strings) is persisted and restored.\n- No schema migration needed for v1; unrecognized fields are ignored on restore.\n\n## Real behavior proof\n\n- Behavior addressed: Queued followup messages (received while an agent turn is active) now survive gateway restarts. Before this patch a process restart discarded all pending items silently; after it they are written to `~/.openclaw/state/live-chat-followup-queues.json` and re-delivered once the drain callback is registered on startup.\n- Real environment tested: Local dev, Node 22, Linux, openclaw source checkout (`jewseppi/openclaw` `feat/queue-followup-persistence`). Module loaded directly via `node --import tsx` — no test runner involved.\n- Exact steps or command run after this patch: Ran `node --import tsx --input-type=module` against the live queue module to exercise the full persist → simulated-restart → restore cycle against a real temp directory.\n- Evidence after fix: Terminal output from `node --import tsx` (live module, real filesystem I/O, no mocks):\n  ```\n  Step 1: persistFollowupQueues()\n  State file: /tmp/openclaw-persist-proof-SdQ5bE/live-chat-followup-queues.json\n  {\n    \"version\": 1,\n    \"updatedAt\": 1778974677687,\n    \"entries\": [\n      [\n        \"agent:main:dm:telegram-proof\",\n        {\n          \"items\": [\n            {\n              \"prompt\": \"did the gateway restart survive?\",\n              \"enqueuedAt\": 1778974677687,\n              \"originatingChannel\": \"telegram\",\n              \"originatingTo\": \"99999\",\n              \"run\": {\n                \"agentId\": \"main\",\n                \"agentDir\": \"/tmp/agent\",\n                \"sessionId\": \"sess-proof\",\n                \"sessionFile\": \"/tmp/sess.jsonl\",\n                \"workspaceDir\": \"/tmp/ws\",\n                \"provider\": \"anthropic\",\n                \"model\": \"claude-sonnet-4-6\",\n                \"timeoutMs\": 30000,\n                \"blockReplyBreak\": \"message_end\"\n              }\n            }\n          ],\n          \"mode\": \"steer\",\n          \"debounceMs\": 500,\n          \"cap\": 20,\n          \"dropPolicy\": \"summarize\",\n          \"droppedCount\": 0,\n          \"summaryLines\": []\n        }\n      ]\n    ]\n  }\n\n  Step 2: simulate restart — delete in-memory queue\n    FOLLOWUP_QUEUES.get(KEY): undefined\n\n  Step 3: restoreFollowupQueues()\n    restored.items.length: 1\n    restored.items[0].prompt: did the gateway restart survive?\n    restored.items[0].originatingChannel: telegram\n    restored.draining: false\n    peekRestoredPendingDrainKeys().has(KEY): true\n\n  Pass: queue survives a simulated process restart.\n  ```\n- Observed result after fix: 1 queued Telegram prompt survived the in-process restart simulation. `FOLLOWUP_QUEUES` was cleared to undefined, `restoreFollowupQueues()` re-populated it from the state file on disk, `draining` reset to `false`, and the key was registered in `restoredPendingDrainKeys` so drain scheduling fires when the callback is next registered. State file written and read by `node` against a real temp dir — no mocks, no vitest.\n- What was not tested: Full live Telegram→gateway→kill→restart→re-delivery end-to-end (requires a real inbound message arriving during an active agent turn followed by a real process restart).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+        "branch": "feat/queue-followup-persistence",
+        "head_sha": "d301d9a76a7371449c74cad183a159caa3386983",
+        "author": "jewseppi",
+        "labels": [
+          "size: XL",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/queue.drain-restart.test.ts",
+            "additions": 266,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.identity-guard.test.ts",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/enqueue.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.test.ts",
+            "additions": 415,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.ts",
+            "additions": 415,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/state.ts",
+            "additions": 7,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82572",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82572.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 24,
+          "counts": {
+            "QUEUED": 10,
+            "SUCCESS": 9,
+            "SKIPPED": 5
+          },
+          "blockers": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4480878190:2026-05-18T18:50:41Z:re_review",
+      "comment_id": "4480878190",
+      "comment_version_key": "4480878190:2026-05-18T18:50:41Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4480878190",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-18T18:50:41Z",
+      "comment_updated_at": "2026-05-18T18:50:41Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(queue): persist followup queues across gateway restarts",
+        "body": "## Problem\n\nWhen the gateway process restarts (npm update, crash, systemd restart), any\nmessages that arrived while an agent turn was in progress are silently lost.\nThe followup queue lives only in process memory — there is no recovery path.\n\nThis is particularly noticeable on channels that serialize messages (e.g.\nTelegram in queue mode): a message received during an active turn is queued\nfor delivery, then gone if the gateway restarts before that turn completes.\n\n## Solution\n\nAdd a JSON persistence layer for the `FOLLOWUP_QUEUES` global map.\n\n### New file: `src/auto-reply/reply/queue/persist.ts`\n\n- `persistFollowupQueues()` — serializes all non-empty queue entries to\n  `<stateDir>/live-chat-followup-queues.json`. Respects `OPENCLAW_STATE_DIR`\n  via the existing `resolveStateDir()` utility. State file is deleted when all\n  queues drain to empty.\n- `restoreFollowupQueues()` — reads the state file at module init and repopulates\n  `FOLLOWUP_QUEUES` before any enqueue or drain fires.\n- `PersistedFollowupRun` — a `Pick<FollowupRun, ...>` type that explicitly\n  excludes runtime-only, non-serializable fields: `abortSignal`,\n  `currentTurnContext`, `deliveryCorrelations`, `queuedLifecycle`. These are\n  transient and must not survive a restart.\n\n### Mutation hooks\n\n`persistFollowupQueues()` is called after every state-changing operation:\n\n| Site | File |\n|---|---|\n| `enqueueFollowupRun` — after `items.push` | `enqueue.ts` |\n| Drain `finally` block — both empty-queue delete and reschedule branches | `drain.ts` |\n| `clearFollowupQueue` — after `FOLLOWUP_QUEUES.delete` | `state.ts` |\n| `refreshQueuedFollowupSession` — after the run-rewrite loop | `state.ts` |\n\n### Tests\n\n`persist.test.ts` covers:\n- State file written when queue has items\n- State file deleted when all queues are empty\n- Full round-trip: enqueue → persist → simulated restart → restore → verify prompt + routing fields\n- Runtime-only `abortSignal` field not present after restore\n- No-op when state file does not exist\n- Malformed entries (non-array items, null key) are skipped\n\n## Notes\n\n- The `draining: false` invariant is enforced on restore — any in-flight drain\n  that was interrupted is restarted by the normal drain scheduler on next enqueue.\n- `summarySources` (contains `FollowupRun` objects, not serializable) is reset to\n  `[]` on restore. `summaryLines` (plain strings) is persisted and restored.\n- No schema migration needed for v1; unrecognized fields are ignored on restore.\n\n## Real behavior proof\n\n- Behavior addressed: Queued followup messages (received while an agent turn is active) now survive gateway restarts. Before this patch a process restart discarded all pending items silently; after it they are written to `~/.openclaw/state/live-chat-followup-queues.json` and re-delivered once the drain callback is registered on startup.\n- Real environment tested: Local dev, Node 22, Linux, openclaw source checkout (`jewseppi/openclaw` `feat/queue-followup-persistence`). Module loaded directly via `node --import tsx` — no test runner involved.\n- Exact steps or command run after this patch: Ran `node --import tsx --input-type=module` against the live queue module to exercise the full persist → simulated-restart → restore cycle against a real temp directory.\n- Evidence after fix: Terminal output from `node --import tsx` (live module, real filesystem I/O, no mocks):\n  ```\n  Step 1: persistFollowupQueues()\n  State file: /tmp/openclaw-persist-proof-SdQ5bE/live-chat-followup-queues.json\n  {\n    \"version\": 1,\n    \"updatedAt\": 1778974677687,\n    \"entries\": [\n      [\n        \"agent:main:dm:telegram-proof\",\n        {\n          \"items\": [\n            {\n              \"prompt\": \"did the gateway restart survive?\",\n              \"enqueuedAt\": 1778974677687,\n              \"originatingChannel\": \"telegram\",\n              \"originatingTo\": \"99999\",\n              \"run\": {\n                \"agentId\": \"main\",\n                \"agentDir\": \"/tmp/agent\",\n                \"sessionId\": \"sess-proof\",\n                \"sessionFile\": \"/tmp/sess.jsonl\",\n                \"workspaceDir\": \"/tmp/ws\",\n                \"provider\": \"anthropic\",\n                \"model\": \"claude-sonnet-4-6\",\n                \"timeoutMs\": 30000,\n                \"blockReplyBreak\": \"message_end\"\n              }\n            }\n          ],\n          \"mode\": \"steer\",\n          \"debounceMs\": 500,\n          \"cap\": 20,\n          \"dropPolicy\": \"summarize\",\n          \"droppedCount\": 0,\n          \"summaryLines\": []\n        }\n      ]\n    ]\n  }\n\n  Step 2: simulate restart — delete in-memory queue\n    FOLLOWUP_QUEUES.get(KEY): undefined\n\n  Step 3: restoreFollowupQueues()\n    restored.items.length: 1\n    restored.items[0].prompt: did the gateway restart survive?\n    restored.items[0].originatingChannel: telegram\n    restored.draining: false\n    peekRestoredPendingDrainKeys().has(KEY): true\n\n  Pass: queue survives a simulated process restart.\n  ```\n- Observed result after fix: 1 queued Telegram prompt survived the in-process restart simulation. `FOLLOWUP_QUEUES` was cleared to undefined, `restoreFollowupQueues()` re-populated it from the state file on disk, `draining` reset to `false`, and the key was registered in `restoredPendingDrainKeys` so drain scheduling fires when the callback is next registered. State file written and read by `node` against a real temp dir — no mocks, no vitest.\n- What was not tested: Full live Telegram→gateway→kill→restart→re-delivery end-to-end (requires a real inbound message arriving during an active agent turn followed by a real process restart).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+        "branch": "feat/queue-followup-persistence",
+        "head_sha": "d301d9a76a7371449c74cad183a159caa3386983",
+        "author": "jewseppi",
+        "labels": [
+          "size: XL",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/queue.drain-restart.test.ts",
+            "additions": 266,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.identity-guard.test.ts",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/enqueue.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.test.ts",
+            "additions": 415,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.ts",
+            "additions": 415,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/state.ts",
+            "additions": 7,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82572",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82572.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 24,
+          "counts": {
+            "QUEUED": 10,
+            "SUCCESS": 9,
+            "SKIPPED": 5
+          },
+          "blockers": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4480566549:2026-05-18T18:14:47Z:re_review",
+      "comment_id": "4480566549",
+      "comment_version_key": "4480566549:2026-05-18T18:14:47Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4480566549",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-18T18:14:47Z",
+      "comment_updated_at": "2026-05-18T18:14:47Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(queue): persist followup queues across gateway restarts",
+        "body": "## Problem\n\nWhen the gateway process restarts (npm update, crash, systemd restart), any\nmessages that arrived while an agent turn was in progress are silently lost.\nThe followup queue lives only in process memory — there is no recovery path.\n\nThis is particularly noticeable on channels that serialize messages (e.g.\nTelegram in queue mode): a message received during an active turn is queued\nfor delivery, then gone if the gateway restarts before that turn completes.\n\n## Solution\n\nAdd a JSON persistence layer for the `FOLLOWUP_QUEUES` global map.\n\n### New file: `src/auto-reply/reply/queue/persist.ts`\n\n- `persistFollowupQueues()` — serializes all non-empty queue entries to\n  `<stateDir>/live-chat-followup-queues.json`. Respects `OPENCLAW_STATE_DIR`\n  via the existing `resolveStateDir()` utility. State file is deleted when all\n  queues drain to empty.\n- `restoreFollowupQueues()` — reads the state file at module init and repopulates\n  `FOLLOWUP_QUEUES` before any enqueue or drain fires.\n- `PersistedFollowupRun` — a `Pick<FollowupRun, ...>` type that explicitly\n  excludes runtime-only, non-serializable fields: `abortSignal`,\n  `currentTurnContext`, `deliveryCorrelations`, `queuedLifecycle`. These are\n  transient and must not survive a restart.\n\n### Mutation hooks\n\n`persistFollowupQueues()` is called after every state-changing operation:\n\n| Site | File |\n|---|---|\n| `enqueueFollowupRun` — after `items.push` | `enqueue.ts` |\n| Drain `finally` block — both empty-queue delete and reschedule branches | `drain.ts` |\n| `clearFollowupQueue` — after `FOLLOWUP_QUEUES.delete` | `state.ts` |\n| `refreshQueuedFollowupSession` — after the run-rewrite loop | `state.ts` |\n\n### Tests\n\n`persist.test.ts` covers:\n- State file written when queue has items\n- State file deleted when all queues are empty\n- Full round-trip: enqueue → persist → simulated restart → restore → verify prompt + routing fields\n- Runtime-only `abortSignal` field not present after restore\n- No-op when state file does not exist\n- Malformed entries (non-array items, null key) are skipped\n\n## Notes\n\n- The `draining: false` invariant is enforced on restore — any in-flight drain\n  that was interrupted is restarted by the normal drain scheduler on next enqueue.\n- `summarySources` (contains `FollowupRun` objects, not serializable) is reset to\n  `[]` on restore. `summaryLines` (plain strings) is persisted and restored.\n- No schema migration needed for v1; unrecognized fields are ignored on restore.\n\n## Real behavior proof\n\n- Behavior addressed: Queued followup messages (received while an agent turn is active) now survive gateway restarts. Before this patch a process restart discarded all pending items silently; after it they are written to `~/.openclaw/state/live-chat-followup-queues.json` and re-delivered once the drain callback is registered on startup.\n- Real environment tested: Local dev, Node 22, Linux, openclaw source checkout (`jewseppi/openclaw` `feat/queue-followup-persistence`). Module loaded directly via `node --import tsx` — no test runner involved.\n- Exact steps or command run after this patch: Ran `node --import tsx --input-type=module` against the live queue module to exercise the full persist → simulated-restart → restore cycle against a real temp directory.\n- Evidence after fix: Terminal output from `node --import tsx` (live module, real filesystem I/O, no mocks):\n  ```\n  Step 1: persistFollowupQueues()\n  State file: /tmp/openclaw-persist-proof-SdQ5bE/live-chat-followup-queues.json\n  {\n    \"version\": 1,\n    \"updatedAt\": 1778974677687,\n    \"entries\": [\n      [\n        \"agent:main:dm:telegram-proof\",\n        {\n          \"items\": [\n            {\n              \"prompt\": \"did the gateway restart survive?\",\n              \"enqueuedAt\": 1778974677687,\n              \"originatingChannel\": \"telegram\",\n              \"originatingTo\": \"99999\",\n              \"run\": {\n                \"agentId\": \"main\",\n                \"agentDir\": \"/tmp/agent\",\n                \"sessionId\": \"sess-proof\",\n                \"sessionFile\": \"/tmp/sess.jsonl\",\n                \"workspaceDir\": \"/tmp/ws\",\n                \"provider\": \"anthropic\",\n                \"model\": \"claude-sonnet-4-6\",\n                \"timeoutMs\": 30000,\n                \"blockReplyBreak\": \"message_end\"\n              }\n            }\n          ],\n          \"mode\": \"steer\",\n          \"debounceMs\": 500,\n          \"cap\": 20,\n          \"dropPolicy\": \"summarize\",\n          \"droppedCount\": 0,\n          \"summaryLines\": []\n        }\n      ]\n    ]\n  }\n\n  Step 2: simulate restart — delete in-memory queue\n    FOLLOWUP_QUEUES.get(KEY): undefined\n\n  Step 3: restoreFollowupQueues()\n    restored.items.length: 1\n    restored.items[0].prompt: did the gateway restart survive?\n    restored.items[0].originatingChannel: telegram\n    restored.draining: false\n    peekRestoredPendingDrainKeys().has(KEY): true\n\n  Pass: queue survives a simulated process restart.\n  ```\n- Observed result after fix: 1 queued Telegram prompt survived the in-process restart simulation. `FOLLOWUP_QUEUES` was cleared to undefined, `restoreFollowupQueues()` re-populated it from the state file on disk, `draining` reset to `false`, and the key was registered in `restoredPendingDrainKeys` so drain scheduling fires when the callback is next registered. State file written and read by `node` against a real temp dir — no mocks, no vitest.\n- What was not tested: Full live Telegram→gateway→kill→restart→re-delivery end-to-end (requires a real inbound message arriving during an active agent turn followed by a real process restart).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+        "branch": "feat/queue-followup-persistence",
+        "head_sha": "d301d9a76a7371449c74cad183a159caa3386983",
+        "author": "jewseppi",
+        "labels": [
+          "size: XL",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/queue.drain-restart.test.ts",
+            "additions": 266,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.identity-guard.test.ts",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/enqueue.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.test.ts",
+            "additions": 415,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.ts",
+            "additions": 415,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/state.ts",
+            "additions": 7,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82572",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82572.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 24,
+          "counts": {
+            "QUEUED": 10,
+            "SUCCESS": 9,
+            "SKIPPED": 5
+          },
+          "blockers": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4478739614:2026-05-18T14:35:32Z:re_review",
+      "comment_id": "4478739614",
+      "comment_version_key": "4478739614:2026-05-18T14:35:32Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4478739614",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-18T14:35:32Z",
+      "comment_updated_at": "2026-05-18T14:35:32Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(queue): persist followup queues across gateway restarts",
+        "body": "## Problem\n\nWhen the gateway process restarts (npm update, crash, systemd restart), any\nmessages that arrived while an agent turn was in progress are silently lost.\nThe followup queue lives only in process memory — there is no recovery path.\n\nThis is particularly noticeable on channels that serialize messages (e.g.\nTelegram in queue mode): a message received during an active turn is queued\nfor delivery, then gone if the gateway restarts before that turn completes.\n\n## Solution\n\nAdd a JSON persistence layer for the `FOLLOWUP_QUEUES` global map.\n\n### New file: `src/auto-reply/reply/queue/persist.ts`\n\n- `persistFollowupQueues()` — serializes all non-empty queue entries to\n  `<stateDir>/live-chat-followup-queues.json`. Respects `OPENCLAW_STATE_DIR`\n  via the existing `resolveStateDir()` utility. State file is deleted when all\n  queues drain to empty.\n- `restoreFollowupQueues()` — reads the state file at module init and repopulates\n  `FOLLOWUP_QUEUES` before any enqueue or drain fires.\n- `PersistedFollowupRun` — a `Pick<FollowupRun, ...>` type that explicitly\n  excludes runtime-only, non-serializable fields: `abortSignal`,\n  `currentTurnContext`, `deliveryCorrelations`, `queuedLifecycle`. These are\n  transient and must not survive a restart.\n\n### Mutation hooks\n\n`persistFollowupQueues()` is called after every state-changing operation:\n\n| Site | File |\n|---|---|\n| `enqueueFollowupRun` — after `items.push` | `enqueue.ts` |\n| Drain `finally` block — both empty-queue delete and reschedule branches | `drain.ts` |\n| `clearFollowupQueue` — after `FOLLOWUP_QUEUES.delete` | `state.ts` |\n| `refreshQueuedFollowupSession` — after the run-rewrite loop | `state.ts` |\n\n### Tests\n\n`persist.test.ts` covers:\n- State file written when queue has items\n- State file deleted when all queues are empty\n- Full round-trip: enqueue → persist → simulated restart → restore → verify prompt + routing fields\n- Runtime-only `abortSignal` field not present after restore\n- No-op when state file does not exist\n- Malformed entries (non-array items, null key) are skipped\n\n## Notes\n\n- The `draining: false` invariant is enforced on restore — any in-flight drain\n  that was interrupted is restarted by the normal drain scheduler on next enqueue.\n- `summarySources` (contains `FollowupRun` objects, not serializable) is reset to\n  `[]` on restore. `summaryLines` (plain strings) is persisted and restored.\n- No schema migration needed for v1; unrecognized fields are ignored on restore.\n\n## Real behavior proof\n\n- Behavior addressed: Queued followup messages (received while an agent turn is active) now survive gateway restarts. Before this patch a process restart discarded all pending items silently; after it they are written to `~/.openclaw/state/live-chat-followup-queues.json` and re-delivered once the drain callback is registered on startup.\n- Real environment tested: Local dev, Node 22, Linux, openclaw source checkout (`jewseppi/openclaw` `feat/queue-followup-persistence`). Module loaded directly via `node --import tsx` — no test runner involved.\n- Exact steps or command run after this patch: Ran `node --import tsx --input-type=module` against the live queue module to exercise the full persist → simulated-restart → restore cycle against a real temp directory.\n- Evidence after fix: Terminal output from `node --import tsx` (live module, real filesystem I/O, no mocks):\n  ```\n  Step 1: persistFollowupQueues()\n  State file: /tmp/openclaw-persist-proof-SdQ5bE/live-chat-followup-queues.json\n  {\n    \"version\": 1,\n    \"updatedAt\": 1778974677687,\n    \"entries\": [\n      [\n        \"agent:main:dm:telegram-proof\",\n        {\n          \"items\": [\n            {\n              \"prompt\": \"did the gateway restart survive?\",\n              \"enqueuedAt\": 1778974677687,\n              \"originatingChannel\": \"telegram\",\n              \"originatingTo\": \"99999\",\n              \"run\": {\n                \"agentId\": \"main\",\n                \"agentDir\": \"/tmp/agent\",\n                \"sessionId\": \"sess-proof\",\n                \"sessionFile\": \"/tmp/sess.jsonl\",\n                \"workspaceDir\": \"/tmp/ws\",\n                \"provider\": \"anthropic\",\n                \"model\": \"claude-sonnet-4-6\",\n                \"timeoutMs\": 30000,\n                \"blockReplyBreak\": \"message_end\"\n              }\n            }\n          ],\n          \"mode\": \"steer\",\n          \"debounceMs\": 500,\n          \"cap\": 20,\n          \"dropPolicy\": \"summarize\",\n          \"droppedCount\": 0,\n          \"summaryLines\": []\n        }\n      ]\n    ]\n  }\n\n  Step 2: simulate restart — delete in-memory queue\n    FOLLOWUP_QUEUES.get(KEY): undefined\n\n  Step 3: restoreFollowupQueues()\n    restored.items.length: 1\n    restored.items[0].prompt: did the gateway restart survive?\n    restored.items[0].originatingChannel: telegram\n    restored.draining: false\n    peekRestoredPendingDrainKeys().has(KEY): true\n\n  Pass: queue survives a simulated process restart.\n  ```\n- Observed result after fix: 1 queued Telegram prompt survived the in-process restart simulation. `FOLLOWUP_QUEUES` was cleared to undefined, `restoreFollowupQueues()` re-populated it from the state file on disk, `draining` reset to `false`, and the key was registered in `restoredPendingDrainKeys` so drain scheduling fires when the callback is next registered. State file written and read by `node` against a real temp dir — no mocks, no vitest.\n- What was not tested: Full live Telegram→gateway→kill→restart→re-delivery end-to-end (requires a real inbound message arriving during an active agent turn followed by a real process restart).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+        "branch": "feat/queue-followup-persistence",
+        "head_sha": "d301d9a76a7371449c74cad183a159caa3386983",
+        "author": "jewseppi",
+        "labels": [
+          "size: XL",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/queue.drain-restart.test.ts",
+            "additions": 266,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.identity-guard.test.ts",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/enqueue.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.test.ts",
+            "additions": 415,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.ts",
+            "additions": 415,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/state.ts",
+            "additions": 7,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82572",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82572.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 24,
+          "counts": {
+            "QUEUED": 10,
+            "SUCCESS": 9,
+            "SKIPPED": 5
+          },
+          "blockers": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4325,
+    "total_ms": 3349,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 565
+        "ms": 377
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1137
+        "ms": 1773
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 2594
+        "ms": 1163
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
