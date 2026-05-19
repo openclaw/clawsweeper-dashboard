@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-19T00:55:47.871Z",
+  "generated_at": "2026-05-19T00:56:09.946Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-18T21:55:47.560Z",
+  "since": "2026-05-18T21:56:07.116Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    83830
+    83827
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,232 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:83827:4483451436:2026-05-19T00:56:03Z:clawsweeper_needs_human",
+      "comment_id": "4483451436",
+      "comment_version_key": "4483451436:2026-05-19T00:56:03Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83827#issuecomment-4483451436",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83827,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-19T00:37:42Z",
+      "comment_updated_at": "2026-05-19T00:56:03Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "No automated repair lane is needed because there are no blocking code findings; the remaining action is maintainer merge judgment and optional live Telegram proof.; Cleared: The diff only changes queued abort-signal propagation and colocated tests; it does not touch CI, dependencies, secrets, permissions, or package execution paths. (sha=695478dc167f6cd54cfe318fe037837494bf832a)",
+      "review_summary": "The branch detaches accepted queued `user_request` followups from source abort signals, keeps `room_event` followups cancellable by their source signal, and adds focused queue/followup regression tests.\n\nReproducibility: yes. Current main visibly attaches and reuses the source abort signal for queued followups, and the PR body reports focused before-fix regression failures against that behavior; I did not run the tests in this read-only review.",
+      "review_followup": "No automated repair lane is needed because there are no blocking code findings; the remaining action is maintainer merge judgment and optional live Telegram proof.",
+      "freeform_prompt": null,
+      "expected_head_sha": "695478dc167f6cd54cfe318fe037837494bf832a",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "Preserve queued Telegram topic followups",
+        "body": "## Summary\n\n- Detach accepted queued `user_request` followups from the source-channel abort signal after they enter the reply queue.\n- Keep `room_event` followups tied to their source abort signal so ambient/current-event work can still be canceled by the admission fence.\n- Stop queued followup execution from falling back to the original source `opts.abortSignal`; queued execution now uses only the abort metadata carried on the queued item.\n\nSupersedes #83790. This replacement PR keeps the same focused fix and folds the RCA, before/after proof, queue-mode proof, live Telegram-topic logs, and blocked proof attempts into the PR body.\n\n## Root Cause\n\nTelegram topic user turns share the generic queued-followup path. Before this patch, `runPreparedReply` always placed `opts.abortSignal` onto the queued followup payload, even for `user_request` turns. For Telegram topics, that signal is the reply-fence signal for the source dispatch; later user turns can supersede that fence while an earlier turn is still active.\n\nThat meant a user message that had already been accepted into the followup queue could later look aborted before it drained. The queued runner also reintroduced the same source signal with `queued.abortSignal ?? opts?.abortSignal`, so simply omitting `abortSignal` from the queued item was not enough. This PR fixes both halves of the RCA:\n\n- `src/auto-reply/reply/get-reply-run.ts:1047` attaches queued abort metadata only for `room_event` followups.\n- `src/auto-reply/reply/followup-runner.ts:422`, `:657`, and `:745` pass only `queued.abortSignal` into queued reply/CLI/embedded execution.\n\n## Queue-Mode Proof\n\nQueue mode is still respected. The patch does not change which turns are enqueued, interrupted, dropped, steered, collected, or followed up.\n\n- `src/auto-reply/reply/get-reply-run.ts:992` resolves `activeRunQueueAction` before constructing the queued followup payload.\n- `src/auto-reply/reply/agent-runner.ts:1178` resolves the same queue policy for active agent runs.\n- `src/auto-reply/reply/agent-runner.ts:1205` calls `enqueueFollowupRun(...)` only after the queue policy chooses `enqueue-followup`, and it passes the existing `resolvedQueue` through unchanged.\n- This PR changes only the abort metadata attached to an already accepted queued item and the abort signal used while draining that item.\n\n## Real Behavior Proof\n\nBehavior addressed: Telegram topic user messages accepted while another turn is active should remain queued and run after the active turn, even if the source reply fence is later superseded. `room_event` followups should still preserve abort metadata and skip when already aborted.\n\nReal environment tested: temp worktree `/tmp/openclaw-topic-followups.hEwtrg` for the patch and focused tests; current live local Telegram gateway for live topic proof; runtime logs from `/tmp/openclaw/openclaw-2026-05-18.log`; topic trajectory summaries from `~/.openclaw/agents/main/sessions`.\n\nExact steps or command run after this patch:\n\n```sh\nnode scripts/run-vitest.mjs src/auto-reply/reply/get-reply-run.media-only.test.ts src/auto-reply/reply/followup-runner.test.ts src/auto-reply/reply/queue.collect.test.ts extensions/telegram/src/bot-message-dispatch.test.ts\njq -r 'select((.message // \"\") | test(\"topic:8185|threadId=8185\")) | select(.time >= \"2026-05-18T19:40:00\") | [.time, .message] | @tsv' /tmp/openclaw/openclaw-2026-05-18.log\njq -r 'select((.message // \"\") | test(\"topic:22684|threadId=22684|client closed\")) | select(.time >= \"2026-05-18T19:53:00\") | [.time, .message] | @tsv' /tmp/openclaw/openclaw-2026-05-18.log\n```\n\nEvidence before fix: checked out parent `d761b98adc6ff2c824b95d0b2a7a54dfa1177d18` in a separate temp worktree, applied only the new regression tests, and ran:\n\n```sh\nnode scripts/run-vitest.mjs src/auto-reply/reply/get-reply-run.media-only.test.ts src/auto-reply/reply/followup-runner.test.ts\n```\n\nResult on old code:\n\n```text\nTest Files  2 failed (2)\nTests  2 failed | 110 passed (112)\n\nFAIL ... followup-runner.test.ts > does not inherit source abort signals for queued user followups\nAssertionError: expected AbortSignal { aborted: true } to be undefined\n\nFAIL ... get-reply-run.media-only.test.ts > detaches queued user requests from superseded source abort signals\nAssertionError: expected AbortSignal { aborted: false } to be undefined\n```\n\nEvidence after fix: on PR head `695478dc167f6cd54cfe318fe037837494bf832a`, the same two-file regression command passed:\n\n```text\nTest Files  2 passed (2)\nTests  112 passed (112)\n```\n\nThe broader focused touched-surface command also passed:\n\n```text\nnode scripts/run-vitest.mjs src/auto-reply/reply/get-reply-run.media-only.test.ts src/auto-reply/reply/followup-runner.test.ts src/auto-reply/reply/queue.collect.test.ts extensions/telegram/src/bot-message-dispatch.test.ts\nTest Files  4 passed (4)\nTests  220 passed (220)\n```\n\nCurrent live Telegram topic proof from the active patched gateway shows topic messages receiving replies back into the same Telegram topic after the patch:\n\n```text\n2026-05-18T19:41:31.880-04:00  Inbound message telegram:group:-<redacted>:topic:8185 -> @vacs_tars_bot (group, 12 chars)\n2026-05-18T19:41:51.482-04:00  telegram outbound send ok accountId=default chatId=-<redacted> messageId=100708 operation=sendMessage deliveryKind=text threadId=8185 chunkCount=1\n2026-05-18T19:43:23.393-04:00  Inbound message telegram:group:-<redacted>:topic:8185 -> @vacs_tars_bot (group, 42 chars)\n2026-05-18T19:46:27.188-04:00  telegram outbound send ok accountId=default chatId=-<redacted> messageId=100749 operation=sendMessage deliveryKind=text threadId=8185 chunkCount=1\n2026-05-18T19:46:28.027-04:00  telegram outbound send ok accountId=default chatId=-<redacted> messageId=100750 operation=sendMessage deliveryKind=text threadId=8185 chunkCount=1\n```\n\nThe active live runtime also contains the patched abort contract:\n\n```text\ndist/get-reply-DqVR3pSa.js: queuedFollowupAbortSignal = inboundEventKind === \"room_event\" ? opts?.abortSignal : void 0\ndist/agent-runner.runtime-CAMJHMX1.js: upstreamAbortSignal: queued.abortSignal\ndist/agent-runner.runtime-CAMJHMX1.js: abortSignal: queued.abortSignal\n```\n\nRedacted runtime log excerpt from the original real OpenClaw Telegram-topic failure window showed multiple topic inbounds while active queued work was present, prompt-stage app-server closures, and queued topic diagnostics:\n\n```text\n2026-05-18T17:42:08.017-04:00  Inbound message telegram:group:-<redacted>:topic:24 -> <redacted>\n2026-05-18T17:43:07.782-04:00  Inbound message telegram:group:-<redacted>:topic:24 -> <redacted>\n2026-05-18T17:43:28.862-04:00  Inbound message telegram:group:-<redacted>:topic:5907 -> <redacted>\n2026-05-18T17:43:43.340-04:00  embedded run failover decision runId=11c4451e-4ab6-4dad-b6ef-edfde684a0cd stage=prompt aborted=false rawErrorPreview=\"codex app-server client closed before turn completed\"\n2026-05-18T17:43:43.379-04:00  embedded run failover decision runId=df0003ed-4b49-4be0-8a12-71e1b450eee7 stage=prompt aborted=false rawErrorPreview=\"codex app-server client closed before turn completed\"\n2026-05-18T17:44:55.514-04:00  liveness warning ... active=...topic:24(processing/embedded_run,q=2,...)|...topic:5907(processing/embedded_run,q=1,...) queued=...topic:24(processing/embedded_run,q=2,...)\n2026-05-18T17:59:02.652-04:00  long-running session ... topic:8428 state=processing queueDepth=1 reason=queued_behind_active_work classification=long_running\n```\n\nAdditional redacted trajectory evidence showed repeated Telegram topic abort endings matching the loss mode this patch removes for queued user requests:\n\n```text\nexternalAbort=true / \"Reply operation aborted by user\" counts by Telegram topic trajectory:\n11 topic:24\n9  topic:26866\n6  topic:5907\n4  topic:8428\n4  topic:22684\n4  topic:10174\n```\n\nLater live observation for redacted Telegram topic `22684`: both the original message and the resend reached OpenClaw, but the original did not produce a Telegram reply because that turn ended with a separate app-server client-close failure. This is not counted as fixed-path proof for this PR; it is included so reviewers do not confuse that later live failure with the queued-abort RCA.\n\n```text\n2026-05-18T19:53:27.194-04:00  Inbound message telegram:group:-<redacted>:topic:22684 -> @vacs_tars_bot (group, 275 chars)\n2026-05-18T19:56:37.401-04:00  codex app-server client closed before turn completed\n2026-05-18T19:56:37.402-04:00  codex app-server client closed before turn completed\n2026-05-18T19:56:37.403-04:00  codex app-server client closed before turn completed\n2026-05-18T19:56:46.958-04:00  Inbound message telegram:group:-<redacted>:topic:22684 -> @vacs_tars_bot (group, 275 chars)\n```\n\nTrajectory summary for the same later live observation:\n\n```text\n2026-05-18T23:53:29.093Z  session.started\n2026-05-18T23:56:37.401Z  turn.client_closed\n2026-05-18T23:56:37.406Z  session.ended  error\n2026-05-18T23:56:58.928Z  session.started\n2026-05-18T23:56:58.937Z  prompt.submitted\n```\n\nObserved result after fix: queued `user_request` followups no longer carry or inherit the supersedable source abort signal; queued `room_event` followups still preserve their abort signal and continue to be skipped when already aborted. Focused regression tests pass, queue-mode routing remains unchanged, and the current live Telegram topic chat shows post-patch inbound topic messages receiving outbound replies from the active patched gateway.\n\nWhat was not tested: Mantis Telegram Desktop visible proof did not capture because the Telegram bot connection was conflicted and proof messages did not reach OpenClaw. No video/artifact proof from Mantis or Crabbox is attached. Discord was not retested beyond the reporter's confirmation that a Discord server channel was not reproducing the same issue. The later `topic:22684` live observation exposed a separate `codex app-server client closed before turn completed` failure, and is not presented as proof that this PR fixes that separate app-server/client-close path. The current live Telegram log proof is from the operator's active gateway, not a controlled baseline/candidate A/B desktop recording.\n\n## Verification\n\n- `pnpm install --frozen-lockfile` to install dependencies in the temp worktree after the Vitest wrapper could not resolve `vitest/package.json`.\n- `git diff --check`\n- `node scripts/run-vitest.mjs src/auto-reply/reply/get-reply-run.media-only.test.ts src/auto-reply/reply/followup-runner.test.ts src/auto-reply/reply/queue.collect.test.ts extensions/telegram/src/bot-message-dispatch.test.ts` -> `Test Files 4 passed (4)`, `Tests 220 passed (220)`.\n- Rebased onto current `origin/main` (`d761b98adc6ff2c824b95d0b2a7a54dfa1177d18`) and reran the same focused test command -> `Test Files 4 passed (4)`, `Tests 220 passed (220)`.\n- Current live gateway log inspection for topic `8185` showed inbound Telegram topic messages followed by outbound `threadId=8185` replies from the active patched runtime.\n- Current live gateway log inspection for topic `22684` showed the later report reached OpenClaw, then failed through `codex app-server client closed before turn completed`; the resend then reached OpenClaw and started a new session. That observation is included as a separate failure classification, not proof of the queued-abort fix.\n- `AUTOREVIEW_AUTO_TESTS=0 .agents/skills/autoreview/scripts/autoreview --mode local` reported findings against untouched files (`src/auto-reply/inbound-debounce.ts`, `extensions/telegram/src/sequential-key.ts`). I rejected those as not applicable after `git diff --name-only` showed this branch only touches reply-runner files. Manual review did find the followup-runner fallback path, which is fixed here. A second autoreview rerun was stopped after about five minutes because it again expanded into broad unrelated GitHub search instead of completing a local-diff review.\n\n## What Was Not Tested\n\n- Mantis Telegram Desktop visible proof / Crabbox proof was attempted but blocked by a conflicted Telegram bot connection.\n- Broad `pnpm check` was not run from this Codex worktree.\n\n",
+        "branch": "telegram-topic-followup-queue-rca",
+        "head_sha": "695478dc167f6cd54cfe318fe037837494bf832a",
+        "author": "vacinc",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 message-delivery",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/followup-runner.test.ts",
+            "additions": 29,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/followup-runner.ts",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/get-reply-run.media-only.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/get-reply-run.ts",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83827",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83827.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 104,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 72,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83827:4483448394:2026-05-19T00:36:54Z:re_review",
+      "comment_id": "4483448394",
+      "comment_version_key": "4483448394:2026-05-19T00:36:54Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83827#issuecomment-4483448394",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83827,
+      "author": "VACInc",
+      "author_id": 3279061,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-19T00:36:54Z",
+      "comment_updated_at": "2026-05-19T00:36:54Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "Preserve queued Telegram topic followups",
+        "body": "## Summary\n\n- Detach accepted queued `user_request` followups from the source-channel abort signal after they enter the reply queue.\n- Keep `room_event` followups tied to their source abort signal so ambient/current-event work can still be canceled by the admission fence.\n- Stop queued followup execution from falling back to the original source `opts.abortSignal`; queued execution now uses only the abort metadata carried on the queued item.\n\nSupersedes #83790. This replacement PR keeps the same focused fix and folds the RCA, before/after proof, queue-mode proof, live Telegram-topic logs, and blocked proof attempts into the PR body.\n\n## Root Cause\n\nTelegram topic user turns share the generic queued-followup path. Before this patch, `runPreparedReply` always placed `opts.abortSignal` onto the queued followup payload, even for `user_request` turns. For Telegram topics, that signal is the reply-fence signal for the source dispatch; later user turns can supersede that fence while an earlier turn is still active.\n\nThat meant a user message that had already been accepted into the followup queue could later look aborted before it drained. The queued runner also reintroduced the same source signal with `queued.abortSignal ?? opts?.abortSignal`, so simply omitting `abortSignal` from the queued item was not enough. This PR fixes both halves of the RCA:\n\n- `src/auto-reply/reply/get-reply-run.ts:1047` attaches queued abort metadata only for `room_event` followups.\n- `src/auto-reply/reply/followup-runner.ts:422`, `:657`, and `:745` pass only `queued.abortSignal` into queued reply/CLI/embedded execution.\n\n## Queue-Mode Proof\n\nQueue mode is still respected. The patch does not change which turns are enqueued, interrupted, dropped, steered, collected, or followed up.\n\n- `src/auto-reply/reply/get-reply-run.ts:992` resolves `activeRunQueueAction` before constructing the queued followup payload.\n- `src/auto-reply/reply/agent-runner.ts:1178` resolves the same queue policy for active agent runs.\n- `src/auto-reply/reply/agent-runner.ts:1205` calls `enqueueFollowupRun(...)` only after the queue policy chooses `enqueue-followup`, and it passes the existing `resolvedQueue` through unchanged.\n- This PR changes only the abort metadata attached to an already accepted queued item and the abort signal used while draining that item.\n\n## Real Behavior Proof\n\nBehavior addressed: Telegram topic user messages accepted while another turn is active should remain queued and run after the active turn, even if the source reply fence is later superseded. `room_event` followups should still preserve abort metadata and skip when already aborted.\n\nReal environment tested: temp worktree `/tmp/openclaw-topic-followups.hEwtrg` for the patch and focused tests; current live local Telegram gateway for live topic proof; runtime logs from `/tmp/openclaw/openclaw-2026-05-18.log`; topic trajectory summaries from `~/.openclaw/agents/main/sessions`.\n\nExact steps or command run after this patch:\n\n```sh\nnode scripts/run-vitest.mjs src/auto-reply/reply/get-reply-run.media-only.test.ts src/auto-reply/reply/followup-runner.test.ts src/auto-reply/reply/queue.collect.test.ts extensions/telegram/src/bot-message-dispatch.test.ts\njq -r 'select((.message // \"\") | test(\"topic:8185|threadId=8185\")) | select(.time >= \"2026-05-18T19:40:00\") | [.time, .message] | @tsv' /tmp/openclaw/openclaw-2026-05-18.log\njq -r 'select((.message // \"\") | test(\"topic:22684|threadId=22684|client closed\")) | select(.time >= \"2026-05-18T19:53:00\") | [.time, .message] | @tsv' /tmp/openclaw/openclaw-2026-05-18.log\n```\n\nEvidence before fix: checked out parent `d761b98adc6ff2c824b95d0b2a7a54dfa1177d18` in a separate temp worktree, applied only the new regression tests, and ran:\n\n```sh\nnode scripts/run-vitest.mjs src/auto-reply/reply/get-reply-run.media-only.test.ts src/auto-reply/reply/followup-runner.test.ts\n```\n\nResult on old code:\n\n```text\nTest Files  2 failed (2)\nTests  2 failed | 110 passed (112)\n\nFAIL ... followup-runner.test.ts > does not inherit source abort signals for queued user followups\nAssertionError: expected AbortSignal { aborted: true } to be undefined\n\nFAIL ... get-reply-run.media-only.test.ts > detaches queued user requests from superseded source abort signals\nAssertionError: expected AbortSignal { aborted: false } to be undefined\n```\n\nEvidence after fix: on PR head `695478dc167f6cd54cfe318fe037837494bf832a`, the same two-file regression command passed:\n\n```text\nTest Files  2 passed (2)\nTests  112 passed (112)\n```\n\nThe broader focused touched-surface command also passed:\n\n```text\nnode scripts/run-vitest.mjs src/auto-reply/reply/get-reply-run.media-only.test.ts src/auto-reply/reply/followup-runner.test.ts src/auto-reply/reply/queue.collect.test.ts extensions/telegram/src/bot-message-dispatch.test.ts\nTest Files  4 passed (4)\nTests  220 passed (220)\n```\n\nCurrent live Telegram topic proof from the active patched gateway shows topic messages receiving replies back into the same Telegram topic after the patch:\n\n```text\n2026-05-18T19:41:31.880-04:00  Inbound message telegram:group:-<redacted>:topic:8185 -> @vacs_tars_bot (group, 12 chars)\n2026-05-18T19:41:51.482-04:00  telegram outbound send ok accountId=default chatId=-<redacted> messageId=100708 operation=sendMessage deliveryKind=text threadId=8185 chunkCount=1\n2026-05-18T19:43:23.393-04:00  Inbound message telegram:group:-<redacted>:topic:8185 -> @vacs_tars_bot (group, 42 chars)\n2026-05-18T19:46:27.188-04:00  telegram outbound send ok accountId=default chatId=-<redacted> messageId=100749 operation=sendMessage deliveryKind=text threadId=8185 chunkCount=1\n2026-05-18T19:46:28.027-04:00  telegram outbound send ok accountId=default chatId=-<redacted> messageId=100750 operation=sendMessage deliveryKind=text threadId=8185 chunkCount=1\n```\n\nThe active live runtime also contains the patched abort contract:\n\n```text\ndist/get-reply-DqVR3pSa.js: queuedFollowupAbortSignal = inboundEventKind === \"room_event\" ? opts?.abortSignal : void 0\ndist/agent-runner.runtime-CAMJHMX1.js: upstreamAbortSignal: queued.abortSignal\ndist/agent-runner.runtime-CAMJHMX1.js: abortSignal: queued.abortSignal\n```\n\nRedacted runtime log excerpt from the original real OpenClaw Telegram-topic failure window showed multiple topic inbounds while active queued work was present, prompt-stage app-server closures, and queued topic diagnostics:\n\n```text\n2026-05-18T17:42:08.017-04:00  Inbound message telegram:group:-<redacted>:topic:24 -> <redacted>\n2026-05-18T17:43:07.782-04:00  Inbound message telegram:group:-<redacted>:topic:24 -> <redacted>\n2026-05-18T17:43:28.862-04:00  Inbound message telegram:group:-<redacted>:topic:5907 -> <redacted>\n2026-05-18T17:43:43.340-04:00  embedded run failover decision runId=11c4451e-4ab6-4dad-b6ef-edfde684a0cd stage=prompt aborted=false rawErrorPreview=\"codex app-server client closed before turn completed\"\n2026-05-18T17:43:43.379-04:00  embedded run failover decision runId=df0003ed-4b49-4be0-8a12-71e1b450eee7 stage=prompt aborted=false rawErrorPreview=\"codex app-server client closed before turn completed\"\n2026-05-18T17:44:55.514-04:00  liveness warning ... active=...topic:24(processing/embedded_run,q=2,...)|...topic:5907(processing/embedded_run,q=1,...) queued=...topic:24(processing/embedded_run,q=2,...)\n2026-05-18T17:59:02.652-04:00  long-running session ... topic:8428 state=processing queueDepth=1 reason=queued_behind_active_work classification=long_running\n```\n\nAdditional redacted trajectory evidence showed repeated Telegram topic abort endings matching the loss mode this patch removes for queued user requests:\n\n```text\nexternalAbort=true / \"Reply operation aborted by user\" counts by Telegram topic trajectory:\n11 topic:24\n9  topic:26866\n6  topic:5907\n4  topic:8428\n4  topic:22684\n4  topic:10174\n```\n\nLater live observation for redacted Telegram topic `22684`: both the original message and the resend reached OpenClaw, but the original did not produce a Telegram reply because that turn ended with a separate app-server client-close failure. This is not counted as fixed-path proof for this PR; it is included so reviewers do not confuse that later live failure with the queued-abort RCA.\n\n```text\n2026-05-18T19:53:27.194-04:00  Inbound message telegram:group:-<redacted>:topic:22684 -> @vacs_tars_bot (group, 275 chars)\n2026-05-18T19:56:37.401-04:00  codex app-server client closed before turn completed\n2026-05-18T19:56:37.402-04:00  codex app-server client closed before turn completed\n2026-05-18T19:56:37.403-04:00  codex app-server client closed before turn completed\n2026-05-18T19:56:46.958-04:00  Inbound message telegram:group:-<redacted>:topic:22684 -> @vacs_tars_bot (group, 275 chars)\n```\n\nTrajectory summary for the same later live observation:\n\n```text\n2026-05-18T23:53:29.093Z  session.started\n2026-05-18T23:56:37.401Z  turn.client_closed\n2026-05-18T23:56:37.406Z  session.ended  error\n2026-05-18T23:56:58.928Z  session.started\n2026-05-18T23:56:58.937Z  prompt.submitted\n```\n\nObserved result after fix: queued `user_request` followups no longer carry or inherit the supersedable source abort signal; queued `room_event` followups still preserve their abort signal and continue to be skipped when already aborted. Focused regression tests pass, queue-mode routing remains unchanged, and the current live Telegram topic chat shows post-patch inbound topic messages receiving outbound replies from the active patched gateway.\n\nWhat was not tested: Mantis Telegram Desktop visible proof did not capture because the Telegram bot connection was conflicted and proof messages did not reach OpenClaw. No video/artifact proof from Mantis or Crabbox is attached. Discord was not retested beyond the reporter's confirmation that a Discord server channel was not reproducing the same issue. The later `topic:22684` live observation exposed a separate `codex app-server client closed before turn completed` failure, and is not presented as proof that this PR fixes that separate app-server/client-close path. The current live Telegram log proof is from the operator's active gateway, not a controlled baseline/candidate A/B desktop recording.\n\n## Verification\n\n- `pnpm install --frozen-lockfile` to install dependencies in the temp worktree after the Vitest wrapper could not resolve `vitest/package.json`.\n- `git diff --check`\n- `node scripts/run-vitest.mjs src/auto-reply/reply/get-reply-run.media-only.test.ts src/auto-reply/reply/followup-runner.test.ts src/auto-reply/reply/queue.collect.test.ts extensions/telegram/src/bot-message-dispatch.test.ts` -> `Test Files 4 passed (4)`, `Tests 220 passed (220)`.\n- Rebased onto current `origin/main` (`d761b98adc6ff2c824b95d0b2a7a54dfa1177d18`) and reran the same focused test command -> `Test Files 4 passed (4)`, `Tests 220 passed (220)`.\n- Current live gateway log inspection for topic `8185` showed inbound Telegram topic messages followed by outbound `threadId=8185` replies from the active patched runtime.\n- Current live gateway log inspection for topic `22684` showed the later report reached OpenClaw, then failed through `codex app-server client closed before turn completed`; the resend then reached OpenClaw and started a new session. That observation is included as a separate failure classification, not proof of the queued-abort fix.\n- `AUTOREVIEW_AUTO_TESTS=0 .agents/skills/autoreview/scripts/autoreview --mode local` reported findings against untouched files (`src/auto-reply/inbound-debounce.ts`, `extensions/telegram/src/sequential-key.ts`). I rejected those as not applicable after `git diff --name-only` showed this branch only touches reply-runner files. Manual review did find the followup-runner fallback path, which is fixed here. A second autoreview rerun was stopped after about five minutes because it again expanded into broad unrelated GitHub search instead of completing a local-diff review.\n\n## What Was Not Tested\n\n- Mantis Telegram Desktop visible proof / Crabbox proof was attempted but blocked by a conflicted Telegram bot connection.\n- Broad `pnpm check` was not run from this Codex worktree.\n\n",
+        "branch": "telegram-topic-followup-queue-rca",
+        "head_sha": "695478dc167f6cd54cfe318fe037837494bf832a",
+        "author": "vacinc",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 message-delivery",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/followup-runner.test.ts",
+            "additions": 29,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/followup-runner.ts",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/get-reply-run.media-only.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/get-reply-run.ts",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83827",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83827.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 104,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 72,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 555,
+    "total_ms": 3038,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 297
+        "ms": 302
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2511
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 245
+        "ms": 196
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
