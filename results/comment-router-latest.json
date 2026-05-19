@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-19T00:12:31.870Z",
+  "generated_at": "2026-05-19T00:12:54.469Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-18T21:12:29.713Z",
+  "since": "2026-05-18T21:12:53.882Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     83818
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4468594252
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -59,77 +61,20 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(opencode-go): strip per-message reasoning fields for kimi-k2.{5,6} (#83812)",
-        "body": "Fixes #83812.\n\n`createOpencodeGoKimiNoReasoningWrapper` (`extensions/opencode-go/stream.ts`) already strips root-level `reasoning` / `reasoning_effort` / `reasoningEffort` from outbound requests for opencode-go's Kimi-family models. But stock OpenClaw preserves `messages[].reasoning_details` on replayed assistant turns for these model IDs — `kimi-k2.5` and `kimi-k2.6` are in `REASONING_CONTENT_REPLAY_MODEL_IDS` (`src/agents/openai-transport-stream.ts`), so `shouldPreserveReasoningContentReplay` returns `true` and the assistant-message sanitizer leaves the field intact. After a few turns the provider rejects the request:\n\n```\n400 Error from provider: Extra inputs are not permitted,\nfield: 'messages[5].reasoning_details'\n```\n\nThe DeepSeek-V4 sibling wrapper next to this one only operates on root-level params, so per-message replay needs its own pass.\n\n## Changes\n\n- `extensions/opencode-go/stream.ts`: extend the existing `stripReasoningParams` payload patch (already gated on `isOpencodeGoKimiNoReasoningModelId`) to walk `payload.messages[]` and `payload.input[]` and strip per-message reasoning fields (`reasoning_details`, `reasoning_content`, `reasoning`, `reasoning_text`). Array-shaped `content` parts on each message are walked recursively. Root-level strip is preserved.\n- `extensions/opencode-go/stream.test.ts`: new vitest file with 4 regression cases — replayed `reasoning_details` on `kimi-k2.6`, array-shaped content parts on `kimi-k2.5`, Responses-style `input[]` entries, and a \"non-Kimi opencode-go model is untouched\" guard.\n\nDiff stat: 2 files, +159 LOC (most of it test coverage; the production change is +44 LOC).\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Sanitized issue evidence — opencode-go/kimi-k2.6 returns `400 Extra inputs are not permitted, field: 'messages[N].reasoning_details'` once a conversation has at least one replayed assistant turn that carried reasoning. The issue's local hotfix walks `messages[]` and `input[]` and strips the same 4 field names.\n\n- **Real environment tested:** Local Node 22.x. Probe at `/tmp/probe_83812.mjs` (a) parses the patched `stream.ts` and verifies the field list is complete, the per-message walker is declared, and `stripReasoningParams` iterates both `messages[]` and `input[]` while preserving the original root-level deletions; (b) replays the patched strip against a realistic payload — root-level `reasoning` / `reasoning_effort`, a replayed assistant message with all 4 reasoning shapes, an array-shaped user content part with `reasoning` leakage, and an `input[]` entry — and asserts every reasoning field is removed while non-reasoning fields (`role`, `content`, `text`, `type`) survive; (c) replays the pre-fix shape (root-only strip) and confirms it leaves `messages[0].reasoning_details` intact — the exact field path the provider rejects.\n\n- **Exact steps or command run after this patch:** `node /tmp/probe_83812.mjs`\n\n- **Evidence after fix:**\n\n```\nPASS: all 4 per-message reasoning field names declared\nPASS: stripPerMessageReasoning helper declared\nPASS: stripReasoningParams iterates payload.messages\nPASS: stripReasoningParams iterates payload.input\nPASS: root-level strip preserved (no regression vs prior behavior)\nPASS: replay: realistic payload strips all 4 reasoning shapes from messages[], messages[].content[], and input[], preserves non-reasoning fields\nPASS: old shape (root-only strip) preserves messages[].reasoning_details — confirms issue's HTTP 400 path\n\nALL CASES PASS\n```\n\n- **Observed result after fix:** A multi-turn opencode-go/kimi-k2.6 chat that previously hit `400 Extra inputs are not permitted, field: 'messages[N].reasoning_details'` no longer carries any reasoning-shaped field at any depth of the request payload (root, `messages[]`, `messages[].content[]`, `input[]`). Models outside the Kimi no-reasoning set (e.g. `deepseek-v4-pro`) short-circuit before the wrapper runs, so the strip never touches their payloads.\n\n- **What was not tested:** Live request against `https://opencode.ai/zen/go/v1` with `kimi-k2.6` after a multi-turn replay — that requires an opencode-go account and is what the reporter's local hotfix confirmed. The probe replays both the patched and pre-fix shapes against the exact field path named in the provider error, and the vitest regression cases exercise the public `createOpencodeGoKimiNoReasoningWrapper` contract on the same shape.\n\n## Audit (per CLAUDE rules — all 5 steps)\n\n- **Existing-helper check:** The reasoning-field list (`reasoning_details`, `reasoning_content`, `reasoning`, `reasoning_text`) is the same set as `COMPLETIONS_REASONING_REPLAY_FIELDS` in `src/agents/openai-transport-stream.ts:2857`, but that constant is module-private. Inlining a 4-name const in this plugin file matches the established pattern of self-contained provider wrappers in `extensions/`. The strip is implemented via the existing `streamWithPayloadPatch` helper already imported here — no new framework. PASS\n- **Shared-helper caller check:** `stripReasoningParams` has exactly one caller (the wrapper that closes over it, two lines below). Behavior change is additive: the new per-message walk runs only on payloads that already pass the `isOpencodeGoKimiNoReasoningModelId` gate. PASS\n- **Broader-fix rival scan:** `gh pr list --search '83812 in:title,body'` and `gh pr list --search 'reasoning_details in:title,body'` both return no open PRs. PASS\n- **Recent-merge audit:** `git log --oneline -10 -- extensions/opencode-go/stream.ts` shows `e1061a8b46 test(live): tolerate provider drift in release checks` — unrelated. PASS\n- **Prototype-pollution scan:** The walker reads `message.content` and the message keys, then uses `delete msg[FIELD]` where `FIELD` comes from a hard-coded constant. No external-input key copying. PASS\n",
-        "branch": "fix-opencode-go-kimi-message-reasoning-83812",
-        "head_sha": "54157f9d17d445381a26bb0c2a209d5fcdb6a7b5",
-        "author": "hclsys",
-        "labels": [
-          "size: S",
-          "proof: supplied",
-          "extensions: opencode-go",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/opencode-go/stream.test.ts",
-            "additions": 115,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/opencode-go/stream.ts",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83818",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83818.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "counts": {
-            "SUCCESS": 65,
-            "SKIPPED": 28,
-            "FAILURE": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "check-lint:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "check-lint:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
-          ]
-        }
-      },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2380,
+    "total_ms": 767,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 320
+        "ms": 570
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1822
+        "ms": 0
       },
       {
         "name": "classify_commands",
@@ -137,11 +82,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 211
+        "ms": 181
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
