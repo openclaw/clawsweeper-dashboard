@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-19T22:16:33.209Z",
+  "generated_at": "2026-05-19T22:17:37.987Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-19T19:16:31.832Z",
+  "since": "2026-05-19T19:17:37.541Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     84153
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4492511016
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 4,
-  "commands_seen": 2,
+  "scanned_comments": 0,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,256 +31,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:84153:4488456669:2026-05-19T21:27:18Z:clawsweeper_auto_merge",
-      "comment_id": "4488456669",
-      "comment_version_key": "4488456669:2026-05-19T21:27:18Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84153#issuecomment-4488456669",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84153,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-19T13:53:39Z",
-      "comment_updated_at": "2026-05-19T21:27:18Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto merge",
-      "intent": "clawsweeper_auto_merge",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: pass (sha=e85c9d6bb05f4e95b8a51c583e3a13a40a7e30b3)",
-      "review_summary": "This PR adds 30-second default fail-open timeouts for `before_compaction` and `after_compaction` plugin hooks, focused regression tests, and a changelog entry.\n\nReproducibility: yes. from source inspection: current main has no defaults for these two void hooks, and awaited `runVoidHook` calls can wait forever on a never-settling handler. I did not run a live hang because this review is read-only.",
-      "review_followup": "No ClawSweeper repair is needed; this is already a focused automerge-opted PR and should remain gated on exact-head CI plus maintainer acceptance of the timeout behavior.",
-      "freeform_prompt": null,
-      "expected_head_sha": "e85c9d6bb05f4e95b8a51c583e3a13a40a7e30b3",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(plugins): add default timeout for before_compaction/after_compaction hooks",
-        "body": "## Bug\n\n`DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK` in `src/plugins/hooks.ts` listed only\n`agent_end`. The `before_compaction` and `after_compaction` plugin hooks are\nvoid hooks (`runBeforeCompaction` / `runAfterCompaction` → `runVoidHook(...)`),\nand `runVoidHook` applies a timeout *only* when `getVoidHookTimeoutMs` returns\na value. With no table entry and no plugin-supplied `hook.timeoutMs`, both\nhooks ran **fully unbounded**.\n\nIn the codex agent harness these hooks fire on the *serialized* notification\nqueue — `extensions/codex/src/app-server/event-projector.ts` `handleItemStarted`\n`await`s `runAgentHarnessBeforeCompactionHook` (and the matching\n`after_compaction` call site) for a `contextCompaction` item. A slow or hung\ncompaction hook therefore freezes processing of every later codex notification —\nincluding `turn/completed` — so the whole agent turn hangs.\n\n## Fix\n\nAdd `before_compaction` and `after_compaction` entries to\n`DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK`, mirroring the defensive-default pattern\nalready applied to `agent_end`. The budget is **30s**, matching `agent_end`\n(the closest like-for-like precedent — a void lifecycle hook) rather than the\ntighter 15s modifying-hook defaults, because compaction hooks can legitimately\ndo real work such as a memory flush. The runner is fail-open for void hooks,\nso a timed-out handler is logged and compaction proceeds without it.\n\nA plugin can still override the default per-registration via `hook.timeoutMs`.\n\n## Related\n\nRelated to #84077 — the same compaction-stall investigation. That issue covers\nthe host's missing safety timeout on plugin-owned `compact()`; this is a\nseparate, independent mechanism (unbounded void hooks freezing the codex\nnotification queue), hence \"Related\" rather than \"Fixes\".\n\n## Test plan\n\n- [x] `pnpm tsgo:core` and `pnpm tsgo:core:test` — typecheck passes\n- [x] `oxlint` on changed files — 0 warnings / 0 errors\n- [x] New `src/plugins/hooks.compaction-timeout.test.ts`:\n  - a never-settling `before_compaction` handler is bounded by the default timeout (no override) and logged, rather than hanging\n  - same for `after_compaction`\n  - a fast `before_compaction` handler completes without a false-positive timeout\n- [x] `vitest` (plugins project): new tests + `hooks.correlation.test.ts` + `wired-hooks-compaction.test.ts` — 15/15 pass\n\n## Real behavior proof\n\nBehavior addressed: hung plugin `before_compaction` and `after_compaction` handlers no longer stall compaction forever. The hook runner now applies the default fail-open timeout when no per-hook override is configured.\n\nReal environment tested: local OpenClaw checkout `/Volumes/LEXAR/repos/openclaw-fix-compaction-hook-timeout`, branch `fix/compaction-hook-default-timeout`, Node via `node --import tsx`, actual `src/plugins/hooks.ts` plugin hook runner.\n\nExact steps or command run after the patch: ran a live script that registers a plugin whose `before_compaction` and `after_compaction` hooks never settle, then invokes `runHookTimeout` for both hooks without per-hook timeout overrides.\n\nEvidence after fix:\n\n```json\n{\n  \"branch\": \"fix/compaction-hook-default-timeout\",\n  \"behavior\": \"hung before_compaction and after_compaction hooks return via default fail-open timeout\",\n  \"elapsedMs\": 30033,\n  \"eventCount\": 2,\n  \"events\": [\n    \"[hooks] before_compaction handler from live-proof-plugin failed: timed out after 30000ms\",\n    \"[hooks] after_compaction handler from live-proof-plugin failed: timed out after 30000ms\"\n  ]\n}\n```\n\nObserved result after fix: both hung hook handlers returned through the default timeout path in about 30 seconds each, emitted fail-open timeout events, and did not block the caller indefinitely.\n\nWhat was not tested: a real external plugin process wedged in production; the proof uses the in-process hook runner with intentionally never-settling handlers.\n",
-        "branch": "fix/compaction-hook-default-timeout",
-        "head_sha": "41fa5fed376734e4e96e942f8dc44a3cd4acc58a",
-        "author": "100yenadmin",
-        "labels": [
-          "size: S",
-          "clawsweeper:automerge",
-          "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: 🚀 automerge armed"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/hooks.compaction-timeout.test.ts",
-            "additions": 121,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/plugins/hooks.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": "automerge-openclaw-openclaw-84153",
-        "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84153.md",
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84153",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84153.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "APPROVED",
-        "checks": {
-          "total": 24,
-          "counts": {
-            "QUEUED": 10,
-            "SUCCESS": 9,
-            "SKIPPED": 5
-          },
-          "blockers": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "pending": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "PR is not open"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84153:4490440383:2026-05-19T17:43:38Z:automerge",
-      "comment_id": "4490440383",
-      "comment_version_key": "4490440383:2026-05-19T17:43:38Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84153#issuecomment-4490440383",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84153,
-      "author": "Takhoffman",
-      "author_id": 781889,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-19T17:43:38Z",
-      "comment_updated_at": "2026-05-19T17:43:38Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "automerge",
-      "intent": "automerge",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "write",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(plugins): add default timeout for before_compaction/after_compaction hooks",
-        "body": "## Bug\n\n`DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK` in `src/plugins/hooks.ts` listed only\n`agent_end`. The `before_compaction` and `after_compaction` plugin hooks are\nvoid hooks (`runBeforeCompaction` / `runAfterCompaction` → `runVoidHook(...)`),\nand `runVoidHook` applies a timeout *only* when `getVoidHookTimeoutMs` returns\na value. With no table entry and no plugin-supplied `hook.timeoutMs`, both\nhooks ran **fully unbounded**.\n\nIn the codex agent harness these hooks fire on the *serialized* notification\nqueue — `extensions/codex/src/app-server/event-projector.ts` `handleItemStarted`\n`await`s `runAgentHarnessBeforeCompactionHook` (and the matching\n`after_compaction` call site) for a `contextCompaction` item. A slow or hung\ncompaction hook therefore freezes processing of every later codex notification —\nincluding `turn/completed` — so the whole agent turn hangs.\n\n## Fix\n\nAdd `before_compaction` and `after_compaction` entries to\n`DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK`, mirroring the defensive-default pattern\nalready applied to `agent_end`. The budget is **30s**, matching `agent_end`\n(the closest like-for-like precedent — a void lifecycle hook) rather than the\ntighter 15s modifying-hook defaults, because compaction hooks can legitimately\ndo real work such as a memory flush. The runner is fail-open for void hooks,\nso a timed-out handler is logged and compaction proceeds without it.\n\nA plugin can still override the default per-registration via `hook.timeoutMs`.\n\n## Related\n\nRelated to #84077 — the same compaction-stall investigation. That issue covers\nthe host's missing safety timeout on plugin-owned `compact()`; this is a\nseparate, independent mechanism (unbounded void hooks freezing the codex\nnotification queue), hence \"Related\" rather than \"Fixes\".\n\n## Test plan\n\n- [x] `pnpm tsgo:core` and `pnpm tsgo:core:test` — typecheck passes\n- [x] `oxlint` on changed files — 0 warnings / 0 errors\n- [x] New `src/plugins/hooks.compaction-timeout.test.ts`:\n  - a never-settling `before_compaction` handler is bounded by the default timeout (no override) and logged, rather than hanging\n  - same for `after_compaction`\n  - a fast `before_compaction` handler completes without a false-positive timeout\n- [x] `vitest` (plugins project): new tests + `hooks.correlation.test.ts` + `wired-hooks-compaction.test.ts` — 15/15 pass\n\n## Real behavior proof\n\nBehavior addressed: hung plugin `before_compaction` and `after_compaction` handlers no longer stall compaction forever. The hook runner now applies the default fail-open timeout when no per-hook override is configured.\n\nReal environment tested: local OpenClaw checkout `/Volumes/LEXAR/repos/openclaw-fix-compaction-hook-timeout`, branch `fix/compaction-hook-default-timeout`, Node via `node --import tsx`, actual `src/plugins/hooks.ts` plugin hook runner.\n\nExact steps or command run after the patch: ran a live script that registers a plugin whose `before_compaction` and `after_compaction` hooks never settle, then invokes `runHookTimeout` for both hooks without per-hook timeout overrides.\n\nEvidence after fix:\n\n```json\n{\n  \"branch\": \"fix/compaction-hook-default-timeout\",\n  \"behavior\": \"hung before_compaction and after_compaction hooks return via default fail-open timeout\",\n  \"elapsedMs\": 30033,\n  \"eventCount\": 2,\n  \"events\": [\n    \"[hooks] before_compaction handler from live-proof-plugin failed: timed out after 30000ms\",\n    \"[hooks] after_compaction handler from live-proof-plugin failed: timed out after 30000ms\"\n  ]\n}\n```\n\nObserved result after fix: both hung hook handlers returned through the default timeout path in about 30 seconds each, emitted fail-open timeout events, and did not block the caller indefinitely.\n\nWhat was not tested: a real external plugin process wedged in production; the proof uses the in-process hook runner with intentionally never-settling handlers.\n",
-        "branch": "fix/compaction-hook-default-timeout",
-        "head_sha": "41fa5fed376734e4e96e942f8dc44a3cd4acc58a",
-        "author": "100yenadmin",
-        "labels": [
-          "size: S",
-          "clawsweeper:automerge",
-          "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: 🚀 automerge armed"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/hooks.compaction-timeout.test.ts",
-            "additions": 121,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/plugins/hooks.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": "automerge-openclaw-openclaw-84153",
-        "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84153.md",
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84153",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84153.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "APPROVED",
-        "checks": {
-          "total": 24,
-          "counts": {
-            "QUEUED": 10,
-            "SUCCESS": 9,
-            "SKIPPED": 5
-          },
-          "blockers": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "pending": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "automerge already completed after this command"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1634,
+    "total_ms": 683,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 397
+        "ms": 435
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 964
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 244
+        "ms": 238
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
