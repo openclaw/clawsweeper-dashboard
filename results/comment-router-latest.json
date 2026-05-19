@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-19T23:53:33.561Z",
+  "generated_at": "2026-05-19T23:53:40.420Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-19T20:53:31.201Z",
+  "since": "2026-05-19T20:53:37.586Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -62,22 +62,96 @@
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "ignored",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "label",
+          "label": "clawsweeper:automerge",
+          "status": "executed"
+        },
+        {
+          "action": "dispatch_repair",
+          "workflow": "repair-cluster-worker.yml",
+          "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84269.md",
+          "mode": "autonomous",
+          "status": "executed",
+          "dispatched_at": "2026-05-19T23:53:53.308Z",
+          "run_url": "https://github.com/openclaw/clawsweeper/actions/runs/26132498875"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-19T23:53:54.714Z",
+          "response_comment_id": null,
+          "response_comment_mode": "created"
+        }
+      ],
+      "author_repository_permission": "write",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(code-mode): sharpen exec tool description so models stop wasting turns rediscovering constraints",
+        "body": "## Problem\n\nWhen OpenClaw code mode is enabled, the `exec` tool's description tells the model to use `tools.search` / `describe` / `call` to call enabled tools but does not state any of the runtime's actual constraints. In observed agent traces, the model burns turns rediscovering them:\n\n- It tries `language: \"bash\"` because \"code mode\" reads as \"any code\"; gets rejected.\n- It writes `require('fs')` (or another Node built-in) to do I/O; gets `\"code mode module access is disabled.\"` and loops trying simpler constructs (`let x = 1`, bare expression) to figure out which patterns are allowed.\n- It rediscovers, turn by turn, that Node modules are unavailable and that the catalog bridge is the only path to I/O.\n\n## Change and value\n\nSharpen the description so the model sees the constraints up front:\n\n- Node modules and `require` / `import` are NOT available.\n- The `language` field accepts only `\"javascript\"` or `\"typescript\"`.\n- The catalog bridge is the path for shell, file, network, or external action: `tools.search(query)` finds enabled catalog entries, then code should pass `entry.id` to `tools.describe(entry.id)` and `tools.call(entry.id, args)`.\n- Catalog calls still go only through enabled tools allowed by existing policy.\n\nParameter descriptions also state which symbols are in scope (`tools`, `ALL_TOOLS`) versus what is not (Node built-ins).\n\nNo runtime behavior changes — only the tool-card text the model sees.\n\n## Who's affected\n\nAll agents with code mode enabled (globally or per-agent), regardless of provider. Most directly: models that don't already know the catalog-bridge contract from training-set examples — typically smaller open-weight models routed through the Pi-embedded-runner.\n\n## Why now\n\nPer-agent code mode shipped in 2026.5.18 (#83473). A controlled re-enable for evaluation surfaced sessions where the agent spent 6+ turns probing the same constraints before stabilizing on the bridge pattern. Description-only fixes are the cheapest path to reduce that floor; the rest of the friction is structural and will need separate work.\n\n## Implementation\n\n`src/agents/code-mode.ts` — `createCodeModeTools`:\n- `exec` tool `description` expanded with the three constraints.\n- Bridge guidance uses the documented id-based flow: search for entries, then call `describe` / `call` with `entry.id`.\n- `code` parameter description states scope explicitly (`tools` and `ALL_TOOLS` in scope; Node built-ins not).\n- `language` parameter description states the enum.\n\n`src/agents/code-mode.test.ts`:\n- Adds regression coverage that the model-visible `exec` description and parameter descriptions keep those runtime constraints visible.\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: When code mode is enabled, models routed through the Pi-embedded-runner can waste turns rediscovering that `language: \"bash\"` is rejected, that `require` / `import` is unavailable, and that the `tools.search` / `describe` / `call` bridge is the path to I/O. The current `exec` description does not state any of those constraints; agents must discover them by trial and error at runtime.\n\n- **Real environment tested**: OpenClaw 2026.5.18 stable (commit `50a2481`); agent routed to `ollama-cloud/kimi-k2.6` via the Pi-embedded-runner; `tools.codeMode.enabled: true` (per-agent override per #83473 schema). Same agent, same model, same prompt across before/after for the live delivery proof. Final-head schema readback was run from this PR branch at `e75ca8e7bb34dfc76a6e6dc23397e571353a09e2`. CI-shaped validation was run on the PR merge ref in Crabbox/GCP.\n\n- **Exact steps or command run after this patch**:\n  ```bash\n  # Live delivery proof — same prompt before and after patching the running dist:\n  PROBE='Without calling any tools, recite the description text of the `exec` tool exactly as it appears in your tool definitions. Quote it verbatim and reply with just that text.'\n\n  openclaw agent --local --agent <pi-runtime-codemode-agent> --timeout 120 \\\n    --model ollama-cloud/kimi-k2.6 --thinking low \\\n    --session-id \"cm-rbp-<phase>-$(date +%s)\" \\\n    -m \"$PROBE\" --json\n\n  # Final-head schema readback at e75ca8e7bb:\n  node --import tsx -e 'import { createCodeModeTools } from \"./src/agents/code-mode.ts\"; import { createToolSearchCatalogRef } from \"./src/agents/tool-search.ts\"; const config = { tools: { codeMode: true } }; const [execTool] = createCodeModeTools({ config, runtimeConfig: config, sessionId: \"schema-proof\", sessionKey: \"agent:main:main\", runId: \"schema-proof\", catalogRef: createToolSearchCatalogRef() }); console.log(execTool.description);'\n\n  # Remote merge-ref validation in Crabbox/GCP:\n  pnpm install --frozen-lockfile --reporter=append-only\n  pnpm build\n  pnpm tsgo:core:test\n  pnpm check:changed\n  ```\n\n- **Evidence after fix**: Live agent dispatches (recitation probe, fresh sessions) at 2026-05-19T20:28Z (before-patch dist) and 2026-05-19T20:42Z (after-patch dist) returned the following final payloads.\n\n  **Before** (`main` dist; agent reads OLD description):\n  ```\n  Run JavaScript or TypeScript in OpenClaw code mode. Use ALL_TOOLS and tools.search/describe/call inside the code to discover and call enabled tools.\n  ```\n  No statement that `require` / `import` is blocked. No statement that `language` rejects values other than `javascript` / `typescript`. The model has to discover these by trying them.\n\n  **Live delivery after initial patch** (dist patched to this PR's description block; agent reads NEW description):\n  ```\n  Run JavaScript or TypeScript in OpenClaw code mode. Node.js modules and `require`/`import` are NOT available — for any shell, file, network, or external action, use the catalog bridge from inside your code: `tools.search(query)` to find tools, `tools.describe(name)` for the input schema, then `tools.call(name, args)`. The `language` field accepts only \"javascript\" or \"typescript\"; do not pass \"bash\", \"shell\", or other values.\n  ```\n  The live recitation proved the model receives the model-visible description unchanged.\n\n  **Final head schema readback** (`e75ca8e7bb`; source code path that builds the model-visible tool schema):\n  ```\n  Run JavaScript or TypeScript in OpenClaw code mode. Node.js modules and `require`/`import` are NOT available — for any shell, file, network, or external action, use enabled catalog tools allowed by policy from inside your code: `tools.search(query)` to find catalog entries, `tools.describe(entry.id)` for the input schema, then `tools.call(entry.id, args)`. The `language` field accepts only \"javascript\" or \"typescript\"; do not pass \"bash\", \"shell\", or other values.\n  ```\n\n  Final-head source assertions also checked the `code` parameter mentions `tools`, `ALL_TOOLS`, and unavailable Node built-ins, and that `language` says it must be `\"javascript\"` or `\"typescript\"`.\n\n  **Remote merge-ref validation** (Crabbox/GCP, `us-east1-b`, PR merge ref containing `e75ca8e7bb`): `pnpm install --frozen-lockfile --reporter=append-only`, `pnpm build`, `pnpm tsgo:core:test`, and `pnpm check:changed` all exited 0. `pnpm check:changed` selected the `core` and `coreTests` lanes, typechecked both, linted 8652 files with 217 rules using 1 thread, and reported 0 warnings / 0 errors. Cleanup check found no remaining `crabbox-*` GCP instances.\n\n- **Observed result after fix**: The live recitation proves the generated `exec` description reaches the model as its tool-card text. The final PR head now emits the safer id-based bridge wording from the same `createCodeModeTools` schema path, so agents see the constraints up front without being steered toward ambiguous name-based `describe` / `call` handles.\n\n- **What was not tested**: A multi-trial controlled A/B measuring the rate-of-rediscovery reduction (turns spent attempting `language: \"bash\"`, `require()`, etc., before stabilizing on the bridge pattern). The proof confirms delivery and final schema text; behavioral impact would need many trials on a model that exhibits the rediscovery loop reliably (an earlier observed instance was a real session that looped 6+ turns on `code mode module access is disabled` after attempting `require('fs')`).",
+        "branch": "fix/code-mode-exec-tool-description",
+        "head_sha": "e75ca8e7bb34dfc76a6e6dc23397e571353a09e2",
+        "author": "kaspre",
+        "labels": [
+          "agents",
+          "size: XS",
+          "clawsweeper:automerge",
+          "proof: supplied",
+          "proof: sufficient",
+          "P3",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/code-mode.test.ts",
+            "additions": 23,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/code-mode.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": "automerge-openclaw-openclaw-84269",
+        "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84269.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84269",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84269.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "SUCCESS": 72,
+            "SKIPPED": 29,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      }
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2700,
+    "total_ms": 17894,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2347
+        "ms": 515
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2302
       },
       {
         "name": "classify_commands",
@@ -85,7 +159,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 340
+        "ms": 15049
       },
       {
         "name": "append_ledger",
