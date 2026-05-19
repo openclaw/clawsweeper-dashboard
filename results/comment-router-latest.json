@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-19T00:23:14.301Z",
+  "generated_at": "2026-05-19T00:23:46.422Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-18T21:23:12.300Z",
+  "since": "2026-05-18T21:23:44.279Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    52036
+    83753
   ],
-  "comment_ids": [
-    4335039278
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 10,
+  "commands_seen": 6,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,116 +31,646 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:52036:4335039278:2026-05-19T00:21:43Z:clawsweeper_auto_repair",
-      "comment_id": "4335039278",
-      "comment_version_key": "4335039278:2026-05-19T00:21:43Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/52036#issuecomment-4335039278",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:83753:4481957087:2026-05-19T00:23:41Z:clawsweeper_needs_human",
+      "comment_id": "4481957087",
+      "comment_version_key": "4481957087:2026-05-19T00:23:41Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83753#issuecomment-4481957087",
       "repo": "openclaw/openclaw",
-      "issue_number": 52036,
+      "issue_number": 83753,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-28T12:05:23Z",
-      "comment_updated_at": "2026-05-19T00:21:43Z",
+      "comment_created_at": "2026-05-18T20:40:11Z",
+      "comment_updated_at": "2026-05-19T00:23:41Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=135fdf395d79b886a6f3aea9dc0fad8f46ce4fce)",
-      "review_summary": "The branch adds promise-chain serialization around guarded session appends, moves pending tool-call tracking before persistence, and adds concurrent append regression tests.\n\nReproducibility: yes. for the PR regressions by source inspection: the mutex defers guardedAppend through Promise.then and pending tracking runs before the blockable write hook. I did not establish a live current-main reproduction of the original concurrent append race during this read-only review.",
-      "review_followup": "External PR needs contributor revision, rebase, and real behavior proof; automation should not repair around missing contributor-side proof for this branch.",
+      "repair_reason": "Human maintainer review is required because the PR has the protected maintainer label and intentionally changes doctor repair sequencing plus privileged systemd repair routing; no narrow automated repair is identified.; Cleared: No concrete security or supply-chain regression was found; the patch changes doctor repair code and tests without adding dependencies or broadening secret handling, and the systemd path keep... (sha=4d24b89c1b234a1d587cb074edee86191ced62da)",
+      "review_summary": "Converts shell completion, startup channel maintenance, systemd linger, and browser residue doctor maintenance into positional structured health-check detect/repair paths with focused tests.\n\nReproducibility: not applicable. this is a doctor health-conversion PR rather than a current-main bug report. The changed behavior is source-checkable, and the PR body includes WSL live CLI proof for the shell-completion lint path plus focused tests for the converted checks.",
+      "review_followup": "Human maintainer review is required because the PR has the protected maintainer label and intentionally changes doctor repair sequencing plus privileged systemd repair routing; no narrow automated repair is identified.",
       "freeform_prompt": null,
-      "expected_head_sha": "135fdf395d79b886a6f3aea9dc0fad8f46ce4fce",
+      "expected_head_sha": "4d24b89c1b234a1d587cb074edee86191ced62da",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix: serialize concurrent appendMessage calls to prevent synthetic flush race",
-        "body": "# fix: serialize concurrent appendMessage calls to prevent synthetic flush race\n\n## Problem\n\nOpenClaw's `session-tool-result-guard` incorrectly generates **synthetic error tool results** during normal agent operation when multiple async event handlers dispatch `appendMessage` concurrently. Users experience this as:\n\n- Spurious `[tool call failed — synthetic result]` entries in session transcripts\n- Duplicate or corrupted conversation histories (real result appended after synthetic)\n- Agent loops that halt unexpectedly because the guard believes tool calls went unanswered\n\nAffects any scenario where the event bus fires multiple listeners that each call `appendMessage` without awaiting the previous call — common during agent completion and parallel tool dispatch.\n\nCloses #38432, #13351, #15008.\n\n---\n\n## Root Cause\n\nTwo interacting bugs in `session-tool-result-guard.ts`:\n\n### Bug 1: No serialization of concurrent `guardedAppend` callers\n\nThe guard maintains a shared `Map<string, string>` called `pending` (tool call ID → tool name). The flush conditions that synthesize error results check `pending.size > 0` and fire on any non-`toolResult` message arriving while IDs are registered:\n\n```\nTick 1:  Handler A → guardedAppend(assistantMsg with tool_calls)\n           → pending.set(\"call_1\", \"read_file\")\n           → originalAppend(assistantMsg)  ← async, yields to event loop\n\nTick 2:  Handler B → guardedAppend(assistantMsg completion, no tools)\n           → pending.size > 0 → flushPendingToolResults() fires 🔥\n           → synthetic error written for \"call_1\"\n           → pending.clear()\n\nTick 3:  Handler A resumes / real toolResult arrives\n           → pending.delete(\"call_1\")  ← no-op, already cleared\n           → originalAppend(real toolResult) appended AFTER synthetic\n           → Transcript: [tool_calls, synthetic_error, real_result] ❌\n```\n\nBecause `guardedAppend` is `async`-capable (it returns whatever `originalAppend` returns, which may be a Promise), any awaited I/O inside `originalAppend` creates a window where a second concurrent caller observes `pending.size > 0` and flushes prematurely.\n\n### Bug 2: `pending.set()` called after `originalAppend()`\n\nTool call IDs were registered in `pending` **after** `originalAppend(message)` was called. If `originalAppend` is async and yields, a concurrent `toolResult` for the same ID could arrive during that window, find the ID absent from `pending`, skip the delete, and leave the ID permanently registered — triggering a spurious synthetic on the next non-`toolResult` message.\n\n---\n\n## Fix\n\n**2 files changed, +167 / −25 lines.**\n\n### 1. Cooperative async mutex (`session-tool-result-guard.ts`)\n\nA minimal promise-chain mutex (`createMutex()`) wraps the entire body of `guardedAppend`. Each call acquires the lock before executing and releases it on completion (including on error), so concurrent callers execute strictly sequentially in arrival order:\n\n```typescript\nfunction createMutex() {\n  let queue: Promise<void> = Promise.resolve();\n  return {\n    run<T>(fn: () => T | Promise<T>): Promise<T> {\n      const result = queue.then(() => fn());\n      queue = result.then(() => undefined, () => undefined);\n      return result;\n    },\n  };\n}\n```\n\nThe guard body is split into `guardedAppendInner` (logic) and `guardedAppend` (mutex wrapper), keeping the public installation API unchanged.\n\n### 2. Reorder `pending.set()` to before `originalAppend()`\n\nTool call IDs are now registered in `pending` **before** `originalAppend(message)` is called, eliminating the window where a concurrent `toolResult` could arrive and find a missing ID:\n\n```typescript\n// Register BEFORE appending so a racing toolResult handler finds the IDs\nif (toolCalls.length > 0) {\n  for (const call of toolCalls) {\n    pending.set(call.id, call.name);\n  }\n}\nconst result = originalAppend(message as never);\n```\n\nNo new npm dependencies. No changes to `session-tool-result-guard-wrapper.ts`.\n\n---\n\n## Testing\n\n**9/9 tests passing** (6 existing + 3 new).\n\n### New concurrent tests added to `session-tool-result-guard.test.ts`:\n\n| Test | What it covers |\n|---|---|\n| `does not synthesize when toolResult arrives concurrently with next assistant message` | Exact Tick 1/2/3 race scenario — fires `toolResult` and a completion message as concurrent microtasks; asserts no synthetic is written and real result is preserved |\n| `serializes multiple concurrent appends without duplicating messages` | Two tool results dispatched concurrently for a two-tool assistant message; asserts exactly 3 messages with no synthetics |\n| `getPendingIds() returns empty after concurrent resolution` | Confirms `pending` Map is fully drained after concurrent resolution (no leaked IDs that would trigger future spurious flushes) |\n\nAll three new tests **fail on the unpatched code** and pass on the patched code, confirming they directly exercise the bug.\n\n---\n\n## Breaking Changes\n\n`guardedAppend` now always returns `Promise<ReturnType<typeof originalAppend>>` rather than `ReturnType<typeof originalAppend>` directly.\n\n**This is safe because:**\n- Callers of `sessionManager.appendMessage` are already in async contexts — they either `await` the result or discard it\n- The TypeScript type for `SessionManager[\"appendMessage\"]` accepts a Promise return; `tsc --noEmit` passes clean\n- The public API surface (`installSessionToolResultGuard` signature) is unchanged\n\n---\n\n## Performance\n\nThe mutex adds one `Promise.resolve()` microtask chain per `appendMessage` call — approximately **0.01 ms overhead per call** in V8.\n\nA typical tool-heavy agent turn (10 tool calls) incurs ~0.12 ms of added latency total. This is well below perception threshold and undetectable in any real workload benchmark.\n\nThe mutex does not slow the common path: in the correct (non-racing) case, concurrent callers would have executed sequentially anyway. The mutex prevents the _incorrect_ fast path where two handlers race to mutate `pending`.\n\n> **Why not lock-free?** JavaScript is single-threaded within a Worker — \"concurrency\" here is cooperative (at `await` yield points), not preemptive. A promise-chain mutex is the idiomatic, zero-overhead solution. Lock-free data structures would add complexity with no benefit.\n\n---\n\n## Checklist\n\n- [x] `tsc --noEmit` passes clean\n- [x] 9/9 tests pass\n- [x] New tests fail on unpatched code (regression gate confirmed)\n- [x] No new npm dependencies\n- [x] `installSessionToolResultGuard` public API unchanged\n- [x] Closes #38432, #13351, #15008\n",
-        "branch": "fix/session-tool-result-guard-race",
-        "head_sha": "135fdf395d79b886a6f3aea9dc0fad8f46ce4fce",
-        "author": "vanek-nutic",
+        "title": "Doctor: convert interactive maintenance checks",
+        "body": "## Summary\r\n\r\nConverts the next interactive doctor maintenance bucket to the structured `detect()` / `repair()` health contract introduced by #83198 while preserving the original doctor contribution order:\r\n\r\n- shell completion detection and cached-completion repair\r\n- startup channel maintenance as a repair-only structured health check\r\n- Linux systemd linger detection and guided repair for local Gateway services\r\n\r\nThe important follow-up in this revision is that converted repairs no longer run from a separate early `doctor:structured-health-repairs` contribution. Each converted contribution now invokes its mapped health check from its existing slot in the doctor order, so the contract changes without changing sequencing. This also realigns the first merged health-check slice from #80055: detect-only checks keep their existing contribution positions, skills repair remains ordered at `doctor:skills`, and the browser residue repair added by #83230 runs from `doctor:browser`. Existing conversion metadata still advertises `healthCheckIds` for lint filtering and conversion tracking.\r\n\r\n## Behavior\r\n\r\n- `doctor --lint` can report shell-completion and systemd-linger findings without mutating state.\r\n- `doctor --lint --only core/doctor/shell-completion` stays quiet when shell completion is simply not installed, because completion install is optional.\r\n- `doctor --fix` runs converted `repair()` paths at the same point where the legacy contribution previously ran, then validates with the same scoped `detect()` logic.\r\n- Startup channel maintenance remains repair-only: it is intentionally quiet in lint mode, but participates in the structured repair pipeline during `doctor --fix` at the startup-channel contribution position.\r\n- Browser clawd-profile residue repair from the earlier conversion path is also kept at the browser contribution position rather than an early bulk pass.\r\n\r\n## Real Behavior Proof\r\n\r\n- **Behavior addressed**: Follow-up doctor maintenance checks migrate from legacy `run(ctx)` repair logic into structured health checks without changing the user-facing repair order; optional shell completion installs do not become lint failures.\r\n- **Real environment tested**: WSL Ubuntu checkout cloned from `giodl73-repo/openclaw:doctor-detection-interactive-maintenance` after the latest push, plus the same patch copied into the WSL proof checkout for targeted verification before push.\r\n- **Exact steps or command run after this patch**:\r\n\r\n```bash\r\npnpm openclaw doctor --lint --only core/doctor/shell-completion --json\r\n\r\nnode node_modules/vitest/vitest.mjs run \\\r\n  src/commands/doctor-completion.test.ts \\\r\n  src/commands/systemd-linger.test.ts \\\r\n  src/flows/doctor-startup-channel-maintenance.test.ts \\\r\n  src/flows/doctor-core-checks.test.ts \\\r\n  src/flows/doctor-repair-flow.test.ts \\\r\n  src/flows/doctor-health-conversion-plan.test.ts \\\r\n  src/flows/doctor-health-contributions.test.ts \\\r\n  --reporter=dot\r\n\r\npnpm exec oxfmt --check --threads=1 \\\r\n  src/flows/doctor-health-contributions.ts \\\r\n  src/flows/doctor-health-contributions.test.ts \\\r\n  src/flows/doctor-health-conversion-plan.ts\r\n\r\ngit diff --check\r\n```\r\n\r\nEarlier focused conversion proof on this branch also ran:\r\n\r\n```bash\r\nCI=1 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 \\\r\n  pnpm test \\\r\n    src/commands/doctor-completion.test.ts \\\r\n    src/commands/systemd-linger.test.ts \\\r\n    src/flows/doctor-startup-channel-maintenance.test.ts \\\r\n    src/flows/doctor-core-checks.test.ts \\\r\n    src/flows/doctor-repair-flow.test.ts \\\r\n    src/flows/doctor-health-conversion-plan.test.ts \\\r\n    -- --reporter=dot\r\n\r\nnode node_modules/@typescript/native-preview/bin/tsgo.js -p tsconfig.core.json --noEmit --incremental false --pretty false\r\nnode node_modules/@typescript/native-preview/bin/tsgo.js -p test/tsconfig/tsconfig.core.test.json --noEmit --incremental false --pretty false\r\npnpm exec oxfmt --check --threads=1 src/commands/doctor-completion.ts src/commands/doctor-completion.test.ts src/commands/systemd-linger.ts src/commands/systemd-linger.test.ts src/flows/doctor-core-checks.ts src/flows/doctor-health-contributions.ts src/flows/doctor-startup-channel-maintenance.test.ts src/flows/health-checks.ts\r\ngit diff --check\r\n```\r\n\r\n- **Evidence after fix**: The real CLI lint proof returned:\r\n\r\n```json\r\n{\"ok\":true,\"checksRun\":1,\"checksSkipped\":19,\"findings\":[]}\r\n```\r\n\r\nThe latest focused order-alignment proof passed:\r\n\r\n```text\r\n7 test files passed / 48 tests passed\r\nAll matched files use the correct format.\r\ngit diff --check passed\r\n```\r\n\r\nEarlier conversion proof passed 3 Vitest shards: 6 test files, 26 tests. Both core and test `tsgo` checks completed with no output. `oxfmt --check` reported all matched files use the correct format. `git diff --check` passed.\r\n\r\n- **Observed result after fix**: Shell completion, startup channel maintenance, systemd linger, and the contribution-order conversion plan are covered by focused tests. The real `doctor --lint --only core/doctor/shell-completion --json` command runs the converted health check and remains clean when completion is optional/missing.\r\n- **What was not tested**: No live systemd service was modified. The systemd linger repair path is covered with injected `loginctl` dependencies rather than changing the host login manager. I did not run a live shell-profile `doctor --fix` install because that would modify the proof host profile; the cache/install repair behavior is covered by injected repair tests.\r\n\r\n## Verification\r\n\r\n- Real WSL CLI proof: `pnpm openclaw doctor --lint --only core/doctor/shell-completion --json` passed with no findings.\r\n- Latest focused WSL regression tests: 7 files / 48 tests passed.\r\n- Earlier WSL focused conversion test command above: passed.\r\n- `tsgo` core + core test configs: passed.\r\n- `oxfmt --check` on changed files: passed.\r\n- `git diff --check`: passed.\r\n\r\n",
+        "branch": "doctor-detection-interactive-maintenance",
+        "head_sha": "4d24b89c1b234a1d587cb074edee86191ced62da",
+        "author": "giodl73-repo",
         "labels": [
-          "agents",
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
+          "commands",
+          "maintainer",
+          "size: L",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "src/agents/session-tool-result-guard.test.ts",
-            "additions": 114,
+            "path": "src/commands/doctor-completion.test.ts",
+            "additions": 87,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/commands/doctor-completion.ts",
+            "additions": 146,
+            "deletions": 77,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/systemd-linger.test.ts",
+            "additions": 132,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/commands/systemd-linger.ts",
+            "additions": 157,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-core-checks.test.ts",
+            "additions": 19,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-core-checks.ts",
+            "additions": 119,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/session-tool-result-guard.ts",
-            "additions": 39,
-            "deletions": 5,
+            "path": "src/flows/doctor-health-contributions.test.ts",
+            "additions": 69,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-health-contributions.ts",
+            "additions": 54,
+            "deletions": 18,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-health-conversion-plan.ts",
+            "additions": 5,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-startup-channel-maintenance.test.ts",
+            "additions": 45,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/health-checks.ts",
+            "additions": 7,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-52036",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-52036.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83753",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83753.md",
         "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 47,
+          "total": 100,
           "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 29,
-            "SKIPPED": 17
+            "SUCCESS": 81,
+            "SKIPPED": 18,
+            "NEUTRAL": 1
           },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
+          "terminalBlockers": []
         }
       },
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83753:4483304763:2026-05-19T00:08:19Z:re_review",
+      "comment_id": "4483304763",
+      "comment_version_key": "4483304763:2026-05-19T00:08:19Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83753#issuecomment-4483304763",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83753,
+      "author": "giodl73-repo",
+      "author_id": 235387111,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-19T00:08:19Z",
+      "comment_updated_at": "2026-05-19T00:08:19Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "write",
+      "target": {
+        "kind": "pull_request",
+        "title": "Doctor: convert interactive maintenance checks",
+        "body": "## Summary\r\n\r\nConverts the next interactive doctor maintenance bucket to the structured `detect()` / `repair()` health contract introduced by #83198 while preserving the original doctor contribution order:\r\n\r\n- shell completion detection and cached-completion repair\r\n- startup channel maintenance as a repair-only structured health check\r\n- Linux systemd linger detection and guided repair for local Gateway services\r\n\r\nThe important follow-up in this revision is that converted repairs no longer run from a separate early `doctor:structured-health-repairs` contribution. Each converted contribution now invokes its mapped health check from its existing slot in the doctor order, so the contract changes without changing sequencing. This also realigns the first merged health-check slice from #80055: detect-only checks keep their existing contribution positions, skills repair remains ordered at `doctor:skills`, and the browser residue repair added by #83230 runs from `doctor:browser`. Existing conversion metadata still advertises `healthCheckIds` for lint filtering and conversion tracking.\r\n\r\n## Behavior\r\n\r\n- `doctor --lint` can report shell-completion and systemd-linger findings without mutating state.\r\n- `doctor --lint --only core/doctor/shell-completion` stays quiet when shell completion is simply not installed, because completion install is optional.\r\n- `doctor --fix` runs converted `repair()` paths at the same point where the legacy contribution previously ran, then validates with the same scoped `detect()` logic.\r\n- Startup channel maintenance remains repair-only: it is intentionally quiet in lint mode, but participates in the structured repair pipeline during `doctor --fix` at the startup-channel contribution position.\r\n- Browser clawd-profile residue repair from the earlier conversion path is also kept at the browser contribution position rather than an early bulk pass.\r\n\r\n## Real Behavior Proof\r\n\r\n- **Behavior addressed**: Follow-up doctor maintenance checks migrate from legacy `run(ctx)` repair logic into structured health checks without changing the user-facing repair order; optional shell completion installs do not become lint failures.\r\n- **Real environment tested**: WSL Ubuntu checkout cloned from `giodl73-repo/openclaw:doctor-detection-interactive-maintenance` after the latest push, plus the same patch copied into the WSL proof checkout for targeted verification before push.\r\n- **Exact steps or command run after this patch**:\r\n\r\n```bash\r\npnpm openclaw doctor --lint --only core/doctor/shell-completion --json\r\n\r\nnode node_modules/vitest/vitest.mjs run \\\r\n  src/commands/doctor-completion.test.ts \\\r\n  src/commands/systemd-linger.test.ts \\\r\n  src/flows/doctor-startup-channel-maintenance.test.ts \\\r\n  src/flows/doctor-core-checks.test.ts \\\r\n  src/flows/doctor-repair-flow.test.ts \\\r\n  src/flows/doctor-health-conversion-plan.test.ts \\\r\n  src/flows/doctor-health-contributions.test.ts \\\r\n  --reporter=dot\r\n\r\npnpm exec oxfmt --check --threads=1 \\\r\n  src/flows/doctor-health-contributions.ts \\\r\n  src/flows/doctor-health-contributions.test.ts \\\r\n  src/flows/doctor-health-conversion-plan.ts\r\n\r\ngit diff --check\r\n```\r\n\r\nEarlier focused conversion proof on this branch also ran:\r\n\r\n```bash\r\nCI=1 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 \\\r\n  pnpm test \\\r\n    src/commands/doctor-completion.test.ts \\\r\n    src/commands/systemd-linger.test.ts \\\r\n    src/flows/doctor-startup-channel-maintenance.test.ts \\\r\n    src/flows/doctor-core-checks.test.ts \\\r\n    src/flows/doctor-repair-flow.test.ts \\\r\n    src/flows/doctor-health-conversion-plan.test.ts \\\r\n    -- --reporter=dot\r\n\r\nnode node_modules/@typescript/native-preview/bin/tsgo.js -p tsconfig.core.json --noEmit --incremental false --pretty false\r\nnode node_modules/@typescript/native-preview/bin/tsgo.js -p test/tsconfig/tsconfig.core.test.json --noEmit --incremental false --pretty false\r\npnpm exec oxfmt --check --threads=1 src/commands/doctor-completion.ts src/commands/doctor-completion.test.ts src/commands/systemd-linger.ts src/commands/systemd-linger.test.ts src/flows/doctor-core-checks.ts src/flows/doctor-health-contributions.ts src/flows/doctor-startup-channel-maintenance.test.ts src/flows/health-checks.ts\r\ngit diff --check\r\n```\r\n\r\n- **Evidence after fix**: The real CLI lint proof returned:\r\n\r\n```json\r\n{\"ok\":true,\"checksRun\":1,\"checksSkipped\":19,\"findings\":[]}\r\n```\r\n\r\nThe latest focused order-alignment proof passed:\r\n\r\n```text\r\n7 test files passed / 48 tests passed\r\nAll matched files use the correct format.\r\ngit diff --check passed\r\n```\r\n\r\nEarlier conversion proof passed 3 Vitest shards: 6 test files, 26 tests. Both core and test `tsgo` checks completed with no output. `oxfmt --check` reported all matched files use the correct format. `git diff --check` passed.\r\n\r\n- **Observed result after fix**: Shell completion, startup channel maintenance, systemd linger, and the contribution-order conversion plan are covered by focused tests. The real `doctor --lint --only core/doctor/shell-completion --json` command runs the converted health check and remains clean when completion is optional/missing.\r\n- **What was not tested**: No live systemd service was modified. The systemd linger repair path is covered with injected `loginctl` dependencies rather than changing the host login manager. I did not run a live shell-profile `doctor --fix` install because that would modify the proof host profile; the cache/install repair behavior is covered by injected repair tests.\r\n\r\n## Verification\r\n\r\n- Real WSL CLI proof: `pnpm openclaw doctor --lint --only core/doctor/shell-completion --json` passed with no findings.\r\n- Latest focused WSL regression tests: 7 files / 48 tests passed.\r\n- Earlier WSL focused conversion test command above: passed.\r\n- `tsgo` core + core test configs: passed.\r\n- `oxfmt --check` on changed files: passed.\r\n- `git diff --check`: passed.\r\n\r\n",
+        "branch": "doctor-detection-interactive-maintenance",
+        "head_sha": "4d24b89c1b234a1d587cb074edee86191ced62da",
+        "author": "giodl73-repo",
+        "labels": [
+          "commands",
+          "maintainer",
+          "size: L",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/commands/doctor-completion.test.ts",
+            "additions": 87,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/commands/doctor-completion.ts",
+            "additions": 146,
+            "deletions": 77,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/systemd-linger.test.ts",
+            "additions": 132,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/commands/systemd-linger.ts",
+            "additions": 157,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-core-checks.test.ts",
+            "additions": 19,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-core-checks.ts",
+            "additions": 119,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-health-contributions.test.ts",
+            "additions": 69,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-health-contributions.ts",
+            "additions": 54,
+            "deletions": 18,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-health-conversion-plan.ts",
+            "additions": 5,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-startup-channel-maintenance.test.ts",
+            "additions": 45,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/health-checks.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83753",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83753.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 100,
+          "counts": {
+            "SUCCESS": 81,
+            "SKIPPED": 18,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83753:4482955236:2026-05-18T22:55:20Z:re_review",
+      "comment_id": "4482955236",
+      "comment_version_key": "4482955236:2026-05-18T22:55:20Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83753#issuecomment-4482955236",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83753,
+      "author": "giodl73-repo",
+      "author_id": 235387111,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-18T22:55:20Z",
+      "comment_updated_at": "2026-05-18T22:55:20Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83753:4482882441:2026-05-18T22:41:04Z:re_review",
+      "comment_id": "4482882441",
+      "comment_version_key": "4482882441:2026-05-18T22:41:04Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83753#issuecomment-4482882441",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83753,
+      "author": "giodl73-repo",
+      "author_id": 235387111,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-18T22:41:04Z",
+      "comment_updated_at": "2026-05-18T22:41:04Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "write",
+      "target": {
+        "kind": "pull_request",
+        "title": "Doctor: convert interactive maintenance checks",
+        "body": "## Summary\r\n\r\nConverts the next interactive doctor maintenance bucket to the structured `detect()` / `repair()` health contract introduced by #83198 while preserving the original doctor contribution order:\r\n\r\n- shell completion detection and cached-completion repair\r\n- startup channel maintenance as a repair-only structured health check\r\n- Linux systemd linger detection and guided repair for local Gateway services\r\n\r\nThe important follow-up in this revision is that converted repairs no longer run from a separate early `doctor:structured-health-repairs` contribution. Each converted contribution now invokes its mapped health check from its existing slot in the doctor order, so the contract changes without changing sequencing. This also realigns the first merged health-check slice from #80055: detect-only checks keep their existing contribution positions, skills repair remains ordered at `doctor:skills`, and the browser residue repair added by #83230 runs from `doctor:browser`. Existing conversion metadata still advertises `healthCheckIds` for lint filtering and conversion tracking.\r\n\r\n## Behavior\r\n\r\n- `doctor --lint` can report shell-completion and systemd-linger findings without mutating state.\r\n- `doctor --lint --only core/doctor/shell-completion` stays quiet when shell completion is simply not installed, because completion install is optional.\r\n- `doctor --fix` runs converted `repair()` paths at the same point where the legacy contribution previously ran, then validates with the same scoped `detect()` logic.\r\n- Startup channel maintenance remains repair-only: it is intentionally quiet in lint mode, but participates in the structured repair pipeline during `doctor --fix` at the startup-channel contribution position.\r\n- Browser clawd-profile residue repair from the earlier conversion path is also kept at the browser contribution position rather than an early bulk pass.\r\n\r\n## Real Behavior Proof\r\n\r\n- **Behavior addressed**: Follow-up doctor maintenance checks migrate from legacy `run(ctx)` repair logic into structured health checks without changing the user-facing repair order; optional shell completion installs do not become lint failures.\r\n- **Real environment tested**: WSL Ubuntu checkout cloned from `giodl73-repo/openclaw:doctor-detection-interactive-maintenance` after the latest push, plus the same patch copied into the WSL proof checkout for targeted verification before push.\r\n- **Exact steps or command run after this patch**:\r\n\r\n```bash\r\npnpm openclaw doctor --lint --only core/doctor/shell-completion --json\r\n\r\nnode node_modules/vitest/vitest.mjs run \\\r\n  src/commands/doctor-completion.test.ts \\\r\n  src/commands/systemd-linger.test.ts \\\r\n  src/flows/doctor-startup-channel-maintenance.test.ts \\\r\n  src/flows/doctor-core-checks.test.ts \\\r\n  src/flows/doctor-repair-flow.test.ts \\\r\n  src/flows/doctor-health-conversion-plan.test.ts \\\r\n  src/flows/doctor-health-contributions.test.ts \\\r\n  --reporter=dot\r\n\r\npnpm exec oxfmt --check --threads=1 \\\r\n  src/flows/doctor-health-contributions.ts \\\r\n  src/flows/doctor-health-contributions.test.ts \\\r\n  src/flows/doctor-health-conversion-plan.ts\r\n\r\ngit diff --check\r\n```\r\n\r\nEarlier focused conversion proof on this branch also ran:\r\n\r\n```bash\r\nCI=1 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 \\\r\n  pnpm test \\\r\n    src/commands/doctor-completion.test.ts \\\r\n    src/commands/systemd-linger.test.ts \\\r\n    src/flows/doctor-startup-channel-maintenance.test.ts \\\r\n    src/flows/doctor-core-checks.test.ts \\\r\n    src/flows/doctor-repair-flow.test.ts \\\r\n    src/flows/doctor-health-conversion-plan.test.ts \\\r\n    -- --reporter=dot\r\n\r\nnode node_modules/@typescript/native-preview/bin/tsgo.js -p tsconfig.core.json --noEmit --incremental false --pretty false\r\nnode node_modules/@typescript/native-preview/bin/tsgo.js -p test/tsconfig/tsconfig.core.test.json --noEmit --incremental false --pretty false\r\npnpm exec oxfmt --check --threads=1 src/commands/doctor-completion.ts src/commands/doctor-completion.test.ts src/commands/systemd-linger.ts src/commands/systemd-linger.test.ts src/flows/doctor-core-checks.ts src/flows/doctor-health-contributions.ts src/flows/doctor-startup-channel-maintenance.test.ts src/flows/health-checks.ts\r\ngit diff --check\r\n```\r\n\r\n- **Evidence after fix**: The real CLI lint proof returned:\r\n\r\n```json\r\n{\"ok\":true,\"checksRun\":1,\"checksSkipped\":19,\"findings\":[]}\r\n```\r\n\r\nThe latest focused order-alignment proof passed:\r\n\r\n```text\r\n7 test files passed / 48 tests passed\r\nAll matched files use the correct format.\r\ngit diff --check passed\r\n```\r\n\r\nEarlier conversion proof passed 3 Vitest shards: 6 test files, 26 tests. Both core and test `tsgo` checks completed with no output. `oxfmt --check` reported all matched files use the correct format. `git diff --check` passed.\r\n\r\n- **Observed result after fix**: Shell completion, startup channel maintenance, systemd linger, and the contribution-order conversion plan are covered by focused tests. The real `doctor --lint --only core/doctor/shell-completion --json` command runs the converted health check and remains clean when completion is optional/missing.\r\n- **What was not tested**: No live systemd service was modified. The systemd linger repair path is covered with injected `loginctl` dependencies rather than changing the host login manager. I did not run a live shell-profile `doctor --fix` install because that would modify the proof host profile; the cache/install repair behavior is covered by injected repair tests.\r\n\r\n## Verification\r\n\r\n- Real WSL CLI proof: `pnpm openclaw doctor --lint --only core/doctor/shell-completion --json` passed with no findings.\r\n- Latest focused WSL regression tests: 7 files / 48 tests passed.\r\n- Earlier WSL focused conversion test command above: passed.\r\n- `tsgo` core + core test configs: passed.\r\n- `oxfmt --check` on changed files: passed.\r\n- `git diff --check`: passed.\r\n\r\n",
+        "branch": "doctor-detection-interactive-maintenance",
+        "head_sha": "4d24b89c1b234a1d587cb074edee86191ced62da",
+        "author": "giodl73-repo",
+        "labels": [
+          "commands",
+          "maintainer",
+          "size: L",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/commands/doctor-completion.test.ts",
+            "additions": 87,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/commands/doctor-completion.ts",
+            "additions": 146,
+            "deletions": 77,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/systemd-linger.test.ts",
+            "additions": 132,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/commands/systemd-linger.ts",
+            "additions": 157,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-core-checks.test.ts",
+            "additions": 19,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-core-checks.ts",
+            "additions": 119,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-health-contributions.test.ts",
+            "additions": 69,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-health-contributions.ts",
+            "additions": 54,
+            "deletions": 18,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-health-conversion-plan.ts",
+            "additions": 5,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-startup-channel-maintenance.test.ts",
+            "additions": 45,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/health-checks.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83753",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83753.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 100,
+          "counts": {
+            "SUCCESS": 81,
+            "SKIPPED": 18,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83753:4482407076:2026-05-18T21:30:04Z:re_review",
+      "comment_id": "4482407076",
+      "comment_version_key": "4482407076:2026-05-18T21:30:04Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83753#issuecomment-4482407076",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83753,
+      "author": "giodl73-repo",
+      "author_id": 235387111,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-18T21:30:04Z",
+      "comment_updated_at": "2026-05-18T21:30:04Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "write",
+      "target": {
+        "kind": "pull_request",
+        "title": "Doctor: convert interactive maintenance checks",
+        "body": "## Summary\r\n\r\nConverts the next interactive doctor maintenance bucket to the structured `detect()` / `repair()` health contract introduced by #83198 while preserving the original doctor contribution order:\r\n\r\n- shell completion detection and cached-completion repair\r\n- startup channel maintenance as a repair-only structured health check\r\n- Linux systemd linger detection and guided repair for local Gateway services\r\n\r\nThe important follow-up in this revision is that converted repairs no longer run from a separate early `doctor:structured-health-repairs` contribution. Each converted contribution now invokes its mapped health check from its existing slot in the doctor order, so the contract changes without changing sequencing. This also realigns the first merged health-check slice from #80055: detect-only checks keep their existing contribution positions, skills repair remains ordered at `doctor:skills`, and the browser residue repair added by #83230 runs from `doctor:browser`. Existing conversion metadata still advertises `healthCheckIds` for lint filtering and conversion tracking.\r\n\r\n## Behavior\r\n\r\n- `doctor --lint` can report shell-completion and systemd-linger findings without mutating state.\r\n- `doctor --lint --only core/doctor/shell-completion` stays quiet when shell completion is simply not installed, because completion install is optional.\r\n- `doctor --fix` runs converted `repair()` paths at the same point where the legacy contribution previously ran, then validates with the same scoped `detect()` logic.\r\n- Startup channel maintenance remains repair-only: it is intentionally quiet in lint mode, but participates in the structured repair pipeline during `doctor --fix` at the startup-channel contribution position.\r\n- Browser clawd-profile residue repair from the earlier conversion path is also kept at the browser contribution position rather than an early bulk pass.\r\n\r\n## Real Behavior Proof\r\n\r\n- **Behavior addressed**: Follow-up doctor maintenance checks migrate from legacy `run(ctx)` repair logic into structured health checks without changing the user-facing repair order; optional shell completion installs do not become lint failures.\r\n- **Real environment tested**: WSL Ubuntu checkout cloned from `giodl73-repo/openclaw:doctor-detection-interactive-maintenance` after the latest push, plus the same patch copied into the WSL proof checkout for targeted verification before push.\r\n- **Exact steps or command run after this patch**:\r\n\r\n```bash\r\npnpm openclaw doctor --lint --only core/doctor/shell-completion --json\r\n\r\nnode node_modules/vitest/vitest.mjs run \\\r\n  src/commands/doctor-completion.test.ts \\\r\n  src/commands/systemd-linger.test.ts \\\r\n  src/flows/doctor-startup-channel-maintenance.test.ts \\\r\n  src/flows/doctor-core-checks.test.ts \\\r\n  src/flows/doctor-repair-flow.test.ts \\\r\n  src/flows/doctor-health-conversion-plan.test.ts \\\r\n  src/flows/doctor-health-contributions.test.ts \\\r\n  --reporter=dot\r\n\r\npnpm exec oxfmt --check --threads=1 \\\r\n  src/flows/doctor-health-contributions.ts \\\r\n  src/flows/doctor-health-contributions.test.ts \\\r\n  src/flows/doctor-health-conversion-plan.ts\r\n\r\ngit diff --check\r\n```\r\n\r\nEarlier focused conversion proof on this branch also ran:\r\n\r\n```bash\r\nCI=1 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 \\\r\n  pnpm test \\\r\n    src/commands/doctor-completion.test.ts \\\r\n    src/commands/systemd-linger.test.ts \\\r\n    src/flows/doctor-startup-channel-maintenance.test.ts \\\r\n    src/flows/doctor-core-checks.test.ts \\\r\n    src/flows/doctor-repair-flow.test.ts \\\r\n    src/flows/doctor-health-conversion-plan.test.ts \\\r\n    -- --reporter=dot\r\n\r\nnode node_modules/@typescript/native-preview/bin/tsgo.js -p tsconfig.core.json --noEmit --incremental false --pretty false\r\nnode node_modules/@typescript/native-preview/bin/tsgo.js -p test/tsconfig/tsconfig.core.test.json --noEmit --incremental false --pretty false\r\npnpm exec oxfmt --check --threads=1 src/commands/doctor-completion.ts src/commands/doctor-completion.test.ts src/commands/systemd-linger.ts src/commands/systemd-linger.test.ts src/flows/doctor-core-checks.ts src/flows/doctor-health-contributions.ts src/flows/doctor-startup-channel-maintenance.test.ts src/flows/health-checks.ts\r\ngit diff --check\r\n```\r\n\r\n- **Evidence after fix**: The real CLI lint proof returned:\r\n\r\n```json\r\n{\"ok\":true,\"checksRun\":1,\"checksSkipped\":19,\"findings\":[]}\r\n```\r\n\r\nThe latest focused order-alignment proof passed:\r\n\r\n```text\r\n7 test files passed / 48 tests passed\r\nAll matched files use the correct format.\r\ngit diff --check passed\r\n```\r\n\r\nEarlier conversion proof passed 3 Vitest shards: 6 test files, 26 tests. Both core and test `tsgo` checks completed with no output. `oxfmt --check` reported all matched files use the correct format. `git diff --check` passed.\r\n\r\n- **Observed result after fix**: Shell completion, startup channel maintenance, systemd linger, and the contribution-order conversion plan are covered by focused tests. The real `doctor --lint --only core/doctor/shell-completion --json` command runs the converted health check and remains clean when completion is optional/missing.\r\n- **What was not tested**: No live systemd service was modified. The systemd linger repair path is covered with injected `loginctl` dependencies rather than changing the host login manager. I did not run a live shell-profile `doctor --fix` install because that would modify the proof host profile; the cache/install repair behavior is covered by injected repair tests.\r\n\r\n## Verification\r\n\r\n- Real WSL CLI proof: `pnpm openclaw doctor --lint --only core/doctor/shell-completion --json` passed with no findings.\r\n- Latest focused WSL regression tests: 7 files / 48 tests passed.\r\n- Earlier WSL focused conversion test command above: passed.\r\n- `tsgo` core + core test configs: passed.\r\n- `oxfmt --check` on changed files: passed.\r\n- `git diff --check`: passed.\r\n\r\n",
+        "branch": "doctor-detection-interactive-maintenance",
+        "head_sha": "4d24b89c1b234a1d587cb074edee86191ced62da",
+        "author": "giodl73-repo",
+        "labels": [
+          "commands",
+          "maintainer",
+          "size: L",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/commands/doctor-completion.test.ts",
+            "additions": 87,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/commands/doctor-completion.ts",
+            "additions": 146,
+            "deletions": 77,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/systemd-linger.test.ts",
+            "additions": 132,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/commands/systemd-linger.ts",
+            "additions": 157,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-core-checks.test.ts",
+            "additions": 19,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-core-checks.ts",
+            "additions": 119,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-health-contributions.test.ts",
+            "additions": 69,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-health-contributions.ts",
+            "additions": 54,
+            "deletions": 18,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-health-conversion-plan.ts",
+            "additions": 5,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-startup-channel-maintenance.test.ts",
+            "additions": 45,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/health-checks.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83753",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83753.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 100,
+          "counts": {
+            "SUCCESS": 81,
+            "SKIPPED": 18,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83753:4482359257:2026-05-18T21:24:35Z:re_review",
+      "comment_id": "4482359257",
+      "comment_version_key": "4482359257:2026-05-18T21:24:35Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83753#issuecomment-4482359257",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83753,
+      "author": "giodl73-repo",
+      "author_id": 235387111,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-18T21:24:35Z",
+      "comment_updated_at": "2026-05-18T21:24:35Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2309,
+    "total_ms": 3841,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 829
+        "ms": 254
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1161
+        "ms": 1871
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 298
+        "ms": 1687
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
