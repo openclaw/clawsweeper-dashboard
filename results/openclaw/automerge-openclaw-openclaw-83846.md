@@ -2,21 +2,21 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-83846"
 mode: "autonomous"
-run_id: "26072515204"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26072515204"
+run_id: "26074579013"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26074579013"
 head_sha: "cb3d70ceec0f45ad6fce3b7c6f1c32d5c1ba86be"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-19T02:39:06.123Z"
+published_at: "2026-05-19T03:48:13.149Z"
 canonical: "#83846"
 canonical_issue: null
 canonical_pr: "#83846"
 actions_total: 1
 fix_executed: 0
-fix_failed: 1
+fix_failed: 0
 fix_blocked: 1
 apply_executed: 0
-apply_blocked: 0
+apply_blocked: 1
 apply_skipped: 0
 needs_human_count: 0
 ---
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/26072515204](https://github.com/openclaw/clawsweeper/actions/runs/26072515204)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/26074579013](https://github.com/openclaw/clawsweeper/actions/runs/26074579013)
 
 Workflow conclusion: success
 
@@ -43,10 +43,10 @@ Make PR #83846 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 | --- | ---: |
 | Worker actions | 1 |
 | Fix executed | 0 |
-| Fix failed | 1 |
+| Fix failed | 0 |
 | Fix blocked | 1 |
 | Applied executions | 0 |
-| Apply blocked | 0 |
+| Apply blocked | 1 |
 | Apply skipped | 0 |
 | Needs human | 0 |
 
@@ -54,15 +54,14 @@ Make PR #83846 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | failed |  |  | command timed out after 300000ms: git fetch origin +refs/pull/83846/head:refs/remotes/clawsweeper/source-pr-83846 |
-| execute_fix | blocked |  |  | command timed out after 300000ms: git fetch origin +refs/pull/83846/head:refs/remotes/clawsweeper/source-pr-83846 |
-| automerge_repair_outcome_comment | updated | #83846 |  |  |
+| repair_contributor_branch | blocked | https://github.com/openclaw/openclaw/pull/83846 |  | GitHub rejected the repair branch push because it updates workflow files and the ClawSweeper app token does not have workflows permission |
+| open_fix_pr | opened | https://github.com/openclaw/openclaw/pull/83969 | clawsweeper/automerge-openclaw-openclaw-83846 |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| #83969 | merge_canonical | blocked | fix_pr | job does not allow merge |
 
 ## Worker Action Matrix
 
