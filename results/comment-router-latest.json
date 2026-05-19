@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-19T20:53:10.804Z",
+  "generated_at": "2026-05-19T20:54:15.743Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-19T17:53:10.397Z",
+  "since": "2026-05-19T17:54:14.012Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    84305
+    84302
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,208 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84302:4491852089:2026-05-19T20:54:10Z:automerge",
+      "comment_id": "4491852089",
+      "comment_version_key": "4491852089:2026-05-19T20:54:10Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84302#issuecomment-4491852089",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84302,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-19T20:39:50Z",
+      "comment_updated_at": "2026-05-19T20:54:10Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "automerge",
+      "intent": "automerge",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": "The PR threads optional shared plugin discovery through plugin registry/loading helpers, adds a scan-scoped package.json manifest cache during discovery, and exposes the parsed package manifest on PluginCandidate.\n\nReproducibility: yes. Source inspection of the latest head shows the cache key omits trust mode, ensurePluginRegistryLoaded eagerly creates shared discovery before active-registry returns, and channel manifest loading does not consume the threaded discovery value.",
+      "review_followup": "There is a narrow automated repair path for the three concrete review blockers before maintainer merge review.",
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "ignored",
+      "actions": [],
+      "author_repository_permission": "none",
+      "target": {
+        "kind": "pull_request",
+        "title": "perf(plugins): scan-scoped package.json cache in discovery",
+        "body": "## Summary\n\nPursuing #3 from the PR comment on #84283: investigate and fix the inner amplifier — why each plugin's `package.json` was being read ~1,565 times per TUI startup.\n\n**Root cause identified:** `runPluginDiscovery` runs two `tracePluginLifecyclePhase(\"discovery scan\")` blocks (scoped + shared), each invoking multiple overlapping helpers (`discoverFromPath`, `discoverInDirectory`) that all call `readCandidatePackageManifest` per candidate. For bundled plugins reachable through multiple roots (stock root + source-checkout extensions + bundled overlays + installed paths + global root), the same `package.json` gets read once per code path per scan — and the per-helper `seen: Set<string>` dedup operates at the candidate level *after* the manifest read happens. The existing `realpathCache` only memoizes realpath resolution, not the JSON parse.\n\n**Fix:** add a per-scan `Map<string, PackageManifest | null>` threaded through the same chain as `realpathCache`, keyed by the directory's resolved real path. Within one scan, the first call to `readCandidatePackageManifest` for a given dir reads from disk; every subsequent call (from a different helper or root) hits the Map. Cache lifetime is one scan — created in `runPluginDiscovery` alongside the existing `seen`/`realpathCache`, dies when the scan returns. `discoverOpenClawPlugins` remains stateless externally.\n\nBuilt on top of #84283 (which threads `discovery?` through outer-scan orchestrators); the two fixes are complementary:\n- #84283: collapses multiple outer scans into one per `ensurePluginRegistryLoaded` invocation.\n- This PR: makes each remaining outer scan read each manifest once instead of N times.\n\n## Expected impact\n\nFrom the original profile (~1,565 reads per extension `package.json`):\n- The scan-scoped cache caps within-scan reads at 1 per file.\n- Combined with #84283, expected post-fix reads per file ≈ **1 × (# of `ensurePluginRegistryLoaded` invocations during one launch)** — typically 1-2 across one CLI/TUI startup.\n- Estimated reduction: from ~1,565 to ~1-2 per file. **~99% of the inner amplifier eliminated.**\n\nNot measured end-to-end yet — single-launch impact depends on overlap of roots in the user's environment. If most reads were already from a single root (no overlap), savings are smaller.\n\n## Test plan\n\n- [x] `node scripts/run-vitest.mjs src/plugins/discovery.test.ts` — 67/67 pass\n- [x] `pnpm tsgo --noEmit --project tsconfig.core.json` — clean\n- [x] `node scripts/run-oxlint.mjs --quiet` on touched file — 0/0\n- [x] `npx oxfmt --check` — clean\n- [ ] End-to-end TUI startup measurement with the perf-trace stash re-applied. Recommended verification before merging — pop the audit-branch perf-trace stash, rebuild, launch TUI, count `json.tryReadJsonSync` lines per `extensions/<id>/package.json` path in `/tmp/openclaw-perf.log`.\n\nBehavior addressed: each plugin's `package.json` was read N times per discovery scan (where N = number of overlapping discovery code paths touching that plugin's root). With this change, each `package.json` is read at most once per scan regardless of how many helpers reach it.\nReal environment tested: macOS, Node 22.22, source checkout. Unit suite passes; runtime measurement deferred to reviewer.\nExact steps or command run after this patch: `node scripts/run-vitest.mjs src/plugins/discovery.test.ts`; `pnpm tsgo --noEmit --project tsconfig.core.json`; `node scripts/run-oxlint.mjs --quiet src/plugins/discovery.ts`; `npx oxfmt --check src/plugins/discovery.ts`.\nEvidence after fix: discovery suite passes 67/67; lint/format/typecheck clean.\nObserved result after fix: cache populates on first read per dir per scan; subsequent reads of the same path within the same scan hit memory.\nWhat was not tested: end-to-end TUI launch read-count delta. The structural correctness of the cache is asserted by the discovery suite; the perf delta requires the maintainer (or me, on direction) to re-instrument and measure on the actual repro setup.\n",
+        "branch": "dallin-perf-candidate-manifest-reuse",
+        "head_sha": "c909256d2e2c68c59e574740e0cc895a6e49fd75",
+        "author": "romneyda",
+        "labels": [
+          "maintainer",
+          "size: M",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 security-boundary",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/plugins/channel-presence-policy.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/config-contracts.ts",
+            "additions": 8,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/discovery-threading.test.ts",
+            "additions": 63,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/plugins/discovery.ts",
+            "additions": 27,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/effective-plugin-ids.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/gateway-startup-plugin-ids.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/installed-plugin-index-registry.ts",
+            "additions": 8,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/installed-plugin-index-types.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/loader.ts",
+            "additions": 17,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/manifest-contract-eligibility.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/manifest-registry.ts",
+            "additions": 9,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/plugin-metadata-snapshot.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/plugin-metadata-snapshot.types.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/runtime/runtime-registry-loader.ts",
+            "additions": 14,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84302",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84302.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 31,
+          "counts": {
+            "SUCCESS": 8,
+            "QUEUED": 10,
+            "SKIPPED": 13
+          },
+          "blockers": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
+    }
+  ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 723,
+    "total_ms": 1981,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 399
+        "ms": 365
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1352
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 316
+        "ms": 249
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
