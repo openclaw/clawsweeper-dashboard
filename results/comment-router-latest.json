@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-20T23:54:37.704Z",
+  "generated_at": "2026-05-20T23:56:12.287Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-20T20:54:37.268Z",
+  "since": "2026-05-20T20:56:10.149Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    84731
+    84728
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 4,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,158 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84728:4503492722:2026-05-20T23:56:05Z:automerge",
+      "comment_id": "4503492722",
+      "comment_version_key": "4503492722:2026-05-20T23:56:05Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84728#issuecomment-4503492722",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84728,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-20T23:32:27Z",
+      "comment_updated_at": "2026-05-20T23:56:05Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "automerge",
+      "intent": "automerge",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": "The PR adds a Codex app-server transcript repair helper that inserts synthetic custom_tool_call_output records for orphaned custom_tool_call items before resuming a bound native Codex thread.\n\nReproducibility: yes. The linked issue and PR body include live 2026.5.19 restart logs plus a redacted native rollout shape, and upstream Codex 0.132.0 source confirms that a custom_tool_call without custom_tool_call_output triggers the reported missing-output error.",
+      "review_followup": "A narrow automated repair can make the scanner streaming/bounded and add the missing large-rollout regression coverage without a product decision.",
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "ignored",
+      "actions": [],
+      "author_repository_permission": "none",
+      "target": {
+        "kind": "pull_request",
+        "title": "Repair orphaned Codex custom tool outputs before resume",
+        "body": "Fixes #84727\n\n## What changed\n\n- Adds a Codex rollout transcript repair helper that scans bound native rollout JSONL files for `custom_tool_call` items missing a matching `custom_tool_call_output`.\n- Runs that repair before resuming a bound Codex app-server thread, so restart-aborted turns do not poison future resumes.\n- Inserts a synthetic interrupted output immediately after each orphaned custom tool call and logs the repair count.\n- Adds focused coverage for orphan repair and for leaving already-paired calls unchanged.\n\n## Proof of the issue\n\nObserved during a live `2026.5.19` gateway restart:\n\n```text\n2026-05-20T21:31:38.479Z WARN still draining 2 active task(s) and 1 active embedded run(s) before restart\n2026-05-20T21:31:38.506Z WARN active embedded run drain grace reached; aborting active run(s) before restart\n2026-05-20T21:31:38.522Z WARN drain timeout reached; proceeding with restart\n```\n\nThe app-server then repeatedly logged the invalid transcript state:\n\n```text\ncustom missing count: 29\nfirst: 2026-05-20T21:33:12.565Z ... Custom tool call output is missing for call id: call_<redacted>\nlast:  2026-05-20T23:12:07.703Z ... Custom tool call output is missing for call id: call_<redacted>\n```\n\nThe Codex native rollout had the persisted call but no output before local manual repair:\n\n```text\nrollout-<timestamp>-<thread-id>.jsonl\nline 28: payload.type=custom_tool_call call_id=call_<redacted> name=exec\n(no matching custom_tool_call_output)\n```\n\n## Real behavior proof\n\nBehavior or issue addressed: Repair a real Codex native rollout transcript that was corrupted by an OpenClaw gateway restart abort. The rollout contained custom_tool_call records without matching custom_tool_call_output records, causing repeated Codex app-server stderr errors on resume.\n\nReal environment tested: Local OpenClaw setup upgraded to 2026.5.19; affected rollout backup copied from `$OPENCLAW_HOME/agents/<agent-id>/agent/codex-home/sessions/<date>/rollout-<timestamp>-<thread-id>.jsonl.backup`.\n\nExact steps or command run after this patch: Copied the actual bad rollout backup to a temporary file, then ran the new repairCodexRolloutMissingCustomToolOutputs helper against that copy with node --import tsx.\n\n```bash\ntmp=/tmp/openclaw-codex-orphan-proof.jsonl\ncp \"$OPENCLAW_HOME/agents/<agent-id>/agent/codex-home/sessions/<date>/rollout-<timestamp>-<thread-id>.jsonl.backup\" \"$tmp\"\nnode --import tsx -e 'import { repairCodexRolloutMissingCustomToolOutputs } from \"./extensions/codex/src/app-server/transcript-repair.ts\"; ...' \"$tmp\"\n```\n\nEvidence after fix: Live output from the real rollout copy showed the helper scanned and repaired the affected file, inserting synthetic outputs and specifically covering the observed orphaned call shape.\n\n```json\n{\n  \"beforeCallOccurrences\": 57,\n  \"repair\": {\n    \"scannedFiles\": 1,\n    \"repairedFiles\": 1,\n    \"insertedOutputs\": 2\n  },\n  \"hasSyntheticOutputForObservedCall\": true\n}\n```\n\nObserved result after fix: The observed orphaned call shape had a synthetic custom_tool_call_output after repair, proving the new repair path fixes the exact corrupted transcript shape seen during the gateway restart.\n\nWhat was not tested: I did not run a live gateway restart with the patched branch installed; the live proof uses the actual corrupted rollout backup from the incident and the new repair helper directly.\n\n## Automated validation\n\nFocused regression test:\n\n```text\nOPENCLAW_VITEST_INCLUDE_FILE=/tmp/openclaw-codex-test-include.json node scripts/run-vitest.mjs run --config test/vitest/vitest.extensions.config.ts\n\nTest Files  1 passed (1)\nTests       2 passed (2)\n```\n\nAdditional validation:\n\n```text\npnpm exec oxfmt --check extensions/codex/src/app-server/transcript-repair.ts extensions/codex/src/app-server/transcript-repair.test.ts extensions/codex/src/app-server/run-attempt.ts\nAll matched files use the correct format.\n\npnpm exec oxlint extensions/codex/src/app-server/transcript-repair.ts extensions/codex/src/app-server/transcript-repair.test.ts extensions/codex/src/app-server/run-attempt.ts --tsconfig config/tsconfig/oxlint.extensions.json\nFound 0 warnings and 0 errors.\n\npnpm test:extensions:package-boundary:compile -- extensions/codex\nextension package boundary check passed\ncompiled plugins: 108\n```\n",
+        "branch": "fix/codex-orphan-tool-output-recovery",
+        "head_sha": "701b8241cf19dba0469a7a2b6645f8c6b0db7969",
+        "author": "pfrederiksen",
+        "labels": [
+          "size: M",
+          "extensions: codex",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "extensions/codex/src/app-server/run-attempt.ts",
+            "additions": 26,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/transcript-repair.test.ts",
+            "additions": 92,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/transcript-repair.ts",
+            "additions": 154,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84728",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84728.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 64,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84728:4503544441:2026-05-20T23:44:12Z:re_review",
+      "comment_id": "4503544441",
+      "comment_version_key": "4503544441:2026-05-20T23:44:12Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84728#issuecomment-4503544441",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84728,
+      "author": "pfrederiksen",
+      "author_id": 908172,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-20T23:44:12Z",
+      "comment_updated_at": "2026-05-20T23:44:12Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    }
+  ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 785,
+    "total_ms": 3113,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 418
+        "ms": 270
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1852
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 350
+        "ms": 975
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
