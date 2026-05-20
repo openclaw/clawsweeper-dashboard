@@ -1,15 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-20T11:09:24.042Z",
+  "generated_at": "2026-05-20T11:09:35.198Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-20T08:09:23.564Z",
+  "since": "2026-05-20T08:09:31.600Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    84542
+    84267
+  ],
+  "comment_ids": [
+    4497719735
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -29,26 +32,177 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84267:4497719735:2026-05-20T11:07:30Z:re_review",
+      "comment_id": "4497719735",
+      "comment_version_key": "4497719735:2026-05-20T11:07:30Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84267#issuecomment-4497719735",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84267,
+      "author": "tianxiaochannel-oss88",
+      "author_id": 272340815,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-20T11:07:30Z",
+      "comment_updated_at": "2026-05-20T11:07:30Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-05-20T11:09:36.480Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 84267
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-20T11:09:37.790Z",
+          "response_comment_id": null,
+          "response_comment_mode": "created"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): recover invalid OpenAI Responses reasoning replay",
+        "body": "Fixes the OpenAI Responses half of #84002.\n\nThis intentionally does not change Slack main/thread session routing. The issue combines two continuation failures; this PR addresses the deterministic Responses replay failure where preserved encrypted reasoning can be rejected with `thinking_signature_invalid`.\n\n## Root cause\n\nOpenAI Responses can reject a replayed encrypted reasoning item when the stored `rs_*` content is no longer verifiable. Current history cleanup only drops replayable OpenAI reasoning when the model snapshot changes or when the reasoning block is orphaned, so a same-provider/same-model continuation can replay the stale encrypted reasoning again.\n\nThat error was also classified as a generic schema/format rejection, so terminal failures surfaced as \"provider rejected the request schema\" instead of a replay-state recovery error.\n\n## What changed\n\n- Classify `thinking_signature_invalid` and encrypted reasoning verification/decryption failures as replay-invalid.\n- Wrap OpenAI Responses stream calls with a one-shot recovery path:\n  - if the request fails before any streamed chunk, or the current Responses transport emits a pre-start assistant `error` event/result with invalid encrypted reasoning, drop replayable OpenAI reasoning blocks\n  - downgrade paired `call|fc` tool call ids after dropping reasoning\n  - retry the same model call once\n  - keep dropping replayable reasoning for later calls in the same session wrapper after recovery is activated\n- Do not retry if any stream chunk was already yielded, to avoid duplicate visible output/events.\n\n## User impact\n\nA Slack or channel continuation that hits stale OpenAI Responses encrypted reasoning should get one clean retry instead of ending the turn with no visible assistant content. If the retry still fails, the user-facing error now points to invalid session/replay state instead of a generic schema rejection.\n\n## Real behavior proof\n\nBehavior or issue addressed: OpenAI Responses continuation recovery for `thinking_signature_invalid` / invalid encrypted reasoning replay.\n\nReal environment tested: Local OpenClaw checkout on this PR branch at original proof head `edc7ccba2a0ab7a3f972362b5ee74753ff0fb302`, then rebased/verified again at current PR head `09f8de688fbfc88e49ac7dd3c27101a0b8a16142`, on macOS with Node `v24.15.0`. The committed proof harness uses the real OpenAI SDK HTTP transport and OpenClaw's current `createOpenAIResponsesTransportStreamFn()` plus `wrapOpenAIResponsesStreamWithReplayRecovery()` against a loopback `/v1/responses` endpoint. It does not mock the OpenAI SDK; the loopback endpoint returns provider-shaped HTTP 400 and SSE responses so reviewers can inspect the request/retry payload transition.\n\nExact steps or command run after this patch:\n\n```text\nnode --import tsx scripts/proofs/openai-responses-replay-recovery.ts\n```\n\nEvidence after fix:\n\n```text\n[openai-transport] [responses] error provider=openai api=openai-responses model=gpt-5.4 name=Error status=400 code=thinking_signature_invalid type=invalid_request_error causeName=undefined causeCode=undefined message=400 The encrypted content for item rs_real_transport_proof could not be verified. Reason: Encrypted content could not be decrypted or parsed.\n[agent/embedded] [session-recovery] OpenAI Responses reasoning replay rejected; retrying once without replayable reasoning: sessionId=real-http-transport-proof-session\nOpenAI Responses replay recovery proof: PASS\nRuntime path: real OpenAI SDK HTTP transport against loopback /v1/responses\nMocking: no vi.mock/openai SDK mock; loopback server returns provider-shaped HTTP/SSE\nRequests observed: 2\nRequest paths: /v1/responses, /v1/responses\nFirst response: HTTP 400 thinking_signature_invalid\nFirst request input types: reasoning, message\nRetry request input types: message\nRetry dropped replayed reasoning: true\nRetry preserved replayed message: true\nRecovered assistant text: recovered via real http transport\nFinal stopReason: stop\n```\n\nObserved result after fix: The first real SDK HTTP request contains replayed `reasoning` and receives a provider-shaped `thinking_signature_invalid` 400. The wrapper retries once. The second real SDK HTTP request drops replayed `reasoning`, preserves the replayed visible `message`, consumes the SSE response, and returns assistant text with `stopReason: stop`.\n\nCommitted inspectable proof: `scripts/proofs/openai-responses-replay-recovery.ts` is the manual proof harness. `src/agents/pi-embedded-runner/openai-responses-transport-replay-recovery.test.ts` remains the regression test that locks in the mocked-SDK transport error-event path.\n\nWhat was not tested: Live Slack and live OpenAI Responses were not used. Slack session routing from #84002 is intentionally out of scope for this PR.\n\n## Exact steps or command run after this patch\n\n```text\nnode --import tsx scripts/proofs/openai-responses-replay-recovery.ts\n./node_modules/.bin/oxlint --tsconfig config/tsconfig/oxlint.scripts.json scripts/proofs/openai-responses-replay-recovery.ts\nnode scripts/run-vitest.mjs src/agents/pi-embedded-runner/openai-responses-transport-replay-recovery.test.ts\nnode scripts/run-vitest.mjs src/agents/pi-embedded-runner/thinking.test.ts\nnode scripts/run-vitest.mjs src/agents/pi-embedded-helpers.formatassistanterrortext.test.ts\nnode scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo\ngit diff --check\n```\n\nRebase refresh at current PR head `09f8de688fbfc88e49ac7dd3c27101a0b8a16142`:\n\n```text\nnode --import tsx scripts/proofs/openai-responses-replay-recovery.ts\n./node_modules/.bin/oxlint --tsconfig config/tsconfig/oxlint.scripts.json scripts/proofs/openai-responses-replay-recovery.ts\nnode scripts/run-vitest.mjs src/agents/pi-embedded-runner/openai-responses-transport-replay-recovery.test.ts\nnode scripts/run-vitest.mjs src/agents/pi-embedded-runner/thinking.test.ts\nnode scripts/run-vitest.mjs src/agents/pi-embedded-helpers.formatassistanterrortext.test.ts\nnode scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo\ngit diff --check\n```\n\n## Validation\n\n```text\nopenai-responses-replay-recovery.ts proof harness: PASS\nscript oxlint: 0 warnings, 0 errors\nopenai-responses-transport-replay-recovery.test.ts: 2 test files, 2 tests passed\nthinking.test.ts: 33 passed\npi-embedded-helpers.formatassistanterrortext.test.ts: 64 passed\ntsgo core: passed\ngit diff --check: passed\nrebase refresh: proof harness PASS, oxlint 0 warnings/0 errors, transport recovery tests 2 passed, thinking tests 33 passed, format assistant error text tests 64 passed, tsgo core passed, git diff --check passed\n```\n",
+        "branch": "fix/responses-thinking-signature-clean-retry",
+        "head_sha": "09f8de688fbfc88e49ac7dd3c27101a0b8a16142",
+        "author": "tianxiaochannel-oss88",
+        "labels": [
+          "scripts",
+          "agents",
+          "size: L",
+          "proof: supplied",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "scripts/proofs/openai-responses-replay-recovery.ts",
+            "additions": 275,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/pi-embedded-helpers.formatassistanterrortext.test.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-helpers/errors.ts",
+            "additions": 7,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/openai-responses-transport-replay-recovery.test.ts",
+            "additions": 160,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
+            "additions": 9,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/thinking.test.ts",
+            "additions": 276,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/thinking.ts",
+            "additions": 170,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84267",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84267.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "counts": {
+            "SUCCESS": 66,
+            "SKIPPED": 21,
+            "IN_PROGRESS": 8,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
+            "checks-node-core-runtime-infra-state:IN_PROGRESS",
+            "checks-node-agentic-commands-models:IN_PROGRESS",
+            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
+          ],
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
+            "checks-node-core-runtime-infra-state:IN_PROGRESS",
+            "checks-node-agentic-commands-models:IN_PROGRESS",
+            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
+          ],
+          "terminalBlockers": []
+        }
+      }
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 839,
+    "total_ms": 7010,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 467
+        "ms": 1809
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1774
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 362
+        "ms": 3400
       },
       {
         "name": "append_ledger",
