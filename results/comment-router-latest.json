@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-20T07:06:15.740Z",
+  "generated_at": "2026-05-20T07:06:28.347Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-20T04:06:12.911Z",
+  "since": "2026-05-20T04:06:23.542Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     71648
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4416195672
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 8,
-  "commands_seen": 3,
-  "actionable": 1,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -55,287 +57,210 @@
       "review_summary": "The PR wraps MCP bridge pending Claude permission and approval entries with timestamps, adds lazy TTL sweeping plus close-time cleanup, and adds regression tests for expiration and lifecycle behavior.\n\nReproducibility: yes. Current main source shows both pending Maps persist until matching replies or resolved frames arrive, and the PR body supplies a real wall-clock base/head probe for the Claude permission map.",
       "review_followup": "No automated repair is needed; the remaining action is maintainer acceptance of the TTL compatibility tradeoff and coordination with related pending-permission follow-up work.",
       "freeform_prompt": null,
-      "expected_head_sha": "eb69de7135a0cabd215a0189b1c3666165cb6934",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(mcp): bound pendingClaudePermissions / pendingApprovals via TTL sweeper + close clear",
-        "body": "## Summary\n\n- **Problem**: `OpenClawChannelBridge` (`src/mcp/channel-bridge.ts`) holds two instance-bound pending Maps — `pendingClaudePermissions` (L50) and `pendingApprovals` (L51) — that lack TTL/sweeper, close-clear, and cap. Sibling collections in the same class (`queue` cap=1000 at L355, `pendingWaiters` close-clear at L148 + per-waiter `setTimeout` fallback at L265) are all bounded; only these two are not.\n- **Why it matters**: long-running `openclaw mcp serve` accumulates entries on (a) missed Claude permission replies (operator typos / cross-channel responses / `--dangerously-skip-permissions`) and (b) gateway WebSocket drops that silence `*.approval.resolved` frames (`onClose` at L122-124 is reject-only, no missed-event catchup).\n- **What changed**: lazy-start a 5-min `sweepPendingExpired()` interval, `.unref()`'d so it never keeps the process alive. Per-Map TTL — 1h for Claude permissions (anchored at `createdAtMs`), respects `payload.expiresAtMs` for approvals (falls back to `trackedAtMs + 30min` when absent). `close()` now clears both Maps and stops the sweeper. Handler entry early-returns when `this.closed` to prevent post-close ghost writes.\n- **What did NOT change**: public `listPendingApprovals` shape, message protocols, or any other class collection. `cap`/FIFO is intentionally split to a follow-up PR (one-thing-per-PR; sweeper covers the slow leak, cap addresses adversarial bursts).\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor required for the fix\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all touched areas)\n\n- [x] Memory / storage\n- [x] Integrations\n- [ ] Gateway / orchestration\n- [ ] Skills / tool execution\n- [ ] Auth / tokens\n- [ ] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\nCloses #71646.\n\n- [x] This PR fixes a bug or regression\n\n## Root Cause\n\nUpstream commit history shows `channel-bridge.ts` evolving across refactor/seam-split commits over the last 6 weeks, but no commit added a TTL/sweep/cap guard for these two pending Maps. The asymmetry is structural:\n\n| Collection | Cap | Close-clear | TTL / sweeper | Status |\n|---|---|---|---|---|\n| `queue` (Array, L48) | `QUEUE_LIMIT=1000` while-shift | n/a | n/a | bounded |\n| `pendingWaiters` (Set, L49) | n/a | `close()` clears (L148) | per-waiter `setTimeout` (L265) | bounded |\n| `pendingClaudePermissions` (Map, L50) | none | none | none | **leaks** |\n| `pendingApprovals` (Map, L51) | none | none | `expiresAtMs` stored at L382 but never drives a timer | **leaks** |\n\n`pendingClaudePermissions` only deletes when the operator reply matches `/^(yes|no)\\s+([a-km-z]{5})$/i` AND `has(requestId)` is true (L455-459) — a single conditional-edge cleanup. `pendingApprovals` only deletes on the matching `*.resolved` frame (L389) — another single conditional-edge. No primary unconditional cleanup path exists.\n\n## Regression Test Plan\n\nNew file `src/mcp/channel-bridge.test.ts` (7 it blocks, fake timers, no production-branch divergence):\n\n1. `pendingClaudePermissions` evicted by sweeper at TTL boundary\n2. `pendingApprovals` evicted at `expiresAtMs`\n3. `pendingApprovals` evicted at default TTL fallback when `expiresAtMs` is absent\n4. `pendingApprovals` evicted even when **both** `createdAtMs` and `expiresAtMs` are absent (regression test for the `now`-anchored fallback bug caught in pre-PR review)\n5. `close()` clears both Maps, stops the sweeper interval, and `vi.getTimerCount() === 0`\n6. `handleClaudePermissionRequest` is a no-op after `close()` — prevents post-close ghost writes\n7. Sweeper interval is not started before any pending entry is added (lazy-init)\n\n`channel-server.test.ts:366` fixture updated to the new `{request, createdAtMs}` wrapper shape.\n\n## User-visible / Behavior Changes\n\n- Long-running `openclaw mcp serve` sees pending Map sizes converge to a steady state instead of growing monotonically.\n- Operators who never reply to a Claude `permission_request` no longer keep the entry forever; it expires after 1h and the next `permission_request` for the same tool starts fresh.\n- Approvals announced over a dropped gateway WebSocket are auto-evicted at `expiresAtMs` (or `trackedAtMs + 30min` if the gateway omitted `expiresAtMs`).\n- No protocol surface changes; client tools see no difference.\n\n## Security Impact\n\nNone. The fix is purely about bounded memory growth in an opt-in long-running daemon. No auth / scope / token / sandbox surface touched. CODEOWNERS protected paths (`/src/cron/service/jobs.ts`, `/src/cron/stagger.ts`, `/src/agents/*auth*`, `/src/agents/sandbox*`) untouched.\n\n## Repro + Verification\n\n### Environment\n\n- pnpm 10.33.0 / Node (project default) / vitest 4.1.5\n- Worktree: clean checkout of upstream/main + this branch\n- Platform: macOS (Darwin 25.4.0)\n\n### Steps\n\n```sh\npnpm install\npnpm check                                                       # type + lint\npnpm build                                                       # build\npnpm exec vitest run src/mcp/channel-bridge.test.ts              # new tests\npnpm exec vitest run src/mcp/channel-server.test.ts              # existing mcp tests after fixture sync\npnpm exec vitest run --config test/vitest/vitest.unit.config.ts  # unit project regression\n```\n\n### Expected\n\nAll green. New file 7/7. Existing channel-server 6/6. Unit project 1575/1575 (was 1573 pre-fix; +2 from new file's count vs prior file count).\n\n### Actual\n\n```\nsrc/mcp/channel-bridge.test.ts: Tests 7 passed (7), 640ms\nsrc/mcp/channel-server.test.ts: Tests 6 passed (6)\nunit project: Test Files 189 passed (189), Tests 1575 passed (1575), 6.48s\npnpm check: clean\npnpm build: clean\n```\n\n## Evidence\n\n- `src/mcp/channel-bridge.ts:50-51` — pre-fix declarations of the two leaking Maps\n- `src/mcp/channel-bridge.ts:136-152` — pre-fix `close()` body (only `pendingWaiters.clear()`)\n- `src/mcp/channel-bridge.ts:355-356` — pre-existing `queue` cap pattern (sibling reference)\n- `src/mcp/channel-bridge.ts:265-267` — pre-existing per-waiter `setTimeout` (sibling reference)\n- Diff: ~80 lines prod (channel-bridge.ts +89 -4) + 9 lines fixture sync (channel-server.test.ts) + 173 lines new test file\n\n## Human Verification\n\nI confirm I have reviewed every diff hunk, ran the build/check/test suites locally, and the regression tests fail on `upstream/main` (no fix) and pass on this branch (with fix).\n\n## Review Conversations\n\nThis is a fresh PR. No prior review threads.\n\n## Compatibility / Migration\n\nFully backwards-compatible. No public API, no protocol field, no config surface changed. The internal Map value shape (`{request, createdAtMs}` wrapper, `{approval, trackedAtMs}` wrapper) is private — only the test that previously cast through `Record<string, unknown>` was updated to match.\n\n## Risks and Mitigations\n\n- **Risk**: TTL constants (`PENDING_CLAUDE_PERMISSION_TTL_MS=1h`, `PENDING_APPROVAL_DEFAULT_TTL_MS=30min`, `PENDING_SWEEP_INTERVAL_MS=5min`) are hardcoded.\n  **Mitigation**: chosen for low operator-disruption (`1h` is longer than typical permission-think time; `30min` matches existing `expiresAtMs` field intent). Happy to migrate to a config surface in a follow-up if requested.\n- **Risk**: PR #56420 (sessionKey binding, OPEN) touches the same `set()` line in `handleClaudePermissionRequest`.\n  **Mitigation**: line-level rebase only; semantic axes are orthogonal (binding vs leak). Whichever PR merges first, the other rebases cleanly.\n- **Risk**: `cap`/FIFO is not in this PR — adversarial bursts within a single sweep tick (5min) could still grow large in pathological cases.\n  **Mitigation**: deferred to a follow-up PR (one-thing-per-PR). Sweeper closes the slow leak that motivated the report; cap is a separate concern.\n\n---\n\n🤖 AI-Assisted (openclaw-audit pipeline). 5-agent post-harness cross-review (proceed: 4 real + 1 fix-insufficient → cap deferred to follow-up). 3-agent pre-PR cross-review round 1 caught a fallback-recalculation bug in the original sweeper (`createdAtMs ?? now` re-anchored expiry on every tick) → fixed via `trackedAtMs` instance bookkeeping; round 2 cleared 3/3 real-problem-real-fix.\n\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Without this patch, OpenClawChannelBridge.pendingClaudePermissions grows unbounded: the class starts no setInterval, so nothing evicts entries left behind by Claude permission requests that never get a matching reply. With this patch, the lazy ensurePendingSweeper() starts a real (unref'd) setInterval that evicts entries past PENDING_CLAUDE_PERMISSION_TTL_MS. This measurement uses the real Node.js wall clock and the production 1-hour TTL — no vi.useFakeTimers().\n- **Real environment tested**: macOS (darwin arm64), Node 23.x, isolated OPENCLAW_HOME. Both builds run the same probe against worktree src via tsx (no bundling). Production constants unchanged: PENDING_CLAUDE_PERMISSION_TTL_MS = 1h, PENDING_SWEEP_INTERVAL_MS = 5min.\n- **Exact steps or command run after this patch**:\n\n```text\n$ pnpm install --frozen-lockfile           (both worktrees)\n$ node_modules/.bin/tsx <probe>.mts        (real setTimeout sleep, ~70.0 min)\n  probe: new OpenClawChannelBridge(...), 100x handleClaudePermissionRequest(),\n         real wall-clock sleep past the 1h TTL, then read pendingClaudePermissions.size\n```\n\n- **Evidence after fix**:\n\nLive Node.js measurement of bridge.pendingClaudePermissions.size with a real setTimeout sleep across the production 1-hour TTL boundary:\n\n```text\n[Build A] without this patch (base sha, no sweeper code):\n  before=0 afterSet=100 afterTtl=100 sweeperPresent=False sleptMin=77.4\n  -> Map still full after the TTL window: no eviction happened.\n\n[Build B] with this patch (head sha, TTL sweeper):\n  before=0 afterSet=100 afterTtl=0 sweeperPresent=True sleptMin=70.0\n  -> real setInterval sweeper drained the Map after the 1h TTL.\n```\n\n- **Observed result after fix**: With the patch, pendingClaudePermissions.size after the 1h TTL window = 0 (down from 100 set). Without the patch it stays at 100. The sweeper is a real unref'd setInterval driven by the real wall clock - no fake timer.\n- **What was not tested**: pendingApprovals (the second Map) shares the same sweepPendingExpired() pass and is covered by the unit suite rather than this wall-clock probe. Cap-based eviction is a separate, intentional follow-up axis.\n\n",
-        "branch": "fix/mcp-channel-bridge-pending-leak",
-        "head_sha": "eb69de7135a0cabd215a0189b1c3666165cb6934",
-        "author": "feelw00",
-        "labels": [
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/mcp/channel-bridge.test.ts",
-            "additions": 212,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/mcp/channel-bridge.ts",
-            "additions": 85,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/mcp/channel-server.test.ts",
-            "additions": 6,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-71648",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-71648.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 114,
-          "counts": {
-            "SUCCESS": 85,
-            "SKIPPED": 28,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
-        }
-      },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:71648:4494943426:2026-05-20T05:51:09Z:re_review",
-      "comment_id": "4494943426",
-      "comment_version_key": "4494943426:2026-05-20T05:51:09Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/71648#issuecomment-4494943426",
-      "repo": "openclaw/openclaw",
-      "issue_number": 71648,
-      "author": "Feelw00",
-      "author_id": 45638585,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T05:51:09Z",
-      "comment_updated_at": "2026-05-20T05:51:09Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-20T07:06:16.630Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 71648
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-20T07:06:17.773Z",
-          "response_comment_id": "4494955699",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
+      "status": "ignored",
+      "actions": [],
+      "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix(mcp): bound pendingClaudePermissions / pendingApprovals via TTL sweeper + close clear",
-        "body": "## Summary\n\n- **Problem**: `OpenClawChannelBridge` (`src/mcp/channel-bridge.ts`) holds two instance-bound pending Maps — `pendingClaudePermissions` (L50) and `pendingApprovals` (L51) — that lack TTL/sweeper, close-clear, and cap. Sibling collections in the same class (`queue` cap=1000 at L355, `pendingWaiters` close-clear at L148 + per-waiter `setTimeout` fallback at L265) are all bounded; only these two are not.\n- **Why it matters**: long-running `openclaw mcp serve` accumulates entries on (a) missed Claude permission replies (operator typos / cross-channel responses / `--dangerously-skip-permissions`) and (b) gateway WebSocket drops that silence `*.approval.resolved` frames (`onClose` at L122-124 is reject-only, no missed-event catchup).\n- **What changed**: lazy-start a 5-min `sweepPendingExpired()` interval, `.unref()`'d so it never keeps the process alive. Per-Map TTL — 1h for Claude permissions (anchored at `createdAtMs`), respects `payload.expiresAtMs` for approvals (falls back to `trackedAtMs + 30min` when absent). `close()` now clears both Maps and stops the sweeper. Handler entry early-returns when `this.closed` to prevent post-close ghost writes.\n- **What did NOT change**: public `listPendingApprovals` shape, message protocols, or any other class collection. `cap`/FIFO is intentionally split to a follow-up PR (one-thing-per-PR; sweeper covers the slow leak, cap addresses adversarial bursts).\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor required for the fix\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all touched areas)\n\n- [x] Memory / storage\n- [x] Integrations\n- [ ] Gateway / orchestration\n- [ ] Skills / tool execution\n- [ ] Auth / tokens\n- [ ] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\nCloses #71646.\n\n- [x] This PR fixes a bug or regression\n\n## Root Cause\n\nUpstream commit history shows `channel-bridge.ts` evolving across refactor/seam-split commits over the last 6 weeks, but no commit added a TTL/sweep/cap guard for these two pending Maps. The asymmetry is structural:\n\n| Collection | Cap | Close-clear | TTL / sweeper | Status |\n|---|---|---|---|---|\n| `queue` (Array, L48) | `QUEUE_LIMIT=1000` while-shift | n/a | n/a | bounded |\n| `pendingWaiters` (Set, L49) | n/a | `close()` clears (L148) | per-waiter `setTimeout` (L265) | bounded |\n| `pendingClaudePermissions` (Map, L50) | none | none | none | **leaks** |\n| `pendingApprovals` (Map, L51) | none | none | `expiresAtMs` stored at L382 but never drives a timer | **leaks** |\n\n`pendingClaudePermissions` only deletes when the operator reply matches `/^(yes|no)\\s+([a-km-z]{5})$/i` AND `has(requestId)` is true (L455-459) — a single conditional-edge cleanup. `pendingApprovals` only deletes on the matching `*.resolved` frame (L389) — another single conditional-edge. No primary unconditional cleanup path exists.\n\n## Regression Test Plan\n\nNew file `src/mcp/channel-bridge.test.ts` (7 it blocks, fake timers, no production-branch divergence):\n\n1. `pendingClaudePermissions` evicted by sweeper at TTL boundary\n2. `pendingApprovals` evicted at `expiresAtMs`\n3. `pendingApprovals` evicted at default TTL fallback when `expiresAtMs` is absent\n4. `pendingApprovals` evicted even when **both** `createdAtMs` and `expiresAtMs` are absent (regression test for the `now`-anchored fallback bug caught in pre-PR review)\n5. `close()` clears both Maps, stops the sweeper interval, and `vi.getTimerCount() === 0`\n6. `handleClaudePermissionRequest` is a no-op after `close()` — prevents post-close ghost writes\n7. Sweeper interval is not started before any pending entry is added (lazy-init)\n\n`channel-server.test.ts:366` fixture updated to the new `{request, createdAtMs}` wrapper shape.\n\n## User-visible / Behavior Changes\n\n- Long-running `openclaw mcp serve` sees pending Map sizes converge to a steady state instead of growing monotonically.\n- Operators who never reply to a Claude `permission_request` no longer keep the entry forever; it expires after 1h and the next `permission_request` for the same tool starts fresh.\n- Approvals announced over a dropped gateway WebSocket are auto-evicted at `expiresAtMs` (or `trackedAtMs + 30min` if the gateway omitted `expiresAtMs`).\n- No protocol surface changes; client tools see no difference.\n\n## Security Impact\n\nNone. The fix is purely about bounded memory growth in an opt-in long-running daemon. No auth / scope / token / sandbox surface touched. CODEOWNERS protected paths (`/src/cron/service/jobs.ts`, `/src/cron/stagger.ts`, `/src/agents/*auth*`, `/src/agents/sandbox*`) untouched.\n\n## Repro + Verification\n\n### Environment\n\n- pnpm 10.33.0 / Node (project default) / vitest 4.1.5\n- Worktree: clean checkout of upstream/main + this branch\n- Platform: macOS (Darwin 25.4.0)\n\n### Steps\n\n```sh\npnpm install\npnpm check                                                       # type + lint\npnpm build                                                       # build\npnpm exec vitest run src/mcp/channel-bridge.test.ts              # new tests\npnpm exec vitest run src/mcp/channel-server.test.ts              # existing mcp tests after fixture sync\npnpm exec vitest run --config test/vitest/vitest.unit.config.ts  # unit project regression\n```\n\n### Expected\n\nAll green. New file 7/7. Existing channel-server 6/6. Unit project 1575/1575 (was 1573 pre-fix; +2 from new file's count vs prior file count).\n\n### Actual\n\n```\nsrc/mcp/channel-bridge.test.ts: Tests 7 passed (7), 640ms\nsrc/mcp/channel-server.test.ts: Tests 6 passed (6)\nunit project: Test Files 189 passed (189), Tests 1575 passed (1575), 6.48s\npnpm check: clean\npnpm build: clean\n```\n\n## Evidence\n\n- `src/mcp/channel-bridge.ts:50-51` — pre-fix declarations of the two leaking Maps\n- `src/mcp/channel-bridge.ts:136-152` — pre-fix `close()` body (only `pendingWaiters.clear()`)\n- `src/mcp/channel-bridge.ts:355-356` — pre-existing `queue` cap pattern (sibling reference)\n- `src/mcp/channel-bridge.ts:265-267` — pre-existing per-waiter `setTimeout` (sibling reference)\n- Diff: ~80 lines prod (channel-bridge.ts +89 -4) + 9 lines fixture sync (channel-server.test.ts) + 173 lines new test file\n\n## Human Verification\n\nI confirm I have reviewed every diff hunk, ran the build/check/test suites locally, and the regression tests fail on `upstream/main` (no fix) and pass on this branch (with fix).\n\n## Review Conversations\n\nThis is a fresh PR. No prior review threads.\n\n## Compatibility / Migration\n\nFully backwards-compatible. No public API, no protocol field, no config surface changed. The internal Map value shape (`{request, createdAtMs}` wrapper, `{approval, trackedAtMs}` wrapper) is private — only the test that previously cast through `Record<string, unknown>` was updated to match.\n\n## Risks and Mitigations\n\n- **Risk**: TTL constants (`PENDING_CLAUDE_PERMISSION_TTL_MS=1h`, `PENDING_APPROVAL_DEFAULT_TTL_MS=30min`, `PENDING_SWEEP_INTERVAL_MS=5min`) are hardcoded.\n  **Mitigation**: chosen for low operator-disruption (`1h` is longer than typical permission-think time; `30min` matches existing `expiresAtMs` field intent). Happy to migrate to a config surface in a follow-up if requested.\n- **Risk**: PR #56420 (sessionKey binding, OPEN) touches the same `set()` line in `handleClaudePermissionRequest`.\n  **Mitigation**: line-level rebase only; semantic axes are orthogonal (binding vs leak). Whichever PR merges first, the other rebases cleanly.\n- **Risk**: `cap`/FIFO is not in this PR — adversarial bursts within a single sweep tick (5min) could still grow large in pathological cases.\n  **Mitigation**: deferred to a follow-up PR (one-thing-per-PR). Sweeper closes the slow leak that motivated the report; cap is a separate concern.\n\n---\n\n🤖 AI-Assisted (openclaw-audit pipeline). 5-agent post-harness cross-review (proceed: 4 real + 1 fix-insufficient → cap deferred to follow-up). 3-agent pre-PR cross-review round 1 caught a fallback-recalculation bug in the original sweeper (`createdAtMs ?? now` re-anchored expiry on every tick) → fixed via `trackedAtMs` instance bookkeeping; round 2 cleared 3/3 real-problem-real-fix.\n\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Without this patch, OpenClawChannelBridge.pendingClaudePermissions grows unbounded: the class starts no setInterval, so nothing evicts entries left behind by Claude permission requests that never get a matching reply. With this patch, the lazy ensurePendingSweeper() starts a real (unref'd) setInterval that evicts entries past PENDING_CLAUDE_PERMISSION_TTL_MS. This measurement uses the real Node.js wall clock and the production 1-hour TTL — no vi.useFakeTimers().\n- **Real environment tested**: macOS (darwin arm64), Node 23.x, isolated OPENCLAW_HOME. Both builds run the same probe against worktree src via tsx (no bundling). Production constants unchanged: PENDING_CLAUDE_PERMISSION_TTL_MS = 1h, PENDING_SWEEP_INTERVAL_MS = 5min.\n- **Exact steps or command run after this patch**:\n\n```text\n$ pnpm install --frozen-lockfile           (both worktrees)\n$ node_modules/.bin/tsx <probe>.mts        (real setTimeout sleep, ~70.0 min)\n  probe: new OpenClawChannelBridge(...), 100x handleClaudePermissionRequest(),\n         real wall-clock sleep past the 1h TTL, then read pendingClaudePermissions.size\n```\n\n- **Evidence after fix**:\n\nLive Node.js measurement of bridge.pendingClaudePermissions.size with a real setTimeout sleep across the production 1-hour TTL boundary:\n\n```text\n[Build A] without this patch (base sha, no sweeper code):\n  before=0 afterSet=100 afterTtl=100 sweeperPresent=False sleptMin=77.4\n  -> Map still full after the TTL window: no eviction happened.\n\n[Build B] with this patch (head sha, TTL sweeper):\n  before=0 afterSet=100 afterTtl=0 sweeperPresent=True sleptMin=70.0\n  -> real setInterval sweeper drained the Map after the 1h TTL.\n```\n\n- **Observed result after fix**: With the patch, pendingClaudePermissions.size after the 1h TTL window = 0 (down from 100 set). Without the patch it stays at 100. The sweeper is a real unref'd setInterval driven by the real wall clock - no fake timer.\n- **What was not tested**: pendingApprovals (the second Map) shares the same sweepPendingExpired() pass and is covered by the unit suite rather than this wall-clock probe. Cap-based eviction is a separate, intentional follow-up axis.\n\n",
-        "branch": "fix/mcp-channel-bridge-pending-leak",
-        "head_sha": "eb69de7135a0cabd215a0189b1c3666165cb6934",
-        "author": "feelw00",
+        "title": "Policy: add conformance system with channel checks",
+        "body": "# Policy: add conformance system with channel checks\r\n\r\nBranch: `policy-channels-consumer`\r\nGitHub base: `main`\r\nCurrent draft: https://github.com/openclaw/openclaw/pull/80407\r\nDraft status: channels-first policy PR\r\n\r\n## Title\r\n\r\nPolicy: add conformance system with channel checks\r\n\r\n## Summary\r\n\r\nThis PR adds `policy` as a bundled extension for enterprise conformance. It gives operators a workspace\r\nartifact for expressing required posture, uses existing OpenClaw settings as\r\nthe enforcement target, and produces auditable proof that the workspace still\r\nmatches the requirements.\r\n\r\nThis draft uses channels as the first concrete policy area:\r\n\r\n- `policy.jsonc` defines the authored channel requirement, such as denying a\r\n  provider.\r\n- When the policy is enabled, it registers channel health checks with\r\n  the shared health registry. Doctor then runs the registered checks; doctor\r\n  does not load plugins itself.\r\n- OpenClaw observes current `channels.*` config as evidence.\r\n- `doctor --lint` reports non-conforming settings, and `doctor --fix` can\r\n  repair the owned setting when repairs are enabled.\r\n- `policy check --json` emits the recordable audit tuple:\r\n  `policyHash + evidenceHash + findingsHash + clean result -> attestationHash`.\r\n\r\nPolicy is only a conformance layer here. `channels.*` remains the runtime\r\nconfiguration. Findings identify both sides of the decision: `target` points\r\nto the observed setting, such as `oc://openclaw.config/channels/telegram`, and\r\n`requirement` points to the authored policy rule, such as\r\n`oc://policy.jsonc/channels/denyRules/#0`.\r\n\r\n## Motivation\r\n\r\nOperators already use config to decide which communication surfaces exist, but\r\nthere is not a small, auditable way to say \"this workspace must not enable this\r\nsurface\" and then prove that setting is still true. That shows up in adjacent\r\nrequests for protected config changes, proposal-only disabling of\r\nplugin/tool/channel surfaces, and doctor dry-run/diff behavior:\r\n\r\n- https://github.com/openclaw/openclaw/issues/77886\r\n- https://github.com/openclaw/openclaw/issues/80081\r\n- https://github.com/openclaw/openclaw/issues/79166\r\n\r\nThis PR keeps the answer narrow. It does not add runtime channel enforcement or\r\na second channel config system. It adds a way to prove which policy file was\r\nchecked against which observed channel evidence, what findings were returned,\r\nand when that check happened.\r\n\r\n## Maintainer Input Requested\r\n\r\n1. **Is policy-as-health the right architecture?**\r\n\r\n   This draft treats policy as a set of health checks over existing OpenClaw\r\n   surfaces. `policy.jsonc` defines requirements, the enabled policy package\r\n   registers the relevant checks, and `doctor --lint` remains the shared\r\n   conformance gate over already-registered checks. Doctor does not load\r\n   plugins itself. Is that the right shape, or should policy own a separate\r\n   check/evaluation loop?\r\n\r\n2. **Where should policy settings live?**\r\n\r\n   The draft uses `policy.jsonc` for authored requirements and\r\n   `plugins.entries.policy.config` for operator toggles such as `enabled`,\r\n   `workspaceRepairs`, `expectedHash`, and the policy path. Is that split right,\r\n   or should more of this be expressed through normal OpenClaw config?\r\n\r\n3. **Is the attestation shape useful and sufficient?**\r\n\r\n   `policy check --json` emits `policy.hash`, `workspace.hash` over the\r\n   observed evidence payload, `findingsHash`, `checkedAt`, and\r\n   `attestationHash`. `checkedAt` is audit metadata; the stable\r\n   `attestationHash` binds policy hash, evidence hash, findings hash, and clean\r\n   result. Is that the right durable audit tuple for policy checks, or should\r\n   the evidence/result model be different before runtime consumers start\r\n   recording it?\r\n\r\n4. **Is the extension activation boundary right?**\r\n\r\n   Doctor does not load plugins directly. This draft keeps the policy logic in\r\n   the bundled policy extension and lets the core bundled-health loader\r\n   register policy checks only when the policy extension is enabled and not\r\n   blocked by plugin control-plane settings. Is that the right boundary for\r\n   bundled policy health checks?\r\n\r\n## What Changed\r\n\r\n- Added the bundled `policy` package and its config schema.\r\n- Added `policy check`.\r\n- Added `policy.jsonc` as the workspace-owned policy artifact.\r\n- Added observed channel evidence, hashes, and an attestation hash to\r\n  `policy check --json`.\r\n- Added policy finding `target` and `requirement` fields so reviewers can see\r\n  the observed setting and authored policy rule behind each finding.\r\n- Added bounded policy health registration for doctor lint/fix.\r\n- Added health findings for missing policy, hash mismatch, and denied enabled\r\n  channel providers.\r\n- Added opt-in repair for denied enabled channels.\r\n- Added policy evidence collection that treats real channel providers as\r\n  evidence while ignoring reserved channel config namespaces such as\r\n  `channels.defaults` and `channels.modelByChannel`.\r\n\r\n## Policy Shape\r\n\r\n```jsonc\r\n{\r\n  \"channels\": {\r\n    \"denyRules\": [\r\n      {\r\n        \"id\": \"no-telegram\",\r\n        \"when\": { \"provider\": \"telegram\" },\r\n        \"reason\": \"Telegram is not approved for this workspace.\",\r\n      },\r\n    ],\r\n  },\r\n}\r\n```\r\n\r\nCategory blocks are namespaces. `channels: {}` does not run a check by itself;\r\nthe channel check runs when an authored requirement such as `denyRules` is\r\npresent.\r\n\r\n## Safety\r\n\r\n`doctor --lint` and `policy check` are read-only. The audit value comes from\r\n`policy check --json`, which records:\r\n\r\n```text\r\npolicy hash + evidence hash + findings hash + clean result -> attestation hash\r\n```\r\n\r\n`checkedAt` is emitted alongside that hash so operators can see when the check\r\nran, but it is not part of the stable attestation hash.\r\n\r\n`doctor --fix` only changes channel config when\r\n`plugins.entries.policy.config.workspaceRepairs` is explicitly enabled. The\r\nrepair is intentionally narrow: it disables denied channels and leaves all\r\nother channel material intact.\r\n\r\nThis draft does not add a channel runtime enforcement hook. If a later channel\r\ngateway hook uses policy to block, approve, or annotate a channel interaction,\r\nthe audit message should include the attestation hash from the last clean\r\npolicy check. That attestation binds the policy hash, observed evidence hash, findings hash, and clean result so operators can correlate the runtime decision with the exact policy file, workspace evidence, and clean result that produced it. `checkedAt` remains audit metadata beside the stable hash.\r\n\r\n## Real behavior proof\r\n\r\n![PR 80407 current policy channel proof](https://raw.githubusercontent.com/giodl73-repo/openclaw/proof-artifacts/pr-80407-fresh/pr-80407/pr-80407-policy-channel-conformance-current-proof.svg)\r\n\r\nFresh deterministic proof artifacts:\r\n- Summary: https://raw.githubusercontent.com/giodl73-repo/openclaw/proof-artifacts/pr-80407-fresh/pr-80407/summary.txt\r\n- Before/source proof log: https://raw.githubusercontent.com/giodl73-repo/openclaw/proof-artifacts/pr-80407-fresh/pr-80407/before-source-proof.log\r\n- After/PR proof log: https://raw.githubusercontent.com/giodl73-repo/openclaw/proof-artifacts/pr-80407-fresh/pr-80407/after-pr-80407.log\r\n\r\n**Behavior addressed**: Policy channel checks produce lint findings, repair the\r\nowned setting when allowed, and end with a clean `policy check --json`\r\nattestation over the updated evidence.\r\n\r\n**Real environment tested**: Local Windows source checkout with a temporary\r\nOpenClaw config and workspace. The policy was enabled in config,\r\n`policy.jsonc` denied provider `telegram`, and the OpenClaw config had\r\n`channels.telegram.enabled=true`.\r\n\r\n**Exact steps or command run after this patch**:\r\n\r\n1. Authored `policy.jsonc` with\r\n   `channels.denyRules[{ when: { provider: \"telegram\" } }]`.\r\n2. Ran `openclaw policy check --json` to emit channel evidence plus policy,\r\n   evidence, findings, and attestation hashes.\r\n3. Ran `openclaw doctor --lint --only policy/channels-denied-provider --json`.\r\n4. Ran `openclaw doctor --fix --yes --non-interactive` to apply enabled policy repairs.\r\n5. Reran `openclaw doctor --lint --only policy/channels-denied-provider --json`\r\n   after the fix.\r\n6. Reran `openclaw policy check --json` to emit the final clean attestation.\r\n\r\n**Evidence after fix**:\r\n\n\r\n**Observed result after fix**: The first lint command reports the enabled\r\nTelegram channel with `target=oc://openclaw.config/channels/telegram` and\r\n`requirement=oc://policy.jsonc/channels/denyRules/#0`. `doctor --fix --yes --non-interactive` disables\r\n`channels.telegram.enabled`. The after-fix lint command validates clean with\r\nzero findings, and the final `policy check --json` emits a clean attestation\r\nover the updated channel evidence.\r\n\r\n**What was not tested**: No live channel gateway was started. This PR only\r\nchanges policy conformance checks and config repair; it does not add runtime\r\nchannel enforcement.\r\n\r\n## Testing\r\n\r\nFocused tests cover bounded policy health registration, policy check\r\nattestation output, missing policy reporting, hash mismatch reporting,\r\ndeny-rule findings, disabled-channel allowance, and denied-channel repair.\r\n\r\n```bash\r\nnode scripts/run-vitest.mjs extensions/policy/src/policy-state.test.ts extensions/policy/src/cli.test.ts extensions/policy/src/doctor/register.test.ts src/flows/bundled-health-checks.test.ts src/cli/program/register.maintenance.test.ts\r\nnode_modules/.bin/tsgo --noxmit --pretty false\r\nnode_modules/.bin/tsgo -p tsconfig.core.json --noxmit --incremental false --pretty false\r\npnpm plugin-sdk:api:check\r\ngit diff --check\r\ncodex review --base upstream/main\r\n```\r\n\r\n## Follow-Up\r\n\r\nTool metadata conformance is scoped as a follow-up PR. It uses the same\r\nauthored-policy plus observed-evidence model without reintroducing generated\r\npolicy:\r\nhttps://github.com/openclaw/openclaw/pull/80056\r\n\r\nModel, network, and MCP conformance are scoped as a combined follow-up that\r\nshows the same policy shape across more OpenClaw settings categories:\r\nhttps://github.com/openclaw/openclaw/pull/80783\r\n\r\nRuntime audit metadata and accepted-attestation enforcement are scoped as the\r\nfinal follow-up in this first policy arc:\r\nhttps://github.com/openclaw/openclaw/pull/81104\r\n\r\n\r\n",
+        "branch": "policy-channels-consumer",
+        "head_sha": "a22db8b23c43e96b840fcc90be3688e9b5addf2c",
+        "author": "giodl73-repo",
         "labels": [
-          "size: M",
-          "proof: supplied",
+          "docs",
+          "cli",
+          "commands",
+          "maintainer",
+          "size: XL",
           "proof: sufficient",
+          "dependencies-changed",
           "P2",
-          "rating: 🐚 platinum hermit",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 automation",
           "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
+          "merge-risk: 🚨 security-boundary",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/mcp/channel-bridge.test.ts",
-            "additions": 212,
+            "path": ".github/labeler.yml",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/index.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/policy.md",
+            "additions": 109,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/mcp/channel-bridge.ts",
-            "additions": 85,
-            "deletions": 16,
+            "path": "docs/docs.json",
+            "additions": 1,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/mcp/channel-server.test.ts",
-            "additions": 6,
-            "deletions": 3,
+            "path": "docs/plugins/sdk-subpaths.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/policy/api.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/policy/index.ts",
+            "additions": 26,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/policy/openclaw.plugin.json",
+            "additions": 41,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/policy/package.json",
+            "additions": 27,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/policy/src/cli.test.ts",
+            "additions": 227,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/policy/src/cli.ts",
+            "additions": 220,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/policy/src/doctor/register.test.ts",
+            "additions": 524,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/policy/src/doctor/register.ts",
+            "additions": 620,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/policy/src/policy-state.test.ts",
+            "additions": 29,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/policy/src/policy-state.ts",
+            "additions": 136,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "pnpm-lock.yaml",
+            "additions": 13,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/program/register.maintenance.test.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-lint.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/bundled-health-checks.test.ts",
+            "additions": 80,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/flows/bundled-health-checks.ts",
+            "additions": 40,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/flows/doctor-health-contributions.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/health-checks.ts",
+            "additions": 2,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-71648",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-71648.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-80407",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-80407.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 114,
+          "total": 103,
           "counts": {
-            "SUCCESS": 85,
+            "SUCCESS": 73,
             "SKIPPED": 28,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      }
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:71648:4386320220:2026-05-06T08:32:24Z:re_review",
-      "comment_id": "4386320220",
-      "comment_version_key": "4386320220:2026-05-06T08:32:24Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/71648#issuecomment-4386320220",
-      "repo": "openclaw/openclaw",
-      "issue_number": 71648,
-      "author": "Feelw00",
-      "author_id": 45638585,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-06T08:32:24Z",
-      "comment_updated_at": "2026-05-06T08:32:24Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(mcp): bound pendingClaudePermissions / pendingApprovals via TTL sweeper + close clear",
-        "body": "## Summary\n\n- **Problem**: `OpenClawChannelBridge` (`src/mcp/channel-bridge.ts`) holds two instance-bound pending Maps — `pendingClaudePermissions` (L50) and `pendingApprovals` (L51) — that lack TTL/sweeper, close-clear, and cap. Sibling collections in the same class (`queue` cap=1000 at L355, `pendingWaiters` close-clear at L148 + per-waiter `setTimeout` fallback at L265) are all bounded; only these two are not.\n- **Why it matters**: long-running `openclaw mcp serve` accumulates entries on (a) missed Claude permission replies (operator typos / cross-channel responses / `--dangerously-skip-permissions`) and (b) gateway WebSocket drops that silence `*.approval.resolved` frames (`onClose` at L122-124 is reject-only, no missed-event catchup).\n- **What changed**: lazy-start a 5-min `sweepPendingExpired()` interval, `.unref()`'d so it never keeps the process alive. Per-Map TTL — 1h for Claude permissions (anchored at `createdAtMs`), respects `payload.expiresAtMs` for approvals (falls back to `trackedAtMs + 30min` when absent). `close()` now clears both Maps and stops the sweeper. Handler entry early-returns when `this.closed` to prevent post-close ghost writes.\n- **What did NOT change**: public `listPendingApprovals` shape, message protocols, or any other class collection. `cap`/FIFO is intentionally split to a follow-up PR (one-thing-per-PR; sweeper covers the slow leak, cap addresses adversarial bursts).\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor required for the fix\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all touched areas)\n\n- [x] Memory / storage\n- [x] Integrations\n- [ ] Gateway / orchestration\n- [ ] Skills / tool execution\n- [ ] Auth / tokens\n- [ ] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\nCloses #71646.\n\n- [x] This PR fixes a bug or regression\n\n## Root Cause\n\nUpstream commit history shows `channel-bridge.ts` evolving across refactor/seam-split commits over the last 6 weeks, but no commit added a TTL/sweep/cap guard for these two pending Maps. The asymmetry is structural:\n\n| Collection | Cap | Close-clear | TTL / sweeper | Status |\n|---|---|---|---|---|\n| `queue` (Array, L48) | `QUEUE_LIMIT=1000` while-shift | n/a | n/a | bounded |\n| `pendingWaiters` (Set, L49) | n/a | `close()` clears (L148) | per-waiter `setTimeout` (L265) | bounded |\n| `pendingClaudePermissions` (Map, L50) | none | none | none | **leaks** |\n| `pendingApprovals` (Map, L51) | none | none | `expiresAtMs` stored at L382 but never drives a timer | **leaks** |\n\n`pendingClaudePermissions` only deletes when the operator reply matches `/^(yes|no)\\s+([a-km-z]{5})$/i` AND `has(requestId)` is true (L455-459) — a single conditional-edge cleanup. `pendingApprovals` only deletes on the matching `*.resolved` frame (L389) — another single conditional-edge. No primary unconditional cleanup path exists.\n\n## Regression Test Plan\n\nNew file `src/mcp/channel-bridge.test.ts` (7 it blocks, fake timers, no production-branch divergence):\n\n1. `pendingClaudePermissions` evicted by sweeper at TTL boundary\n2. `pendingApprovals` evicted at `expiresAtMs`\n3. `pendingApprovals` evicted at default TTL fallback when `expiresAtMs` is absent\n4. `pendingApprovals` evicted even when **both** `createdAtMs` and `expiresAtMs` are absent (regression test for the `now`-anchored fallback bug caught in pre-PR review)\n5. `close()` clears both Maps, stops the sweeper interval, and `vi.getTimerCount() === 0`\n6. `handleClaudePermissionRequest` is a no-op after `close()` — prevents post-close ghost writes\n7. Sweeper interval is not started before any pending entry is added (lazy-init)\n\n`channel-server.test.ts:366` fixture updated to the new `{request, createdAtMs}` wrapper shape.\n\n## User-visible / Behavior Changes\n\n- Long-running `openclaw mcp serve` sees pending Map sizes converge to a steady state instead of growing monotonically.\n- Operators who never reply to a Claude `permission_request` no longer keep the entry forever; it expires after 1h and the next `permission_request` for the same tool starts fresh.\n- Approvals announced over a dropped gateway WebSocket are auto-evicted at `expiresAtMs` (or `trackedAtMs + 30min` if the gateway omitted `expiresAtMs`).\n- No protocol surface changes; client tools see no difference.\n\n## Security Impact\n\nNone. The fix is purely about bounded memory growth in an opt-in long-running daemon. No auth / scope / token / sandbox surface touched. CODEOWNERS protected paths (`/src/cron/service/jobs.ts`, `/src/cron/stagger.ts`, `/src/agents/*auth*`, `/src/agents/sandbox*`) untouched.\n\n## Repro + Verification\n\n### Environment\n\n- pnpm 10.33.0 / Node (project default) / vitest 4.1.5\n- Worktree: clean checkout of upstream/main + this branch\n- Platform: macOS (Darwin 25.4.0)\n\n### Steps\n\n```sh\npnpm install\npnpm check                                                       # type + lint\npnpm build                                                       # build\npnpm exec vitest run src/mcp/channel-bridge.test.ts              # new tests\npnpm exec vitest run src/mcp/channel-server.test.ts              # existing mcp tests after fixture sync\npnpm exec vitest run --config test/vitest/vitest.unit.config.ts  # unit project regression\n```\n\n### Expected\n\nAll green. New file 7/7. Existing channel-server 6/6. Unit project 1575/1575 (was 1573 pre-fix; +2 from new file's count vs prior file count).\n\n### Actual\n\n```\nsrc/mcp/channel-bridge.test.ts: Tests 7 passed (7), 640ms\nsrc/mcp/channel-server.test.ts: Tests 6 passed (6)\nunit project: Test Files 189 passed (189), Tests 1575 passed (1575), 6.48s\npnpm check: clean\npnpm build: clean\n```\n\n## Evidence\n\n- `src/mcp/channel-bridge.ts:50-51` — pre-fix declarations of the two leaking Maps\n- `src/mcp/channel-bridge.ts:136-152` — pre-fix `close()` body (only `pendingWaiters.clear()`)\n- `src/mcp/channel-bridge.ts:355-356` — pre-existing `queue` cap pattern (sibling reference)\n- `src/mcp/channel-bridge.ts:265-267` — pre-existing per-waiter `setTimeout` (sibling reference)\n- Diff: ~80 lines prod (channel-bridge.ts +89 -4) + 9 lines fixture sync (channel-server.test.ts) + 173 lines new test file\n\n## Human Verification\n\nI confirm I have reviewed every diff hunk, ran the build/check/test suites locally, and the regression tests fail on `upstream/main` (no fix) and pass on this branch (with fix).\n\n## Review Conversations\n\nThis is a fresh PR. No prior review threads.\n\n## Compatibility / Migration\n\nFully backwards-compatible. No public API, no protocol field, no config surface changed. The internal Map value shape (`{request, createdAtMs}` wrapper, `{approval, trackedAtMs}` wrapper) is private — only the test that previously cast through `Record<string, unknown>` was updated to match.\n\n## Risks and Mitigations\n\n- **Risk**: TTL constants (`PENDING_CLAUDE_PERMISSION_TTL_MS=1h`, `PENDING_APPROVAL_DEFAULT_TTL_MS=30min`, `PENDING_SWEEP_INTERVAL_MS=5min`) are hardcoded.\n  **Mitigation**: chosen for low operator-disruption (`1h` is longer than typical permission-think time; `30min` matches existing `expiresAtMs` field intent). Happy to migrate to a config surface in a follow-up if requested.\n- **Risk**: PR #56420 (sessionKey binding, OPEN) touches the same `set()` line in `handleClaudePermissionRequest`.\n  **Mitigation**: line-level rebase only; semantic axes are orthogonal (binding vs leak). Whichever PR merges first, the other rebases cleanly.\n- **Risk**: `cap`/FIFO is not in this PR — adversarial bursts within a single sweep tick (5min) could still grow large in pathological cases.\n  **Mitigation**: deferred to a follow-up PR (one-thing-per-PR). Sweeper closes the slow leak that motivated the report; cap is a separate concern.\n\n---\n\n🤖 AI-Assisted (openclaw-audit pipeline). 5-agent post-harness cross-review (proceed: 4 real + 1 fix-insufficient → cap deferred to follow-up). 3-agent pre-PR cross-review round 1 caught a fallback-recalculation bug in the original sweeper (`createdAtMs ?? now` re-anchored expiry on every tick) → fixed via `trackedAtMs` instance bookkeeping; round 2 cleared 3/3 real-problem-real-fix.\n\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Without this patch, OpenClawChannelBridge.pendingClaudePermissions grows unbounded: the class starts no setInterval, so nothing evicts entries left behind by Claude permission requests that never get a matching reply. With this patch, the lazy ensurePendingSweeper() starts a real (unref'd) setInterval that evicts entries past PENDING_CLAUDE_PERMISSION_TTL_MS. This measurement uses the real Node.js wall clock and the production 1-hour TTL — no vi.useFakeTimers().\n- **Real environment tested**: macOS (darwin arm64), Node 23.x, isolated OPENCLAW_HOME. Both builds run the same probe against worktree src via tsx (no bundling). Production constants unchanged: PENDING_CLAUDE_PERMISSION_TTL_MS = 1h, PENDING_SWEEP_INTERVAL_MS = 5min.\n- **Exact steps or command run after this patch**:\n\n```text\n$ pnpm install --frozen-lockfile           (both worktrees)\n$ node_modules/.bin/tsx <probe>.mts        (real setTimeout sleep, ~70.0 min)\n  probe: new OpenClawChannelBridge(...), 100x handleClaudePermissionRequest(),\n         real wall-clock sleep past the 1h TTL, then read pendingClaudePermissions.size\n```\n\n- **Evidence after fix**:\n\nLive Node.js measurement of bridge.pendingClaudePermissions.size with a real setTimeout sleep across the production 1-hour TTL boundary:\n\n```text\n[Build A] without this patch (base sha, no sweeper code):\n  before=0 afterSet=100 afterTtl=100 sweeperPresent=False sleptMin=77.4\n  -> Map still full after the TTL window: no eviction happened.\n\n[Build B] with this patch (head sha, TTL sweeper):\n  before=0 afterSet=100 afterTtl=0 sweeperPresent=True sleptMin=70.0\n  -> real setInterval sweeper drained the Map after the 1h TTL.\n```\n\n- **Observed result after fix**: With the patch, pendingClaudePermissions.size after the 1h TTL window = 0 (down from 100 set). Without the patch it stays at 100. The sweeper is a real unref'd setInterval driven by the real wall clock - no fake timer.\n- **What was not tested**: pendingApprovals (the second Map) shares the same sweepPendingExpired() pass and is covered by the unit suite rather than this wall-clock probe. Cap-based eviction is a separate, intentional follow-up axis.\n\n",
-        "branch": "fix/mcp-channel-bridge-pending-leak",
-        "head_sha": "eb69de7135a0cabd215a0189b1c3666165cb6934",
-        "author": "feelw00",
-        "labels": [
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/mcp/channel-bridge.test.ts",
-            "additions": 212,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/mcp/channel-bridge.ts",
-            "additions": 85,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/mcp/channel-server.test.ts",
-            "additions": 6,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-71648",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-71648.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 114,
-          "counts": {
-            "SUCCESS": 85,
-            "SKIPPED": 28,
-            "NEUTRAL": 1
+            "NEUTRAL": 2
           },
           "blockers": [],
           "pending": [],
           "terminalBlockers": []
         }
       },
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5483,
+    "total_ms": 5005,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 427
+        "ms": 2082
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2387
+        "ms": 2709
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 2643
+        "ms": 200
       },
       {
         "name": "append_ledger",
