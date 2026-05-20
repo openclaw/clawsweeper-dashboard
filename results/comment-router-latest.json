@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-20T04:41:33.730Z",
+  "generated_at": "2026-05-20T04:42:07.344Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-20T01:41:31.395Z",
+  "since": "2026-05-20T01:42:05.093Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    84234
+    84340
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,143 +31,292 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:84234:4490183472:2026-05-20T04:41:26Z:clawsweeper_needs_human",
-      "comment_id": "4490183472",
-      "comment_version_key": "4490183472:2026-05-20T04:41:26Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84234#issuecomment-4490183472",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:84340:4492546068:2026-05-20T04:42:00Z:clawsweeper_auto_repair",
+      "comment_id": "4492546068",
+      "comment_version_key": "4492546068:2026-05-20T04:42:00Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84340#issuecomment-4492546068",
       "repo": "openclaw/openclaw",
-      "issue_number": 84234,
+      "issue_number": 84340,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-19T17:10:04Z",
-      "comment_updated_at": "2026-05-20T04:41:26Z",
+      "comment_created_at": "2026-05-19T22:20:38Z",
+      "comment_updated_at": "2026-05-20T04:42:00Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
       "autoclose_message": null,
       "implementation_prompt": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "Maintainers need to review the session-state tradeoff and coordinate landing order with https://github.com/openclaw/openclaw/pull/81048; there is no narrow automated repair to queue from this review.; Cleared: The diff only adds local Claude transcript probing and focused tests; it adds no dependencies, workflow changes, network calls, secret handling, or package-resolution changes. (sha=a6df1dc14156f92940e064e85a778a46f73d3be1)",
-      "review_summary": "The PR adds a Claude CLI transcript-flush gate before persisting session bindings and invalidates reusable Claude CLI sessions when the transcript contains an unanswered tool-use state.\n\nReproducibility: yes. Current main unconditionally persists effective CLI session ids on successful runs and only invalidates missing transcripts before reuse; the PR body and related issue provide live logs for the context-loss and no-reply symptoms.",
-      "review_followup": "Maintainers need to review the session-state tradeoff and coordinate landing order with https://github.com/openclaw/openclaw/pull/81048; there is no narrow automated repair to queue from this review.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=02f5ff99d2dce9e72a93f3e4351675cf9af986b7)",
+      "review_summary": "The PR converts gateway service doctor repairs and adjacent structured doctor buckets to health-check repairs with service effects, note routing, dry-run/diff support, and focused tests.\n\nReproducibility: yes. Source inspection gives a high-confidence path: return `serviceRewriteBlocked: true` with remaining config issues, and the structured repair reports an update effect after the legacy helper returns before service mutation.",
+      "review_followup": "Needs maintainer and contributor handling because the PR is protected, stacked, lacks live service-manager proof, and has a concrete repair-output correctness bug.",
       "freeform_prompt": null,
-      "expected_head_sha": "a6df1dc14156f92940e064e85a778a46f73d3be1",
+      "expected_head_sha": "02f5ff99d2dce9e72a93f3e4351675cf9af986b7",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(cli-runner): write-side flush gate + orphan-tool-use invalidator [AI-assisted]",
-        "body": "# fix(cli-runner): write-side flush gate + orphan-tool-use invalidator [AI-assisted]\n\n## Summary\n\nTwo narrow fixes that together close the most common Claude-CLI session-recovery context-loss failures on the **write side** of the binding lifecycle. Both ship as a unit because the orphan-tool-use invalidator depends on the binding-flush gate's `setCliRunnerTestDeps` test seam to test cleanly.\n\nPartial fix for #77974 (write-side; the read-side is in #81048 by @benjamin1492).\n\nThis is a split-out from PR #81821 (still open as draft) that contains only the two solidly-proven commits. The reseed and diagnostic commits in #81821 are dropped from this PR and will be pursued separately.\n\n### 1. Binding-flush gate (`6952778fc6` / original `80cad2240a`)\n\nWhen a claude-cli turn produces a session id but the underlying claude subprocess fails to flush an assistant-role record to its `~/.claude/projects/<cwd>/<sid>.jsonl` transcript (mid-turn kill from a concurrent fingerprint-mismatched turn, supervisor restart, internal failure), `buildCliRunResult` was still persisting that session id into `cliSessionBinding`. The next turn ran `claudeCliSessionTranscriptHasContent`, didn't find the file, logged `cli session reset: reason=missing-transcript`, and started a brand-new claude session with empty memory.\n\nEnd-user symptom: agent forgets prior conversation between turns.\n\nThe fix adds an `isCliBindingFlushed(sessionId, provider)` predicate that probes the transcript with a bounded retry (0 / 50 / 150 ms). When the gate fails:\n\n- `cliSessionBinding` is dropped from the result (so next-turn binding lookup returns nothing rather than a ghost id).\n- `agentMeta.sessionId` is **also** cleared in the same case. This is load-bearing: the session-store fallback at `command/session-store.ts` reads `agentMeta.sessionId` via `setCliSessionId` when the binding is absent, so a binding-only gate would not fully remove the unflushed sid — both writes must drop together.\n\nThe gate fires only for `claude-cli` providers; other CLIs don't write to `~/.claude/projects` so probing them would always return false and incorrectly strip valid binding metadata. `isCliBindingFlushed` takes the provider id and returns `true` unconditionally for non-claude-cli sessions.\n\nThe transcript-probe is exposed as an injectable dep (`setCliRunnerTestDeps` / `restoreCliRunnerTestDeps`) mirroring the existing pattern in `src/agents/cli-runner/prepare.ts`, so `isCliBindingFlushed` is testable without touching `~/.claude/projects`.\n\n### 2. Orphan-tool-use invalidator (`1803c146a7` / original `dfa2617117`)\n\nWhen a claude-cli session crashes mid-tool (gateway OOM, kickstart, manual kill), the project JSONL transcript ends with an assistant `tool_use` block that has no matching user `tool_result`. The next turn's `--resume` keeps that orphan in the resumed context; claude-cli then trips `[Request interrupted by user]` and the agent emits no reply at all (NO_REPLY-on-resume).\n\nThe fix adds `claudeCliSessionTranscriptHasOrphanedToolUse({sessionId})` in `src/agents/command/attempt-execution.helpers.ts`. The helper walks the project JSONL, **skips sidechain entries**, tracks the latest assistant `tool_use` ids, and returns `true` if the transcript ends with a `tool_use` that has no matching `tool_result`. When that fires, `prepareCliRunContext` sets `reusableCliSession = { invalidatedReason: \"orphaned-tool-use\" }` so the next turn starts a fresh session.\n\nThe new invalidation reason is added to the `CliInvalidatedReason` union and to the `loadCliSessionReseedMessages` allowed-reasons set so the reseed path can pull the prior transcript across the invalidation boundary.\n\n## Coordination with PR #81048\n\nPR #81048 (also open, by @benjamin1492) addresses the **read-side** of the same family of issues — it tightens `claudeCliSessionTranscriptHasContent` with a deterministic `<homeDir>/.claude/projects/<encoded(workspaceDir)>/<sessionId>.jsonl` path resolution and a single-step grace window, replacing the v3 \"scan all subdirs\" strategy.\n\nThe two PRs touch the same helper file (`attempt-execution.helpers.ts`) but the changes don't textually conflict. They DO, however, represent two different strategies for the same probe family:\n\n- **This PR** uses the v3 \"scan-all-subdirs\" strategy for the new `claudeCliSessionTranscriptHasOrphanedToolUse` helper, mirroring the shape of the existing `claudeCliSessionTranscriptHasContent` at the time of branching.\n- **#81048** changes `claudeCliSessionTranscriptHasContent` to require `workspaceDir` and use the deterministic-path strategy.\n\nIf #81048 lands first, this PR's `claudeCliSessionTranscriptHasOrphanedToolUse` should migrate to the same v4 deterministic-path strategy in a follow-up (call sites at `prepare.ts` would also need to thread `workspaceDir` through). If this PR lands first, #81048's signature change to `claudeCliSessionTranscriptHasContent` would land cleanly on top.\n\nHappy to adapt to whichever order maintainers prefer.\n\n## Out of scope\n\nTwo commits from the original #81821 are intentionally NOT in this PR; they'll be pursued separately:\n\n- **Recovery-prelude reseed (`3a6de1b62a` in #81821)** — covers the user-visible-amnesia tail of the orphan-tool-use case by reading the invalidated transcript through `buildClaudeCliFallbackContextPrelude` and prepending it as a retry prelude. Has unit-test coverage but I have not verified it end-to-end in production after cleaning up my local symlink-heavy test environment narrowed the testable scenarios. Will refile when real-runtime evidence is available.\n- **Fingerprint-mismatch diagnostic (`8b8e82584d` in #81821)** — logs which fingerprint key triggered a live-session restart. Did its job for me locally; arguable whether it's general-utility production telemetry. Easier to land separately if maintainers want it.\n\n## Change Type (select all)\n\n- [x] Bug fix\n\n## Scope (select all touched areas)\n\n- [x] CLI-backend / Claude CLI integration\n- [x] Memory / storage (session binding lifecycle)\n\n## Linked Issue/PR\n\n- Partial fix for #77974 (write-side; read-side handled in #81048)\n- Supersedes the proven commits in #81821 (which stays open as draft for the reseed and diagnostic work)\n- Adjacent to #81048 (orthogonal write-side vs read-side fixes; no textual conflict)\n- [x] This PR fixes a bug or regression\n\n## Test plan\n\n```bash\npnpm install\npnpm build\nnode scripts/run-vitest.mjs run \\\n  src/agents/cli-runner.binding-flush.test.ts \\\n  src/agents/cli-runner/prepare.test.ts \\\n  src/agents/command/attempt-execution.test.ts\npnpm tsgo:core\npnpm tsgo:core:test\npnpm exec oxfmt --check --threads=1 \\\n  src/agents/cli-runner.ts \\\n  src/agents/cli-runner.binding-flush.test.ts \\\n  src/agents/cli-runner/prepare.ts \\\n  src/agents/cli-runner/session-history.ts \\\n  src/agents/cli-runner/types.ts \\\n  src/agents/command/attempt-execution.helpers.ts \\\n  src/agents/command/attempt-execution.test.ts\nnode scripts/run-oxlint.mjs \\\n  src/agents/cli-runner.ts \\\n  src/agents/cli-runner.binding-flush.test.ts \\\n  src/agents/cli-runner/prepare.ts \\\n  src/agents/cli-runner/session-history.ts \\\n  src/agents/cli-runner/types.ts \\\n  src/agents/command/attempt-execution.helpers.ts \\\n  src/agents/command/attempt-execution.test.ts\n```\n\nAll green locally on `fix/cli-runner/binding-flush-orphan-tool` rebased on `upstream/main` at `78d226bb3b`. 154/154 tests pass across the touched surface.\n\n## Real behavior proof\n\nExternal-contributor real-environment proof, captured on macOS / Node 22 / `2026.5.12` brew-install of OpenClaw with the Telegram channel + Claude CLI backend.\n\n- **Behavior addressed:**\n  1. Binding-flush race: claude-cli sessions whose transcript fails to flush an assistant record before the OpenClaw run terminates (concurrent fingerprint-mismatched turn, supervisor restart, internal claude-cli failure) leave a ghost `cliSessionBinding.sessionId` on the session entry. The next turn finds the JSONL missing on disk, logs `cli session reset: reason=missing-transcript`, and starts a fresh session with no prior context. Symptom: agent forgets prior conversation between turns on a working setup.\n  2. Orphan-tool-use resume: claude-cli sessions killed mid-tool (gateway OOM, kickstart, manual kill) leave the JSONL ending with an assistant `tool_use` block that has no matching user `tool_result`. Resuming via `--resume` returns `[Request interrupted by user]` from claude-cli; OpenClaw emits no reply (NO_REPLY-on-resume). Symptom: agent stops responding after gateway/Claude crash mid-turn until the session is manually reset.\n\n- **Real environment tested:** OpenClaw `2026.5.12` brew-installed on M5 Max / macOS 15.x / Node 22; Anthropic claude-cli backend over Telegram. Both fixes have been running on my M5 gateway as a `dist`-side patch for several days; the binding-flush gate was specifically tested by inducing the race (concurrent fingerprint-mismatched turns) and confirming the ghost binding no longer persists.\n\n- **Exact steps or command run after this patch:**\n  1. `git checkout fix/cli-runner/binding-flush-orphan-tool`\n  2. `pnpm install`\n  3. `pnpm build` — clean\n  4. `node scripts/run-vitest.mjs run src/agents/cli-runner.binding-flush.test.ts src/agents/cli-runner/prepare.test.ts src/agents/command/attempt-execution.test.ts` — 154 tests pass\n  5. `pnpm tsgo:core` and `pnpm tsgo:core:test` — both clean\n  6. `pnpm exec oxfmt --check --threads=1 <touched files>` — clean\n  7. `node scripts/run-oxlint.mjs <touched .ts files>` — 0 warnings, 0 errors\n\n- **Evidence after fix:**\n\n  ```\n  $ node scripts/run-vitest.mjs run \\\n      src/agents/cli-runner.binding-flush.test.ts \\\n      src/agents/cli-runner/prepare.test.ts \\\n      src/agents/command/attempt-execution.test.ts\n\n   Test Files  6 passed (6)\n        Tests  154 passed (154)\n     Duration  ~3.5s\n  ```\n\n  Bundle proof that both predicates flow through:\n\n  ```\n  $ grep -n \"isCliBindingFlushed\\|claudeCliSessionTranscriptHasOrphanedToolUse\" dist/cli-runner-*.js dist/prepare.runtime-*.js | head\n  dist/cli-runner-*.js: function isCliBindingFlushed(sessionId, provider) {\n  dist/cli-runner-*.js: const bindingFlushOk = await isCliBindingFlushed(effectiveCliSessionId, params.provider);\n  dist/prepare.runtime-*.js: claudeCliSessionTranscriptHasOrphanedToolUse({...})\n  dist/prepare.runtime-*.js: invalidatedReason: \"orphaned-tool-use\"\n  ```\n\n- **Observed result after fix:**\n  - Binding-flush race: when the transcript probe fails after retries, both `cliSessionBinding.sessionId` AND `agentMeta.sessionId` are cleared in the result. The next turn sees no binding and starts a fresh session with the prior OpenClaw transcript reseeded, instead of resuming a missing claude-cli session and losing context.\n  - Orphan-tool-use: when the JSONL transcript ends with an unmatched assistant `tool_use`, the next turn's `prepareCliRunContext` sets `invalidatedReason: \"orphaned-tool-use\"`, forcing a fresh claude-cli session and avoiding the `[Request interrupted by user]` failure.\n\n- **What was not tested:** end-to-end live reproduction of an orphan-tool-use scenario with the freshly-built bundle. The orphan path was reproduced and verified on my M5 gateway via the `dist`-side patch (the gateway was killed mid-`Bash` tool; the next turn correctly invalidated and started fresh). The unit-level test at `src/agents/command/attempt-execution.test.ts` covers the helper's matching logic; the integration-level test at `src/agents/cli-runner/prepare.test.ts` covers the prepareCliRunContext branch that consumes it.\n\n## Reviewer Pass before push\n\nRan our own reviewer agent on this diff before pushing (same posture as PR #80046's rebase). Findings addressed in this commit:\n\n1. **Flaky timing test** — replaced wall-clock-bounded test in `cli-runner.binding-flush.test.ts:54` with a `vi.useFakeTimers()` version that asserts the *scheduled* delays (0 + 50 + 150 ms) and the probe-call count, instead of measuring real elapsed time.\n2. **`Closes #77974` → `Partial fix for #77974`** — the binding-flush gate is the write-side fix; the read-side is in #81048. Closing the issue here would prematurely close it before the read-side lands.\n3. **Coordination disclosure** — explicitly flagged the v3-vs-v4 strategy difference between this PR's new helper and #81048's restructured probe, with a clear \"happy to adapt to whichever order maintainers prefer.\"\n4. **Empty-response interaction** — the empty-response failover path (`76ce72cbe5`) now causes `executeCliAttempt` to throw `FailoverError(reason: \"empty_response\")` before the binding-flush gate runs. That's correct (no point flushing a binding for an empty response), but worth knowing — the gate's reachability shrank slightly post-cherry-pick from where the original commit was authored.\n\n## Implementation notes\n\n- `isCliBindingFlushed` returns true unconditionally for non-claude-cli providers; the per-provider gate is intentional rather than generalized so that future codex-cli / gemini-cli probes (with their own transcript layouts) can be added explicitly when those layouts are known.\n- The retry sequence (0 / 50 / 150 ms) tolerates the brief gap between claude-cli's stdio close and the OS making the JSONL line visible to readers (cooperative fsync semantics on APFS, but not guaranteed under stress). Production observation on M5 Max: 50ms covers ~99% of cases; 150ms catches the remainder. Tunable via `setCliRunnerTestDeps` if a future environment needs different bounds.\n- The orphan-tool-use walker skips sidechain entries (e.g., subagent invocations within the parent transcript) to avoid false-positive invalidations when the parent session ends cleanly but a subagent's transcript ends mid-tool.\n- The new `loadCliSessionReseedMessages` allowed-reason set entry (`\"orphaned-tool-use\"`) keeps the reseed path consistent with the new invalidation reason — without it, the orphan-invalidated session would lose access to its prior OpenClaw transcript when reseeding.\n\n## AI-assisted\n\n[AI-assisted] Built with Claude (claude-cli) under the contributor's `openclaw-contributor` skill. Both fixes were derived from real failure-mode reproduction on the contributor's M5 gateway running the Telegram + claude-cli backend. Reviewer pass on the diff caught the flaky timing test, the issue-closing-language overreach, and the v3/v4 coordination concern with #81048 before push.\n",
-        "branch": "fix/cli-runner/binding-flush-orphan-tool",
-        "head_sha": "a6df1dc14156f92940e064e85a778a46f73d3be1",
-        "author": "adele-with-a-b",
+        "title": "Doctor: structure gateway service repairs",
+        "body": "## Goal\n\nConvert gateway service maintenance to structured doctor repairs while keeping service-manager work represented as service effects, not fake file/config diffs.\n\nGateway service repair is inherently platform/service-manager work. This PR’s goal is to make that work detectable, previewable, note-aware, and validateable through the structured contract without pretending launchd/systemd operations are config patches.\n\n## Scope\n\n| Check | Goal | Behavior |\n| --- | --- | --- |\n| `core/doctor/gateway-services/extra` | Detect and clean up legacy or gateway-like services from the structured path. | Detect is silent; repair delegates to `repairExtraGatewayServices(...)`. |\n| `core/doctor/gateway-services/config` | Detect and repair service config drift from the structured path. | Detect is silent; repair delegates to `repairGatewayServiceConfig(...)`. |\n| `core/doctor/gateway-services/platform-notes` | Preserve operator context without detect-time printing. | Repair notes flow through `DoctorPrompter.note(...)` into ordered repair notes. |\n\n## Structured Repair Matrix\n\n| Check | Detect / lint behavior | Repair behavior | Dry-run / effects | Note / validation proof |\n| --- | --- | --- | --- | --- |\n| `core/doctor/gateway-services/extra` | Detects gateway-like/legacy services without printing. | Converted repair calls `repairExtraGatewayServices(...)`; legacy `maybeScanExtraGatewayServices(...)` delegates for old contribution paths. | `would-remove-legacy-gateway-service` and `remove-legacy-gateway-service` service effects. | Detect-after verifies removed legacy services are no longer reported in focused tests. |\n| `core/doctor/gateway-services/config` | Detects service config drift silently. | Converted repair calls `repairGatewayServiceConfig(...)`; legacy `maybeRepairGatewayServiceConfig(...)` delegates for old contribution paths. | `would-update-gateway-service-config` and `update-gateway-service-config` service effects. | Focused tests cover repair, dry-run, effects, and validation. |\n| Gateway platform notes | Platform/service caveats are structured findings or repair notes, not detect-time prints. | Timing-sensitive repair presentation goes through shared `DoctorPrompter.note(...)`. | No synthetic config/file diffs for service-manager work. | Structured adapter routes notes into ordered `repairNotes`. |\n| Install-plan warnings | Suppressed during detect/audit and lint. | Emitted during actual repair when the install plan is built for mutation. | Side-effect metadata stays explicit. | Tests cover silent detect/lint behavior and repair-time note routing. |\n\n## Proof\n\n| Proof | Result |\n| --- | --- |\n| Head | `02f5ff99d2dc` on `doctor-gateway-services-structured-repairs`, stacked on #84326, #84290, and #83753. |\n| Focused gateway/core/repair/lint tests | `node scripts/run-vitest.mjs src/commands/doctor-gateway-services.test.ts src/commands/doctor-gateway-daemon-flow.test.ts src/flows/doctor-core-checks.test.ts src/flows/doctor-health-contributions.test.ts src/flows/doctor-repair-flow.test.ts src/flows/doctor-lint-flow.test.ts --reporter=dot` passed, 6 files / 115 tests. |\n| Core typecheck | `node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo` passed. |\n| Formatting / whitespace | `node node_modules/oxfmt/bin/oxfmt --check --threads=1 ...` on touched gateway/core files and `git diff --check doctor-sandbox-structured-repairs..HEAD` passed. |\n| Autoreview | `.agents/skills/autoreview/scripts/autoreview --mode branch --parallel-tests \"node scripts/run-vitest.mjs src/commands/doctor-gateway-services.test.ts src/commands/doctor-gateway-daemon-flow.test.ts src/flows/doctor-core-checks.test.ts src/flows/doctor-health-contributions.test.ts src/flows/doctor-repair-flow.test.ts src/flows/doctor-lint-flow.test.ts --reporter=dot\"` passed with no accepted/actionable findings. |\n\n## Out of Scope\n\n- Live launchd/systemd mutation proof for this stacked branch.\n- Changing gateway service policy or install semantics.\n- Emitting synthetic file diffs for service-manager operations.\n\n## Real Behavior Proof\n\nBehavior addressed: Gateway service doctor repairs now run through structured health checks at their original doctor contribution position, with silent detect/lint behavior, ordered repair presentation, detect-after validation, and concrete side-effect metadata.\n\nReal environment tested: WSL source worktree `/tmp/openclaw-doctor-next` on restacked branch head `02f5ff99d2dc`.\n\nExact steps or command run after this patch: focused gateway service, daemon-flow, core check, health contribution, repair-flow, and lint-flow tests; core tsgo; touched-file formatting; whitespace check; autoreview with parallel focused tests.\n\nEvidence after fix: Focused test output showed 6 files / 115 tests passing. Core tsgo, formatting, whitespace, and autoreview passed.\n\nObserved result after fix: structured gateway repairs report service effects, preserve note ordering through the shared repair-note contract, keep detect/lint silent, and validate repaired findings.\n\nWhat was not tested: live launchd/systemd install. This proof uses mocked service managers and command helpers.\n",
+        "branch": "doctor-gateway-services-structured-repairs",
+        "head_sha": "02f5ff99d2dce9e72a93f3e4351675cf9af986b7",
+        "author": "giodl73-repo",
         "labels": [
+          "commands",
           "agents",
-          "size: L",
-          "proof: supplied",
-          "proof: sufficient",
-          "mantis: telegram-visible-proof",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
+          "maintainer",
+          "size: XL",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/cli-runner.binding-flush.test.ts",
-            "additions": 103,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/cli-runner.ts",
-            "additions": 93,
+            "path": "src/agents/pi-embedded-runner/run/attempt.spawn-workspace.test-support.ts",
+            "additions": 8,
             "deletions": 4,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/cli-runner/prepare.ts",
-            "additions": 37,
-            "deletions": 15,
+            "path": "src/commands/doctor-auth-flat-profiles.test.ts",
+            "additions": 1,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/cli-runner/session-history.ts",
+            "path": "src/commands/doctor-auth-oauth-sidecar.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-auth.deprecated-cli-profiles.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-completion.test.ts",
+            "additions": 132,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/commands/doctor-completion.ts",
+            "additions": 146,
+            "deletions": 77,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-gateway-daemon-flow.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-gateway-services.test.ts",
             "additions": 2,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/cli-runner/types.ts",
-            "additions": 2,
+            "path": "src/commands/doctor-gateway-services.ts",
+            "additions": 222,
+            "deletions": 68,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-memory-search.test.ts",
+            "additions": 3,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-plugin-manifests.test.ts",
+            "additions": 78,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-plugin-manifests.ts",
+            "additions": 110,
+            "deletions": 18,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-plugin-registry.test.ts",
+            "additions": 102,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/command/attempt-execution.helpers.ts",
-            "additions": 171,
+            "path": "src/commands/doctor-plugin-registry.ts",
+            "additions": 169,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-prompter.ts",
+            "additions": 5,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/command/attempt-execution.test.ts",
-            "additions": 297,
+            "path": "src/commands/doctor-sandbox.ts",
+            "additions": 284,
+            "deletions": 21,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-sandbox.warns-sandbox-enabled-without-docker.test.ts",
+            "additions": 237,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor.types.ts",
+            "additions": 2,
             "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/systemd-linger.test.ts",
+            "additions": 132,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/commands/systemd-linger.ts",
+            "additions": 157,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-core-browser-residue-check.test.ts",
+            "additions": 21,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-core-checks.test.ts",
+            "additions": 1095,
+            "deletions": 56,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-core-checks.ts",
+            "additions": 1087,
+            "deletions": 23,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-health-contributions.test.ts",
+            "additions": 540,
+            "deletions": 15,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-health-contributions.ts",
+            "additions": 116,
+            "deletions": 52,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-health-conversion-plan.ts",
+            "additions": 5,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-lint-flow.test.ts",
+            "additions": 16,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-lint-flow.ts",
+            "additions": 9,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-repair-flow.test.ts",
+            "additions": 259,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-repair-flow.ts",
+            "additions": 27,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/doctor-startup-channel-maintenance.test.ts",
+            "additions": 86,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/health-checks.ts",
+            "additions": 58,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84234",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84234.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84340",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84340.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 106,
+          "total": 39,
           "counts": {
-            "SUCCESS": 79,
-            "SKIPPED": 26,
-            "NEUTRAL": 1
+            "SKIPPED": 31,
+            "SUCCESS": 8
           },
           "blockers": [],
           "pending": [],
           "terminalBlockers": []
         }
       },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2620,
+    "total_ms": 2619,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 358
+        "ms": 498
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1962
+        "ms": 1739
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 275
+        "ms": 356
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
