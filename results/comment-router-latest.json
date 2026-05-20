@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-20T17:25:32.560Z",
+  "generated_at": "2026-05-20T17:26:11.450Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-20T14:25:29.381Z",
+  "since": "2026-05-20T14:26:11.000Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    84641
+    84647
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,135 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:84641:4500721740:2026-05-20T17:25:24Z:clawsweeper_needs_human",
-      "comment_id": "4500721740",
-      "comment_version_key": "4500721740:2026-05-20T17:25:24Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84641#issuecomment-4500721740",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84641,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T17:03:16Z",
-      "comment_updated_at": "2026-05-20T17:25:24Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "The remaining blocker is contributor-provided live macOS launchd proof, not an automated code repair.; Cleared: No concrete security or supply-chain concern found; the diff only changes a generated local launchd shell template and its unit assertion. (sha=56ea970fa484bc0ccf62be53faca7c9bd6638ac3)",
-      "review_summary": "The PR adds a post-bootout unload poll and bootstrap-failure kickstart fallback to the macOS launchd reload handoff template, plus updates the focused unit assertion.\n\nReproducibility: yes. from source, but not as a live reproduction here: current main and v2026.5.18 emit a reload script that bootouts and immediately bootstraps with no recovery path, matching the linked failure report.",
-      "review_followup": "The remaining blocker is contributor-provided live macOS launchd proof, not an automated code repair.",
-      "freeform_prompt": null,
-      "expected_head_sha": "56ea970fa484bc0ccf62be53faca7c9bd6638ac3",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: add bootout poll and kickstart fallback to launchd reload handoff",
-        "body": "## Summary\n\nFixes the `reload` mode race condition in the launchd restart handoff script that can leave the macOS LaunchAgent deregistered with no auto-recovery.\n\nOn macOS, when the gateway restarts with `mode=reload`, the handoff script runs `launchctl bootout` followed immediately by `launchctl bootstrap`. Because `bootout` returns 0 immediately but launchd processes the unload asynchronously, the subsequent `bootstrap` can hit the service while it's still transitioning and fail with `Bootstrap failed: 5: Input/output error` (EIO). Since `bootout` succeeded, launchd treats the service as cleanly deregistered (not crashed), so `KeepAlive=true` does not restart it — the gateway stays down until manual intervention.\n\nTwo compounding problems existed:\n\n1. No unload-completion poll — `bootout` returns before launchd finishes\n2. No fallback — unlike `kickstart` and `start-after-exit` templates which retry on failure, `reload` had no recovery path\n\n### Fix\n\nThe `reload` handoff template now:\n\n1. Polls `launchctl print` after `bootout` until the service is confirmed unloaded (max 15 x 0.2s = 3s), preventing the async race\n2. Falls back to `launchctl kickstart -k` if `bootstrap` still fails after the poll, matching the resilience of the other templates\n\nThis ensures the service either re-registers cleanly or restarts in-place rather than being left silently deregistered.\n\nCloses: https://github.com/openclaw/openclaw/issues/84630\n\n## Real behavior proof\n\nBehavior addressed: The launchd reload handoff script (bootout to bootstrap) races with launchd async unload, causing EIO and leaving the LaunchAgent permanently deregistered with no auto-recovery.\n\nReal environment tested: macOS 15.5, Node 24, local checkout. The generated shell script was inspected and validated against the expected template.\n\nExact steps or command run after this patch:\n\nnode scripts/run-vitest.mjs src/daemon/launchd-restart-handoff.test.ts\n\nThe reload-mode script template was extracted from the module and the generated shell script was reviewed for correctness.\n\nEvidence after fix:\n\nThe reload-mode handoff script rendered from the fixed template. This is the actual shell script that launchd executes on gateway restart with mode=reload:\n\n```sh\nservice_target=\"$1\"\ndomain=\"$2\"\nplist_path=\"$3\"\n\nexec >>\"$HOME/.openclaw/logs/gateway-restart.log\" 2>&1\n\nprintf '[%s] openclaw restart attempt source=launchd-handoff mode=reload\\n' \"$(date -u +%FT%TZ)\" >&2\n\nif [ -n \"$wait_pid\" ] && [ \"$wait_pid\" -gt 1 ] 2>/dev/null; then\n  while kill -0 \"$wait_pid\" >/dev/null 2>&1; do\n    sleep 0.1\n  done\nfi\n\nstatus=0\nlaunchctl enable \"$service_target\"\nlaunchctl bootout \"$service_target\" >/dev/null 2>&1 || true\n\nbootout_wait_count=\"15\"\nwhile [ \"$bootout_wait_count\" -gt 0 ]; do\n  if ! launchctl print \"$service_target\" >/dev/null 2>&1; then\n    break\n  fi\n  bootout_wait_count=$((bootout_wait_count - 1))\n  sleep 0.2\ndone\n\nif launchctl bootstrap \"$domain\" \"$plist_path\"; then\n  status=0\nelse\n  status=$?\n  launchctl kickstart -k \"$service_target\"\n  status=$?\nfi\n\nif [ \"$status\" -eq 0 ]; then\n  printf '[%s] openclaw restart done source=launchd-handoff mode=reload\\n' \"$(date -u +%FT%TZ)\" >&2\nelse\n  printf '[%s] openclaw restart failed source=launchd-handoff mode=reload status=%s\\n' \"$(date -u +%FT%TZ)\" \"$status\" >&2\nfi\n\nexit \"$status\"\n```\n\nThe two additions are the bootout polling loop (lines with bootout_wait_count, waits up to 3s for launchd to finish the async unload) and the kickstart fallback (launchctl kickstart -k inside the else branch, keeps the service alive if bootstrap fails).\n\nObserved result after fix: Running node against the handoff module confirms the reload template generates the bootout wait loop and kickstart fallback as shown above. The generated shell script was validated and the fix addresses the bootout-to-bootstrap race by confirming the unload completed before re-registering, with a kickstart safety net for transient bootstrap failures.\n\nWhat was not tested: Live macOS launchd integration with an actual LaunchAgent reload cycle. The script template change is straightforward and verified via code inspection and shell syntax validation; full launchd integration testing requires a macOS device with active service management.",
-        "branch": "codex/fix-84630-launchd-reload-race",
-        "head_sha": "56ea970fa484bc0ccf62be53faca7c9bd6638ac3",
-        "author": "nianjiuzst",
-        "labels": [
-          "gateway",
-          "size: XS",
-          "proof: supplied",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/daemon/launchd-restart-handoff.test.ts",
-            "additions": 6,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/launchd-restart-handoff.ts",
-            "additions": 16,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84641",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84641.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 30,
-          "counts": {
-            "SUCCESS": 8,
-            "QUEUED": 10,
-            "SKIPPED": 12
-          },
-          "blockers": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "pending": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3458,
+    "total_ms": 646,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 383
+        "ms": 438
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2783
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 267
+        "ms": 196
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
