@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-20T05:46:29.860Z",
+  "generated_at": "2026-05-20T05:48:04.801Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-20T02:46:29.636Z",
+  "since": "2026-05-20T02:48:02.074Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    84455
+    84208
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 2,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +29,115 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84208:4489456535:2026-05-20T05:47:56Z:automerge",
+      "comment_id": "4489456535",
+      "comment_version_key": "4489456535:2026-05-20T05:47:56Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84208#issuecomment-4489456535",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84208,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-19T15:41:16Z",
+      "comment_updated_at": "2026-05-20T05:47:56Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "automerge",
+      "intent": "automerge",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": "The PR adds local `Number.isFinite` guards to browser CLI `click-coords` and `resize` positional numeric arguments before request helpers run.\n\nReproducibility: yes. from source inspection: current main converts non-numeric `click-coords` arguments with `Number()` and sends the resulting values into the `/act` body. The resize half is already source-reproducible as covered by the shared helper, not by the PR’s added navigation guard.",
+      "review_followup": "A narrow automated repair can remove the duplicate resize guard while preserving the useful click-coords validation; no product decision is needed.",
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "ignored",
+      "actions": [],
+      "author_repository_permission": "none",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(browser-cli): reject non-numeric coordinates in click-coords and resize (#83876)",
+        "body": "Fixes #83876.\n\n`browser click-coords <x> <y>` (`extensions/browser/src/cli/browser-cli-actions-input/register.element.ts:88-89`) and `browser resize <width> <height>` (`register.navigation.ts:50`) parse their positional numeric arguments with bare `Number()`. A non-numeric input — typo, an unintended shell expansion, an empty string — yields `NaN`, which `JSON.stringify` serializes as `null`. The CLI happily forwards `{ kind: \"clickCoords\", x: null, y: 200 }` to the `/act` endpoint instead of failing fast with a user-visible error. The surrounding option parsers in the same files already use `Number.isFinite` for exactly this reason (`delayMs` at line 99, `timeoutMs` at line 175, the geolocation triple in `browser-cli-state.ts:187-189`); the positional args were the missing case.\n\n## Changes\n\n- `extensions/browser/src/cli/browser-cli-actions-input/register.element.ts`: guard the `click-coords` action handler with `if (!Number.isFinite(x) || !Number.isFinite(y))` and emit `defaultRuntime.error(danger(\"invalid coordinates …\")) + defaultRuntime.exit(1)` before `runElementAction` is called. Mirrors the existing `defaultRuntime.error(danger(...)) + exit(1)` pattern in `register.navigation.ts`'s navigate error branch.\n- `extensions/browser/src/cli/browser-cli-actions-input/register.navigation.ts`: identical guard on the `resize` action handler against `width` and `height`, before `runBrowserResizeWithOutput`.\n\nDiff stat: 2 files, +14 / -0. No behavior change for any input that was already a finite number.\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Sanitized issue evidence — `runElementAction` posts `body` to `/act` via `callBrowserAct`, and `runBrowserResizeWithOutput` posts `{ width, height, … }` via the resize helper. JSON-stringifying `NaN` produces `null`, so the server can't distinguish \"missing field\" from \"user typo'd the argument.\" The guard runs at the CLI boundary and never sends the malformed body.\n\n- **Real environment tested:** Local Node 22.x. Probe at `/tmp/probe_83876.mjs` does both halves of the proof. (a) Parses the patched `register.element.ts` and `register.navigation.ts` and verifies (i) each action handler now contains `Number.isFinite` on its positional args + `defaultRuntime.error(danger(...))` + `defaultRuntime.exit(1)`, and (ii) the guard precedes the request call (`runElementAction` / `runBrowserResizeWithOutput`). (b) Replays both shapes in pure JS — buggy handler with `\"abc\" \"200\"` returns a payload containing `\"x\":null` (confirming the exact #83876 symptom: NaN → JSON null → silent transmission to the server); patched handler with the same input returns `{ sent: false, exitCode: 1 }` (rejected at the CLI boundary, request never issued); patched handler with valid `\"100\" \"200\"` returns `\"x\":100,\"y\":200` unchanged (no regression).\n\n- **Exact steps or command run after this patch:** `pnpm install && pnpm build && node openclaw.mjs browser click-coords abc 200 ; node openclaw.mjs browser click-coords 100 200 ; node openclaw.mjs browser resize abc 100` (live CLI), AND `node /tmp/probe_83876.mjs`\n\n- **Live `openclaw browser` invocation after build** (Linux, Node 22.x):\n\n```\n$ node openclaw.mjs browser click-coords abc 200\ninvalid coordinates \"abc 200\": x and y must be finite numbers\n$ # exit code 1, no /act request issued\n\n$ node openclaw.mjs browser click-coords 100 200\nGatewayTransportError: gateway closed (1006 abnormal closure (no close frame)): no close reason\n# (Gateway is offline locally — but this is the happy path: the guard passes, the request reaches the gateway transport.)\n\n$ node openclaw.mjs browser resize abc 100\ninvalid viewport size \"NaN 100\": width and height must be finite numbers\n$ # exit code 1, no /resize request issued\n```\n\nThe invalid-coordinate case correctly stops at the CLI boundary with `invalid coordinates \"abc 200\"` on stderr and exits non-zero. The valid case proceeds past the guard into `runElementAction` → `callBrowserAct` and surfaces a real `GatewayTransportError` (because no gateway is running locally) — which proves the guard is NOT blocking finite numerics. The resize case shows `\"NaN 100\"` rather than `\"abc 100\"` because Commander's `(v: string) => Number(v)` argument parser converts before the action handler runs; the error is correctly raised, just with the post-parse value in the message. This matches the issue's \"Minimum fix scope\" exactly.\n\n- **Probe evidence:**\n\n```\nPASS: click-coords action guards x/y with Number.isFinite and emits danger+exit(1)\nPASS: click-coords guard runs BEFORE runElementAction (rejects before request)\nPASS: resize action guards width/height with Number.isFinite and emits danger+exit(1)\nPASS: resize guard runs BEFORE runBrowserResizeWithOutput (rejects before request)\nPASS: replay (buggy): non-numeric x silently serializes to JSON null and is sent to /act — confirms #83876\nPASS: replay (patched): non-numeric x is rejected before /act with exit(1) — request never sent\nPASS: replay (patched, valid input): finite numerics flow through unchanged — no regression\n\nALL CASES PASS\n```\n\n- **Observed result after fix:** `browser click-coords abc 200` now writes `invalid coordinates \"abc 200\": x and y must be finite numbers` to stderr and exits 1 instead of POSTing `{ x: null, y: 200 }` to `/act`. `browser resize abc 100` likewise rejects on the CLI side. Any finite numeric input — including 0, negative, decimals — is unchanged.\n\n- **What was not tested:** No live browser session against a Chrome/CDP target — that's outside the scope of an input-validation fix. The probe replays the exact NaN-to-null serialization path called out in the issue's repro section.\n\n## Audit (per CLAUDE rules — all 5 steps)\n\n- **Existing-helper check:** No helper needed — `Number.isFinite` is the codebase's established predicate for this exact concern (`delayMs` at `register.element.ts:99`, `timeoutMs` at `:175`, three coords in `browser-cli-state.ts:187-189`, the resolved-timeout pair in `browser-cli-shared.ts:40,46`). I'm reusing the same predicate, not inventing one. PASS\n- **Shared-helper caller check:** No shared helper is being modified. The two action handlers are leaf endpoints in their respective command registrations; the new validation is local to each action and cannot affect other call sites. PASS\n- **Broader-fix rival scan:** `gh pr list --search '83876 in:title,body'` and `gh pr list --search 'click-coords coordinates in:title,body'` return no open PRs. Issue timeline shows zero cross-references. PASS\n- **Recent-merge audit:** `git log --oneline -5 -- extensions/browser/src/cli/browser-cli-actions-input/` shows no recent commits touching these files. PASS\n- **Prototype-pollution scan:** N/A — `Number.isFinite` on locally-bound numeric variables, no object property access.\n\n",
+        "branch": "fix-browser-cli-coord-finite-guard-83876",
+        "head_sha": "e61934e451ad821933e3c28b4d08597769e22b1a",
+        "author": "hclsys",
+        "labels": [
+          "size: XS",
+          "triage: needs-real-behavior-proof",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "extensions/browser/src/cli/browser-cli-actions-input/register.element.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/browser/src/cli/browser-cli-actions-input/register.navigation.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84208",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84208.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "counts": {
+            "FAILURE": 1,
+            "SUCCESS": 65,
+            "SKIPPED": 29,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ]
+        }
+      },
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
+    }
+  ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 455,
+    "total_ms": 3063,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 214
+        "ms": 460
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2254
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 231
+        "ms": 337
       },
       {
         "name": "append_ledger",
