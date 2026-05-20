@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-20T00:32:42.283Z",
-  "repo": "openclaw/clawhub",
+  "generated_at": "2026-05-20T00:33:08.982Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-19T21:32:42.077Z",
+  "since": "2026-05-19T21:33:06.797Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    2333
+    84358
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 2,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,123 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:84358:4493100868:2026-05-20T00:33:02Z:clawsweeper_needs_human",
+      "comment_id": "4493100868",
+      "comment_version_key": "4493100868:2026-05-20T00:33:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84358#issuecomment-4493100868",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84358,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-19T23:39:00Z",
+      "comment_updated_at": "2026-05-20T00:33:02Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "Review did not complete, so no work-lane recommendation was made. (sha=3501a3fe02660b5e8ded98f81e13f4a93a155ddd)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "Review did not complete, so no work-lane recommendation was made.",
+      "freeform_prompt": null,
+      "expected_head_sha": "3501a3fe02660b5e8ded98f81e13f4a93a155ddd",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(doctor): invalidate gateway auth cache after OAuth sidecar repair [AI-assisted]",
+        "body": "Fixes the gateway auth cache staleness part of #84252 (Bug B). AI-assisted (Claude Code).\n\n## Summary\n\n- After `doctor --fix` repairs legacy OAuth sidecar profiles or stale OAuth profile shadows, the running gateway's `models.authStatus` result cache (60-second TTL) was returning stale pre-repair data, causing users to see runtime auth failures immediately after a supposedly successful repair.\n- The `models.authStatus` gateway method already supports a `refresh: true` param that bypasses the TTL cache and forces a fresh disk read of auth profile files (the per-file auth store cache is mtime-keyed so it correctly detects the new files written by the doctor).\n- This PR uses that existing mechanism: when `runDoctorRepairSequence` makes auth profile file changes (either via `maybeRepairLegacyOAuthSidecarProfiles` or `repairStaleOAuthProfileShadows`), it sets `authProfilesRepaired: true` in its return value, and `loadAndMaybeMigrateDoctorConfig` then calls the gateway with `refresh: true` best-effort (3-second timeout, silent on failure so a non-running gateway doesn't block the doctor).\n\n## What was wrong with the earlier approach\n\nMy [earlier comment](https://github.com/openclaw/openclaw/issues/84252#issuecomment-4491633652) on the issue proposed calling `clearLoadedAuthStoreCache()` and `invalidateModelAuthStatusCache()` from `repair-sequencing.ts`. That was wrong: both functions are process-local. The correction is in a [follow-up comment](https://github.com/openclaw/openclaw/issues/84252#issuecomment-4492953255).\n\n## Changes\n\n- `src/commands/doctor/repair-sequencing.ts`: adds `authProfilesRepaired: boolean` to return type; set when either OAuth sidecar or stale OAuth shadow repair writes auth files to disk\n- `src/commands/doctor-config-flow.ts`: best-effort `callGateway({ method: \"models.authStatus\", params: { refresh: true }, timeoutMs: 3000 })` when `authProfilesRepaired`\n- `src/commands/doctor/repair-sequencing.test.ts`: three new tests for the flag\n\n## Real behavior proof\n\nBehavior addressed: `doctor --fix` leaves gateway auth status cache stale after OAuth sidecar repair, causing runtime auth failures for up to 60 seconds after repair succeeds.\n\nReal environment tested: Linux desktop (HP Z640), source-checkout at commit `3501a3f` (v2026.5.19), Node 24.14.1, `pnpm openclaw doctor --fix` run live against this install.\n\nExact steps or command run after this patch: `pnpm openclaw doctor --fix` on the branch with managed gateway stopped (version mismatch — v2026.5.18-beta.1 service vs v2026.5.19 source).\n\nEvidence after fix: Live terminal output from `pnpm openclaw doctor --fix` on this branch:\n\n```\n$ node scripts/run-node.mjs doctor --fix\n\n◇  Doctor changes ─────────────────────────────────────────────────────────────╮\n│  Repaired Codex model routes:                                                 │\n│  - agents.defaults.models.openai-codex/gpt-5.4-mini:                         │\n│    openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini                          │\n├───────────────────────────────────────────────────────────────────────────────╯\n\n◇  Gateway ────────────────────╮\n│  Gateway not running.        │\n├──────────────────────────────╯\n\nUpdated config: ~/.openclaw/openclaw.json\n└  Doctor complete.\n```\n\nDoctor ran and completed normally. Auth profile repair paths (`maybeRepairLegacyOAuthSidecarProfiles`, `repairStaleOAuthProfileShadows`) ran without error; no legacy sidecar profiles exist on this install (credentials already fully migrated), so `authProfilesRepaired` was false and no gateway call was triggered — consistent with expected behavior. The gateway-down path (gateway not running when `authProfilesRepaired` would be true) is the try/catch silent-failure path; doctor completing cleanly with \"Gateway not running.\" confirms it.\n\nSupplemental: `pnpm build` exit 0; `pnpm check` exit 0 (\"Import cycle check: 0 runtime value cycle(s)\"); `repair-sequencing.test.ts` 12/12 passed (3 new `authProfilesRepaired` tests); `doctor-config-flow.test.ts` 34/34 passed.\n\nObserved result after fix: Doctor completed with \"Doctor complete.\" on a live install. Config repairs applied. No auth errors, no crash, no regression. Gateway-not-running path exercised: callGateway would be called if `authProfilesRepaired` were true, silently catches connection failure, doctor still exits cleanly.\n\nWhat was not tested: Live gateway refresh with an actual stale sidecar profile — this machine's OAuth credentials are already fully migrated from the legacy sidecar format, so the repair functions produced no auth file changes during this run. macOS LaunchAgent managed install not tested. A maintainer with a legacy sidecar profile or a multi-agent install with stale shadow credentials could exercise the full path.",
+        "branch": "fix/doctor-auth-cache-invalidation-84252",
+        "head_sha": "3501a3fe02660b5e8ded98f81e13f4a93a155ddd",
+        "author": "jimdawdy-hub",
+        "labels": [
+          "commands",
+          "size: S",
+          "proof: supplied",
+          "P1",
+          "rating: 🌊 off-meta tidepool",
+          "merge-risk: 🚨 auth-provider"
+        ],
+        "files": [
+          {
+            "path": "src/commands/doctor-config-flow.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/repair-sequencing.test.ts",
+            "additions": 34,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/repair-sequencing.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84358",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84358.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 70,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 333,
+    "total_ms": 2392,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 195
+        "ms": 295
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1876
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 127
+        "ms": 194
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
