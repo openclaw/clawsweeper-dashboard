@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-20T19:14:17.179Z",
+  "generated_at": "2026-05-20T19:14:27.182Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-20T16:14:15.123Z",
+  "since": "2026-05-20T16:14:26.830Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    71185
+    84674
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 9,
-  "commands_seen": 1,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,144 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:71185:4323359226:2026-05-20T19:14:09Z:clawsweeper_needs_human",
-      "comment_id": "4323359226",
-      "comment_version_key": "4323359226:2026-05-20T19:14:09Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/71185#issuecomment-4323359226",
-      "repo": "openclaw/openclaw",
-      "issue_number": 71185,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-27T00:03:00Z",
-      "comment_updated_at": "2026-05-20T19:14:09Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "No ClawSweeper repair lane is needed; the existing PR appears correct and should proceed through maintainer review and normal landing checks.; Cleared: The diff only broadens null handling in diagnostic support redaction and trajectory metadata plus tests, and does not add dependencies, secret handling, CI, publishing, or code-execution paths. (sha=9d8e173017daeabcde58efb7cc46e71586aaa53d)",
-      "review_summary": "The PR hardens trajectory support metadata capture by making path redaction null-tolerant, filtering malformed resolved skill entries with fallback to the basic skill list, and adding regression tests.\n\nReproducibility: yes. Source inspection shows current main can throw in `buildSkillsCapture` and `redactPathForSupport` when a partial resolved skill entry reaches trajectory metadata, and the PR body supplies redacted before/after live gateway logs for that path.",
-      "review_followup": "No ClawSweeper repair lane is needed; the existing PR appears correct and should proceed through maintainer review and normal landing checks.",
-      "freeform_prompt": null,
-      "expected_head_sha": "9d8e173017daeabcde58efb7cc46e71586aaa53d",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(trajectory): tolerate partial skill snapshot entries in support capture",
-        "body": "## Summary\n\n- `buildSkillsCapture` and `redactPathForSupport` crash on skill snapshot entries with undefined `name`/`filePath`/`baseDir`, which happens in practice whenever the symlink-escape guard rejects a skill and leaves a partial entry in `resolvedSkills`.\n- Defensive consumer fix only — security posture of the symlink-escape rejection is unchanged.\n- Repro was deterministic in my environment: every agent turn died in `runEmbeddedAttempt` → `buildTrajectoryRunMetadata` → `buildSkillsCapture`, failing the entire model-fallback chain because every candidate hits the same shared code.\n\n## Changes\n\n- `src/logging/diagnostic-support-redaction.ts`: `redactPathForSupport` now accepts `string | null | undefined` and returns `\"\"` for non-string input.\n- `src/trajectory/metadata.ts`: `buildSkillsCapture` filters skill entries without a string `name`. If every `resolvedSkills` entry is filtered out (i.e. every resolved entry is partial), falls back to `skillsSnapshot.skills` so support bundles don't lose the skill inventory entirely. Final `toSorted` comparator is null-safe.\n- `src/trajectory/metadata.test.ts`: regression tests for partial-snapshot tolerance, fallback when all resolved entries are partial, and direct redaction null-input.\n\n## Security posture unchanged\n\nThe symlink-escape rejection in `src/agents/skills/workspace.ts` still refuses to load escaped symlinks and emits the same `[skills] Skipping escaped skill path outside its configured root` warn log. This PR only prevents the downstream support-capture consumer from crashing on the partial entries the rejection path leaves behind.\n\n## Suggested follow-up (not in this PR)\n\nThe producer side — `src/agents/skills/workspace.ts` around the `symlink-escape` / `bundled-symlink-escape` reasons — is what leaves partial entries in `resolvedSkills`. A cleaner producer-side fix (skip the entry, or emit with `available: false` + placeholder name) would remove the class of problem. Happy to follow up if preferred.\n\n\n## Real behavior proof\n\n- Behavior or issue addressed: agent turns crashing with `TypeError: Cannot read properties of undefined (reading 'startsWith')` in `runEmbeddedAttempt` → `buildTrajectoryRunMetadata` → `buildSkillsCapture` whenever `skillsSnapshot.resolvedSkills` carries a partial entry left behind by the symlink-escape rejection in `src/agents/skills/workspace.ts`. Every model in the fallback chain hit the same shared code path, so the entire turn would fail with reason=unknown.\n- Real environment tested: production OpenClaw gateway daemon on macOS Sonoma (Darwin 23.6.0), Node 25.6.0, running an 11-account Matrix deployment with mixed text + media traffic. Same gateway was running the unpatched code, then the patched dist for several days continuously.\n- Exact steps or command run after this patch: built patched dist (`pnpm build`), reloaded the gateway LaunchDaemon (`sudo launchctl bootout system/ai.openclaw.gateway && sudo launchctl bootstrap system /Library/LaunchDaemons/ai.openclaw.gateway.plist`), and let live Matrix traffic exercise the symlink-escape rejection path (the `himalaya` skill is a symlink that resolves outside `~/.openclaw/skills`, so it triggers the rejection on every skills-snapshot rebuild).\n- Evidence after fix:\n  - **Pre-patch crash signature** in redacted runtime logs at `~/.openclaw/logs/gateway.log` — log excerpt:\n    ```\n    2026-04-27T06:43:33.391-04:00 [ws] ⇄ res ✗ agent errorCode=UNAVAILABLE errorMessage=TypeError: Cannot read properties of undefined (reading 'startsWith') runId=1a473ced-1328-46c7-8e23-55813ef3b8f9\n    2026-04-27T06:47:43.641-04:00 [ws] ⇄ res ✗ agent errorCode=UNAVAILABLE errorMessage=TypeError: Cannot read properties of undefined (reading 'startsWith') runId=429f610a-6f62-417c-804a-5c7d3aa33d96\n    ```\n  - **Symlink-escape rejection still firing on the running patched daemon** in redacted runtime logs at `~/.openclaw/logs/gateway.err.log` — proves the security guard is unchanged and the producer-side path that emits the partial entry is exactly the one this PR catches; live output below:\n    ```\n    [skills] Skipping escaped skill path outside its configured root: source=openclaw-managed root=~/.openclaw/skills reason=symlink-escape requested=~/.openclaw/skills/himalaya resolved=~/moltbot/skills/himalaya\n    [skills] Skipping escaped skill path outside its configured root: source=openclaw-workspace root=~/clawd/skills rootResolved=~/.openclaw/skills reason=symlink-escape requested=~/clawd/skills/himalaya resolved=~/moltbot/skills/himalaya\n    ```\n  - **Post-patch agent turns completing normally** — `gh run list` against my fork's recent gateway-driven activity, plus a continuous tail of `~/.openclaw/logs/gateway.log`, both confirm no new `Cannot read properties of undefined (reading 'startsWith')` lines since the patched dist was deployed; daemon process has been continuously up across many turns of real Matrix traffic.\n- Observed result after fix: agent turns that previously failed every time the symlink-escape rejection fired now complete normally. The rejection warn line still emits (security posture unchanged), `buildSkillsCapture` filters the partial entry instead of crashing, and `redactPathForSupport` returns `\"\"` for the undefined-path case rather than throwing on `String.prototype.startsWith`. Live `openclaw gateway` output in the same logs above shows continued ws traffic resolving normally.\n- What was not tested: I do not have a deterministic e2e fixture that re-creates the symlink-escape `resolvedSkills` shape outside my live deployment, so the regression coverage is the unit tests in `src/trajectory/metadata.test.ts` plus the live-gateway observation above. The producer-side cleanup (rejecting the partial entry at the workspace.ts source) was not attempted in this PR — it stays as a follow-up.\n\n## Test plan\n\n- [x] `pnpm test src/trajectory/metadata.test.ts` passes (6/6, was 3/3)\n- [x] `pnpm build` passes locally\n- [x] `pnpm check` passes locally\n- [x] `codex review --base upstream/main` run locally — one P2 finding (fallback on fully-filtered `resolvedSkills`) addressed in-branch; re-ran clean\n- [x] Verified in-tree: with patched dist, agent turns that previously crashed every time now complete normally; no weakening of symlink-escape rejection path\n\n## Degree of testing\n\nLightly tested — unit tests cover the three failure modes, and the running gateway in my environment has been stable with the patched dist across hours of live traffic on an 11-account Matrix deployment. No integration or e2e coverage added.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n",
-        "branch": "fix/skills-capture-null-safety",
-        "head_sha": "9d8e173017daeabcde58efb7cc46e71586aaa53d",
-        "author": "lukeboyett",
-        "labels": [
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦞 diamond lobster",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/logging/diagnostic-support-redaction.ts",
-            "additions": 7,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/trajectory/metadata.test.ts",
-            "additions": 82,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/trajectory/metadata.ts",
-            "additions": 16,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-71185",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-71185.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 30,
-          "counts": {
-            "CANCELLED": 1,
-            "QUEUED": 10,
-            "SUCCESS": 7,
-            "SKIPPED": 12
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "pending": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2332,
+    "total_ms": 587,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 431
+        "ms": 339
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1611
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 264
+        "ms": 236
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
