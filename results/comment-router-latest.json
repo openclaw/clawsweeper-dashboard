@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-20T13:40:11.521Z",
+  "generated_at": "2026-05-20T13:40:45.706Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-20T10:40:08.732Z",
+  "since": "2026-05-20T10:40:41.829Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     80726
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4479887337
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 7,
-  "commands_seen": 3,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -55,171 +57,107 @@
       "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
       "review_followup": "Review did not complete, so no work-lane recommendation was made.",
       "freeform_prompt": null,
-      "expected_head_sha": "c4c03134e1c683afc0e305dd50ec8580cd759407",
+      "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
+      "status": "ignored",
       "actions": [],
+      "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix(telegram): resolve DM topic thread ids",
-        "body": "## Summary\n- add a shared Telegram helper that resolves thread ids from `message_thread_id` or Bot API `direct_messages_topic.topic_id`\n- use that helper across Telegram inbound message context, native commands, runtime handlers, and sequential keys\n- add regression coverage for BotFather Threaded Mode/private DM topic routing\n\n## Testing\n- `OPENCLAW_VITEST_INCLUDE_FILE=/tmp/openclaw-vitest-include.json OPENCLAW_VITEST_MAX_WORKERS=1 corepack pnpm vitest run --config test/vitest/vitest.extension-telegram.config.ts --typecheck --reporter verbose`\n- `OPENCLAW_VITEST_INCLUDE_FILE=/tmp/openclaw-vitest-include-2.json OPENCLAW_VITEST_MAX_WORKERS=1 corepack pnpm vitest run --config test/vitest/vitest.extension-telegram.config.ts --typecheck --reporter dot`\n- `corepack pnpm format:check extensions/telegram/src/bot/helpers.ts extensions/telegram/src/bot/helpers.test.ts extensions/telegram/src/bot-message-context.ts extensions/telegram/src/bot-message-context.dm-topic-threadid.test.ts extensions/telegram/src/bot-native-commands.ts extensions/telegram/src/bot-handlers.runtime.ts extensions/telegram/src/sequential-key.ts`\n- `git diff --check`\n",
-        "branch": "fix/telegram-dm-topic-thread-id",
-        "head_sha": "c4c03134e1c683afc0e305dd50ec8580cd759407",
-        "author": "audiofool934",
+        "title": "fix(infra): tolerate chmod EPERM on K8s fsGroup-mounted PVC",
+        "body": "## Summary\n\nOn Kubernetes deployments with `fsGroup`-mounted PVCs, `chmod(dir, 0o700)` fails with EPERM because the state directory is owned by root (with group ownership set to the fsGroup GID). This crashes exec approvals, task registry, task-flow registry, and plugin-state initialization on startup.\n\nThis PR extracts a shared `tryChmodSync` helper that:\n1. Tries `chmodSync(target, mode)` as before\n2. On EPERM/EACCES/EROFS: verifies the process can actually access the path via `accessSync`\n3. If accessible → tolerates the failure (the fsGroup grants adequate permissions via group bits)\n4. If not accessible → rethrows the original error\n\n## Root cause\n\n```\nEPERM: operation not permitted, chmod '/home/openclaw/.openclaw'\n```\n\nK8s `fsGroup` volumes are owned by `root:<fsGroup>` with setgid bit. The container process runs as a non-root UID in the fsGroup, so it has full access via group membership but cannot `chmodSync` a root-owned directory.\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `src/infra/chmod.ts` | New `tryChmodSync` helper — chmod with EPERM/EACCES/EROFS tolerance |\n| `src/infra/chmod.test.ts` | 9 tests covering all error codes and access verification paths |\n| `src/infra/exec-approvals.ts` | Use `tryChmodSync` instead of raw `chmodSync` |\n| `src/tasks/task-registry.store.sqlite.ts` | Use `tryChmodSync` |\n| `src/tasks/task-flow-registry.store.sqlite.ts` | Use `tryChmodSync` |\n| `src/plugin-state/plugin-state-store.sqlite.ts` | Use `tryChmodSync` |\n\n## Tests\n\n```\n$ node scripts/run-vitest.mjs src/infra/chmod.test.ts\n ✓ infra  ../../src/infra/chmod.test.ts (12 tests) 16ms\n Test Files  1 passed (1)\n      Tests  12 passed (12)\n   Duration  152ms\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: `chmod(dir, 0o700)` throws EPERM on K8s fsGroup-mounted PVC, crashing exec approvals and state initialization. The helper tolerates EPERM when access is verified, and rejects only the genuinely dangerous case (unexpected other-WRITE permission).\n- **Real environment tested**: Local patched OpenClaw checkout at `bfadbe3e37`, macOS arm64, Node.js `v24.10.0`. Also reproduced on OrbStack Kubernetes v1.33.9.\n- **Failing proof before fix**: On upstream/main (`a002c416c7`), `chmodSync(dir, 0o700)` on a K8s fsGroup volume throws EPERM and crashes the gateway on startup. Test file `src/infra/chmod.test.ts` does not exist on upstream/main.\n\n### Permission boundary policy (updated in `bfadbe3e37`)\n\nK8s fsGroup volumes commonly set directories to mode `2775` (setgid + rwxrwxr-x). The helper now:\n- **Accepts** `2775` (other has read+execute but NOT write) ✅\n- **Accepts** `2755`, `2751`, etc. (other read/execute without write) ✅\n- **Rejects** `2777` or any mode with unexpected other-WRITE (`0o002`) ❌ — this signals a genuine security misconfiguration\n\nThis boundary aligns with the real K8s fsGroup behavior: volume plugins set read+execute on `other`, but never write.\n\n### Live K8s reproduction\n\nPod spec:\n```yaml\nsecurityContext:\n  runAsUser: 1000\n  runAsGroup: 1000\n  fsGroup: 1000\nvolumes:\n  - name: state\n    emptyDir: {}  # simulates fsGroup PVC\n```\n\nTerminal output from `kubectl exec`:\n```\n=== K8s fsGroup EPERM Reproduction ===\nNode: v24.15.0\nUser: uid=1000(node) gid=1000(node) groups=1000(node)\n\n--- State directory (fsGroup mount) ---\ndrwxrwsr-x 1 root node  0 May 20 07:00 .openclaw\n\nOwner: 0:1000\nMode: 0o2775\n\n--- Main branch: chmod(dir, 0o700) ---\nchmod FAILED: EPERM EPERM: operation not permitted, chmod '/home/openclaw/.openclaw'\n\n--- PR fix: tryChmodSync(dir, 0o700) ---\nchmod failed with EPERM - checking access...\naccessSync(R_OK|W_OK|X_OK) PASSED ✅\nactualOtherWrite=0, requestedOtherWrite=0 → tolerating\n→ tryChmodSync tolerates EPERM, gateway starts normally\n\n--- Verify: can create state files ---\nWrite+Read: ✅ {\"test\":true}\nCleanup: ✅\n```\n\n- **Exact steps or command run after this patch**:\n\n```text\nnode scripts/run-vitest.mjs src/infra/chmod.test.ts\n```\n\n- **Evidence after fix**:\n\n```text\n ✓ infra  ../../src/infra/chmod.test.ts (12 tests) 16ms\n\n Test Files  1 passed (1)\n      Tests  12 passed (12)\n   Duration  152ms\n```\n\n- **Observed result after fix**: All 12 chmod tests pass — EPERM tolerance with accessSync fallback, K8s fsGroup mode 2775 accepted, world-writable (other-WRITE) rejected, and normal chmod behavior preserved.\n- **What was not tested**: Full OpenClaw gateway startup inside a live K8s cluster. The chmod behavior is validated via mocked fs calls and real K8s `kubectl exec` reproduction.\n\nCloses #83619\n\n",
+        "branch": "fix/k8s-fsgroup-chmod-eperm",
+        "head_sha": "b9dcaf9426c536de84b3cf131b155e51b5fcd6bc",
+        "author": "jerry-xin",
         "labels": [
-          "channel: telegram",
-          "size: S",
+          "size: M",
           "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🌊 off-meta tidepool",
-          "merge-risk: 🚨 message-delivery"
+          "proof: sufficient",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "extensions/telegram/src/bot-handlers.runtime.ts",
-            "additions": 7,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message-context.dm-topic-threadid.test.ts",
-            "additions": 16,
+            "path": "src/infra/chmod.test.ts",
+            "additions": 140,
             "deletions": 0,
-            "changeType": "MODIFIED"
+            "changeType": "ADDED"
           },
           {
-            "path": "extensions/telegram/src/bot-message-context.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
+            "path": "src/infra/chmod.ts",
+            "additions": 37,
+            "deletions": 0,
+            "changeType": "ADDED"
           },
           {
-            "path": "extensions/telegram/src/bot-native-commands.ts",
+            "path": "src/infra/exec-approvals.ts",
             "additions": 3,
-            "deletions": 2,
+            "deletions": 6,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/telegram/src/bot/helpers.test.ts",
-            "additions": 21,
-            "deletions": 0,
+            "path": "src/plugin-state/plugin-state-store.sqlite.ts",
+            "additions": 4,
+            "deletions": 3,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/telegram/src/bot/helpers.ts",
-            "additions": 19,
-            "deletions": 0,
+            "path": "src/tasks/task-flow-registry.store.sqlite.ts",
+            "additions": 4,
+            "deletions": 3,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/telegram/src/sequential-key.ts",
-            "additions": 2,
-            "deletions": 2,
+            "path": "src/tasks/task-registry.store.sqlite.ts",
+            "additions": 4,
+            "deletions": 3,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-80726",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-80726.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83695",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83695.md",
         "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 108,
+          "total": 102,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 27,
-            "SUCCESS": 78,
+            "FAILURE": 1,
+            "SUCCESS": 71,
+            "SKIPPED": 29,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:CANCELLED"
+            "Real behavior proof:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
+            "Real behavior proof:FAILURE"
           ]
         }
       },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:80726:4497261689:2026-05-20T10:14:47Z:re_review",
-      "comment_id": "4497261689",
-      "comment_version_key": "4497261689:2026-05-20T10:14:47Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/80726#issuecomment-4497261689",
-      "repo": "openclaw/openclaw",
-      "issue_number": 80726,
-      "author": "Audiofool934",
-      "author_id": 146060063,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-20T10:14:23Z",
-      "comment_updated_at": "2026-05-20T10:14:47Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:80726:4436901770:2026-05-13T03:30:40Z:re_review",
-      "comment_id": "4436901770",
-      "comment_version_key": "4436901770:2026-05-13T03:30:40Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/80726#issuecomment-4436901770",
-      "repo": "openclaw/openclaw",
-      "issue_number": 80726,
-      "author": "Audiofool934",
-      "author_id": 146060063,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-13T03:30:40Z",
-      "comment_updated_at": "2026-05-13T03:30:40Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 6211,
+    "total_ms": 4161,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 497
+        "ms": 607
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2277
+        "ms": 3256
       },
       {
         "name": "classify_commands",
@@ -227,11 +165,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3410
+        "ms": 285
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
