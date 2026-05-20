@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-20T23:45:12.043Z",
+  "generated_at": "2026-05-20T23:45:18.480Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-20T20:45:09.841Z",
+  "since": "2026-05-20T20:45:16.688Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -13,6 +13,9 @@
   ],
   "comment_ids": [
     4323384001
+  ],
+  "comment_ids": [
+    4323573049
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -64,17 +67,16 @@
       "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "memory-lancedb: add configurable timeout/retry for embedding calls",
-        "body": "Replaces #56517 (closed, could not reopen).\n\n- Add embedding.timeoutMs (default 10s) and embedding.maxRetries (default 1) to memory-lancedb plugin config\n- Prevents cascading Connection error failures during API rate-limit storms\n- Also bumps LaunchAgent ThrottleInterval from 1s to 10s\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: `memory-lancedb`'s OpenAI-SDK embedding client had no operator-tunable timeout/retry budget. A hung or 5xx-storming embedding backend blocks on the SDK default (600000ms) and stalls every agent turn that triggers auto-recall. This PR lets operators bound it via `embedding.timeoutMs` / `embedding.maxRetries`. Per ClawSweeper review, the bounds now apply ONLY when explicitly configured; unset installs keep the SDK defaults (no upgrade behavior change).\n- **Real environment tested**: local `openclaw` checkout (upgrade onto current upstream/main) with the bundled `openai` SDK the plugin loads at runtime, exercised against a blackhole TCP endpoint that accepts the connection but never responds (simulating a hung embedding backend).\n- **Exact steps or command run after this patch**:\n  ```bash\n  # blackhole server + the same OpenAI client the plugin constructs, with the\n  # configured bound applied:\n  node ./embed-timeout-proof.mjs   # full script in PR discussion\n  # core: new OpenAI({ baseURL: <blackhole>, timeout: 2000, maxRetries: 1 })\n  #         .embeddings.create({ model, input })\n  ```\n- **Evidence after fix**: captured live from the blackhole run via `node` against the bundled `openai` SDK in `~/.openclaw`/local checkout:\n  ```\n  blackhole embedding endpoint listening at http://127.0.0.1:60765/v1 (never responds)\n  configured timeoutMs=2000 maxRetries=1: failed after 4520ms — APIConnectionTimeoutError: Request timed out.\n  ```\n  The configured bound aborts at 2000ms, retries once, and surfaces `APIConnectionTimeoutError` after ~4.5s total — instead of hanging on the SDK default 600000ms. The deployed wiring in `extensions/memory-lancedb/index.ts` now spreads `timeout`/`maxRetries` into the `new OpenAI({...})` constructor only when set (`...(timeoutMs !== undefined ? { timeout: timeoutMs } : {})`), so unconfigured installs retain SDK defaults.\n- **Observed result after fix**: With `embedding.timeoutMs` set, a hung endpoint fails fast at the configured bound. With it unset, the OpenAI SDK default (600000ms / 2 retries) is preserved unchanged — no regression for installs with slow-but-working endpoints (the upgrade risk ClawSweeper flagged). Config-layer clamping still rejects out-of-range values (`timeoutMs` to [1000, 60000], `maxRetries` to [0, 5]).\n- **What was not tested**: A real upstream OpenAI 5xx wave (used a local blackhole to deterministically reproduce the hang). Behavior on a partially-responsive endpoint that sends headers then stalls mid-body (the SDK's bodyTimeout governs that path, unchanged by this PR).\n",
-        "branch": "fix/lancedb-embedding-timeout-v2",
-        "head_sha": "f19a655435722a4ddc9f949829aa056900ca1d04",
+        "title": "feat(auth): add models auth clean command to prune stale auth profiles",
+        "body": "## Summary\n\n- Adds `openclaw models auth clean` command that identifies and removes stale auth profiles no longer referenced by provider config\n- Supports `--dry-run`, `--json`, and `--agent` flags\n- Uses file locking to prevent concurrent write races\n- Sanitizes profile IDs to prevent terminal injection in diagnostic output\n- Uses atomic temp-file-then-rename writes in saveJsonFile (CWE-377 fix)\n- Adds `loadAgentLocalAuthProfileStore` to prevent credential scope bleed when cleaning subagent stores\n\nSupersedes #49429, #54171, #41640 (rebased onto current main v2026.4.14).\n\n## Motivation\n\nStale auth profiles accumulate over time (expired OAuth tokens, removed providers, orphaned external CLI syncs). These stale entries cause recurring \"Model login failed\" errors when the sync mechanism overwrites fresh credentials with expired ones from external CLI files like `~/.codex/auth.json`.\n\n## Test plan\n\n- [x] `src/commands/models/auth-clean.test.ts` -- 35 tests\n- [x] `src/agents/auth-profiles/store.legacy-migration.test.ts` -- 6 tests\n- [x] `src/cli/models-cli.test.ts` -- 4 tests\n- [x] `pnpm tsgo` passes\n- [x] `pnpm build` passes\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: `openclaw models auth clean` prunes profiles present in the agent's `auth-profiles.json` store that are no longer referenced by `openclaw.json` (`auth.profiles` / `auth.order`), keeping configured profiles. Previously there was no command to remove orphaned/stale store entries.\n- **Real environment tested**: local `openclaw` build (current upstream/main + this PR) against an isolated `OPENCLAW_HOME` with a disposable store containing one CONFIGURED profile (`anthropic:keep-me`, present in `openclaw.json` auth.profiles) and one ORPHANED profile (`openai-codex:stale-orphan`, present only in the store).\n- **Exact steps or command run after this patch**:\n  ```bash\n  # openclaw.json auth.profiles = { \"anthropic:keep-me\": {...} }\n  # store auth-profiles.json profiles = { anthropic:keep-me, openai-codex:stale-orphan }\n  OPENCLAW_HOME=/tmp/authclean-home node dist/index.js models auth clean --dry-run\n  OPENCLAW_HOME=/tmp/authclean-home node dist/index.js models auth clean\n  ```\n- **Evidence after fix**: captured live from `node dist/index.js models auth clean`:\n\n  BEFORE — store profile ids:\n  ```\n  ['anthropic:keep-me', 'openai-codex:stale-orphan']\n  ```\n  DRY-RUN — previews the prune without writing:\n  ```\n  Configured: anthropic:keep-me\n  In store:   anthropic:keep-me, openai-codex:stale-orphan\n  Profiles to remove (1):\n    - openai-codex:stale-orphan\n  Profiles to keep (1):\n    + anthropic:keep-me\n  (dry run -- no changes written)\n  ```\n  REAL RUN — prunes the orphan:\n  ```\n  Profiles to remove (1):\n    - openai-codex:stale-orphan\n  Profiles to keep (1):\n    + anthropic:keep-me\n  Removed 1 stale profile(s). Restart the gateway to apply.\n  ```\n  AFTER — store profile ids (orphan pruned, configured retained):\n  ```\n  ['anthropic:keep-me']\n  ```\n- **Observed result after fix**: the orphaned `openai-codex:stale-orphan` profile is removed from the store while the configured `anthropic:keep-me` profile is kept. Dry-run previews identically without writing. A timestamped backup of the prior store is written before the rewrite.\n- **What was not tested**: pruning against a live production store (used a disposable `OPENCLAW_HOME` to avoid touching real credentials). The `--force` path for a store with zero configured profiles (covered by unit tests; not exercised here since the realistic case keeps at least one configured profile).\n",
+        "branch": "fix/auth-clean-v3",
+        "head_sha": "3c199cd3f223ccf264396e489f7cf7cf6082ec74",
         "author": "amittell",
         "labels": [
           "docs",
           "extensions: memory-lancedb",
           "size: M",
           "proof: supplied",
-          "proof: sufficient",
           "P2",
           "rating: 🦐 gold shrimp",
           "merge-risk: 🚨 availability",
@@ -82,74 +84,74 @@
         ],
         "files": [
           {
-            "path": "src/cli/daemon-cli/status.gather.test.ts",
-            "additions": 6,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/daemon-cli/status.gather.ts",
-            "additions": 27,
-            "deletions": 19,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/gateway-status.test.ts",
-            "additions": 8,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/gateway-status/helpers.test.ts",
-            "additions": 163,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/gateway-status/helpers.ts",
-            "additions": 45,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/gateway-status/probe-run.ts",
-            "additions": 27,
-            "deletions": 14,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/status.gateway-probe.ts",
+            "path": "CHANGELOG.md",
             "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "docs/plugins/memory-lancedb.md",
-            "additions": 41,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-lancedb/config.test.ts",
-            "additions": 127,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-lancedb/config.ts",
-            "additions": 47,
+            "path": "src/agents/auth-profiles/doctor.ts",
+            "additions": 48,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/memory-lancedb/index.ts",
-            "additions": 22,
-            "deletions": 3,
+            "path": "src/agents/auth-profiles/order.ts",
+            "additions": 1,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/memory-lancedb/openclaw.plugin.json",
-            "additions": 22,
+            "path": "src/agents/auth-profiles/sanitize.test.ts",
+            "additions": 64,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/auth-profiles/sanitize.ts",
+            "additions": 71,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/auth-profiles/store.legacy-migration.test.ts",
+            "additions": 151,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/auth-profiles/store.ts",
+            "additions": 36,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/models-cli.test.ts",
+            "additions": 27,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/models-cli.ts",
+            "additions": 32,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/models/auth-clean.test.ts",
+            "additions": 915,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/commands/models/auth-clean.ts",
+            "additions": 363,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "test/scripts/lint-suppressions.test.ts",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
@@ -164,14 +166,140 @@
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 96,
+          "total": 95,
           "counts": {
-            "SKIPPED": 28,
-            "SUCCESS": 67,
-            "NEUTRAL": 1
+            "SUCCESS": 12,
+            "IN_PROGRESS": 62,
+            "SKIPPED": 21
           },
-          "blockers": [],
-          "pending": [],
+          "blockers": [
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "Scan changed paths (precise):IN_PROGRESS",
+            "Security High (channel-runtime-boundary):IN_PROGRESS",
+            "Security High (network-ssrf-boundary):IN_PROGRESS",
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "Security High (actions):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "Critical Quality (core-auth-secrets):IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-core-fast:IN_PROGRESS",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
+            "checks-node-core-src-security:IN_PROGRESS",
+            "checks-node-core-ui:IN_PROGRESS",
+            "checks-node-core-support:IN_PROGRESS",
+            "checks-node-core-runtime-infra-state:IN_PROGRESS",
+            "checks-node-core-runtime-infra-process:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-core-runtime-shared:IN_PROGRESS",
+            "checks-node-core-runtime-cron-core:IN_PROGRESS",
+            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
+            "checks-node-core-runtime-cron-service:IN_PROGRESS",
+            "checks-node-agentic-control-plane-agent-chat:IN_PROGRESS",
+            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
+            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
+            "checks-node-agentic-control-plane-http-plugin-ws:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-runtime:IN_PROGRESS",
+            "checks-node-agentic-cli:IN_PROGRESS",
+            "checks-node-agentic-command-support:IN_PROGRESS",
+            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-shared:IN_PROGRESS",
+            "checks-node-agentic-commands-models:IN_PROGRESS",
+            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
+            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
+            "checks-node-agentic-agents:IN_PROGRESS",
+            "checks-node-agentic-gateway-core:IN_PROGRESS",
+            "checks-node-agentic-gateway-methods:IN_PROGRESS",
+            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
+            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
+            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
+            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
+            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
+            "checks-node-auto-reply-reply-session:IN_PROGRESS",
+            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS",
+            "check-docs:IN_PROGRESS"
+          ],
+          "pending": [
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "Scan changed paths (precise):IN_PROGRESS",
+            "Security High (channel-runtime-boundary):IN_PROGRESS",
+            "Security High (network-ssrf-boundary):IN_PROGRESS",
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "Security High (actions):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "Critical Quality (core-auth-secrets):IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-core-fast:IN_PROGRESS",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
+            "checks-node-core-src-security:IN_PROGRESS",
+            "checks-node-core-ui:IN_PROGRESS",
+            "checks-node-core-support:IN_PROGRESS",
+            "checks-node-core-runtime-infra-state:IN_PROGRESS",
+            "checks-node-core-runtime-infra-process:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-core-runtime-shared:IN_PROGRESS",
+            "checks-node-core-runtime-cron-core:IN_PROGRESS",
+            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
+            "checks-node-core-runtime-cron-service:IN_PROGRESS",
+            "checks-node-agentic-control-plane-agent-chat:IN_PROGRESS",
+            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
+            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
+            "checks-node-agentic-control-plane-http-plugin-ws:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-runtime:IN_PROGRESS",
+            "checks-node-agentic-cli:IN_PROGRESS",
+            "checks-node-agentic-command-support:IN_PROGRESS",
+            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-shared:IN_PROGRESS",
+            "checks-node-agentic-commands-models:IN_PROGRESS",
+            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
+            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
+            "checks-node-agentic-agents:IN_PROGRESS",
+            "checks-node-agentic-gateway-core:IN_PROGRESS",
+            "checks-node-agentic-gateway-methods:IN_PROGRESS",
+            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
+            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
+            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
+            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
+            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
+            "checks-node-auto-reply-reply-session:IN_PROGRESS",
+            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS",
+            "check-docs:IN_PROGRESS"
+          ],
           "terminalBlockers": []
         }
       },
@@ -180,15 +308,15 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2392,
+    "total_ms": 2028,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 513
+        "ms": 577
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1673
+        "ms": 1202
       },
       {
         "name": "classify_commands",
@@ -196,7 +324,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 191
+        "ms": 236
       },
       {
         "name": "append_ledger",
