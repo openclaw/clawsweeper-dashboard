@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-20T10:07:09.186Z",
+  "generated_at": "2026-05-20T10:10:08.172Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-20T07:07:07.199Z",
+  "since": "2026-05-20T07:10:04.365Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    84285
+    59898
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4331913763
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 9,
-  "commands_seen": 5,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,407 +33,176 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:84285:4491411694:2026-05-20T10:07:03Z:clawsweeper_needs_human",
-      "comment_id": "4491411694",
-      "comment_version_key": "4491411694:2026-05-20T10:07:03Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84285#issuecomment-4491411694",
+      "idempotency_key": "comment-router:openclaw/openclaw:59898:4331913763:2026-05-20T10:08:18Z:automerge",
+      "comment_id": "4331913763",
+      "comment_version_key": "4331913763:2026-05-20T10:08:18Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/59898#issuecomment-4331913763",
       "repo": "openclaw/openclaw",
-      "issue_number": 84285,
+      "issue_number": 59898,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-19T19:43:22Z",
-      "comment_updated_at": "2026-05-20T10:07:03Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "No ClawSweeper repair lane is needed; maintainer review should choose wrapper-versus-upstream timing and merge normally if that ownership choice is acceptable.; Cleared: The diff only changes local JSON helper logic and tests; it does not alter dependencies, CI, scripts, secrets, permissions, or downloaded artifacts. (sha=dc53ea3d5f77bd67a5c0c9b299a4d7ff61c72e2e)",
-      "review_summary": "The PR wraps OpenClaw async JSON readers with bounded retry handling for transient `File changed during read` races and adds retry success/exhaustion tests.\n\nReproducibility: yes. source-reproducible: `@openclaw/fs-safe` 0.2.4 throws `File changed during read`, current `main` exposes async JSON readers without retry, and pairing reads `paired.json` through `readJsonIfExists`. The PR tests simulate the stable-target race directly.",
-      "review_followup": "No ClawSweeper repair lane is needed; maintainer review should choose wrapper-versus-upstream timing and merge normally if that ownership choice is acceptable.",
-      "freeform_prompt": null,
-      "expected_head_sha": "dc53ea3d5f77bd67a5c0c9b299a4d7ff61c72e2e",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(json): retry on transient File changed during read race condition",
-        "body": "## Summary\n\n`JsonFileReadError: File changed during read` occurs when `paired.json` is atomically rewritten (temp file + rename) while another component reads it. `verifyStableReadTarget` detects the file changed between stat and open, and throws immediately.\n\n## Fix\n\nReplace the three async JSON read functions in `src/infra/json-files.ts` — `readJson`, `readJsonIfExists`, `tryReadJson` — with bounded retry logic for the transient file-changed race:\n\n### Key design decisions\n\n1. **Cause‑chain walking** — The error from `@openclaw/fs-safe` is `JsonFileReadError` whose message is `\"Failed to read JSON file: …\"`, while the original `\"File changed during read\"` error is nested in `err.cause`. The `isFileChangedDuringRead` check recursively follows `err.cause` to detect the true race, unlike the naïve `err.message.includes` approach that would never match.\n\n2. **Bounded retry** — Retry up to 3 attempts with exponential backoff (50 ms → 100 ms). Only retry on `File changed during read` errors — parse errors, ENOENT, and other errors are not retried.\n\n3. **`tryReadJson` re‑routed through `readJsonIfExists`** — The underlying `@openclaw/fs-safe` `tryReadJsonImpl` swallows all errors internally and returns `null`, which prevents the retry wrapper from ever detecting a race. Our `tryReadJson` now delegates to `readJsonIfExists` (which properly propagates errors on race conditions), so the retry wrapper can intercept them. Parse errors and file‑not‑found are still handled gracefully by the outer catch.\n\n4. **Strict reader types preserved** — `readJson<T>` and `readJsonFileStrict<T>` retain `Promise<T>` (not `Promise<T | null>`), maintaining SDK contract compatibility per ClawSweeper's [P2] finding.\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Gateway startup triggers `JsonFileReadError: Failed to read JSON file: paired.json` when `verifyStableReadTarget` detects the file changed between stat and open (race condition with atomic write). Error propagates as unhandled error in request handler.\n\n- **Real environment tested:** OpenClaw 2026.5.18 (npm install, Oracle VPS, Ubuntu 24.04, Node.js v24.15.0). The paired.json file is rewritten by `openclaw logs --follow` or device pairing operations during gateway startup.\n\n- **Exact steps or command run after this patch:** (1) Backed up the original `dist/json-files-1SmAauRO.js`. (2) Applied the patch with the cause‑chain‑aware retry and `tryReadJson` re‑routing. (3) Verified JS syntax with `node --check`. (4) Ran unit tests — 15/15 passed including new retry-success and retry-exhaustion coverage. (5) The gateway was restarted and has been running without errors for 1.5+ hours.\n\n- **Evidence after fix:**\n\n  **Before (error on every restart with concurrent device operations):**\n  ```\n  18:43:10+00:00 error [gateway-http] unhandled error in request handler:\n    JsonFileReadError: Failed to read JSON file:\n      /home/ubuntu/.openclaw/devices/paired.json\n    [cause]: Error: File changed during read:\n      /home/ubuntu/.openclaw/devices/paired.json\n      at verifyStableReadTarget (regular-file-6GdZVPgG.js:152:131)\n  ```\n\n  **After (1.5+ hours of runtime — zero JsonFileReadError errors):**\n  ```\n  # Gateway process (started 2026-05-20 07:53 UTC, 1h28m uptime):\n    ubuntu  1338372  node openclaw/dist/index.js gateway --port 18789\n\n  # Dist file confirmed patched:\n    $ grep -c 'withRetryOnFileChanged' json-files-1SmAauRO.js\n    3\n\n  # Logs — no JsonFileReadError found in any log output\n    May 20 08:30:55 node[1338372]: [agent/embedded] incomplete turn detected …\n    (normal lifecycle event, not a read error)\n  ```\n\n  **Unit tests (15/15 passed, including retry coverage):**\n  ```\n   ✓ retries on transient File changed during read and succeeds (54ms)\n   ✓ throws JsonFileReadError after exhausting retries (159ms)\n   ✓ tryReadJson returns null after exhausting retries (164ms)\n\n  Test Files  1 passed (1)\n       Tests  15 passed (15)\n  ```\n\n- **Observed result after fix:** The `JsonFileReadError: File changed during read` error no longer appears on gateway startup or operation. The cause‑chain‑aware retry mechanism absorbs the transient race condition without propagating to the request handler.\n\n- **What was not tested:** Sync read paths (`readJsonSync`, `tryReadJsonSync`) — less prone to races in practice. Non-Linux platforms (Windows rename semantics differ). Extreme contention (3+ concurrent writes) — retries exhaust after 3 attempts and the original error path activates.\n\n## Related\n\nFixes #83657",
-        "branch": "fix/paired-json-retry",
-        "head_sha": "dc53ea3d5f77bd67a5c0c9b299a4d7ff61c72e2e",
-        "author": "samson1357924",
-        "labels": [
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/infra/json-files.test.ts",
-            "additions": 94,
-            "deletions": 17,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/json-files.ts",
-            "additions": 95,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84285",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84285.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "SUCCESS": 71,
-            "SKIPPED": 29,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "check-lint:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "check-lint:FAILURE"
-          ]
-        }
-      },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84285:4496938196:2026-05-20T09:46:28Z:re_review",
-      "comment_id": "4496938196",
-      "comment_version_key": "4496938196:2026-05-20T09:46:28Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84285#issuecomment-4496938196",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84285,
-      "author": "samson1357924",
-      "author_id": 98934496,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-20T09:46:28Z",
-      "comment_updated_at": "2026-05-20T09:46:28Z",
+      "comment_created_at": "2026-04-28T02:23:39Z",
+      "comment_updated_at": "2026-05-20T10:08:18Z",
       "status_comment_id": null,
       "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "command": "automerge",
+      "intent": "automerge",
       "autoclose_message": null,
       "implementation_prompt": null,
       "trusted_bot": false,
       "trusted_bot_author": null,
       "automation_source": null,
       "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
+      "review_summary": "This PR changes agent system-prompt/report construction, embedded-runner hosted-client-tool plumbing, and OpenResponses client-tool validation for explicit empty-tool and hosted-tool-only sessions.\n\nReproducibility: yes. The PR body gives a concrete live CLI before/after repro for an isolated no-tools agent, and source inspection shows the prompt/report paths that can still disagree at PR head.",
+      "review_followup": "The remaining blockers are narrow, code-local prompt/report and OpenResponses compatibility repairs with clear tests.",
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
+      "status": "ignored",
       "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84285:4496675509:2026-05-20T09:22:11Z:re_review",
-      "comment_id": "4496675509",
-      "comment_version_key": "4496675509:2026-05-20T09:22:11Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84285#issuecomment-4496675509",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84285,
-      "author": "samson1357924",
-      "author_id": 98934496,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-20T09:22:11Z",
-      "comment_updated_at": "2026-05-20T09:22:11Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
+      "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix(json): retry on transient File changed during read race condition",
-        "body": "## Summary\n\n`JsonFileReadError: File changed during read` occurs when `paired.json` is atomically rewritten (temp file + rename) while another component reads it. `verifyStableReadTarget` detects the file changed between stat and open, and throws immediately.\n\n## Fix\n\nReplace the three async JSON read functions in `src/infra/json-files.ts` — `readJson`, `readJsonIfExists`, `tryReadJson` — with bounded retry logic for the transient file-changed race:\n\n### Key design decisions\n\n1. **Cause‑chain walking** — The error from `@openclaw/fs-safe` is `JsonFileReadError` whose message is `\"Failed to read JSON file: …\"`, while the original `\"File changed during read\"` error is nested in `err.cause`. The `isFileChangedDuringRead` check recursively follows `err.cause` to detect the true race, unlike the naïve `err.message.includes` approach that would never match.\n\n2. **Bounded retry** — Retry up to 3 attempts with exponential backoff (50 ms → 100 ms). Only retry on `File changed during read` errors — parse errors, ENOENT, and other errors are not retried.\n\n3. **`tryReadJson` re‑routed through `readJsonIfExists`** — The underlying `@openclaw/fs-safe` `tryReadJsonImpl` swallows all errors internally and returns `null`, which prevents the retry wrapper from ever detecting a race. Our `tryReadJson` now delegates to `readJsonIfExists` (which properly propagates errors on race conditions), so the retry wrapper can intercept them. Parse errors and file‑not‑found are still handled gracefully by the outer catch.\n\n4. **Strict reader types preserved** — `readJson<T>` and `readJsonFileStrict<T>` retain `Promise<T>` (not `Promise<T | null>`), maintaining SDK contract compatibility per ClawSweeper's [P2] finding.\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Gateway startup triggers `JsonFileReadError: Failed to read JSON file: paired.json` when `verifyStableReadTarget` detects the file changed between stat and open (race condition with atomic write). Error propagates as unhandled error in request handler.\n\n- **Real environment tested:** OpenClaw 2026.5.18 (npm install, Oracle VPS, Ubuntu 24.04, Node.js v24.15.0). The paired.json file is rewritten by `openclaw logs --follow` or device pairing operations during gateway startup.\n\n- **Exact steps or command run after this patch:** (1) Backed up the original `dist/json-files-1SmAauRO.js`. (2) Applied the patch with the cause‑chain‑aware retry and `tryReadJson` re‑routing. (3) Verified JS syntax with `node --check`. (4) Ran unit tests — 15/15 passed including new retry-success and retry-exhaustion coverage. (5) The gateway was restarted and has been running without errors for 1.5+ hours.\n\n- **Evidence after fix:**\n\n  **Before (error on every restart with concurrent device operations):**\n  ```\n  18:43:10+00:00 error [gateway-http] unhandled error in request handler:\n    JsonFileReadError: Failed to read JSON file:\n      /home/ubuntu/.openclaw/devices/paired.json\n    [cause]: Error: File changed during read:\n      /home/ubuntu/.openclaw/devices/paired.json\n      at verifyStableReadTarget (regular-file-6GdZVPgG.js:152:131)\n  ```\n\n  **After (1.5+ hours of runtime — zero JsonFileReadError errors):**\n  ```\n  # Gateway process (started 2026-05-20 07:53 UTC, 1h28m uptime):\n    ubuntu  1338372  node openclaw/dist/index.js gateway --port 18789\n\n  # Dist file confirmed patched:\n    $ grep -c 'withRetryOnFileChanged' json-files-1SmAauRO.js\n    3\n\n  # Logs — no JsonFileReadError found in any log output\n    May 20 08:30:55 node[1338372]: [agent/embedded] incomplete turn detected …\n    (normal lifecycle event, not a read error)\n  ```\n\n  **Unit tests (15/15 passed, including retry coverage):**\n  ```\n   ✓ retries on transient File changed during read and succeeds (54ms)\n   ✓ throws JsonFileReadError after exhausting retries (159ms)\n   ✓ tryReadJson returns null after exhausting retries (164ms)\n\n  Test Files  1 passed (1)\n       Tests  15 passed (15)\n  ```\n\n- **Observed result after fix:** The `JsonFileReadError: File changed during read` error no longer appears on gateway startup or operation. The cause‑chain‑aware retry mechanism absorbs the transient race condition without propagating to the request handler.\n\n- **What was not tested:** Sync read paths (`readJsonSync`, `tryReadJsonSync`) — less prone to races in practice. Non-Linux platforms (Windows rename semantics differ). Extreme contention (3+ concurrent writes) — retries exhaust after 3 attempts and the original error path activates.\n\n## Related\n\nFixes #83657",
-        "branch": "fix/paired-json-retry",
-        "head_sha": "dc53ea3d5f77bd67a5c0c9b299a4d7ff61c72e2e",
-        "author": "samson1357924",
+        "title": "fix(agents): handle explicit empty tool lists in system prompt",
+        "body": "## Summary\r\n\r\nDescribe the problem and fix in 2-5 bullets:\r\n\r\n- Problem: when tools are explicitly disabled for a session, OpenClaw can still build a prompt that looks partly like a normal tool-enabled session. That can leave behind leaked skills content or other tool-only guidance.\r\n- Why it matters: if the prompt says the session has tools when it actually does not, the model can try to use tools that are unavailable and behave like a tool-enabled session instead of a chat-only one.\r\n- What changed: this PR makes the no-tools case consistent in the code that builds and adjusts the system prompt. The final prompt, prompt report, CLI path, embedded-runner path, and OpenAI-specific no-tools wording now all agree when a session really has no tools. It also fixes skills reporting in cases where the prompt contains another <available_skills> block or a skill body contains headings like # Project Context. Before this change, the prompt report could read the wrong block or stop too early, which could make it show missing or partial skills even though the real prompt still contained them.\r\n- Additional behavior corrected: sessions that only have hosted/client tools no longer advertise OpenClaw built-in tool flows such as exec or subagents when those built-in tools are not actually available.\r\n- Small contract update: provider-specific prompt code now receives `toolNames` in the `transformSystemPrompt` context, so plugins see the same advertised tool list that the main prompt builder is using.\r\n- Scope boundary: this PR does not broadly redesign all capability handling. Sessions with omitted tool lists or non-empty filtered tool lists are still left mostly unchanged unless a narrow fix was needed to keep the no-tools and hosted-tool-only cases truthful.\r\n\r\n## Change Type (select all)\r\n\r\n- [x] Bug fix\r\n- [ ] Feature\r\n- [ ] Refactor required for the fix\r\n- [ ] Docs\r\n- [ ] Security hardening\r\n- [ ] Chore/infra\r\n\r\n## Scope (select all touched areas)\r\n\r\n- [x] Gateway / orchestration\r\n- [x] Skills / tool execution\r\n- [ ] Auth / tokens\r\n- [ ] Memory / storage\r\n- [x] Integrations\r\n- [x] API / contracts\r\n- [x] UI / DX\r\n- [ ] CI/CD / infra\r\n\r\n## Linked Issue/PR\r\n\r\n- Closes N/A\r\n- Related #25569, #53000, #46214\r\n- Adjacent context: #44229, #44484, #47583\r\n- [x] This PR fixes a bug or regression\r\n\r\n## Root Cause / Regression History (if applicable)\r\n\r\n- Root cause: when OpenClaw builds the system prompt for a session with no tools, different parts of the prompt-building flow can disagree about whether tools are available. Some parts correctly treat the session as tool-free, while others still act as if tools or skills exist, so the final prompt can end up mixing no-tool behavior with tool-related guidance.\r\n- Missing detection / guardrail: there was no coverage that locked in this behavior across the full flow, including the prompt text, prompt report, CLI path, embedded-runner path, provider-specific prompt code, and OpenAI-specific no-tools wording.\r\n- Prior context (`git blame`, prior PR, issue, or refactor if known): #25569 is still the closest related upstream work because it distinguishes explicitly empty tool availability from unspecified/default availability, but other code paths still had inconsistent behavior. #53000 addresses similar empty-tools confusion but still keeps a reference tool catalog in the prompt. #46214 removes adjacent CLI-runner prompt pollution rather than this exact bug.\r\n- Why this reproduces: the no-tools state was not carried through every step that contributes to the final prompt. Once a real runtime session had tools intentionally disabled, some later steps still added skills content or other tool-related guidance.\r\n- What was ruled out: this is not just a unit-test-only mismatch. The same problem was reproduced through the normal OpenClaw CLI against an isolated deployment config, and review also surfaced related inconsistencies in provider-specific prompt code and OpenAI no-tools wording.\r\n\r\n## Regression Test Plan (if applicable)\r\n\r\n- Coverage level that should have caught this:\r\n  - [x] Unit test\r\n  - [ ] Seam / integration test\r\n  - [ ] End-to-end test\r\n  - [ ] Existing coverage already sufficient\r\n- Target test or file:\r\n  - `src/agents/system-prompt.test.ts`\r\n  - `src/agents/system-prompt-report.test.ts`\r\n  - `src/agents/system-prompt.memory.test.ts`\r\n  - `src/agents/cli-runner.spawn.test.ts`\r\n  - `src/agents/pi-embedded-runner/system-prompt.test.ts`\r\n  - `src/agents/pi-embedded-runner/tool-name-allowlist.test.ts`\r\n  - `src/agents/pi-embedded-runner/compaction-runtime-context.test.ts`\r\n  - `extensions/openai/index.test.ts`\r\n- Scenario the test should lock in:\r\n  - explicit empty-tool sessions must not leak the skills catalog\r\n  - explicit empty-tool sessions must not leak later tool-only guidance such as tool-call style, subagent/tool messaging guidance, approvals, or sandbox guidance\r\n  - explicit empty-tool sessions must preserve truthful non-tool context such as workspace notes and TTS hints\r\n  - prompt reports for explicit empty-tool sessions must keep `tools.entries = []` and no skills block\r\n  - omitted `toolNames` must preserve legacy/default prompt behavior\r\n  - explicit non-empty filtered tool lists must stay close to upstream/main behavior\r\n  - client-tool-only sessions must not advertise native OpenClaw exec/subagent flows\r\n  - provider overlays and transform hooks must receive the same effective tool context as the final prompt\r\n- Why this is the smallest reliable guardrail: the final bug surface spans prompt construction, prompt reporting, runner plumbing, and provider overlays, so the reliable guardrail has to cover those seams rather than only the original builder helper.\r\n- Existing test that already covers this (if any): none previously separated omitted tools from explicit empty effective tools across the whole prompt pipeline, and none previously locked in the client-tool-only/provider-transform cases.\r\n- If no new test is added, why not: N/A\r\n\r\n## User-visible / Behavior Changes\r\n\r\nSessions with tools explicitly disabled now behave like true no-tool sessions:\r\n\r\n- no leaked skills catalog\r\n- no later tool-only guidance such as tool-call style, approval flow, subagent orchestration, tool-only messaging, or sandbox execution hints\r\n- prompt report for the explicit no-tools path no longer includes a skills block\r\n- OpenAI no-tools wording now stays aligned with the no-tools path instead of reintroducing tool-related wording\r\n- workspace notes and TTS hints can still appear when supplied because they are context, not tool availability\r\n\r\nAdditional fixes covered by this branch:\r\n\r\n- sessions that only have hosted/client tools no longer advertise OpenClaw built-in exec/subagent flows they do not actually have\r\n- CLI and bundled-tool sessions continue to advertise truthful tool guidance when tools really are available\r\n- provider-specific prompt code now receives the tool-name context it needs to make consistent prompt adjustments\r\n\r\nSessions with omitted tool lists and explicit non-empty filtered tool lists are still left close to existing behavior unless a narrow consistency fix required otherwise.\r\n\r\n## Diagram (if applicable)\r\n\r\n```text\r\nBefore:\r\n[toolNames omitted or []] -> [shared prompt construction] -> [explicit no-tools sessions can still inherit skills content or tool-related guidance]\r\n\r\nAfter:\r\n[toolNames omitted] -> [legacy/default prompt behavior]\r\n[toolNames non-empty] -> [upstream/main-style filtered prompt behavior]\r\n[toolNames = []] -> [explicit no-tools branch] -> [truthful no-tool prompt with no leaked skills block or tool-only guidance]\r\n```\r\n\r\n## Security Impact (required)\r\n\r\n- New permissions/capabilities? (`Yes/No`) No\r\n- Secrets/tokens handling changed? (`Yes/No`) No\r\n- New/changed network calls? (`Yes/No`) No\r\n- Command/tool execution surface changed? (`Yes/No`) No\r\n- Data access scope changed? (`Yes/No`) No\r\n- If any `Yes`, explain risk + mitigation: N/A\r\n\r\n## Repro + Verification\r\n\r\n### Environment\r\n\r\n- OS: Linux (Debian bookworm host)\r\n- Runtime/container: local source checkout run via pnpm; not a containerized repro\r\n- Model/provider: `openai-codex/gpt-5.4`\r\n- Integration/channel (if any): CLI via `openclaw agent --local`\r\n- Relevant config (redacted): temporary `no-tools` agent with `tools: { deny: [\"*\"] }`\r\n\r\n### Steps\r\n\r\n1. Create a disposable config copy and add a temporary no-tool agent so the runtime has a truly empty effective tool set:\r\n\r\n   ```bash\r\n   export OPENCLAW_CONFIG_PATH=/path/to/openclaw.json\r\n   export OPENCLAW_STATE_DIR=/path/to/state-dir\r\n\r\n   cp \"$OPENCLAW_CONFIG_PATH\" /tmp/openclaw-no-tools-repro.json\r\n   export OPENCLAW_CONFIG_PATH=/tmp/openclaw-no-tools-repro.json\r\n\r\n   python3 - <<'PY'\r\n   import json, os\r\n   p = os.environ[\"OPENCLAW_CONFIG_PATH\"]\r\n   with open(p) as f:\r\n       cfg = json.load(f)\r\n   agents = cfg.setdefault(\"agents\", {}).setdefault(\"list\", [])\r\n   agents = [a for a in agents if a.get(\"id\") != \"no-tools\"]\r\n   agents.append({\r\n       \"id\": \"no-tools\",\r\n       \"tools\": {\"deny\": [\"*\"]},\r\n   })\r\n   cfg[\"agents\"][\"list\"] = agents\r\n   with open(p, \"w\") as f:\r\n       json.dump(cfg, f, indent=2)\r\n       f.write(\"\\n\")\r\n   PY\r\n   ```\r\n\r\n2. Run the normal CLI repro against that config:\r\n\r\n   ```bash\r\n   openclaw agent --local \\\r\n     --agent no-tools \\\r\n     --session-id explicit-empty-tools-repro \\\r\n     --json \\\r\n     --message '/context detail' \\\r\n     --timeout 120 \\\r\n   | jq '{payloads, tools: .meta.systemPromptReport.tools, skills: .meta.systemPromptReport.skills, systemPrompt: .meta.systemPromptReport.systemPrompt}'\r\n   ```\r\n\r\n### Expected\r\n\r\n- In a real explicit no-tool session:\r\n  - `tools.entries` should be `[]`\r\n  - `tools.listChars` should be `0`\r\n  - the prompt should not inject the skills catalog\r\n  - the prompt should explicitly behave like a no-tools session\r\n\r\n### Actual\r\n\r\n- Live deployed-instance repro on this fixed branch:\r\n  - `tools.entries = []`\r\n  - `tools.listChars = 0`\r\n  - `skills.promptChars = 0`\r\n  - `skills.entries = []`\r\n  - `systemPrompt.chars = 20194`\r\n  - final assistant text includes `No tools are available in this session.`\r\n- Live deployed-instance repro on v2026.04.11:\r\n  - `tools.entries = []`\r\n  - `tools.listChars = 0`\r\n  - `skills.promptChars = 5932`\r\n  - `skills.entries.length = 11`\r\n  - `systemPrompt.chars = 30389`\r\n\r\n## Evidence\r\n\r\nAttach at least one:\r\n\r\n- [x] Failing test/log before + passing after\r\n- [x] Trace/log snippets\r\n- [ ] Screenshot/recording\r\n- [ ] Perf numbers (if relevant)\r\n\r\nEvidence highlights:\r\n- Live repro on this branch:\r\n  - `tools.entries = []`\r\n  - `tools.listChars = 0`\r\n  - `skills.promptChars = 0`\r\n  - `skills.entries = []`\r\n  - `systemPrompt.chars = 20194`\r\n  - assistant text explicitly says `No tools are available in this session.`\r\n- Live repro on `v2026.4.11`:\r\n  - `tools.entries = []`\r\n  - `tools.listChars = 0`\r\n  - `skills.promptChars = 5932`\r\n  - `skills.entries.length = 11`\r\n  - `systemPrompt.chars = 30389`\r\n- Targeted prompt/report tests on this branch:\r\n  - `src/agents/system-prompt.test.ts`\r\n  - `src/agents/system-prompt-report.test.ts`\r\n  - `src/agents/system-prompt.memory.test.ts`\r\n  - `src/agents/cli-runner.spawn.test.ts`\r\n  - `src/agents/pi-embedded-runner/system-prompt.test.ts`\r\n  - `src/agents/pi-embedded-runner/tool-name-allowlist.test.ts`\r\n  - `src/agents/pi-embedded-runner/compaction-runtime-context.test.ts`\r\n  - `extensions/openai/index.test.ts`\r\n  - result: `150` tests passed across `8` files\r\n\r\n## Human Verification (required)\r\n\r\nWhat you personally verified (not just CI), and how:\r\n\r\n- Verified scenarios:\r\n  - reran the deployed-instance repro on an isolated OpenClaw instance using a disposable no-tools config\r\n  - confirmed the bug still reproduces on `main` and `v2026.4.11`\r\n  - confirmed the same repro no longer fails on this fixed branch\r\n  - confirmed the verification signal is prompt/report metadata, not model-specific assistant output\r\n- Edge cases checked:\r\n  - explicit empty-tool session keeps `tools.entries = []` and `tools.listChars = 0`\r\n  - explicit empty-tool session no longer leaks the skills catalog or later tool-only guidance\r\n  - client-tool-only sessions no longer advertise native OpenClaw exec/subagent flows they do not actually have\r\n- What you did **not** verify:\r\n  - full OpenClaw test suite\r\n  - unrelated model-level or workflow-level regressions outside this prompt-construction/reporting bug\r\n  - performance impact beyond the prompt/report character-count change above\r\n\r\n## Review Conversations\r\n\r\n- [x] I replied to or resolved every bot review conversation I addressed in this PR.\r\n- [x] I left unresolved only the conversations that still need reviewer or maintainer judgment.\r\n\r\nIf a bot review conversation is addressed by this PR, resolve that conversation yourself. Do not leave bot review conversation cleanup for maintainers.\r\n\r\n## Compatibility / Migration\r\n\r\n- Backward compatible? (`Yes/No`) Yes\r\n- Config/env changes? (`Yes/No`) No\r\n- Migration needed? (`Yes/No`) No\r\n- If yes, exact upgrade steps: N/A\r\n\r\n## Risks and Mitigations\r\n\r\n- Risk: callers that accidentally relied on tool-related guidance surviving in explicit empty-tool sessions will now get a true no-tool prompt.\r\n  - Mitigation: that behavior now matches explicit runtime intent, and regression tests lock in the distinction.\r\n- Risk: future prompt edits could blur the difference between omitted, explicit empty, and explicit non-empty filtered tool states.\r\n  - Mitigation: regression tests now cover all three cases.\r\n\r\n",
+        "branch": "fix-empty-tools-issue",
+        "head_sha": "d8d03d7d29c03ebe476be36a23d27a27b5e9cf13",
+        "author": "martinfrancois",
         "labels": [
-          "size: M",
-          "proof: supplied",
+          "gateway",
+          "agents",
+          "size: XL",
+          "triage: needs-real-behavior-proof",
           "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "status: 👀 ready for maintainer look"
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/infra/json-files.test.ts",
-            "additions": 94,
-            "deletions": 17,
+            "path": "src/agents/command/shared-types.ts",
+            "additions": 45,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/infra/json-files.ts",
-            "additions": 95,
-            "deletions": 6,
+            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/params.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/system-prompt.test.ts",
+            "additions": 68,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/system-prompt.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/system-prompt-report.test.ts",
+            "additions": 173,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/system-prompt-report.ts",
+            "additions": 54,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/system-prompt.test.ts",
+            "additions": 308,
+            "deletions": 22,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/system-prompt.ts",
+            "additions": 304,
+            "deletions": 102,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/openresponses-http.test.ts",
+            "additions": 148,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/openresponses-http.ts",
+            "additions": 25,
+            "deletions": 13,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84285",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84285.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-59898",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-59898.md",
         "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
         "review_decision": "",
         "checks": {
-          "total": 102,
+          "total": 72,
           "counts": {
-            "SUCCESS": 71,
-            "SKIPPED": 29,
-            "FAILURE": 1,
-            "NEUTRAL": 1
+            "FAILURE": 3,
+            "SUCCESS": 55,
+            "SKIPPED": 14
           },
           "blockers": [
-            "check-lint:FAILURE"
+            "Real behavior proof:FAILURE",
+            "checks-node-agentic-control-plane:FAILURE",
+            "checks-node-core:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "check-lint:FAILURE"
+            "Real behavior proof:FAILURE",
+            "checks-node-agentic-control-plane:FAILURE",
+            "checks-node-core:FAILURE"
           ]
         }
       },
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84285:4496291619:2026-05-20T08:35:42Z:re_review",
-      "comment_id": "4496291619",
-      "comment_version_key": "4496291619:2026-05-20T08:35:42Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84285#issuecomment-4496291619",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84285,
-      "author": "samson1357924",
-      "author_id": 98934496,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-20T08:35:42Z",
-      "comment_updated_at": "2026-05-20T08:35:42Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(json): retry on transient File changed during read race condition",
-        "body": "## Summary\n\n`JsonFileReadError: File changed during read` occurs when `paired.json` is atomically rewritten (temp file + rename) while another component reads it. `verifyStableReadTarget` detects the file changed between stat and open, and throws immediately.\n\n## Fix\n\nReplace the three async JSON read functions in `src/infra/json-files.ts` — `readJson`, `readJsonIfExists`, `tryReadJson` — with bounded retry logic for the transient file-changed race:\n\n### Key design decisions\n\n1. **Cause‑chain walking** — The error from `@openclaw/fs-safe` is `JsonFileReadError` whose message is `\"Failed to read JSON file: …\"`, while the original `\"File changed during read\"` error is nested in `err.cause`. The `isFileChangedDuringRead` check recursively follows `err.cause` to detect the true race, unlike the naïve `err.message.includes` approach that would never match.\n\n2. **Bounded retry** — Retry up to 3 attempts with exponential backoff (50 ms → 100 ms). Only retry on `File changed during read` errors — parse errors, ENOENT, and other errors are not retried.\n\n3. **`tryReadJson` re‑routed through `readJsonIfExists`** — The underlying `@openclaw/fs-safe` `tryReadJsonImpl` swallows all errors internally and returns `null`, which prevents the retry wrapper from ever detecting a race. Our `tryReadJson` now delegates to `readJsonIfExists` (which properly propagates errors on race conditions), so the retry wrapper can intercept them. Parse errors and file‑not‑found are still handled gracefully by the outer catch.\n\n4. **Strict reader types preserved** — `readJson<T>` and `readJsonFileStrict<T>` retain `Promise<T>` (not `Promise<T | null>`), maintaining SDK contract compatibility per ClawSweeper's [P2] finding.\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Gateway startup triggers `JsonFileReadError: Failed to read JSON file: paired.json` when `verifyStableReadTarget` detects the file changed between stat and open (race condition with atomic write). Error propagates as unhandled error in request handler.\n\n- **Real environment tested:** OpenClaw 2026.5.18 (npm install, Oracle VPS, Ubuntu 24.04, Node.js v24.15.0). The paired.json file is rewritten by `openclaw logs --follow` or device pairing operations during gateway startup.\n\n- **Exact steps or command run after this patch:** (1) Backed up the original `dist/json-files-1SmAauRO.js`. (2) Applied the patch with the cause‑chain‑aware retry and `tryReadJson` re‑routing. (3) Verified JS syntax with `node --check`. (4) Ran unit tests — 15/15 passed including new retry-success and retry-exhaustion coverage. (5) The gateway was restarted and has been running without errors for 1.5+ hours.\n\n- **Evidence after fix:**\n\n  **Before (error on every restart with concurrent device operations):**\n  ```\n  18:43:10+00:00 error [gateway-http] unhandled error in request handler:\n    JsonFileReadError: Failed to read JSON file:\n      /home/ubuntu/.openclaw/devices/paired.json\n    [cause]: Error: File changed during read:\n      /home/ubuntu/.openclaw/devices/paired.json\n      at verifyStableReadTarget (regular-file-6GdZVPgG.js:152:131)\n  ```\n\n  **After (1.5+ hours of runtime — zero JsonFileReadError errors):**\n  ```\n  # Gateway process (started 2026-05-20 07:53 UTC, 1h28m uptime):\n    ubuntu  1338372  node openclaw/dist/index.js gateway --port 18789\n\n  # Dist file confirmed patched:\n    $ grep -c 'withRetryOnFileChanged' json-files-1SmAauRO.js\n    3\n\n  # Logs — no JsonFileReadError found in any log output\n    May 20 08:30:55 node[1338372]: [agent/embedded] incomplete turn detected …\n    (normal lifecycle event, not a read error)\n  ```\n\n  **Unit tests (15/15 passed, including retry coverage):**\n  ```\n   ✓ retries on transient File changed during read and succeeds (54ms)\n   ✓ throws JsonFileReadError after exhausting retries (159ms)\n   ✓ tryReadJson returns null after exhausting retries (164ms)\n\n  Test Files  1 passed (1)\n       Tests  15 passed (15)\n  ```\n\n- **Observed result after fix:** The `JsonFileReadError: File changed during read` error no longer appears on gateway startup or operation. The cause‑chain‑aware retry mechanism absorbs the transient race condition without propagating to the request handler.\n\n- **What was not tested:** Sync read paths (`readJsonSync`, `tryReadJsonSync`) — less prone to races in practice. Non-Linux platforms (Windows rename semantics differ). Extreme contention (3+ concurrent writes) — retries exhaust after 3 attempts and the original error path activates.\n\n## Related\n\nFixes #83657",
-        "branch": "fix/paired-json-retry",
-        "head_sha": "dc53ea3d5f77bd67a5c0c9b299a4d7ff61c72e2e",
-        "author": "samson1357924",
-        "labels": [
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/infra/json-files.test.ts",
-            "additions": 94,
-            "deletions": 17,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/json-files.ts",
-            "additions": 95,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84285",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84285.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "SUCCESS": 71,
-            "SKIPPED": 29,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "check-lint:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "check-lint:FAILURE"
-          ]
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84285:4496097430:2026-05-20T08:13:59Z:re_review",
-      "comment_id": "4496097430",
-      "comment_version_key": "4496097430:2026-05-20T08:13:59Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84285#issuecomment-4496097430",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84285,
-      "author": "samson1357924",
-      "author_id": 98934496,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-20T08:13:59Z",
-      "comment_updated_at": "2026-05-20T08:13:59Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(json): retry on transient File changed during read race condition",
-        "body": "## Summary\n\n`JsonFileReadError: File changed during read` occurs when `paired.json` is atomically rewritten (temp file + rename) while another component reads it. `verifyStableReadTarget` detects the file changed between stat and open, and throws immediately.\n\n## Fix\n\nReplace the three async JSON read functions in `src/infra/json-files.ts` — `readJson`, `readJsonIfExists`, `tryReadJson` — with bounded retry logic for the transient file-changed race:\n\n### Key design decisions\n\n1. **Cause‑chain walking** — The error from `@openclaw/fs-safe` is `JsonFileReadError` whose message is `\"Failed to read JSON file: …\"`, while the original `\"File changed during read\"` error is nested in `err.cause`. The `isFileChangedDuringRead` check recursively follows `err.cause` to detect the true race, unlike the naïve `err.message.includes` approach that would never match.\n\n2. **Bounded retry** — Retry up to 3 attempts with exponential backoff (50 ms → 100 ms). Only retry on `File changed during read` errors — parse errors, ENOENT, and other errors are not retried.\n\n3. **`tryReadJson` re‑routed through `readJsonIfExists`** — The underlying `@openclaw/fs-safe` `tryReadJsonImpl` swallows all errors internally and returns `null`, which prevents the retry wrapper from ever detecting a race. Our `tryReadJson` now delegates to `readJsonIfExists` (which properly propagates errors on race conditions), so the retry wrapper can intercept them. Parse errors and file‑not‑found are still handled gracefully by the outer catch.\n\n4. **Strict reader types preserved** — `readJson<T>` and `readJsonFileStrict<T>` retain `Promise<T>` (not `Promise<T | null>`), maintaining SDK contract compatibility per ClawSweeper's [P2] finding.\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Gateway startup triggers `JsonFileReadError: Failed to read JSON file: paired.json` when `verifyStableReadTarget` detects the file changed between stat and open (race condition with atomic write). Error propagates as unhandled error in request handler.\n\n- **Real environment tested:** OpenClaw 2026.5.18 (npm install, Oracle VPS, Ubuntu 24.04, Node.js v24.15.0). The paired.json file is rewritten by `openclaw logs --follow` or device pairing operations during gateway startup.\n\n- **Exact steps or command run after this patch:** (1) Backed up the original `dist/json-files-1SmAauRO.js`. (2) Applied the patch with the cause‑chain‑aware retry and `tryReadJson` re‑routing. (3) Verified JS syntax with `node --check`. (4) Ran unit tests — 15/15 passed including new retry-success and retry-exhaustion coverage. (5) The gateway was restarted and has been running without errors for 1.5+ hours.\n\n- **Evidence after fix:**\n\n  **Before (error on every restart with concurrent device operations):**\n  ```\n  18:43:10+00:00 error [gateway-http] unhandled error in request handler:\n    JsonFileReadError: Failed to read JSON file:\n      /home/ubuntu/.openclaw/devices/paired.json\n    [cause]: Error: File changed during read:\n      /home/ubuntu/.openclaw/devices/paired.json\n      at verifyStableReadTarget (regular-file-6GdZVPgG.js:152:131)\n  ```\n\n  **After (1.5+ hours of runtime — zero JsonFileReadError errors):**\n  ```\n  # Gateway process (started 2026-05-20 07:53 UTC, 1h28m uptime):\n    ubuntu  1338372  node openclaw/dist/index.js gateway --port 18789\n\n  # Dist file confirmed patched:\n    $ grep -c 'withRetryOnFileChanged' json-files-1SmAauRO.js\n    3\n\n  # Logs — no JsonFileReadError found in any log output\n    May 20 08:30:55 node[1338372]: [agent/embedded] incomplete turn detected …\n    (normal lifecycle event, not a read error)\n  ```\n\n  **Unit tests (15/15 passed, including retry coverage):**\n  ```\n   ✓ retries on transient File changed during read and succeeds (54ms)\n   ✓ throws JsonFileReadError after exhausting retries (159ms)\n   ✓ tryReadJson returns null after exhausting retries (164ms)\n\n  Test Files  1 passed (1)\n       Tests  15 passed (15)\n  ```\n\n- **Observed result after fix:** The `JsonFileReadError: File changed during read` error no longer appears on gateway startup or operation. The cause‑chain‑aware retry mechanism absorbs the transient race condition without propagating to the request handler.\n\n- **What was not tested:** Sync read paths (`readJsonSync`, `tryReadJsonSync`) — less prone to races in practice. Non-Linux platforms (Windows rename semantics differ). Extreme contention (3+ concurrent writes) — retries exhaust after 3 attempts and the original error path activates.\n\n## Related\n\nFixes #83657",
-        "branch": "fix/paired-json-retry",
-        "head_sha": "dc53ea3d5f77bd67a5c0c9b299a4d7ff61c72e2e",
-        "author": "samson1357924",
-        "labels": [
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/infra/json-files.test.ts",
-            "additions": 94,
-            "deletions": 17,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/json-files.ts",
-            "additions": 95,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84285",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84285.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "SUCCESS": 71,
-            "SKIPPED": 29,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "check-lint:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "check-lint:FAILURE"
-          ]
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3093,
+    "total_ms": 4064,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 357
+        "ms": 550
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1612
+        "ms": 3243
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 1094
+        "ms": 257
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
