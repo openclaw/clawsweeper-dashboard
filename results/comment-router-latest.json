@@ -1,20 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-20T19:38:18.862Z",
+  "generated_at": "2026-05-20T19:38:33.467Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-20T16:38:16.316Z",
+  "since": "2026-05-20T16:38:29.849Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 20,
+  "max_comments": 1,
   "item_numbers": [
     84595
   ],
+  "comment_ids": [
+    4323573049
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
-  "commands_seen": 3,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -51,165 +54,33 @@
       "trusted_bot_author": null,
       "automation_source": null,
       "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
+      "review_summary": "The PR adds `openclaw models auth clean` with dry-run, JSON, and agent options, plus auth-store cleanup logic, profile ID display sanitization/validation, tests, and a changelog entry.\n\nReproducibility: yes. source-reproducible: code inspection shows the main-agent cleanup trigger can return a runtime snapshot before disk migration, and the CLI now rejects profile IDs that the current config schema still accepts as string keys.",
+      "review_followup": "A narrow automated repair can address the concrete branch blockers without a broader product decision.",
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
+      "status": "ignored",
       "actions": [],
-      "author_repository_permission": "write",
+      "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix(browser): honor image sanitization config for screenshots",
-        "body": "## Summary\n- forward `agents.defaults.imageMaxDimensionPx` into browser screenshot tool results\n- forward the same image sanitization limits into `snapshot --labels` image results\n- add regression coverage for both browser image-returning paths\n\n## Problem\n`browser screenshot` normalized images to the browser layer's `<= 2000px` limit first, but then returned them through `imageResultFromFile()` without passing runtime image sanitization config.\n\nThat meant the final tool image still fell back to the default `1200px` sanitize limit, even when `agents.defaults.imageMaxDimensionPx` was configured higher. The same omission existed for `browser snapshot --labels`.\n\n## Fix\nThread runtime image sanitization limits into both browser image-returning call sites:\n- `browser:screenshot`\n- `browser:snapshot` when `labels=true`\n\nThis keeps browser tool image behavior aligned with the documented global image sanitization setting and with other OpenClaw image paths that already forward this config.\n\n## Verification\n- focused browser extension test suite passed:\n  - `extensions/browser/src/browser-tool.test.ts` (`51 passed`)\n- direct runtime check with the same input image showed:\n  - default config: final browser screenshot output still reduced to `1200x625`\n  - `imageMaxDimensionPx = 1920`: final output became `1920x1000`\n  - `imageMaxDimensionPx = 2000`: final output stayed at `2000x1042`\n  - `imageMaxDimensionPx = 3000`: final output still stayed at `2000x1042`, as expected because browser pre-normalization already caps screenshots at `2000px`\n\n## Real behavior proof\n**Behavior or issue addressed**: browser screenshot and `browser snapshot --labels` image results ignored `agents.defaults.imageMaxDimensionPx` on the final tool-image sanitize step, so a browser screenshot could still come out at `1200px` even when the config was set higher.\n\n**Real environment tested**: local OpenClaw checkout on macOS using the real browser screenshot normalization path plus the browser tool image-result path with a local PNG test image as the input.\n\n**Exact steps or command run after this patch**: ran the browser screenshot runtime check against the patched branch, varying `agents.defaults.imageMaxDimensionPx` across default, `1920`, `2000`, and `3000`, then inspected the generated image metadata.\n\n**Evidence after fix**:\n```text\nlive output from runtime image metadata inspection:\nnormalized browser layer: 2000x1042, 246537 bytes, image/jpeg\ndefault final output:    1200x625,  107491 bytes, image/jpeg\nconfigured 1920:         1920x1000, 214162 bytes, image/jpeg\nconfigured 2000:         2000x1042, 246537 bytes, image/jpeg\nconfigured 3000:         2000x1042, 246537 bytes, image/jpeg\n```\n\n**Observed result after fix**: after the patch, browser-originated image results now honor the configured sanitize limit up to the browser layer's own `2000px` ceiling. `1920` produces `1920x1000`, `2000` produces `2000x1042`, and `3000` does not exceed `2000x1042` because browser pre-normalization already caps that path.\n\n**What was not tested**: a full remote provider call was not run; this proof covers the local browser screenshot normalization path and the actual browser tool image packaging and sanitize path.\n\n",
-        "branch": "fix/browser-image-sanitization-config-clean",
-        "head_sha": "e05874ff5bb5159cb372d7d3bdc304223378d8a5",
-        "author": "xx205",
+        "title": "feat(auth): add models auth clean command to prune stale auth profiles",
+        "body": "## Summary\n\n- Adds `openclaw models auth clean` command that identifies and removes stale auth profiles no longer referenced by provider config\n- Supports `--dry-run`, `--json`, and `--agent` flags\n- Uses file locking to prevent concurrent write races\n- Sanitizes profile IDs to prevent terminal injection in diagnostic output\n- Uses atomic temp-file-then-rename writes in saveJsonFile (CWE-377 fix)\n- Adds `loadAgentLocalAuthProfileStore` to prevent credential scope bleed when cleaning subagent stores\n\nSupersedes #49429, #54171, #41640 (rebased onto current main v2026.4.14).\n\n## Motivation\n\nStale auth profiles accumulate over time (expired OAuth tokens, removed providers, orphaned external CLI syncs). These stale entries cause recurring \"Model login failed\" errors when the sync mechanism overwrites fresh credentials with expired ones from external CLI files like `~/.codex/auth.json`.\n\n## Test plan\n\n- [x] `src/commands/models/auth-clean.test.ts` -- 35 tests\n- [x] `src/agents/auth-profiles/store.legacy-migration.test.ts` -- 6 tests\n- [x] `src/cli/models-cli.test.ts` -- 4 tests\n- [x] `pnpm tsgo` passes\n- [x] `pnpm build` passes\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: `openclaw models auth clean` prunes profiles present in the agent's `auth-profiles.json` store that are no longer referenced by `openclaw.json` (`auth.profiles` / `auth.order`), keeping configured profiles. Previously there was no command to remove orphaned/stale store entries.\n- **Real environment tested**: local `openclaw` build (current upstream/main + this PR) against an isolated `OPENCLAW_HOME` with a disposable store containing one CONFIGURED profile (`anthropic:keep-me`, present in `openclaw.json` auth.profiles) and one ORPHANED profile (`openai-codex:stale-orphan`, present only in the store).\n- **Exact steps or command run after this patch**:\n  ```bash\n  # openclaw.json auth.profiles = { \"anthropic:keep-me\": {...} }\n  # store auth-profiles.json profiles = { anthropic:keep-me, openai-codex:stale-orphan }\n  OPENCLAW_HOME=/tmp/authclean-home node dist/index.js models auth clean --dry-run\n  OPENCLAW_HOME=/tmp/authclean-home node dist/index.js models auth clean\n  ```\n- **Evidence after fix**: captured live from `node dist/index.js models auth clean`:\n\n  BEFORE — store profile ids:\n  ```\n  ['anthropic:keep-me', 'openai-codex:stale-orphan']\n  ```\n  DRY-RUN — previews the prune without writing:\n  ```\n  Configured: anthropic:keep-me\n  In store:   anthropic:keep-me, openai-codex:stale-orphan\n  Profiles to remove (1):\n    - openai-codex:stale-orphan\n  Profiles to keep (1):\n    + anthropic:keep-me\n  (dry run -- no changes written)\n  ```\n  REAL RUN — prunes the orphan:\n  ```\n  Profiles to remove (1):\n    - openai-codex:stale-orphan\n  Profiles to keep (1):\n    + anthropic:keep-me\n  Removed 1 stale profile(s). Restart the gateway to apply.\n  ```\n  AFTER — store profile ids (orphan pruned, configured retained):\n  ```\n  ['anthropic:keep-me']\n  ```\n- **Observed result after fix**: the orphaned `openai-codex:stale-orphan` profile is removed from the store while the configured `anthropic:keep-me` profile is kept. Dry-run previews identically without writing. A timestamped backup of the prior store is written before the rewrite.\n- **What was not tested**: pruning against a live production store (used a disposable `OPENCLAW_HOME` to avoid touching real credentials). The `--force` path for a store with zero configured profiles (covered by unit tests; not exercised here since the realistic case keeps at least one configured profile).\n",
+        "branch": "fix/auth-clean-v3",
+        "head_sha": "8b39bc881550d8c4c98d987b14f860b8d337b571",
+        "author": "amittell",
         "labels": [
+          "cli",
           "commands",
-          "size: S",
-          "clawsweeper:automerge",
+          "agents",
+          "size: XL",
           "proof: supplied",
           "proof: sufficient",
-          "extensions: openrouter",
           "P2",
-          "rating: 🦞 diamond lobster",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "extensions/openrouter/provider-routing.ts",
-            "additions": 5,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/approval-auth.test.ts",
-            "additions": 40,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/browser/src/browser-tool.actions.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/browser/src/browser-tool.runtime.ts",
-            "additions": 10,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/browser/src/browser-tool.test.ts",
-            "additions": 40,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/browser/src/browser-tool.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openrouter/provider-routing.ts",
-            "additions": 5,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/status.summary.redaction.test.ts",
-            "additions": 5,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": "automerge-openclaw-openclaw-84595",
-        "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84595.md",
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84595",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84595.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "SUCCESS": 69,
-            "SKIPPED": 28,
-            "IN_PROGRESS": 3,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "security-fast:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-runtime-infra-state:FAILURE",
-            "checks-node-agentic-commands-models:IN_PROGRESS"
-          ],
-          "pending": [
-            "security-fast:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "checks-node-core-runtime-infra-state:FAILURE"
-          ]
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84595:4499812084:2026-05-20T15:13:55Z:maintainer_approve_automerge",
-      "comment_id": "4499812084",
-      "comment_version_key": "4499812084:2026-05-20T15:13:55Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84595#issuecomment-4499812084",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84595,
-      "author": "Takhoffman",
-      "author_id": 781889,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T15:13:55Z",
-      "comment_updated_at": "2026-05-20T15:13:55Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "merge",
-      "intent": "maintainer_approve_automerge",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "write",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(browser): honor image sanitization config for screenshots",
-        "body": "## Summary\n- forward `agents.defaults.imageMaxDimensionPx` into browser screenshot tool results\n- forward the same image sanitization limits into `snapshot --labels` image results\n- add regression coverage for both browser image-returning paths\n\n## Problem\n`browser screenshot` normalized images to the browser layer's `<= 2000px` limit first, but then returned them through `imageResultFromFile()` without passing runtime image sanitization config.\n\nThat meant the final tool image still fell back to the default `1200px` sanitize limit, even when `agents.defaults.imageMaxDimensionPx` was configured higher. The same omission existed for `browser snapshot --labels`.\n\n## Fix\nThread runtime image sanitization limits into both browser image-returning call sites:\n- `browser:screenshot`\n- `browser:snapshot` when `labels=true`\n\nThis keeps browser tool image behavior aligned with the documented global image sanitization setting and with other OpenClaw image paths that already forward this config.\n\n## Verification\n- focused browser extension test suite passed:\n  - `extensions/browser/src/browser-tool.test.ts` (`51 passed`)\n- direct runtime check with the same input image showed:\n  - default config: final browser screenshot output still reduced to `1200x625`\n  - `imageMaxDimensionPx = 1920`: final output became `1920x1000`\n  - `imageMaxDimensionPx = 2000`: final output stayed at `2000x1042`\n  - `imageMaxDimensionPx = 3000`: final output still stayed at `2000x1042`, as expected because browser pre-normalization already caps screenshots at `2000px`\n\n## Real behavior proof\n**Behavior or issue addressed**: browser screenshot and `browser snapshot --labels` image results ignored `agents.defaults.imageMaxDimensionPx` on the final tool-image sanitize step, so a browser screenshot could still come out at `1200px` even when the config was set higher.\n\n**Real environment tested**: local OpenClaw checkout on macOS using the real browser screenshot normalization path plus the browser tool image-result path with a local PNG test image as the input.\n\n**Exact steps or command run after this patch**: ran the browser screenshot runtime check against the patched branch, varying `agents.defaults.imageMaxDimensionPx` across default, `1920`, `2000`, and `3000`, then inspected the generated image metadata.\n\n**Evidence after fix**:\n```text\nlive output from runtime image metadata inspection:\nnormalized browser layer: 2000x1042, 246537 bytes, image/jpeg\ndefault final output:    1200x625,  107491 bytes, image/jpeg\nconfigured 1920:         1920x1000, 214162 bytes, image/jpeg\nconfigured 2000:         2000x1042, 246537 bytes, image/jpeg\nconfigured 3000:         2000x1042, 246537 bytes, image/jpeg\n```\n\n**Observed result after fix**: after the patch, browser-originated image results now honor the configured sanitize limit up to the browser layer's own `2000px` ceiling. `1920` produces `1920x1000`, `2000` produces `2000x1042`, and `3000` does not exceed `2000x1042` because browser pre-normalization already caps that path.\n\n**What was not tested**: a full remote provider call was not run; this proof covers the local browser screenshot normalization path and the actual browser tool image packaging and sanitize path.\n\n",
-        "branch": "fix/browser-image-sanitization-config-clean",
-        "head_sha": "e05874ff5bb5159cb372d7d3bdc304223378d8a5",
-        "author": "xx205",
-        "labels": [
-          "commands",
-          "size: S",
-          "clawsweeper:automerge",
-          "proof: supplied",
-          "proof: sufficient",
-          "extensions: openrouter",
-          "P2",
-          "rating: 🦞 diamond lobster",
-          "status: 👀 ready for maintainer look"
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
@@ -219,121 +90,107 @@
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/browser/src/browser-tool.actions.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/browser/src/browser-tool.runtime.ts",
-            "additions": 10,
+            "path": "src/agents/auth-profiles/doctor.ts",
+            "additions": 48,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/browser/src/browser-tool.test.ts",
-            "additions": 40,
-            "deletions": 4,
+            "path": "src/agents/auth-profiles/order.ts",
+            "additions": 1,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/browser/src/browser-tool.ts",
-            "additions": 2,
+            "path": "src/agents/auth-profiles/sanitize.test.ts",
+            "additions": 57,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/auth-profiles/sanitize.ts",
+            "additions": 62,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/auth-profiles/store.legacy-migration.test.ts",
+            "additions": 151,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/auth-profiles/store.ts",
+            "additions": 36,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/models-cli.test.ts",
+            "additions": 24,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/openrouter/provider-routing.ts",
-            "additions": 5,
-            "deletions": 5,
+            "path": "src/cli/models-cli.ts",
+            "additions": 32,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/commands/status.summary.redaction.test.ts",
-            "additions": 5,
-            "deletions": 2,
+            "path": "src/commands/models/auth-clean.test.ts",
+            "additions": 915,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/commands/models/auth-clean.ts",
+            "additions": 363,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "test/scripts/lint-suppressions.test.ts",
+            "additions": 1,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
-        "cluster_id": "automerge-openclaw-openclaw-84595",
-        "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84595.md",
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84595",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84595.md",
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-66911",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-66911.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 102,
+          "total": 117,
           "counts": {
-            "SUCCESS": 69,
-            "SKIPPED": 28,
-            "IN_PROGRESS": 3,
-            "FAILURE": 1,
+            "SUCCESS": 89,
+            "SKIPPED": 27,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "security-fast:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-runtime-infra-state:FAILURE",
-            "checks-node-agentic-commands-models:IN_PROGRESS"
-          ],
-          "pending": [
-            "security-fast:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "checks-node-core-runtime-infra-state:FAILURE"
-          ]
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
         }
       },
-      "reason": "maintainer approval requires an active ClawSweeper pause label"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:84595:4499178477:2026-05-20T14:13:05Z:clawsweeper_needs_human",
-      "comment_id": "4499178477",
-      "comment_version_key": "4499178477:2026-05-20T14:13:05Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84595#issuecomment-4499178477",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84595,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T14:02:23Z",
-      "comment_updated_at": "2026-05-20T14:13:05Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "No ClawSweeper repair lane is needed because the patch is narrow and I found no actionable defect; it should proceed through normal maintainer merge/check handling.; Cleared: The diff only threads an existing numeric config into local browser image result packaging and adds tests; it does not change dependencies, workflows, credentials, permissions, or code-execution surfaces. (sha=158cfa4b8b4b22aedfeba59d9780e436a3d88003)",
-      "review_summary": "The PR adds a browser-runtime image-sanitization resolver, passes it into screenshot and snapshot-label image results, and adds regression tests for both call sites.\n\nReproducibility: yes. source-level reproduction is high confidence: current main calls imageResultFromFile without imageSanitization on both browser image-returning paths, while the shared sanitizer falls back to 1200px when no override is passed. I did not run a live current-main browser session in this read-only review.",
-      "review_followup": "No ClawSweeper repair lane is needed because the patch is narrow and I found no actionable defect; it should proceed through normal maintainer merge/check handling.",
-      "freeform_prompt": null,
-      "expected_head_sha": "158cfa4b8b4b22aedfeba59d9780e436a3d88003",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2747,
+    "total_ms": 3955,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 523
+        "ms": 611
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2007
+        "ms": 2993
       },
       {
         "name": "classify_commands",
@@ -341,11 +198,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 188
+        "ms": 337
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
