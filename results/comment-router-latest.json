@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-20T04:17:12.256Z",
+  "generated_at": "2026-05-20T04:17:47.445Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-20T01:17:09.339Z",
+  "since": "2026-05-20T01:17:44.444Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     58808
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4386553468
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 157,
-  "commands_seen": 3,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -55,51 +57,90 @@
       "review_summary": "Adds optional `requesterSenderId` and `senderIsOwner` fields to `ChannelAgentToolFactory` params and forwards `createOpenClawCodingTools` sender context into `listChannelAgentTools`.\n\nReproducibility: yes. by source inspection: current main forwards sender context to OpenClaw/plugin message-tool paths but calls channel agent-tool factories with only `cfg`. I did not run tests because this review is read-only.",
       "review_followup": "Needs contributor real behavior proof and maintainer API/security-boundary acceptance; there is no narrow automated code repair left after the guard fix.",
       "freeform_prompt": null,
-      "expected_head_sha": "0a0303ad842b161299399095fddf00d541ee4852",
+      "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
+      "status": "ignored",
       "actions": [],
+      "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "feat: pass requesterSenderId and senderIsOwner to ChannelAgentToolFactory",
-        "body": "## Summary\n\nPass trusted sender context (`requesterSenderId` and `senderIsOwner`) to `ChannelAgentToolFactory`, enabling channel plugins to implement sender-aware access control in their agent tools.\n\n## Problem\n\n`listChannelAgentTools()` only passes `{ cfg }` to channel agent tool factories, while the immediately following `createOpenClawTools()` call in the same function receives the full sender context. This gap means channel-registered agent tools cannot distinguish between different senders.\n\n## Changes\n\n**3 files changed, +17 / -3**\n\n### `src/channels/plugins/types.core.ts`\n- Extended `ChannelAgentToolFactory` params type to include `requesterSenderId?: string | null` and `senderIsOwner?: boolean`\n\n### `src/agents/channel-tools.ts`\n- Updated `listChannelAgentTools` function signature to accept the new fields\n- These are already forwarded to the factory via `entry(params)`\n\n### `src/agents/pi-tools.ts`\n- Pass `options?.senderId` and `options?.senderIsOwner` from the existing `options` object into `listChannelAgentTools()`\n\n## Backward Compatibility\n\nFully backward compatible. Existing factories that only destructure `{ cfg }` will simply ignore the new optional fields. No changes required for any existing channel plugin.\n\n## Use Case\n\nThe DMWork channel plugin needs sender-aware agent tools where:\n- Any user can query their own DM history with the bot\n- Any user can query groups they are a member of\n- Only the bot owner can query other users' DM history\n\nWithout sender context in the factory, the plugin must choose between `ownerOnly: true` (too restrictive) or no access control (too permissive).\n\nCloses #58806\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: `ChannelAgentToolFactory` now receives `requesterSenderId` and `senderIsOwner` from the trusted server context, enabling channel plugins to implement sender-aware access control without relying on LLM-controlled input.\n- **Real environment tested**: Local patched OpenClaw checkout at `eb197b7a2b`, macOS arm64, Node.js `v24.10.0`.\n- **Failing proof before fix**: On upstream/main (`a002c416c7`), `listChannelAgentTools` is called with only `{ cfg }` — no sender context:\n\n```text\n$ grep \"listChannelAgentTools\" src/agents/pi-tools.ts\n921:    ...(includeChannelTools ? listChannelAgentTools({ cfg: options?.config }) : []),\n```\n\nChannel plugins have no way to distinguish between different senders.\n\n- **Exact steps or command run after this patch**:\n\n```text\ngrep -n \"requesterSenderId\\|senderIsOwner\" src/agents/channel-tools.ts src/agents/pi-tools.ts src/channels/plugins/types.core.ts\nnode scripts/run-vitest.mjs src/agents/pi-embedded-runner/run/attempt-tool-construction-plan.test.ts\n```\n\n- **Evidence after fix**:\n\n```text\nsrc/agents/channel-tools.ts:33:  requesterSenderId?: string | null;\nsrc/agents/channel-tools.ts:34:  senderIsOwner?: boolean;\nsrc/agents/channel-tools.ts:101:  requesterSenderId?: string | null;\nsrc/agents/channel-tools.ts:102:  senderIsOwner?: boolean;\nsrc/agents/pi-tools.ts:856:            requesterSenderId: options?.senderId,\nsrc/agents/pi-tools.ts:857:            senderIsOwner: options?.senderIsOwner,\nsrc/agents/pi-tools.ts:924:          requesterSenderId: options?.senderId,\nsrc/agents/pi-tools.ts:925:          senderIsOwner: options?.senderIsOwner,\nsrc/channels/plugins/types.core.ts:  requesterSenderId?: string | null;\nsrc/channels/plugins/types.core.ts:  senderIsOwner?: boolean;\n\n ✓ unit-fast attempt-tool-construction-plan.test.ts (20 tests) 5ms\n\n Test Files  1 passed (1)\n      Tests  20 passed (20)\n   Duration  97ms\n```\n\n- **Observed result after fix**: The sender fields are threaded from `createOpenClawCodingTools(options)` through `listChannelAgentTools(params)` into every `ChannelAgentToolFactory` call. The `includeChannelTools` and `includeOpenClawTools` per-family guards are preserved (fixed in `eb197b7a2b`) — no regression to plugin-only/channel-only construction plans. All 20 tool construction plan tests pass.\n- **What was not tested**: A live channel plugin consuming `requesterSenderId` for access control was not tested in this proof. The downstream consumer is the [openclaw-channel-octo](https://github.com/nicepkg/openclaw-channel-octo) plugin, which uses these fields to gate cross-user DM history queries. The proof here verifies the core contract (params reach the factory); plugin-side enforcement is tested in the plugin's own test suite.\n\n## P1 Fix (ClawSweeper finding addressed)\n\nThe original diff inadvertently replaced `includeChannelTools`/`includeOpenClawTools` guards with `includeCoreTools`. Fixed in `eb197b7a2b`: channel tools remain behind `includeChannelTools`, OpenClaw tools behind `includeOpenClawTools`, while sender context is forwarded in both paths.\n",
-        "branch": "feat/channel-agent-tools-sender-context",
-        "head_sha": "0a0303ad842b161299399095fddf00d541ee4852",
-        "author": "jerry-xin",
+        "title": "feat(embedded-runner): expose prep stage timings",
+        "body": "## Summary\n- expose existing embedded runner prep stage snapshots on attempt results and run meta\n- include prep stage timings on the `agent_end` hook event for plugin observability\n- add coverage for attempt result and hook event prep stage propagation\n- document the new optional hook field and add an Unreleased changelog entry\n\n## Motivation\nOpenClaw already records detailed embedded runner prep stages internally, but that timing data is not currently available to runtime metadata consumers or plugin hooks. When embedded runs feel slow, plugin authors and operators cannot tell whether time is going into tool bundling, system prompt construction, session resource loading, or stream setup without patching core locally.\n\nExposing the existing stage snapshot gives downstream integrations a stable, low-risk way to collect real latency evidence before proposing behavior-changing optimizations such as tool bundle filtering or prompt caching. This keeps future performance work data-driven instead of relying on coarse end-to-end timings.\n\n## Implementation notes\n- reuses the existing `createEmbeddedRunStageTracker()` / `prepStages.snapshot()` path\n- keeps all new fields optional\n- uses a public structural plugin hook type instead of exporting runner internals through the plugin API\n- does not change tool bundling, system prompt construction, stream setup, model calls, or runner behavior\n- documents `agent_end.prepStages` as optional diagnostic telemetry whose stage labels may grow over time\n\n## Real behavior proof\n\n- Behavior or issue addressed: Embedded runner prep stage timings are available to runtime metadata consumers and `agent_end` hook observers without changing runner behavior.\n- Real environment tested: Local macOS OpenClaw source checkout at `/Users/guanbear/.config/superpowers/worktrees/OctoClaw/resolve-pr-78381`, branch `prep-metrics-pr1`, current head `fef1a64765dd57ced7e90a4fa24969e5f1d37eb9`. The proof used a temporary `HOME`, `OPENCLAW_STATE_DIR`, and `OPENCLAW_CONFIG_PATH`; a real `openclaw agent --local` embedded run; the repository OpenAI-compatible local response server; and a temporary non-bundled plugin registered through `plugins.load.paths` with `hooks.allowConversationAccess=true`.\n- Exact steps or command run after this patch:\n\n```bash\nMOCK_PORT=41xxx SUCCESS_MARKER=OPENCLAW_PREP_PROOF_OK \\\n  MOCK_REQUEST_LOG=/tmp/openclaw-pr78381-proof-JCgOKx/mock-openai.log \\\n  node scripts/e2e/mock-openai-server.mjs\n\nnode scripts/run-node.mjs plugins inspect prep-proof --runtime --json\n\nnode scripts/run-node.mjs agent \\\n  --local \\\n  --agent main \\\n  --session-id prep-proof-session \\\n  --message \"Reply exactly OPENCLAW_PREP_PROOF_OK\" \\\n  --thinking off \\\n  --json\n```\n\n- Evidence after fix: Terminal capture from the current-head runtime proof:\n\n```json\n{\n  \"head\": \"fef1a64765dd57ced7e90a4fa24969e5f1d37eb9\",\n  \"finalAssistantVisibleText\": \"OPENCLAW_PREP_PROOF_OK\",\n  \"metaHasPrepStages\": true,\n  \"metaPrepStages\": {\n    \"totalMs\": 1293,\n    \"stages\": [\n      { \"name\": \"workspace-sandbox\", \"durationMs\": 1, \"elapsedMs\": 1 },\n      { \"name\": \"skills\", \"durationMs\": 0, \"elapsedMs\": 1 },\n      { \"name\": \"core-plugin-tools\", \"durationMs\": 206, \"elapsedMs\": 207 },\n      { \"name\": \"bootstrap-context\", \"durationMs\": 2, \"elapsedMs\": 209 },\n      { \"name\": \"bundle-tools\", \"durationMs\": 151, \"elapsedMs\": 360 },\n      { \"name\": \"system-prompt\", \"durationMs\": 850, \"elapsedMs\": 1210 },\n      { \"name\": \"session-resource-loader\", \"durationMs\": 62, \"elapsedMs\": 1272 },\n      { \"name\": \"agent-session\", \"durationMs\": 2, \"elapsedMs\": 1274 },\n      { \"name\": \"stream-setup\", \"durationMs\": 19, \"elapsedMs\": 1293 }\n    ]\n  },\n  \"hookProof\": {\n    \"success\": true,\n    \"durationMs\": 607,\n    \"hasPrepStages\": true,\n    \"totalMs\": 1293,\n    \"stages\": [\n      { \"name\": \"workspace-sandbox\", \"durationMs\": 1, \"elapsedMs\": 1 },\n      { \"name\": \"skills\", \"durationMs\": 0, \"elapsedMs\": 1 },\n      { \"name\": \"core-plugin-tools\", \"durationMs\": 206, \"elapsedMs\": 207 },\n      { \"name\": \"bootstrap-context\", \"durationMs\": 2, \"elapsedMs\": 209 },\n      { \"name\": \"bundle-tools\", \"durationMs\": 151, \"elapsedMs\": 360 },\n      { \"name\": \"system-prompt\", \"durationMs\": 850, \"elapsedMs\": 1210 },\n      { \"name\": \"session-resource-loader\", \"durationMs\": 62, \"elapsedMs\": 1272 },\n      { \"name\": \"agent-session\", \"durationMs\": 2, \"elapsedMs\": 1274 },\n      { \"name\": \"stream-setup\", \"durationMs\": 19, \"elapsedMs\": 1293 }\n    ]\n  },\n  \"proofLog\": \"/tmp/openclaw-pr78381-proof-JCgOKx/agent-end-prepStages.jsonl\"\n}\n```\n\nThe temporary plugin's raw `agent_end` log line from the same run had `hasPrepStages: true`, `prepStages.totalMs: 1293`, and stage entries for `workspace-sandbox`, `skills`, `core-plugin-tools`, `bootstrap-context`, `bundle-tools`, `system-prompt`, `session-resource-loader`, `agent-session`, and `stream-setup`. The agent command JSON from the same run also included `meta.prepStages` and `finalAssistantVisibleText: \"OPENCLAW_PREP_PROOF_OK\"`, confirming both runtime metadata and the plugin hook observer saw prep-stage telemetry on current head.\n\n- Observed result after fix: A standalone `openclaw agent --local` embedded run completed successfully against the local OpenAI-compatible response server, returned `OPENCLAW_PREP_PROOF_OK`, and the temporary real plugin's `agent_end` handler observed `event.prepStages` with `bundle-tools`, `system-prompt`, and `stream-setup` entries.\n- What was not tested: A live paid external model/provider run was not run; the standalone proof used OpenClaw's deterministic local OpenAI-compatible response server to avoid provider latency/cost while still exercising the real embedded runner, local CLI, plugin loader, and `agent_end` hook dispatch.\n\n## Validation\n- `pnpm test src/agents/pi-embedded-runner/run/attempt-stage-timing.test.ts src/agents/pi-embedded-runner/run/attempt.spawn-workspace.context-engine.test.ts src/plugins/hooks.phase-hooks.test.ts src/plugins/hooks.model-override-wiring.test.ts`\n- `pnpm changed:lanes --json` -> lanes `core`, `coreTests`, `docs`\n- `pnpm check:changed`\n- `git diff --check origin/main...HEAD`\n\n",
+        "branch": "prep-metrics-pr1",
+        "head_sha": "057d21f1188efc59d7379ac2a66ff45659b00adc",
+        "author": "guanbear",
         "labels": [
+          "docs",
           "agents",
-          "size: XS",
+          "size: S",
           "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 security-boundary",
-          "status: 📣 needs proof"
+          "proof: sufficient",
+          "P3",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 automation",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/agents/channel-tools.ts",
-            "additions": 5,
-            "deletions": 1,
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/pi-tools.ts",
+            "path": "docs/plugins/hooks.md",
             "additions": 7,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/channels/plugins/types.core.ts",
-            "additions": 7,
-            "deletions": 1,
+            "path": "src/agents/pi-embedded-runner/run.incomplete-turn.test.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.spawn-workspace.context-engine.test.ts",
+            "additions": 66,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
+            "additions": 14,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/types.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/types.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/hook-types.ts",
+            "additions": 12,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-58808",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-58808.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-78381",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-78381.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
@@ -107,8 +148,8 @@
         "checks": {
           "total": 102,
           "counts": {
-            "SUCCESS": 73,
-            "SKIPPED": 22,
+            "SUCCESS": 74,
+            "SKIPPED": 27,
             "NEUTRAL": 1
           },
           "blockers": [],
@@ -116,208 +157,32 @@
           "terminalBlockers": []
         }
       },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:58808:4345467200:2026-04-29T16:09:45Z:clawsweeper_needs_human",
-      "comment_id": "4345467200",
-      "comment_version_key": "4345467200:2026-04-29T16:09:45Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/58808#issuecomment-4345467200",
-      "repo": "openclaw/openclaw",
-      "issue_number": 58808,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-29T16:09:45Z",
-      "comment_updated_at": "2026-04-29T16:09:45Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=8c1ec96d264424d804c12a78e3ad66b9451b8994)",
-      "review_summary": "The PR adds optional requesterSenderId and senderIsOwner fields to ChannelAgentToolFactory/listChannelAgentTools and forwards createOpenClawCodingTools sender context into channel-owned agent-tool factories.",
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": "8c1ec96d264424d804c12a78e3ad66b9451b8994",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "feat: pass requesterSenderId and senderIsOwner to ChannelAgentToolFactory",
-        "body": "## Summary\n\nPass trusted sender context (`requesterSenderId` and `senderIsOwner`) to `ChannelAgentToolFactory`, enabling channel plugins to implement sender-aware access control in their agent tools.\n\n## Problem\n\n`listChannelAgentTools()` only passes `{ cfg }` to channel agent tool factories, while the immediately following `createOpenClawTools()` call in the same function receives the full sender context. This gap means channel-registered agent tools cannot distinguish between different senders.\n\n## Changes\n\n**3 files changed, +17 / -3**\n\n### `src/channels/plugins/types.core.ts`\n- Extended `ChannelAgentToolFactory` params type to include `requesterSenderId?: string | null` and `senderIsOwner?: boolean`\n\n### `src/agents/channel-tools.ts`\n- Updated `listChannelAgentTools` function signature to accept the new fields\n- These are already forwarded to the factory via `entry(params)`\n\n### `src/agents/pi-tools.ts`\n- Pass `options?.senderId` and `options?.senderIsOwner` from the existing `options` object into `listChannelAgentTools()`\n\n## Backward Compatibility\n\nFully backward compatible. Existing factories that only destructure `{ cfg }` will simply ignore the new optional fields. No changes required for any existing channel plugin.\n\n## Use Case\n\nThe DMWork channel plugin needs sender-aware agent tools where:\n- Any user can query their own DM history with the bot\n- Any user can query groups they are a member of\n- Only the bot owner can query other users' DM history\n\nWithout sender context in the factory, the plugin must choose between `ownerOnly: true` (too restrictive) or no access control (too permissive).\n\nCloses #58806\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: `ChannelAgentToolFactory` now receives `requesterSenderId` and `senderIsOwner` from the trusted server context, enabling channel plugins to implement sender-aware access control without relying on LLM-controlled input.\n- **Real environment tested**: Local patched OpenClaw checkout at `eb197b7a2b`, macOS arm64, Node.js `v24.10.0`.\n- **Failing proof before fix**: On upstream/main (`a002c416c7`), `listChannelAgentTools` is called with only `{ cfg }` — no sender context:\n\n```text\n$ grep \"listChannelAgentTools\" src/agents/pi-tools.ts\n921:    ...(includeChannelTools ? listChannelAgentTools({ cfg: options?.config }) : []),\n```\n\nChannel plugins have no way to distinguish between different senders.\n\n- **Exact steps or command run after this patch**:\n\n```text\ngrep -n \"requesterSenderId\\|senderIsOwner\" src/agents/channel-tools.ts src/agents/pi-tools.ts src/channels/plugins/types.core.ts\nnode scripts/run-vitest.mjs src/agents/pi-embedded-runner/run/attempt-tool-construction-plan.test.ts\n```\n\n- **Evidence after fix**:\n\n```text\nsrc/agents/channel-tools.ts:33:  requesterSenderId?: string | null;\nsrc/agents/channel-tools.ts:34:  senderIsOwner?: boolean;\nsrc/agents/channel-tools.ts:101:  requesterSenderId?: string | null;\nsrc/agents/channel-tools.ts:102:  senderIsOwner?: boolean;\nsrc/agents/pi-tools.ts:856:            requesterSenderId: options?.senderId,\nsrc/agents/pi-tools.ts:857:            senderIsOwner: options?.senderIsOwner,\nsrc/agents/pi-tools.ts:924:          requesterSenderId: options?.senderId,\nsrc/agents/pi-tools.ts:925:          senderIsOwner: options?.senderIsOwner,\nsrc/channels/plugins/types.core.ts:  requesterSenderId?: string | null;\nsrc/channels/plugins/types.core.ts:  senderIsOwner?: boolean;\n\n ✓ unit-fast attempt-tool-construction-plan.test.ts (20 tests) 5ms\n\n Test Files  1 passed (1)\n      Tests  20 passed (20)\n   Duration  97ms\n```\n\n- **Observed result after fix**: The sender fields are threaded from `createOpenClawCodingTools(options)` through `listChannelAgentTools(params)` into every `ChannelAgentToolFactory` call. The `includeChannelTools` and `includeOpenClawTools` per-family guards are preserved (fixed in `eb197b7a2b`) — no regression to plugin-only/channel-only construction plans. All 20 tool construction plan tests pass.\n- **What was not tested**: A live channel plugin consuming `requesterSenderId` for access control was not tested in this proof. The downstream consumer is the [openclaw-channel-octo](https://github.com/nicepkg/openclaw-channel-octo) plugin, which uses these fields to gate cross-user DM history queries. The proof here verifies the core contract (params reach the factory); plugin-side enforcement is tested in the plugin's own test suite.\n\n## P1 Fix (ClawSweeper finding addressed)\n\nThe original diff inadvertently replaced `includeChannelTools`/`includeOpenClawTools` guards with `includeCoreTools`. Fixed in `eb197b7a2b`: channel tools remain behind `includeChannelTools`, OpenClaw tools behind `includeOpenClawTools`, while sender context is forwarded in both paths.\n",
-        "branch": "feat/channel-agent-tools-sender-context",
-        "head_sha": "0a0303ad842b161299399095fddf00d541ee4852",
-        "author": "jerry-xin",
-        "labels": [
-          "agents",
-          "size: XS",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 security-boundary",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/channel-tools.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-tools.ts",
-            "additions": 7,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/plugins/types.core.ts",
-            "additions": 7,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-58808",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-58808.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "counts": {
-            "SUCCESS": 73,
-            "SKIPPED": 22,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:58808:4345204720:2026-04-29T15:34:07Z:clawsweeper_needs_human",
-      "comment_id": "4345204720",
-      "comment_version_key": "4345204720:2026-04-29T15:34:07Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/58808#issuecomment-4345204720",
-      "repo": "openclaw/openclaw",
-      "issue_number": 58808,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-29T15:34:07Z",
-      "comment_updated_at": "2026-04-29T15:34:07Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=136b9aa21e906c8209fea71f7e48aa9717f45e37)",
-      "review_summary": "The PR adds optional requesterSenderId and senderIsOwner fields to ChannelAgentToolFactory/listChannelAgentTools and forwards createOpenClawCodingTools sender context into channel-owned agent-tool factories.",
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": "136b9aa21e906c8209fea71f7e48aa9717f45e37",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "feat: pass requesterSenderId and senderIsOwner to ChannelAgentToolFactory",
-        "body": "## Summary\n\nPass trusted sender context (`requesterSenderId` and `senderIsOwner`) to `ChannelAgentToolFactory`, enabling channel plugins to implement sender-aware access control in their agent tools.\n\n## Problem\n\n`listChannelAgentTools()` only passes `{ cfg }` to channel agent tool factories, while the immediately following `createOpenClawTools()` call in the same function receives the full sender context. This gap means channel-registered agent tools cannot distinguish between different senders.\n\n## Changes\n\n**3 files changed, +17 / -3**\n\n### `src/channels/plugins/types.core.ts`\n- Extended `ChannelAgentToolFactory` params type to include `requesterSenderId?: string | null` and `senderIsOwner?: boolean`\n\n### `src/agents/channel-tools.ts`\n- Updated `listChannelAgentTools` function signature to accept the new fields\n- These are already forwarded to the factory via `entry(params)`\n\n### `src/agents/pi-tools.ts`\n- Pass `options?.senderId` and `options?.senderIsOwner` from the existing `options` object into `listChannelAgentTools()`\n\n## Backward Compatibility\n\nFully backward compatible. Existing factories that only destructure `{ cfg }` will simply ignore the new optional fields. No changes required for any existing channel plugin.\n\n## Use Case\n\nThe DMWork channel plugin needs sender-aware agent tools where:\n- Any user can query their own DM history with the bot\n- Any user can query groups they are a member of\n- Only the bot owner can query other users' DM history\n\nWithout sender context in the factory, the plugin must choose between `ownerOnly: true` (too restrictive) or no access control (too permissive).\n\nCloses #58806\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: `ChannelAgentToolFactory` now receives `requesterSenderId` and `senderIsOwner` from the trusted server context, enabling channel plugins to implement sender-aware access control without relying on LLM-controlled input.\n- **Real environment tested**: Local patched OpenClaw checkout at `eb197b7a2b`, macOS arm64, Node.js `v24.10.0`.\n- **Failing proof before fix**: On upstream/main (`a002c416c7`), `listChannelAgentTools` is called with only `{ cfg }` — no sender context:\n\n```text\n$ grep \"listChannelAgentTools\" src/agents/pi-tools.ts\n921:    ...(includeChannelTools ? listChannelAgentTools({ cfg: options?.config }) : []),\n```\n\nChannel plugins have no way to distinguish between different senders.\n\n- **Exact steps or command run after this patch**:\n\n```text\ngrep -n \"requesterSenderId\\|senderIsOwner\" src/agents/channel-tools.ts src/agents/pi-tools.ts src/channels/plugins/types.core.ts\nnode scripts/run-vitest.mjs src/agents/pi-embedded-runner/run/attempt-tool-construction-plan.test.ts\n```\n\n- **Evidence after fix**:\n\n```text\nsrc/agents/channel-tools.ts:33:  requesterSenderId?: string | null;\nsrc/agents/channel-tools.ts:34:  senderIsOwner?: boolean;\nsrc/agents/channel-tools.ts:101:  requesterSenderId?: string | null;\nsrc/agents/channel-tools.ts:102:  senderIsOwner?: boolean;\nsrc/agents/pi-tools.ts:856:            requesterSenderId: options?.senderId,\nsrc/agents/pi-tools.ts:857:            senderIsOwner: options?.senderIsOwner,\nsrc/agents/pi-tools.ts:924:          requesterSenderId: options?.senderId,\nsrc/agents/pi-tools.ts:925:          senderIsOwner: options?.senderIsOwner,\nsrc/channels/plugins/types.core.ts:  requesterSenderId?: string | null;\nsrc/channels/plugins/types.core.ts:  senderIsOwner?: boolean;\n\n ✓ unit-fast attempt-tool-construction-plan.test.ts (20 tests) 5ms\n\n Test Files  1 passed (1)\n      Tests  20 passed (20)\n   Duration  97ms\n```\n\n- **Observed result after fix**: The sender fields are threaded from `createOpenClawCodingTools(options)` through `listChannelAgentTools(params)` into every `ChannelAgentToolFactory` call. The `includeChannelTools` and `includeOpenClawTools` per-family guards are preserved (fixed in `eb197b7a2b`) — no regression to plugin-only/channel-only construction plans. All 20 tool construction plan tests pass.\n- **What was not tested**: A live channel plugin consuming `requesterSenderId` for access control was not tested in this proof. The downstream consumer is the [openclaw-channel-octo](https://github.com/nicepkg/openclaw-channel-octo) plugin, which uses these fields to gate cross-user DM history queries. The proof here verifies the core contract (params reach the factory); plugin-side enforcement is tested in the plugin's own test suite.\n\n## P1 Fix (ClawSweeper finding addressed)\n\nThe original diff inadvertently replaced `includeChannelTools`/`includeOpenClawTools` guards with `includeCoreTools`. Fixed in `eb197b7a2b`: channel tools remain behind `includeChannelTools`, OpenClaw tools behind `includeOpenClawTools`, while sender context is forwarded in both paths.\n",
-        "branch": "feat/channel-agent-tools-sender-context",
-        "head_sha": "0a0303ad842b161299399095fddf00d541ee4852",
-        "author": "jerry-xin",
-        "labels": [
-          "agents",
-          "size: XS",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 security-boundary",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/channel-tools.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-tools.ts",
-            "additions": 7,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/plugins/types.core.ts",
-            "additions": 7,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-58808",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-58808.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "counts": {
-            "SUCCESS": 73,
-            "SKIPPED": 22,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3257,
+    "total_ms": 3284,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 989
+        "ms": 834
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1911
+        "ms": 2155
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 324
+        "ms": 284
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
