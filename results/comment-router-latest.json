@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-20T17:38:48.253Z",
+  "generated_at": "2026-05-20T17:38:54.747Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-20T14:38:46.211Z",
+  "since": "2026-05-20T14:38:54.349Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    84649
+    84653
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,257 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84649:4500857010:2026-05-20T17:38:41Z:automerge",
-      "comment_id": "4500857010",
-      "comment_version_key": "4500857010:2026-05-20T17:38:41Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84649#issuecomment-4500857010",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84649,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T17:22:41Z",
-      "comment_updated_at": "2026-05-20T17:38:41Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "automerge",
-      "intent": "automerge",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": "The PR adds plugin metadata/registry memoization and threads snapshots, install records, and discovery through plugin provider and auto-enable startup paths to reduce TUI cold-start plugin-system work.\n\nReproducibility: yes. for the review findings: current main has focused same-process freshness coverage, and source inspection of the PR head shows both new memo layers can bypass that freshness path. I did not run tests because this review is read-only.",
-      "review_followup": "There is a narrow repair path that an automated worker could attempt: preserve derived watched-file memo invalidation while leaving the rest of the performance work intact.",
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "ignored",
-      "actions": [],
-      "author_repository_permission": "none",
-      "target": {
-        "kind": "pull_request",
-        "title": "perf(plugins): cut plugin-system thrash from TUI cold start",
-        "body": "## Summary\n\n- **Fixes snapshot-memo store/lookup key asymmetry.** The memo computed its lookup key from the persisted index but stored entries under the derived index's fingerprint when the result came from discovery. Persisted vs. derived indexes always differ in volatile fields (`generatedAtMs`, `refreshReason`), so future lookups never matched stored keys. Local hit rate goes from 24% → 98% after fix.\n- **Routes `PluginMetadataSnapshot` through provider-resolve paths.** `resolvePluginProviders` / `isPluginProvidersLoadInFlight` / `resolveOwningPluginIdsForProvider` / `resolveExternalAuthProfilesWithPlugins` all dispatch to helpers that have a manifestRegistry fast path; they now self-service a snapshot via `ensurePluginMetadataSnapshot` instead of letting each helper rebuild from disk. Drops `loadPluginManifestRegistryForInstalledIndex` fires from 685 → ~10 per cold start.\n- **Threads `installRecords` through `PluginLoadOptions`.** `resolvePluginLoadCacheContext` and `buildProvenanceIndex` now use the caller-supplied install records when present, eliminating ~250 redundant `loadInstalledPluginIndexInstallRecordsSync` calls per startup (each reading `installs.json` + npm metadata).\n- **Threads `discovery?: PluginDiscoveryResult` through the auto-enable chain.** `detectPluginAutoEnableCandidates` → `resolvePluginAutoEnableReadiness` → `collectConfiguredChannelIds` → `listPotentialConfiguredChannelPresenceSignals` + `listBundledChannelIdsWithConfiguredState` all accept and forward an optional discovery, plus the bundled-channel leaf helpers (`listBundledChannelIds`, `listChannelPackageStateCatalog`, `hasBundledChannelPersistedAuthState`, etc.). Lets callers that already own a discovery short-circuit the chain of bundled `discoverOpenClawPlugins` scans triggered by `applyPluginAutoEnable`.\n\nCombined startup impact on a local cold start: TUI freeze drops from ~32s to ~13–16s. Residual cost is dominated by two single-plugin module loads (Codex 2.76s, Anthropic 746ms) that this PR does not address.\n\n## Verification\n\n**Behavior addressed:** TUI cold-start freeze; redundant discovery scans, manifest-registry rebuilds, and `installs.json` reads driven by the auto-enable + provider-resolve chains.\n\n**Real environment tested:** local macOS, `pnpm openclaw tui` from a fresh process.\n\n**Exact steps or command run after this patch:** `pnpm build && pnpm openclaw tui`, exiting once first responsive prompt appears. Compared event-loop heartbeat lag totals against a baseline build at `origin/main`.\n\n**Evidence after fix:**\n- Snapshot memo hit rate: 24% → 98% (`loadPluginMetadataSnapshot.enter` `keyMatch:true` vs `false`)\n- `loadPluginManifestRegistryForInstalledIndex` fires: 685 → ~10\n- `loadInstalledPluginIndexInstallRecordsSync` calls: 291 → 27\n- `discoverOpenClawPlugins` scans: 163 → 85\n- Per-plugin `tryReadJsonSync` for `extensions/*/package.json`: ~914 → ~370\n- Sum of event-loop heartbeat lag windows: ~14s → ~10s\n\n**Observed result after fix:** Perceived TUI freeze 32s → 13–16s (varies run to run with gateway-connect timing).\n\n**Test runs:**\n- `node scripts/run-vitest.mjs src/plugins/plugin-metadata-snapshot.memo.test.ts` — 23/23 pass\n- `node scripts/run-vitest.mjs src/plugins/plugin-registry-snapshot.test.ts` — pass\n- `pnpm tsgo --noEmit --project tsconfig.core.json` — clean\n\n**What was not tested:** behavior under concurrent sibling-process `openclaw plugin install` (snapshot memo invalidation path); full `pnpm test` suite; full `pnpm check`. Left for CI / Crabbox.\n\n## Notes for reviewers\n\n- Three `wip(perf-trace):` commits (`9fdfe38c`, `4e6e539e`, `3df0ae2c`) are preserved in history to keep the audit instrumentation easy to re-cherry-pick for future startup work. Their effects are reverted by `dd7170e1` at the tip, so the net diff against main contains zero `perfMark`/`perfSpan` calls and no `src/infra/perf-trace.ts`.\n- Net diff against main: 22 files, +494/-137. Plugin-system only — no TUI / gateway / CLI behavior changes.",
-        "branch": "dallin-perf-startup-trace",
-        "head_sha": "2b1b0c0c588c81964ce7de3bb46846594f18bfa9",
-        "author": "romneyda",
-        "labels": [
-          "gateway",
-          "maintainer",
-          "size: L",
-          "proof: sufficient",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/channels/config-presence.ts",
-            "additions": 13,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/plugins/bundled-ids.ts",
-            "additions": 27,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/plugins/configured-state.ts",
-            "additions": 7,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/plugins/package-state-probes.ts",
-            "additions": 10,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/plugins/persisted-auth-state.ts",
-            "additions": 7,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/plugin-auto-enable.apply.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/plugin-auto-enable.detect.ts",
-            "additions": 3,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/plugin-auto-enable.shared.ts",
-            "additions": 13,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.impl.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/activation-context.ts",
-            "additions": 12,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/discovery.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/installed-plugin-index-store.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/loader-provenance.ts",
-            "additions": 2,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/loader.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/plugin-metadata-snapshot.memo.test.ts",
-            "additions": 38,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/plugin-metadata-snapshot.ts",
-            "additions": 58,
-            "deletions": 56,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/plugin-registry-snapshot.test.ts",
-            "additions": 74,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/plugin-registry-snapshot.ts",
-            "additions": 94,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/provider-runtime.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/providers.runtime.ts",
-            "additions": 54,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/providers.ts",
-            "additions": 21,
-            "deletions": 38,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/runtime/load-context.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84649",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84649.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 31,
-          "counts": {
-            "CANCELLED": 2,
-            "QUEUED": 10,
-            "SKIPPED": 13,
-            "SUCCESS": 6
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "pending": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
-    }
-  ],
+  "commands": [],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2358,
+    "total_ms": 717,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 439
+        "ms": 387
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1589
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 316
+        "ms": 319
       },
       {
         "name": "append_ledger",
