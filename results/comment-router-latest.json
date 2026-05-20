@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-20T22:18:57.223Z",
+  "generated_at": "2026-05-20T22:20:21.416Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-20T19:18:55.272Z",
+  "since": "2026-05-20T19:20:17.886Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     84419
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4452130437
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 11,
-  "commands_seen": 3,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -104,10 +106,8 @@
         "checks": {
           "total": 102,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 28,
-            "SUCCESS": 70,
-            "FAILURE": 1,
+            "SKIPPED": 9,
+            "SUCCESS": 5,
             "NEUTRAL": 1
           },
           "blockers": [
@@ -122,205 +122,19 @@
         }
       },
       "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84419:4495221168:2026-05-20T06:24:19Z:re_review",
-      "comment_id": "4495221168",
-      "comment_version_key": "4495221168:2026-05-20T06:24:19Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84419#issuecomment-4495221168",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84419,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T06:24:19Z",
-      "comment_updated_at": "2026-05-20T06:24:19Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(session): prefer real tool result over synthetic error in transcript repair",
-        "body": "## Summary\n\nFix transcript repair to prefer real tool results over synthetic \"missing tool result\" errors during deduplication.\n\nWhen a channel (e.g. Feishu) has a flush-race condition, the session-tool-result-guard may write a synthetic error result before the real result arrives from the channel. On the next session load, `repairToolUseResultPairing` deduplicates by keeping the first-seen result — which is the synthetic error. The user sees \"Something went wrong\" even though the tool call actually succeeded.\n\nThis PR adds `isSyntheticMissingToolResult()` detection and replaces an existing synthetic result with a later real result during deduplication.\n\n> **Note:** This is a transcript-repair mitigation. The underlying flush-race in the session-tool-result-guard (#84134) is a separate root-cause concern tracked independently.\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `session-transcript-repair.ts` | Add `isSyntheticMissingToolResult()` detector; track output positions; replace synthetic with real during dedup |\n| `session-transcript-repair.test.ts` | 5 regression tests: synthetic-first, real-first, two-real, two-synthetic, span-level replacement |\n\n## Tests\n\n```\n$ node scripts/run-vitest.mjs src/agents/session-transcript-repair.test.ts\n ✓ unit-fast ../../src/agents/session-transcript-repair.test.ts (40 tests) 5ms\n Test Files  1 passed (1)\n      Tests  40 passed (40)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: When a synthetic \"missing tool result\" error is persisted before the real result arrives (Feishu channel flush race), the repair pass keeps the synthetic error and the user sees \"Something went wrong\" even though the tool call succeeded.\n- **Real environment tested**: macOS arm64, Node.js `v24.10.0`, running the actual `repairToolUseResultPairing` function from the source tree against a realistic Feishu session scenario.\n\n### Failing proof before fix (main branch)\n\n```\n$ npx tsx proof-84419-runner.mts  # on main branch\n\n--- Input: session with synthetic-first, real-second tool result ---\n  Messages: 4\n  Tool results: 2 (1 synthetic error, 1 real success)\n  Scenario: Feishu flush race — synthetic error persisted before real result arrived\n\n--- Output: after repair ---\n  Messages: 4\n  Tool results: 2\n  Kept result isError: true\n  Kept result text: \"[openclaw] missing tool result in session history; ...\"\n\n❌ FAIL: Synthetic error was kept\n   → User sees \"Something went wrong\" even though message was delivered\n```\n\n### Passing proof after fix (this PR)\n\n```\n$ npx tsx proof-84419-runner.mts  # on fix branch\n\n--- Input: session with synthetic-first, real-second tool result ---\n  Messages: 4\n  Tool results: 2 (1 synthetic error, 1 real success)\n\n--- Output: after repair ---\n  Messages: 3\n  Tool results: 1\n  Kept result isError: false\n  Kept result text: \"Message sent successfully to Feishu user feishu_user_123\"\n\n✅ PASS: Real result preferred over synthetic error\n   → User sees successful delivery, not \"Something went wrong\"\n\n--- Scenario 2: real-first, synthetic-second ---\n  Kept result isError: false\n✅ PASS: Real result kept (synthetic duplicate dropped)\n```\n\n- **Evidence after fix**: The repair function correctly identifies synthetic \"missing tool result\" markers and replaces them with real results when both exist for the same tool call ID. Both orderings (synthetic-first and real-first) produce the correct outcome.\n- **What was not tested**: Live Feishu channel reproduction (requires a configured Feishu bot with the specific flush-race timing). The underlying flush race in `session-tool-result-guard` (#84134) is not addressed by this PR — it mitigates the downstream effect in the transcript repair pass.\n",
-        "branch": "fix/transcript-repair-prefer-real-result-84134",
-        "head_sha": "3900f55c6cb5270db81dedd03e2b68b569ec6228",
-        "author": "jerry-xin",
-        "labels": [
-          "agents",
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 automation",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/agents/session-transcript-repair.test.ts",
-            "additions": 117,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/session-transcript-repair.ts",
-            "additions": 60,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84419",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84419.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 28,
-            "SUCCESS": 70,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-core-runtime-infra-state:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-core-runtime-infra-state:FAILURE"
-          ]
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84419:4494610372:2026-05-20T04:48:17Z:re_review",
-      "comment_id": "4494610372",
-      "comment_version_key": "4494610372:2026-05-20T04:48:17Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84419#issuecomment-4494610372",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84419,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T04:48:17Z",
-      "comment_updated_at": "2026-05-20T04:48:17Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(session): prefer real tool result over synthetic error in transcript repair",
-        "body": "## Summary\n\nFix transcript repair to prefer real tool results over synthetic \"missing tool result\" errors during deduplication.\n\nWhen a channel (e.g. Feishu) has a flush-race condition, the session-tool-result-guard may write a synthetic error result before the real result arrives from the channel. On the next session load, `repairToolUseResultPairing` deduplicates by keeping the first-seen result — which is the synthetic error. The user sees \"Something went wrong\" even though the tool call actually succeeded.\n\nThis PR adds `isSyntheticMissingToolResult()` detection and replaces an existing synthetic result with a later real result during deduplication.\n\n> **Note:** This is a transcript-repair mitigation. The underlying flush-race in the session-tool-result-guard (#84134) is a separate root-cause concern tracked independently.\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `session-transcript-repair.ts` | Add `isSyntheticMissingToolResult()` detector; track output positions; replace synthetic with real during dedup |\n| `session-transcript-repair.test.ts` | 5 regression tests: synthetic-first, real-first, two-real, two-synthetic, span-level replacement |\n\n## Tests\n\n```\n$ node scripts/run-vitest.mjs src/agents/session-transcript-repair.test.ts\n ✓ unit-fast ../../src/agents/session-transcript-repair.test.ts (40 tests) 5ms\n Test Files  1 passed (1)\n      Tests  40 passed (40)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: When a synthetic \"missing tool result\" error is persisted before the real result arrives (Feishu channel flush race), the repair pass keeps the synthetic error and the user sees \"Something went wrong\" even though the tool call succeeded.\n- **Real environment tested**: macOS arm64, Node.js `v24.10.0`, running the actual `repairToolUseResultPairing` function from the source tree against a realistic Feishu session scenario.\n\n### Failing proof before fix (main branch)\n\n```\n$ npx tsx proof-84419-runner.mts  # on main branch\n\n--- Input: session with synthetic-first, real-second tool result ---\n  Messages: 4\n  Tool results: 2 (1 synthetic error, 1 real success)\n  Scenario: Feishu flush race — synthetic error persisted before real result arrived\n\n--- Output: after repair ---\n  Messages: 4\n  Tool results: 2\n  Kept result isError: true\n  Kept result text: \"[openclaw] missing tool result in session history; ...\"\n\n❌ FAIL: Synthetic error was kept\n   → User sees \"Something went wrong\" even though message was delivered\n```\n\n### Passing proof after fix (this PR)\n\n```\n$ npx tsx proof-84419-runner.mts  # on fix branch\n\n--- Input: session with synthetic-first, real-second tool result ---\n  Messages: 4\n  Tool results: 2 (1 synthetic error, 1 real success)\n\n--- Output: after repair ---\n  Messages: 3\n  Tool results: 1\n  Kept result isError: false\n  Kept result text: \"Message sent successfully to Feishu user feishu_user_123\"\n\n✅ PASS: Real result preferred over synthetic error\n   → User sees successful delivery, not \"Something went wrong\"\n\n--- Scenario 2: real-first, synthetic-second ---\n  Kept result isError: false\n✅ PASS: Real result kept (synthetic duplicate dropped)\n```\n\n- **Evidence after fix**: The repair function correctly identifies synthetic \"missing tool result\" markers and replaces them with real results when both exist for the same tool call ID. Both orderings (synthetic-first and real-first) produce the correct outcome.\n- **What was not tested**: Live Feishu channel reproduction (requires a configured Feishu bot with the specific flush-race timing). The underlying flush race in `session-tool-result-guard` (#84134) is not addressed by this PR — it mitigates the downstream effect in the transcript repair pass.\n",
-        "branch": "fix/transcript-repair-prefer-real-result-84134",
-        "head_sha": "3900f55c6cb5270db81dedd03e2b68b569ec6228",
-        "author": "jerry-xin",
-        "labels": [
-          "agents",
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 automation",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/agents/session-transcript-repair.test.ts",
-            "additions": 117,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/session-transcript-repair.ts",
-            "additions": 60,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84419",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84419.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 28,
-            "SUCCESS": 70,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-core-runtime-infra-state:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-core-runtime-infra-state:FAILURE"
-          ]
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2139,
+    "total_ms": 3853,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 288
+        "ms": 2379
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1648
+        "ms": 1134
       },
       {
         "name": "classify_commands",
@@ -328,7 +142,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 188
+        "ms": 323
       },
       {
         "name": "append_ledger",
