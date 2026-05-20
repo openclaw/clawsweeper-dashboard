@@ -1,22 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-20T20:35:40.598Z",
+  "generated_at": "2026-05-20T20:36:57.359Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-20T17:35:38.593Z",
+  "since": "2026-05-20T17:36:56.148Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    84151
+    84628
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 36,
-  "commands_seen": 12,
-  "actionable": 1,
+  "scanned_comments": 8,
+  "commands_seen": 4,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,257 +31,140 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:84151:4488372170:2026-05-20T20:35:35Z:clawsweeper_auto_repair",
-      "comment_id": "4488372170",
-      "comment_version_key": "4488372170:2026-05-20T20:35:35Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4488372170",
+      "idempotency_key": "comment-router:openclaw/openclaw:84628:4500571527:2026-05-20T20:36:52Z:automerge",
+      "comment_id": "4500571527",
+      "comment_version_key": "4500571527:2026-05-20T20:36:52Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84628#issuecomment-4500571527",
       "repo": "openclaw/openclaw",
-      "issue_number": 84151,
+      "issue_number": 84628,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-19T13:45:02Z",
-      "comment_updated_at": "2026-05-20T20:35:35Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=60356e95a51feb0cfc763a2522beae9e70900a26)",
-      "review_summary": "This PR adds a systemd-specific managed update handoff path using `systemd-run --user --scope`, exits supervised update restarts with status 78, adjusts generated systemd unit defaults, and adds targeted tests.\n\nReproducibility: yes. at source/proof level: current main combines a detached helper with systemd `KillMode=control-group`, and the linked issue plus terminal proof show why the helper can be killed before it runs. I did not run a packaged OpenClaw update in this read-only review.",
-      "review_followup": "Contributor action is needed for the CI annotations and current-head real systemd OpenClaw proof; automation cannot supply the missing external runtime evidence.",
-      "freeform_prompt": null,
-      "expected_head_sha": "60356e95a51feb0cfc763a2522beae9e70900a26",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(daemon): escape systemd cgroup for update handoff via systemd-run --scope",
-        "body": "## Summary\n\nOn systemd-supervised installs, clicking \"Update now\" silently fails: the update handoff helper is created but immediately killed by systemd's `KillMode=control-group` when the gateway unit restarts. The helper never executes, the version stays unchanged, and the UI shows \"Update skipped: managed-service-handoff-started.\"\n\nThis PR detects systemd supervision and launches the handoff helper via `systemd-run --user --scope` to escape the gateway's cgroup. Non-systemd supervisors (launchd, etc.) continue using the existing detached-child path.\n\n## Root cause\n\nsystemd's `KillMode=control-group` (the default) kills all processes in the service's cgroup on restart — including detached child processes. The handoff helper, despite being `unref()`'d and spawned with `detached: true`, stays in the same cgroup and is terminated before it can run `npm install`.\n\n## Fix\n\n```\nsystemd-run --user --scope --unit openclaw-update-<handoffId> --collect -- node handoff.cjs handoff.json\n```\n\nKey design choices:\n\n**`--scope` not `--service`**: `--scope` inherits the caller's environment (profile, state dir, config, PATH, proxy, package manager discovery all preserved). `--service` runs in a clean systemd environment and would lose all service env vars.\n\n**`KillMode=control-group` preserved**: The scoped update helper escapes via `systemd-run --scope` into its own cgroup, so `KillMode=control-group` safely stops the gateway and all its child workers without affecting the handoff. No change to existing shutdown semantics.\n\n**Launch failure detection**: After spawning `systemd-run`, the code awaits its exit code with a 5s timeout. If systemd-run exits non-zero (user session unavailable, D-Bus down, etc.), an error is thrown before reporting \"handoff started\" — preventing the gateway from exiting 80 and leaving the service stale.\n\n**No secret exposure via argv**: The `env` object is passed via `spawn()` option — identical to the existing non-systemd path. No `--setenv=KEY=*** args are used. Secrets stay in `/proc/PID/environ` (restricted to same UID), not in `/proc/PID/cmdline` (world-readable).\n\nAdditional hardening:\n- `sanitizeSystemdUnitName()` strips non-`[a-zA-Z0-9:._-]` chars from `handoffId`\n- `/tmp/openclaw-update-in-progress` marker file for `ExecStartPre` defense-in-depth guard\n- `--collect` flag ensures scope units are garbage-collected after exit\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `update-managed-service-handoff.ts` | Detect `supervisor === \"systemd\"` → spawn via `systemd-run --user --scope`; await exit code to detect launch failures; add marker file lifecycle; add `sanitizeSystemdUnitName()` |\n| `update-managed-service-handoff.test.ts` | 3 new tests: systemd `--scope` spawn path with env assertions, ENOENT detection, non-zero exit detection; enhanced mock with `mockChild()` helper |\n| `systemd-unit.ts` | Add `ExecStartPre` marker guard, `RestartPreventExitStatus=80`; keep `KillMode=control-group` with updated comment |\n| `systemd-unit.test.ts` | Updated KillMode assertion to verify `control-group` |\n\n## Tests\n\n```\n$ npx vitest run --project gateway-methods src/gateway/server-methods/update-managed-service-handoff.test.ts\n ✓ gateway-methods (8 tests) 632ms\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n\n$ npx vitest run --project unit-fast src/daemon/systemd-unit.test.ts\n ✓ unit-fast (4 tests) 2ms\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: systemd `KillMode=control-group` kills detached update handoff helper on gateway restart, preventing self-update.\n- **Real environment tested**: OrbStack Linux VM (Ubuntu 22.04 Jammy, kernel 6.19.13-orbstack, aarch64) with full user-level systemd and `loginctl enable-linger`. Node.js v24.15.0.\n\n### Live systemd proof: `--scope` escapes cgroup, helper survives service restart\n\nCreated a systemd user service with `KillMode=control-group` (matching OpenClaw's generated unit at `src/daemon/systemd-unit.ts:86`):\n\n```ini\n[Service]\nType=simple\nExecStart=/tmp/handoff-test/gateway-sim.sh\nKillMode=control-group\nRestart=no\n```\n\n**Test A: WITH `systemd-run --user --scope` (this PR)**\n\n```\n=== Gateway running ===\n     Active: active (running) since Wed 2026-05-20 20:08:58 CST\n   Main PID: 2797 (gateway-sim.sh)\n     CGroup: /user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway-test.service\n\n=== Helper started (in separate scope unit, sleeping 8s) ===\nHelper PID=2799 started in scope at Wed May 20 08:08:58 PM CST 2026\nHelper: sleeping 8s while gateway lives...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:00 ===\nGateway service stopped\n\n=== Immediately after kill ===\nHelper still running (no sentinel yet — helper still working)\n\n=== After 10s wait (helper finished at 20:09:06) ===\nHelper: still alive after 8s! Gateway should be dead by now\nHelper: writing sentinel at Wed May 20 08:09:06 PM CST 2026\nSentinel: update-complete\n```\n\n**Result**: Helper survived gateway service kill and completed work ✅\n\n**Test B: WITHOUT `systemd-run --scope` (current main behavior)**\n\nSame setup but using plain `bash &` with `disown` (simulating current detached spawn):\n\n```\n=== Helper started (no scope, sleeping 8s) ===\nHelper PID=2844 (NO SCOPE) started at Wed May 20 08:09:44 PM CST 2026\nHelper: sleeping 8s...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:46 ===\n\n=== After 10s wait ===\nHelper log: stopped at \"sleeping 8s...\" — no further output\nSentinel: FAILED: helper was KILLED by KillMode=control-group!\n```\n\n**Result**: Helper was killed when gateway service stopped ❌\n\n### Comparison\n\n| Scenario | Helper survives service stop? | Sentinel written? |\n|----------|------------------------------|-------------------|\n| `systemd-run --user --scope` (this PR) | ✅ Yes — ran in separate scope unit | ✅ `update-complete` |\n| Plain detached child (current main) | ❌ No — killed by `KillMode=control-group` | ❌ Never created |\n\n### Security: env via spawn(), not argv\n\n```typescript\n// env passed to spawn() for systemd-run — not in command-line args\nchild = spawn(\"systemd-run\", [...], { cwd: params.root, env, detached: true, stdio: \"ignore\" });\n```\n\nTest coverage verifies explicitly:\n```typescript\nexpect(options.env).toBeDefined();\nexpect(args).not.toContain(\"--setenv\");\n```\n\n### What was not tested\n\n- Full end-to-end `openclaw update` flow (requires published package version delta and npm registry)\n- Live `ExecStartPre` marker file guard (defense-in-depth only, verified by code inspection)\n- `--collect` garbage collection timing (non-functional, only prevents stale unit name conflicts)\n\nCloses #84068\n",
-        "branch": "fix/systemd-update-handoff-84068",
-        "head_sha": "60356e95a51feb0cfc763a2522beae9e70900a26",
-        "author": "jerry-xin",
-        "labels": [
-          "gateway",
-          "cli",
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/cli/gateway-cli/run-loop.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/systemd-unit.test.ts",
-            "additions": 4,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/systemd-unit.ts",
-            "additions": 7,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update-managed-service-handoff.test.ts",
-            "additions": 164,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update-managed-service-handoff.ts",
-            "additions": 117,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/process-respawn.test.ts",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/process-respawn.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84151",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84151.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "counts": {
-            "FAILURE": 3,
-            "SKIPPED": 22,
-            "SUCCESS": 70,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ]
-        }
-      },
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84151:4502307666:2026-05-20T20:17:45Z:re_review",
-      "comment_id": "4502307666",
-      "comment_version_key": "4502307666:2026-05-20T20:17:45Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4502307666",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84151,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T20:17:45Z",
-      "comment_updated_at": "2026-05-20T20:17:45Z",
+      "comment_created_at": "2026-05-20T16:42:25Z",
+      "comment_updated_at": "2026-05-20T20:36:52Z",
       "status_comment_id": null,
       "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "command": "automerge",
+      "intent": "automerge",
       "autoclose_message": null,
       "implementation_prompt": null,
       "trusted_bot": false,
       "trusted_bot_author": null,
       "automation_source": null,
       "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
+      "review_summary": "The PR scopes gateway startup plugin metadata snapshot loading to a conservative plugin ID set, persists installed-index config-path activation hints, and adds regression coverage for scoped startup manifests and fallback cases.\n\nReproducibility: yes. at source level. The PR head stores a scoped plugin lookup table as current metadata, and config-only callers still pass through getCurrentPluginMetadataSnapshot without exact pluginIds.",
+      "review_followup": "There is a narrow code/test blocker in scoped current snapshot reuse that an automated repair can attempt before maintainer review.",
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-20T20:35:44.222Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 84151
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-20T20:35:45.357Z",
-          "response_comment_id": "4502320829",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
+      "status": "ignored",
+      "actions": [],
+      "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix(daemon): escape systemd cgroup for update handoff via systemd-run --scope",
-        "body": "## Summary\n\nOn systemd-supervised installs, clicking \"Update now\" silently fails: the update handoff helper is created but immediately killed by systemd's `KillMode=control-group` when the gateway unit restarts. The helper never executes, the version stays unchanged, and the UI shows \"Update skipped: managed-service-handoff-started.\"\n\nThis PR detects systemd supervision and launches the handoff helper via `systemd-run --user --scope` to escape the gateway's cgroup. Non-systemd supervisors (launchd, etc.) continue using the existing detached-child path.\n\n## Root cause\n\nsystemd's `KillMode=control-group` (the default) kills all processes in the service's cgroup on restart — including detached child processes. The handoff helper, despite being `unref()`'d and spawned with `detached: true`, stays in the same cgroup and is terminated before it can run `npm install`.\n\n## Fix\n\n```\nsystemd-run --user --scope --unit openclaw-update-<handoffId> --collect -- node handoff.cjs handoff.json\n```\n\nKey design choices:\n\n**`--scope` not `--service`**: `--scope` inherits the caller's environment (profile, state dir, config, PATH, proxy, package manager discovery all preserved). `--service` runs in a clean systemd environment and would lose all service env vars.\n\n**`KillMode=control-group` preserved**: The scoped update helper escapes via `systemd-run --scope` into its own cgroup, so `KillMode=control-group` safely stops the gateway and all its child workers without affecting the handoff. No change to existing shutdown semantics.\n\n**Launch failure detection**: After spawning `systemd-run`, the code awaits its exit code with a 5s timeout. If systemd-run exits non-zero (user session unavailable, D-Bus down, etc.), an error is thrown before reporting \"handoff started\" — preventing the gateway from exiting 80 and leaving the service stale.\n\n**No secret exposure via argv**: The `env` object is passed via `spawn()` option — identical to the existing non-systemd path. No `--setenv=KEY=*** args are used. Secrets stay in `/proc/PID/environ` (restricted to same UID), not in `/proc/PID/cmdline` (world-readable).\n\nAdditional hardening:\n- `sanitizeSystemdUnitName()` strips non-`[a-zA-Z0-9:._-]` chars from `handoffId`\n- `/tmp/openclaw-update-in-progress` marker file for `ExecStartPre` defense-in-depth guard\n- `--collect` flag ensures scope units are garbage-collected after exit\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `update-managed-service-handoff.ts` | Detect `supervisor === \"systemd\"` → spawn via `systemd-run --user --scope`; await exit code to detect launch failures; add marker file lifecycle; add `sanitizeSystemdUnitName()` |\n| `update-managed-service-handoff.test.ts` | 3 new tests: systemd `--scope` spawn path with env assertions, ENOENT detection, non-zero exit detection; enhanced mock with `mockChild()` helper |\n| `systemd-unit.ts` | Add `ExecStartPre` marker guard, `RestartPreventExitStatus=80`; keep `KillMode=control-group` with updated comment |\n| `systemd-unit.test.ts` | Updated KillMode assertion to verify `control-group` |\n\n## Tests\n\n```\n$ npx vitest run --project gateway-methods src/gateway/server-methods/update-managed-service-handoff.test.ts\n ✓ gateway-methods (8 tests) 632ms\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n\n$ npx vitest run --project unit-fast src/daemon/systemd-unit.test.ts\n ✓ unit-fast (4 tests) 2ms\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: systemd `KillMode=control-group` kills detached update handoff helper on gateway restart, preventing self-update.\n- **Real environment tested**: OrbStack Linux VM (Ubuntu 22.04 Jammy, kernel 6.19.13-orbstack, aarch64) with full user-level systemd and `loginctl enable-linger`. Node.js v24.15.0.\n\n### Live systemd proof: `--scope` escapes cgroup, helper survives service restart\n\nCreated a systemd user service with `KillMode=control-group` (matching OpenClaw's generated unit at `src/daemon/systemd-unit.ts:86`):\n\n```ini\n[Service]\nType=simple\nExecStart=/tmp/handoff-test/gateway-sim.sh\nKillMode=control-group\nRestart=no\n```\n\n**Test A: WITH `systemd-run --user --scope` (this PR)**\n\n```\n=== Gateway running ===\n     Active: active (running) since Wed 2026-05-20 20:08:58 CST\n   Main PID: 2797 (gateway-sim.sh)\n     CGroup: /user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway-test.service\n\n=== Helper started (in separate scope unit, sleeping 8s) ===\nHelper PID=2799 started in scope at Wed May 20 08:08:58 PM CST 2026\nHelper: sleeping 8s while gateway lives...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:00 ===\nGateway service stopped\n\n=== Immediately after kill ===\nHelper still running (no sentinel yet — helper still working)\n\n=== After 10s wait (helper finished at 20:09:06) ===\nHelper: still alive after 8s! Gateway should be dead by now\nHelper: writing sentinel at Wed May 20 08:09:06 PM CST 2026\nSentinel: update-complete\n```\n\n**Result**: Helper survived gateway service kill and completed work ✅\n\n**Test B: WITHOUT `systemd-run --scope` (current main behavior)**\n\nSame setup but using plain `bash &` with `disown` (simulating current detached spawn):\n\n```\n=== Helper started (no scope, sleeping 8s) ===\nHelper PID=2844 (NO SCOPE) started at Wed May 20 08:09:44 PM CST 2026\nHelper: sleeping 8s...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:46 ===\n\n=== After 10s wait ===\nHelper log: stopped at \"sleeping 8s...\" — no further output\nSentinel: FAILED: helper was KILLED by KillMode=control-group!\n```\n\n**Result**: Helper was killed when gateway service stopped ❌\n\n### Comparison\n\n| Scenario | Helper survives service stop? | Sentinel written? |\n|----------|------------------------------|-------------------|\n| `systemd-run --user --scope` (this PR) | ✅ Yes — ran in separate scope unit | ✅ `update-complete` |\n| Plain detached child (current main) | ❌ No — killed by `KillMode=control-group` | ❌ Never created |\n\n### Security: env via spawn(), not argv\n\n```typescript\n// env passed to spawn() for systemd-run — not in command-line args\nchild = spawn(\"systemd-run\", [...], { cwd: params.root, env, detached: true, stdio: \"ignore\" });\n```\n\nTest coverage verifies explicitly:\n```typescript\nexpect(options.env).toBeDefined();\nexpect(args).not.toContain(\"--setenv\");\n```\n\n### What was not tested\n\n- Full end-to-end `openclaw update` flow (requires published package version delta and npm registry)\n- Live `ExecStartPre` marker file guard (defense-in-depth only, verified by code inspection)\n- `--collect` garbage collection timing (non-functional, only prevents stale unit name conflicts)\n\nCloses #84068\n",
-        "branch": "fix/systemd-update-handoff-84068",
-        "head_sha": "60356e95a51feb0cfc763a2522beae9e70900a26",
-        "author": "jerry-xin",
+        "title": "[AI-assisted] fix(plugins): scope startup metadata manifest reads",
+        "body": "## Summary\n\n- Problem: Gateway startup could still rebuild plugin metadata from every installed plugin manifest before narrowing to the configured startup set.\n- Solution: carry a conservative startup plugin-id scope into metadata snapshot loading when the Installed Plugin Index can prove the narrowed set safely.\n- What changed: metadata snapshots can carry scoped `pluginIds`; lookup/startup paths pass a conservative `pluginIdScope`; startup scoping carries indexed `activation.onConfigPaths` owners such as `browser`; persisted installed indexes preserve that `startup.configPaths` metadata; scoped snapshots are not reused for configless default discovery; unscoped Gateway config-validation snapshots are not reused for restrictive startup bootstrap.\n- What did NOT change (scope boundary): no plugin config shape changes, no provider/channel activation semantics changes, no compat bundled-discovery shortcut.\n\n## Motivation\n\n#70533 is a startup stability problem: a restrictive plugin setup should not crash-loop or pay full manifest reconstruction cost just because unrelated installed plugins exist. This keeps the startup path on the Installed Plugin Index when it can safely prove the manifest subset, and falls back to the old unscoped behavior when it cannot.\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor required for the fix\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [ ] Skills / tool execution\n- [ ] Auth / tokens\n- [ ] Memory / storage\n- [x] Integrations\n- [ ] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- Closes #70533\n- [x] This PR fixes a bug or regression\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: restrictive gateway startup plugin scope still caused full installed-index manifest reconstruction before startup narrowing.\n- Real environment tested: isolated Linux testserver disposable repo, Node v22.22.2, pnpm 11.1.2, `origin/main` at `a13468320c` compared with this patch.\n- Exact steps or command run after this patch: ran TSX diagnostic scripts through the real `loadPluginLookUpTable -> loadPluginMetadataSnapshot -> loadPluginManifestRegistryForInstalledIndex -> resolveGatewayStartupPluginPlanFromRegistry` path using valid 96-plugin Installed Plugin Index fixtures.\n- Evidence after fix:\n\n```json\n{\n  \"label\": \"after-rebased-patch-confirm\",\n  \"indexPluginCount\": 96,\n  \"manifestPluginCount\": 1,\n  \"startupPluginIds\": [\"openai\"],\n  \"loadedPluginIds\": [\"openai\"],\n  \"diagnosticCount\": 0\n}\n```\n\n- Observed result after fix: the Installed Plugin Index still contains 96 plugins, but metadata manifest reconstruction reads only the one allowed startup plugin manifest; startup selection remains `[\"openai\"]`.\n- Additional blocker-fix proof:\n\n```json\n{\n  \"config\": {\n    \"browser\": { \"enabled\": true },\n    \"channels\": {},\n    \"plugins\": {\n      \"allow\": [\"openai\"],\n      \"slots\": { \"memory\": \"none\" }\n    }\n  },\n  \"results\": [\n    {\n      \"label\": \"indexed-config-path-scope\",\n      \"indexPluginCount\": 96,\n      \"manifestPluginCount\": 2,\n      \"startupPluginIds\": [\"openai\", \"browser\"],\n      \"loadedPluginIds\": [\"browser\", \"openai\"],\n      \"diagnosticCount\": 0\n    },\n    {\n      \"label\": \"persisted-index-config-path-roundtrip\",\n      \"indexPluginCount\": 96,\n      \"manifestPluginCount\": 2,\n      \"startupPluginIds\": [\"openai\", \"browser\"],\n      \"loadedPluginIds\": [\"browser\", \"openai\"],\n      \"persistedBrowserConfigPaths\": [\"browser\"],\n      \"diagnosticCount\": 0\n    },\n    {\n      \"label\": \"legacy-index-safe-fallback\",\n      \"indexPluginCount\": 96,\n      \"manifestPluginCount\": 96,\n      \"startupPluginIds\": [\"openai\", \"browser\"],\n      \"diagnosticCount\": 0\n    }\n  ]\n}\n```\n\n- Observed blocker-fix result: `browser.enabled=true` is preserved under a restrictive `plugins.allow=[\"openai\"]`; new and persisted indexes keep `startup.configPaths=[\"browser\"]` and stay scoped to 2 manifests, while legacy indexes without indexed config-path metadata fall back unscoped instead of losing `browser`.\n- Full Gateway startup path proof:\n\n```json\n{\n  \"path\": [\n    \"readConfigFileSnapshotWithPluginMetadata\",\n    \"loadGatewayStartupConfigSnapshot\",\n    \"prepareGatewayPluginBootstrap\"\n  ],\n  \"validationSnapshot\": {\n    \"pluginIds\": \"unscoped\",\n    \"manifestPluginCount\": 96\n  },\n  \"bootstrapManifestLoads\": [[\"browser\"], [\"browser\"], [\"browser\", \"openai\"]],\n  \"bootstrapLookup\": {\n    \"pluginIds\": [\"browser\", \"openai\"],\n    \"manifestPluginCount\": 2\n  },\n  \"startupPluginIds\": [\"openai\", \"browser\"]\n}\n```\n\n- Observed full-path result: the real config-validation snapshot is still unscoped with 96 manifests, but startup bootstrap does not reuse it for the restrictive allowlist. The final bootstrap lookup reloads the scoped `[\"browser\",\"openai\"]` manifests and starts the expected plugins.\n- What was not tested: no production credentials, no persistent services, no real external provider/channel account.\n- Before evidence:\n\n```json\n{\n  \"label\": \"before-rebased-origin-main\",\n  \"indexPluginCount\": 96,\n  \"manifestPluginCount\": 96,\n  \"startupPluginIds\": [\"openai\"],\n  \"diagnosticCount\": 0\n}\n```\n\n## Root Cause (if applicable)\n\n- Root cause: metadata snapshot loading had no way to receive a conservative startup plugin-id scope after the Installed Plugin Index was available, so it reconstructed the installed manifest registry for the full index before startup planning narrowed plugin ids.\n- Missing detection / guardrail: tests covered startup narrowing and metadata memoization separately, but not the manifest reconstruction count for restrictive gateway startup allowlists.\n- Contributing context (if known): some startup intent, config-path activation, channel, provider, slot, and harness decisions can only be trusted when the Installed Plugin Index can map them without reading manifests; unsafe cases need to stay unscoped.\n\n## Regression Test Plan (if applicable)\n\n- Coverage level that should have caught this:\n  - [x] Unit test\n  - [x] Seam / integration test\n  - [ ] End-to-end test\n  - [ ] Existing coverage already sufficient\n- Target test or file:\n  - `src/commands/status.summary.redaction.test.ts`\n  - `src/gateway/pr84628-startup-snapshot-proof.temp.test.ts` (temporary proof test, not committed)\n  - `src/plugins/plugin-lookup-table.test.ts`\n  - `src/plugins/installed-plugin-index-store.test.ts`\n  - `src/plugins/channel-plugin-ids.test.ts`\n  - `src/plugins/plugin-metadata-snapshot.memo.test.ts`\n  - `src/plugins/current-plugin-metadata-snapshot.test.ts`\n- Scenario the test should lock in: restrictive `plugins.allow` startup config passes a narrow scope to installed-index manifest reconstruction; config-path activation owners such as `browser` stay included; conservative fallback remains unscoped for compat discovery, legacy indexes, or unmappable providers.\n- Why this is the smallest reliable guardrail: it asserts the actual manifest-registry load boundary without needing external plugin credentials.\n- Existing test that already covers this (if any): none before this PR.\n- If no new test is added, why not: N/A.\n\n## User-visible / Behavior Changes\n\nGateway startup with a restrictive plugin allowlist can avoid reading unrelated installed plugin manifests when the startup scope is safe to prove from the Installed Plugin Index. Unsafe configs keep existing unscoped behavior.\n\n## Diagram (if applicable)\n\n```text\nBefore:\nInstalled Index (96 plugins) -> read 96 manifests -> startup plan -> openai\n\nAfter:\nInstalled Index (96 plugins) -> conservative scope [\"browser\",\"openai\"] when browser config is present -> read 2 manifests -> startup plan -> openai + browser\n```\n\n## Security Impact (required)\n\n- New permissions/capabilities? (`Yes/No`) No\n- Secrets/tokens handling changed? (`Yes/No`) No\n- New/changed network calls? (`Yes/No`) No\n- Command/tool execution surface changed? (`Yes/No`) No\n- Data access scope changed? (`Yes/No`) No\n- If any `Yes`, explain risk + mitigation: N/A\n\n## Repro + Verification\n\n### Environment\n\n- OS: Linux testserver disposable run\n- Runtime/container: Node v22.22.2, pnpm 11.1.2\n- Model/provider: N/A\n- Integration/channel (if any): synthetic installed plugin fixture; no external channel account\n- Relevant config (redacted): `plugins.allow=[\"openai\"]`, `plugins.slots.memory=\"none\"`; blocker regression also uses `browser.enabled=true`\n\n### Steps\n\n1. On `origin/main`, run the diagnostic fixture through `loadPluginLookUpTable`.\n2. Apply this patch.\n3. Run the same diagnostic fixture again.\n4. Run focused regression tests, format, typecheck, and targeted lint.\n\n### Expected\n\n- Startup still selects `openai`.\n- `browser.enabled=true` still selects `browser` even when `plugins.allow` only lists `openai`.\n- Manifest reconstruction only reads the scoped startup plugin(s) after the patch.\n- Conservative fallback paths remain unscoped when the Installed Plugin Index cannot prove the mapping.\n\n### Actual\n\n- Before: `manifestPluginCount=96`, `startupPluginIds=[\"openai\"]`.\n- After: `manifestPluginCount=1`, `loadedPluginIds=[\"openai\"]`, `startupPluginIds=[\"openai\"]`.\n- After blocker repair: `manifestPluginCount=2`, `loadedPluginIds=[\"browser\",\"openai\"]`, `startupPluginIds=[\"openai\",\"browser\"]` for `browser.enabled=true`.\n- After persisted-index repair: persisted read/write roundtrip keeps `persistedBrowserConfigPaths=[\"browser\"]`, `manifestPluginCount=2`, and `diagnosticCount=0`.\n- After Gateway startup snapshot repair: config-validation snapshot remains `pluginIds=\"unscoped\"` with `manifestPluginCount=96`, but bootstrap reloads scoped `[\"browser\",\"openai\"]` and lookup ends at `manifestPluginCount=2`.\n\n## Evidence\n\n- [x] Failing test/log before + passing after\n- [x] Trace/log snippets\n- [ ] Screenshot/recording\n- [x] Perf numbers (if relevant)\n\nValidation:\n\n```text\nnode scripts/run-vitest.mjs src/commands/status.summary.redaction.test.ts src/plugins/plugin-lookup-table.test.ts src/plugins/manifest-registry-installed.test.ts src/plugins/channel-plugin-ids.test.ts src/gateway/server-startup-plugins.test.ts src/gateway/server-plugins.test.ts src/plugins/plugin-metadata-snapshot.memo.test.ts src/plugins/current-plugin-metadata-snapshot.test.ts src/plugins/manifest-contract-eligibility.test.ts src/plugins/tools.optional.test.ts\n10 files / 269 tests passed\n\ncorepack pnpm exec oxfmt --check --threads=1 src/plugins/plugin-metadata-snapshot.ts src/plugins/plugin-metadata-snapshot.types.ts src/plugins/plugin-lookup-table.ts src/plugins/manifest-registry-installed.ts src/plugins/effective-plugin-ids.ts src/plugins/gateway-startup-plugin-ids.ts src/gateway/server-startup-plugins.ts src/gateway/server-plugins.ts src/commands/status.summary.redaction.test.ts\npassed\n\ngit diff --check\npassed\n\nnode scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo\npassed\n\nnode scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test.tsbuildinfo\npassed\n\nnode scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json <11 changed files>\n0 warnings / 0 errors\n\nClawSweeper follow-up acceptance after persisted-index schema repair:\n\nnode scripts/run-vitest.mjs src/plugins/installed-plugin-index-store.test.ts src/plugins/channel-plugin-ids.test.ts src/plugins/plugin-lookup-table.test.ts src/plugins/plugin-metadata-snapshot.memo.test.ts\n4 files / 150 tests passed\n\ngit diff --check\npassed\n\nnode scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo\npassed\n\nnode_modules/.bin/oxfmt --check --threads=1 src/plugins/installed-plugin-index-store.ts src/plugins/installed-plugin-index-store.test.ts\npassed\n\nnode scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/plugins/installed-plugin-index-store.ts src/plugins/installed-plugin-index-store.test.ts\n0 warnings / 0 errors\n\nClawSweeper follow-up after Gateway startup snapshot reuse repair:\n\nnode scripts/run-vitest.mjs src/gateway/pr84628-startup-snapshot-proof.temp.test.ts --reporter=verbose\n3 Vitest projects / 3 tests passed\n\nnode scripts/run-vitest.mjs src/plugins/installed-plugin-index-store.test.ts src/plugins/channel-plugin-ids.test.ts src/plugins/plugin-lookup-table.test.ts src/plugins/plugin-metadata-snapshot.memo.test.ts\n4 files / 151 tests passed\n\ngit diff --check\npassed\n\nnode scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo\npassed\n\nnode_modules/.bin/oxfmt --check --threads=1 src/plugins/gateway-startup-plugin-ids.ts src/plugins/channel-plugin-ids.ts src/plugins/plugin-lookup-table.ts src/plugins/plugin-lookup-table.test.ts\npassed\n\nnode scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/plugins/gateway-startup-plugin-ids.ts src/plugins/channel-plugin-ids.ts src/plugins/plugin-lookup-table.ts src/plugins/plugin-lookup-table.test.ts\n0 warnings / 0 errors\n\nClawSweeper follow-up after current-snapshot exact-scope repair:\n\nCommit:\n05abd2ca1f fix(plugins): require exact current snapshot scope\n\nChanged:\nsrc/plugins/current-plugin-metadata-snapshot.ts\nsrc/plugins/current-plugin-metadata-snapshot.test.ts\n\nBehavior locked in:\ngetCurrentPluginMetadataSnapshot() only reuses a current snapshot for a scoped pluginIds request when the current snapshot has the exact same normalized pluginIds scope. Unscoped current snapshots are rejected for scoped requests.\n\nnode scripts/run-vitest.mjs src/plugins/current-plugin-metadata-snapshot.test.ts src/plugins/plugin-metadata-snapshot.memo.test.ts src/plugins/plugin-lookup-table.test.ts src/plugins/channel-plugin-ids.test.ts src/plugins/installed-plugin-index-store.test.ts\n5 files / 166 tests passed\n\ngit diff --check\npassed\n\nnode scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo\npassed\n\nnode_modules/.bin/oxfmt --check --threads=1 src/plugins/current-plugin-metadata-snapshot.ts src/plugins/current-plugin-metadata-snapshot.test.ts\npassed\n\nnode scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/plugins/current-plugin-metadata-snapshot.ts src/plugins/current-plugin-metadata-snapshot.test.ts\n0 warnings / 0 errors\n\npnpm check:changed\nattempted; conflict/changelog/dependency guards plus core and core-test TypeScript passed, then full core lint was killed by `tsgolint` SIGKILL on the testserver. Targeted Oxlint for the changed repair files passed with 0 warnings / 0 errors.\n```\n\nAdditional note: `origin/main @ a13468320c` failed `test/tsconfig/tsconfig.core.test.json` before this patch because `status.summary.redaction.test.ts` had not been updated for the newer `SessionStatus` fields. This PR includes that test-only fixture update so `check:changed` can pass cleanly on the rebased branch.\n\n## Human Verification (required)\n\nWhat I personally verified (not just CI), and how:\n\n- Verified scenarios: before/after runtime manifest reconstruction count on the real OpenClaw metadata lookup path; full Gateway config-snapshot to plugin-bootstrap path; restrictive allowlist scope; config-path activation owner retention; legacy index safe fallback; compat discovery fallback; unmappable provider fallback; scoped/unscoped memo separation; configless scoped snapshot reuse rejection.\n- Edge cases checked: disabled plugin entries are removed from the scope, direct configured channels/providers only scope when the Installed Plugin Index can map them, scope ids outside the index and legacy config-path activation metadata fall back to unscoped loading.\n- What I did **not** verify: real production provider/channel credentials or long-running gateway service startup.\n\n## Review Conversations\n\n- [x] I replied to or resolved every bot review conversation I addressed in this PR.\n- [x] I left unresolved only the conversations that still need reviewer or maintainer judgment.\n\n## Compatibility / Migration\n\n- Backward compatible? (`Yes/No`) Yes\n- Config/env changes? (`Yes/No`) No\n- Migration needed? (`Yes/No`) No\n- If yes, exact upgrade steps: N/A\n\n## Risks and Mitigations\n\n- Risk: overly aggressive startup scoping could hide a plugin whose startup intent is only manifest-visible.\n  - Mitigation: scope is only used when allowlists/config entries/config-path activation/slots/direct channel/provider/harness ids can be mapped from the Installed Plugin Index; ambiguous compat, provider, channel, legacy-index, or out-of-index cases return to unscoped manifest reconstruction.\n",
+        "branch": "fix/plugin-discovery-scope-70533",
+        "head_sha": "05abd2ca1f9a61a5d0ab4d232023cff1da90d251",
+        "author": "iwhatsskill",
         "labels": [
-          "gateway",
-          "cli",
-          "size: M",
-          "triage: needs-real-behavior-proof",
+          "commands",
+          "size: L",
+          "proof: supplied",
+          "proof: sufficient",
           "P1",
           "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/cli/gateway-cli/run-loop.ts",
-            "additions": 4,
+            "path": "src/commands/status.summary.redaction.test.ts",
+            "additions": 3,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/daemon/systemd-unit.test.ts",
-            "additions": 4,
+            "path": "src/plugins/channel-plugin-ids.test.ts",
+            "additions": 133,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/channel-plugin-ids.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/current-plugin-metadata-snapshot.test.ts",
+            "additions": 29,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/current-plugin-metadata-snapshot.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/gateway-startup-plugin-ids.ts",
+            "additions": 456,
             "deletions": 3,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/daemon/systemd-unit.ts",
-            "additions": 7,
-            "deletions": 4,
+            "path": "src/plugins/installed-plugin-index-record-builder.ts",
+            "additions": 1,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server-methods/update-managed-service-handoff.test.ts",
-            "additions": 164,
+            "path": "src/plugins/installed-plugin-index-store.test.ts",
+            "additions": 31,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/installed-plugin-index-store.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/installed-plugin-index-types.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/plugin-lookup-table.test.ts",
+            "additions": 203,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/plugin-lookup-table.ts",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/plugin-metadata-snapshot.memo.test.ts",
+            "additions": 40,
             "deletions": 6,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server-methods/update-managed-service-handoff.ts",
-            "additions": 117,
-            "deletions": 7,
+            "path": "src/plugins/plugin-metadata-snapshot.ts",
+            "additions": 29,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server-methods/update.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/process-respawn.test.ts",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/process-respawn.ts",
-            "additions": 6,
+            "path": "src/plugins/plugin-metadata-snapshot.types.ts",
+            "additions": 8,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
@@ -289,46 +172,38 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84151",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84151.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84628",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84628.md",
         "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
         "review_decision": "",
         "checks": {
-          "total": 96,
+          "total": 14,
           "counts": {
-            "FAILURE": 3,
-            "SKIPPED": 22,
-            "SUCCESS": 70,
+            "SUCCESS": 5,
+            "SKIPPED": 8,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ]
+          "terminalBlockers": []
         }
-      }
+      },
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
     },
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:84151:4501306935:2026-05-20T18:16:22Z:re_review",
-      "comment_id": "4501306935",
-      "comment_version_key": "4501306935:2026-05-20T18:16:22Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4501306935",
+      "idempotency_key": "comment-router:openclaw/openclaw:84628:4502163269:2026-05-20T20:01:18Z:re_review",
+      "comment_id": "4502163269",
+      "comment_version_key": "4502163269:2026-05-20T20:01:18Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84628#issuecomment-4502163269",
       "repo": "openclaw/openclaw",
-      "issue_number": 84151,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
+      "issue_number": 84628,
+      "author": "IWhatsskill",
+      "author_id": 284122573,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T18:16:22Z",
-      "comment_updated_at": "2026-05-20T18:16:22Z",
+      "comment_created_at": "2026-05-20T20:01:18Z",
+      "comment_updated_at": "2026-05-20T20:01:18Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -349,17 +224,17 @@
       "reason": "comment version already processed in ledger"
     },
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:84151:4500498963:2026-05-20T16:32:09Z:re_review",
-      "comment_id": "4500498963",
-      "comment_version_key": "4500498963:2026-05-20T16:32:09Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4500498963",
+      "idempotency_key": "comment-router:openclaw/openclaw:84628:4501427145:2026-05-20T18:28:39Z:re_review",
+      "comment_id": "4501427145",
+      "comment_version_key": "4501427145:2026-05-20T18:28:39Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84628#issuecomment-4501427145",
       "repo": "openclaw/openclaw",
-      "issue_number": 84151,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
+      "issue_number": 84628,
+      "author": "IWhatsskill",
+      "author_id": 284122573,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T16:32:09Z",
-      "comment_updated_at": "2026-05-20T16:32:09Z",
+      "comment_created_at": "2026-05-20T18:28:39Z",
+      "comment_updated_at": "2026-05-20T18:28:39Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -380,48 +255,17 @@
       "reason": "comment version already processed in ledger"
     },
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:84151:4500448172:2026-05-20T16:25:16Z:re_review",
-      "comment_id": "4500448172",
-      "comment_version_key": "4500448172:2026-05-20T16:25:16Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4500448172",
+      "idempotency_key": "comment-router:openclaw/openclaw:84628:4501207746:2026-05-20T18:06:31Z:re_review",
+      "comment_id": "4501207746",
+      "comment_version_key": "4501207746:2026-05-20T18:06:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84628#issuecomment-4501207746",
       "repo": "openclaw/openclaw",
-      "issue_number": 84151,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
+      "issue_number": 84628,
+      "author": "IWhatsskill",
+      "author_id": 284122573,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T16:25:16Z",
-      "comment_updated_at": "2026-05-20T16:25:16Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84151:4499977625:2026-05-20T15:32:15Z:re_review",
-      "comment_id": "4499977625",
-      "comment_version_key": "4499977625:2026-05-20T15:32:15Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4499977625",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84151,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T15:32:15Z",
-      "comment_updated_at": "2026-05-20T15:32:15Z",
+      "comment_created_at": "2026-05-20T18:06:31Z",
+      "comment_updated_at": "2026-05-20T18:06:31Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -442,74 +286,109 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(daemon): escape systemd cgroup for update handoff via systemd-run --scope",
-        "body": "## Summary\n\nOn systemd-supervised installs, clicking \"Update now\" silently fails: the update handoff helper is created but immediately killed by systemd's `KillMode=control-group` when the gateway unit restarts. The helper never executes, the version stays unchanged, and the UI shows \"Update skipped: managed-service-handoff-started.\"\n\nThis PR detects systemd supervision and launches the handoff helper via `systemd-run --user --scope` to escape the gateway's cgroup. Non-systemd supervisors (launchd, etc.) continue using the existing detached-child path.\n\n## Root cause\n\nsystemd's `KillMode=control-group` (the default) kills all processes in the service's cgroup on restart — including detached child processes. The handoff helper, despite being `unref()`'d and spawned with `detached: true`, stays in the same cgroup and is terminated before it can run `npm install`.\n\n## Fix\n\n```\nsystemd-run --user --scope --unit openclaw-update-<handoffId> --collect -- node handoff.cjs handoff.json\n```\n\nKey design choices:\n\n**`--scope` not `--service`**: `--scope` inherits the caller's environment (profile, state dir, config, PATH, proxy, package manager discovery all preserved). `--service` runs in a clean systemd environment and would lose all service env vars.\n\n**`KillMode=control-group` preserved**: The scoped update helper escapes via `systemd-run --scope` into its own cgroup, so `KillMode=control-group` safely stops the gateway and all its child workers without affecting the handoff. No change to existing shutdown semantics.\n\n**Launch failure detection**: After spawning `systemd-run`, the code awaits its exit code with a 5s timeout. If systemd-run exits non-zero (user session unavailable, D-Bus down, etc.), an error is thrown before reporting \"handoff started\" — preventing the gateway from exiting 80 and leaving the service stale.\n\n**No secret exposure via argv**: The `env` object is passed via `spawn()` option — identical to the existing non-systemd path. No `--setenv=KEY=*** args are used. Secrets stay in `/proc/PID/environ` (restricted to same UID), not in `/proc/PID/cmdline` (world-readable).\n\nAdditional hardening:\n- `sanitizeSystemdUnitName()` strips non-`[a-zA-Z0-9:._-]` chars from `handoffId`\n- `/tmp/openclaw-update-in-progress` marker file for `ExecStartPre` defense-in-depth guard\n- `--collect` flag ensures scope units are garbage-collected after exit\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `update-managed-service-handoff.ts` | Detect `supervisor === \"systemd\"` → spawn via `systemd-run --user --scope`; await exit code to detect launch failures; add marker file lifecycle; add `sanitizeSystemdUnitName()` |\n| `update-managed-service-handoff.test.ts` | 3 new tests: systemd `--scope` spawn path with env assertions, ENOENT detection, non-zero exit detection; enhanced mock with `mockChild()` helper |\n| `systemd-unit.ts` | Add `ExecStartPre` marker guard, `RestartPreventExitStatus=80`; keep `KillMode=control-group` with updated comment |\n| `systemd-unit.test.ts` | Updated KillMode assertion to verify `control-group` |\n\n## Tests\n\n```\n$ npx vitest run --project gateway-methods src/gateway/server-methods/update-managed-service-handoff.test.ts\n ✓ gateway-methods (8 tests) 632ms\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n\n$ npx vitest run --project unit-fast src/daemon/systemd-unit.test.ts\n ✓ unit-fast (4 tests) 2ms\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: systemd `KillMode=control-group` kills detached update handoff helper on gateway restart, preventing self-update.\n- **Real environment tested**: OrbStack Linux VM (Ubuntu 22.04 Jammy, kernel 6.19.13-orbstack, aarch64) with full user-level systemd and `loginctl enable-linger`. Node.js v24.15.0.\n\n### Live systemd proof: `--scope` escapes cgroup, helper survives service restart\n\nCreated a systemd user service with `KillMode=control-group` (matching OpenClaw's generated unit at `src/daemon/systemd-unit.ts:86`):\n\n```ini\n[Service]\nType=simple\nExecStart=/tmp/handoff-test/gateway-sim.sh\nKillMode=control-group\nRestart=no\n```\n\n**Test A: WITH `systemd-run --user --scope` (this PR)**\n\n```\n=== Gateway running ===\n     Active: active (running) since Wed 2026-05-20 20:08:58 CST\n   Main PID: 2797 (gateway-sim.sh)\n     CGroup: /user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway-test.service\n\n=== Helper started (in separate scope unit, sleeping 8s) ===\nHelper PID=2799 started in scope at Wed May 20 08:08:58 PM CST 2026\nHelper: sleeping 8s while gateway lives...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:00 ===\nGateway service stopped\n\n=== Immediately after kill ===\nHelper still running (no sentinel yet — helper still working)\n\n=== After 10s wait (helper finished at 20:09:06) ===\nHelper: still alive after 8s! Gateway should be dead by now\nHelper: writing sentinel at Wed May 20 08:09:06 PM CST 2026\nSentinel: update-complete\n```\n\n**Result**: Helper survived gateway service kill and completed work ✅\n\n**Test B: WITHOUT `systemd-run --scope` (current main behavior)**\n\nSame setup but using plain `bash &` with `disown` (simulating current detached spawn):\n\n```\n=== Helper started (no scope, sleeping 8s) ===\nHelper PID=2844 (NO SCOPE) started at Wed May 20 08:09:44 PM CST 2026\nHelper: sleeping 8s...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:46 ===\n\n=== After 10s wait ===\nHelper log: stopped at \"sleeping 8s...\" — no further output\nSentinel: FAILED: helper was KILLED by KillMode=control-group!\n```\n\n**Result**: Helper was killed when gateway service stopped ❌\n\n### Comparison\n\n| Scenario | Helper survives service stop? | Sentinel written? |\n|----------|------------------------------|-------------------|\n| `systemd-run --user --scope` (this PR) | ✅ Yes — ran in separate scope unit | ✅ `update-complete` |\n| Plain detached child (current main) | ❌ No — killed by `KillMode=control-group` | ❌ Never created |\n\n### Security: env via spawn(), not argv\n\n```typescript\n// env passed to spawn() for systemd-run — not in command-line args\nchild = spawn(\"systemd-run\", [...], { cwd: params.root, env, detached: true, stdio: \"ignore\" });\n```\n\nTest coverage verifies explicitly:\n```typescript\nexpect(options.env).toBeDefined();\nexpect(args).not.toContain(\"--setenv\");\n```\n\n### What was not tested\n\n- Full end-to-end `openclaw update` flow (requires published package version delta and npm registry)\n- Live `ExecStartPre` marker file guard (defense-in-depth only, verified by code inspection)\n- `--collect` garbage collection timing (non-functional, only prevents stale unit name conflicts)\n\nCloses #84068\n",
-        "branch": "fix/systemd-update-handoff-84068",
-        "head_sha": "60356e95a51feb0cfc763a2522beae9e70900a26",
-        "author": "jerry-xin",
+        "title": "[AI-assisted] fix(plugins): scope startup metadata manifest reads",
+        "body": "## Summary\n\n- Problem: Gateway startup could still rebuild plugin metadata from every installed plugin manifest before narrowing to the configured startup set.\n- Solution: carry a conservative startup plugin-id scope into metadata snapshot loading when the Installed Plugin Index can prove the narrowed set safely.\n- What changed: metadata snapshots can carry scoped `pluginIds`; lookup/startup paths pass a conservative `pluginIdScope`; startup scoping carries indexed `activation.onConfigPaths` owners such as `browser`; persisted installed indexes preserve that `startup.configPaths` metadata; scoped snapshots are not reused for configless default discovery; unscoped Gateway config-validation snapshots are not reused for restrictive startup bootstrap.\n- What did NOT change (scope boundary): no plugin config shape changes, no provider/channel activation semantics changes, no compat bundled-discovery shortcut.\n\n## Motivation\n\n#70533 is a startup stability problem: a restrictive plugin setup should not crash-loop or pay full manifest reconstruction cost just because unrelated installed plugins exist. This keeps the startup path on the Installed Plugin Index when it can safely prove the manifest subset, and falls back to the old unscoped behavior when it cannot.\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor required for the fix\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [ ] Skills / tool execution\n- [ ] Auth / tokens\n- [ ] Memory / storage\n- [x] Integrations\n- [ ] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- Closes #70533\n- [x] This PR fixes a bug or regression\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: restrictive gateway startup plugin scope still caused full installed-index manifest reconstruction before startup narrowing.\n- Real environment tested: isolated Linux testserver disposable repo, Node v22.22.2, pnpm 11.1.2, `origin/main` at `a13468320c` compared with this patch.\n- Exact steps or command run after this patch: ran TSX diagnostic scripts through the real `loadPluginLookUpTable -> loadPluginMetadataSnapshot -> loadPluginManifestRegistryForInstalledIndex -> resolveGatewayStartupPluginPlanFromRegistry` path using valid 96-plugin Installed Plugin Index fixtures.\n- Evidence after fix:\n\n```json\n{\n  \"label\": \"after-rebased-patch-confirm\",\n  \"indexPluginCount\": 96,\n  \"manifestPluginCount\": 1,\n  \"startupPluginIds\": [\"openai\"],\n  \"loadedPluginIds\": [\"openai\"],\n  \"diagnosticCount\": 0\n}\n```\n\n- Observed result after fix: the Installed Plugin Index still contains 96 plugins, but metadata manifest reconstruction reads only the one allowed startup plugin manifest; startup selection remains `[\"openai\"]`.\n- Additional blocker-fix proof:\n\n```json\n{\n  \"config\": {\n    \"browser\": { \"enabled\": true },\n    \"channels\": {},\n    \"plugins\": {\n      \"allow\": [\"openai\"],\n      \"slots\": { \"memory\": \"none\" }\n    }\n  },\n  \"results\": [\n    {\n      \"label\": \"indexed-config-path-scope\",\n      \"indexPluginCount\": 96,\n      \"manifestPluginCount\": 2,\n      \"startupPluginIds\": [\"openai\", \"browser\"],\n      \"loadedPluginIds\": [\"browser\", \"openai\"],\n      \"diagnosticCount\": 0\n    },\n    {\n      \"label\": \"persisted-index-config-path-roundtrip\",\n      \"indexPluginCount\": 96,\n      \"manifestPluginCount\": 2,\n      \"startupPluginIds\": [\"openai\", \"browser\"],\n      \"loadedPluginIds\": [\"browser\", \"openai\"],\n      \"persistedBrowserConfigPaths\": [\"browser\"],\n      \"diagnosticCount\": 0\n    },\n    {\n      \"label\": \"legacy-index-safe-fallback\",\n      \"indexPluginCount\": 96,\n      \"manifestPluginCount\": 96,\n      \"startupPluginIds\": [\"openai\", \"browser\"],\n      \"diagnosticCount\": 0\n    }\n  ]\n}\n```\n\n- Observed blocker-fix result: `browser.enabled=true` is preserved under a restrictive `plugins.allow=[\"openai\"]`; new and persisted indexes keep `startup.configPaths=[\"browser\"]` and stay scoped to 2 manifests, while legacy indexes without indexed config-path metadata fall back unscoped instead of losing `browser`.\n- Full Gateway startup path proof:\n\n```json\n{\n  \"path\": [\n    \"readConfigFileSnapshotWithPluginMetadata\",\n    \"loadGatewayStartupConfigSnapshot\",\n    \"prepareGatewayPluginBootstrap\"\n  ],\n  \"validationSnapshot\": {\n    \"pluginIds\": \"unscoped\",\n    \"manifestPluginCount\": 96\n  },\n  \"bootstrapManifestLoads\": [[\"browser\"], [\"browser\"], [\"browser\", \"openai\"]],\n  \"bootstrapLookup\": {\n    \"pluginIds\": [\"browser\", \"openai\"],\n    \"manifestPluginCount\": 2\n  },\n  \"startupPluginIds\": [\"openai\", \"browser\"]\n}\n```\n\n- Observed full-path result: the real config-validation snapshot is still unscoped with 96 manifests, but startup bootstrap does not reuse it for the restrictive allowlist. The final bootstrap lookup reloads the scoped `[\"browser\",\"openai\"]` manifests and starts the expected plugins.\n- What was not tested: no production credentials, no persistent services, no real external provider/channel account.\n- Before evidence:\n\n```json\n{\n  \"label\": \"before-rebased-origin-main\",\n  \"indexPluginCount\": 96,\n  \"manifestPluginCount\": 96,\n  \"startupPluginIds\": [\"openai\"],\n  \"diagnosticCount\": 0\n}\n```\n\n## Root Cause (if applicable)\n\n- Root cause: metadata snapshot loading had no way to receive a conservative startup plugin-id scope after the Installed Plugin Index was available, so it reconstructed the installed manifest registry for the full index before startup planning narrowed plugin ids.\n- Missing detection / guardrail: tests covered startup narrowing and metadata memoization separately, but not the manifest reconstruction count for restrictive gateway startup allowlists.\n- Contributing context (if known): some startup intent, config-path activation, channel, provider, slot, and harness decisions can only be trusted when the Installed Plugin Index can map them without reading manifests; unsafe cases need to stay unscoped.\n\n## Regression Test Plan (if applicable)\n\n- Coverage level that should have caught this:\n  - [x] Unit test\n  - [x] Seam / integration test\n  - [ ] End-to-end test\n  - [ ] Existing coverage already sufficient\n- Target test or file:\n  - `src/commands/status.summary.redaction.test.ts`\n  - `src/gateway/pr84628-startup-snapshot-proof.temp.test.ts` (temporary proof test, not committed)\n  - `src/plugins/plugin-lookup-table.test.ts`\n  - `src/plugins/installed-plugin-index-store.test.ts`\n  - `src/plugins/channel-plugin-ids.test.ts`\n  - `src/plugins/plugin-metadata-snapshot.memo.test.ts`\n  - `src/plugins/current-plugin-metadata-snapshot.test.ts`\n- Scenario the test should lock in: restrictive `plugins.allow` startup config passes a narrow scope to installed-index manifest reconstruction; config-path activation owners such as `browser` stay included; conservative fallback remains unscoped for compat discovery, legacy indexes, or unmappable providers.\n- Why this is the smallest reliable guardrail: it asserts the actual manifest-registry load boundary without needing external plugin credentials.\n- Existing test that already covers this (if any): none before this PR.\n- If no new test is added, why not: N/A.\n\n## User-visible / Behavior Changes\n\nGateway startup with a restrictive plugin allowlist can avoid reading unrelated installed plugin manifests when the startup scope is safe to prove from the Installed Plugin Index. Unsafe configs keep existing unscoped behavior.\n\n## Diagram (if applicable)\n\n```text\nBefore:\nInstalled Index (96 plugins) -> read 96 manifests -> startup plan -> openai\n\nAfter:\nInstalled Index (96 plugins) -> conservative scope [\"browser\",\"openai\"] when browser config is present -> read 2 manifests -> startup plan -> openai + browser\n```\n\n## Security Impact (required)\n\n- New permissions/capabilities? (`Yes/No`) No\n- Secrets/tokens handling changed? (`Yes/No`) No\n- New/changed network calls? (`Yes/No`) No\n- Command/tool execution surface changed? (`Yes/No`) No\n- Data access scope changed? (`Yes/No`) No\n- If any `Yes`, explain risk + mitigation: N/A\n\n## Repro + Verification\n\n### Environment\n\n- OS: Linux testserver disposable run\n- Runtime/container: Node v22.22.2, pnpm 11.1.2\n- Model/provider: N/A\n- Integration/channel (if any): synthetic installed plugin fixture; no external channel account\n- Relevant config (redacted): `plugins.allow=[\"openai\"]`, `plugins.slots.memory=\"none\"`; blocker regression also uses `browser.enabled=true`\n\n### Steps\n\n1. On `origin/main`, run the diagnostic fixture through `loadPluginLookUpTable`.\n2. Apply this patch.\n3. Run the same diagnostic fixture again.\n4. Run focused regression tests, format, typecheck, and targeted lint.\n\n### Expected\n\n- Startup still selects `openai`.\n- `browser.enabled=true` still selects `browser` even when `plugins.allow` only lists `openai`.\n- Manifest reconstruction only reads the scoped startup plugin(s) after the patch.\n- Conservative fallback paths remain unscoped when the Installed Plugin Index cannot prove the mapping.\n\n### Actual\n\n- Before: `manifestPluginCount=96`, `startupPluginIds=[\"openai\"]`.\n- After: `manifestPluginCount=1`, `loadedPluginIds=[\"openai\"]`, `startupPluginIds=[\"openai\"]`.\n- After blocker repair: `manifestPluginCount=2`, `loadedPluginIds=[\"browser\",\"openai\"]`, `startupPluginIds=[\"openai\",\"browser\"]` for `browser.enabled=true`.\n- After persisted-index repair: persisted read/write roundtrip keeps `persistedBrowserConfigPaths=[\"browser\"]`, `manifestPluginCount=2`, and `diagnosticCount=0`.\n- After Gateway startup snapshot repair: config-validation snapshot remains `pluginIds=\"unscoped\"` with `manifestPluginCount=96`, but bootstrap reloads scoped `[\"browser\",\"openai\"]` and lookup ends at `manifestPluginCount=2`.\n\n## Evidence\n\n- [x] Failing test/log before + passing after\n- [x] Trace/log snippets\n- [ ] Screenshot/recording\n- [x] Perf numbers (if relevant)\n\nValidation:\n\n```text\nnode scripts/run-vitest.mjs src/commands/status.summary.redaction.test.ts src/plugins/plugin-lookup-table.test.ts src/plugins/manifest-registry-installed.test.ts src/plugins/channel-plugin-ids.test.ts src/gateway/server-startup-plugins.test.ts src/gateway/server-plugins.test.ts src/plugins/plugin-metadata-snapshot.memo.test.ts src/plugins/current-plugin-metadata-snapshot.test.ts src/plugins/manifest-contract-eligibility.test.ts src/plugins/tools.optional.test.ts\n10 files / 269 tests passed\n\ncorepack pnpm exec oxfmt --check --threads=1 src/plugins/plugin-metadata-snapshot.ts src/plugins/plugin-metadata-snapshot.types.ts src/plugins/plugin-lookup-table.ts src/plugins/manifest-registry-installed.ts src/plugins/effective-plugin-ids.ts src/plugins/gateway-startup-plugin-ids.ts src/gateway/server-startup-plugins.ts src/gateway/server-plugins.ts src/commands/status.summary.redaction.test.ts\npassed\n\ngit diff --check\npassed\n\nnode scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo\npassed\n\nnode scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test.tsbuildinfo\npassed\n\nnode scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json <11 changed files>\n0 warnings / 0 errors\n\nClawSweeper follow-up acceptance after persisted-index schema repair:\n\nnode scripts/run-vitest.mjs src/plugins/installed-plugin-index-store.test.ts src/plugins/channel-plugin-ids.test.ts src/plugins/plugin-lookup-table.test.ts src/plugins/plugin-metadata-snapshot.memo.test.ts\n4 files / 150 tests passed\n\ngit diff --check\npassed\n\nnode scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo\npassed\n\nnode_modules/.bin/oxfmt --check --threads=1 src/plugins/installed-plugin-index-store.ts src/plugins/installed-plugin-index-store.test.ts\npassed\n\nnode scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/plugins/installed-plugin-index-store.ts src/plugins/installed-plugin-index-store.test.ts\n0 warnings / 0 errors\n\nClawSweeper follow-up after Gateway startup snapshot reuse repair:\n\nnode scripts/run-vitest.mjs src/gateway/pr84628-startup-snapshot-proof.temp.test.ts --reporter=verbose\n3 Vitest projects / 3 tests passed\n\nnode scripts/run-vitest.mjs src/plugins/installed-plugin-index-store.test.ts src/plugins/channel-plugin-ids.test.ts src/plugins/plugin-lookup-table.test.ts src/plugins/plugin-metadata-snapshot.memo.test.ts\n4 files / 151 tests passed\n\ngit diff --check\npassed\n\nnode scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo\npassed\n\nnode_modules/.bin/oxfmt --check --threads=1 src/plugins/gateway-startup-plugin-ids.ts src/plugins/channel-plugin-ids.ts src/plugins/plugin-lookup-table.ts src/plugins/plugin-lookup-table.test.ts\npassed\n\nnode scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/plugins/gateway-startup-plugin-ids.ts src/plugins/channel-plugin-ids.ts src/plugins/plugin-lookup-table.ts src/plugins/plugin-lookup-table.test.ts\n0 warnings / 0 errors\n\nClawSweeper follow-up after current-snapshot exact-scope repair:\n\nCommit:\n05abd2ca1f fix(plugins): require exact current snapshot scope\n\nChanged:\nsrc/plugins/current-plugin-metadata-snapshot.ts\nsrc/plugins/current-plugin-metadata-snapshot.test.ts\n\nBehavior locked in:\ngetCurrentPluginMetadataSnapshot() only reuses a current snapshot for a scoped pluginIds request when the current snapshot has the exact same normalized pluginIds scope. Unscoped current snapshots are rejected for scoped requests.\n\nnode scripts/run-vitest.mjs src/plugins/current-plugin-metadata-snapshot.test.ts src/plugins/plugin-metadata-snapshot.memo.test.ts src/plugins/plugin-lookup-table.test.ts src/plugins/channel-plugin-ids.test.ts src/plugins/installed-plugin-index-store.test.ts\n5 files / 166 tests passed\n\ngit diff --check\npassed\n\nnode scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo\npassed\n\nnode_modules/.bin/oxfmt --check --threads=1 src/plugins/current-plugin-metadata-snapshot.ts src/plugins/current-plugin-metadata-snapshot.test.ts\npassed\n\nnode scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/plugins/current-plugin-metadata-snapshot.ts src/plugins/current-plugin-metadata-snapshot.test.ts\n0 warnings / 0 errors\n\npnpm check:changed\nattempted; conflict/changelog/dependency guards plus core and core-test TypeScript passed, then full core lint was killed by `tsgolint` SIGKILL on the testserver. Targeted Oxlint for the changed repair files passed with 0 warnings / 0 errors.\n```\n\nAdditional note: `origin/main @ a13468320c` failed `test/tsconfig/tsconfig.core.test.json` before this patch because `status.summary.redaction.test.ts` had not been updated for the newer `SessionStatus` fields. This PR includes that test-only fixture update so `check:changed` can pass cleanly on the rebased branch.\n\n## Human Verification (required)\n\nWhat I personally verified (not just CI), and how:\n\n- Verified scenarios: before/after runtime manifest reconstruction count on the real OpenClaw metadata lookup path; full Gateway config-snapshot to plugin-bootstrap path; restrictive allowlist scope; config-path activation owner retention; legacy index safe fallback; compat discovery fallback; unmappable provider fallback; scoped/unscoped memo separation; configless scoped snapshot reuse rejection.\n- Edge cases checked: disabled plugin entries are removed from the scope, direct configured channels/providers only scope when the Installed Plugin Index can map them, scope ids outside the index and legacy config-path activation metadata fall back to unscoped loading.\n- What I did **not** verify: real production provider/channel credentials or long-running gateway service startup.\n\n## Review Conversations\n\n- [x] I replied to or resolved every bot review conversation I addressed in this PR.\n- [x] I left unresolved only the conversations that still need reviewer or maintainer judgment.\n\n## Compatibility / Migration\n\n- Backward compatible? (`Yes/No`) Yes\n- Config/env changes? (`Yes/No`) No\n- Migration needed? (`Yes/No`) No\n- If yes, exact upgrade steps: N/A\n\n## Risks and Mitigations\n\n- Risk: overly aggressive startup scoping could hide a plugin whose startup intent is only manifest-visible.\n  - Mitigation: scope is only used when allowlists/config entries/config-path activation/slots/direct channel/provider/harness ids can be mapped from the Installed Plugin Index; ambiguous compat, provider, channel, legacy-index, or out-of-index cases return to unscoped manifest reconstruction.\n",
+        "branch": "fix/plugin-discovery-scope-70533",
+        "head_sha": "05abd2ca1f9a61a5d0ab4d232023cff1da90d251",
+        "author": "iwhatsskill",
         "labels": [
-          "gateway",
-          "cli",
-          "size: M",
-          "triage: needs-real-behavior-proof",
+          "commands",
+          "size: L",
+          "proof: supplied",
+          "proof: sufficient",
           "P1",
           "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/cli/gateway-cli/run-loop.ts",
-            "additions": 4,
+            "path": "src/commands/status.summary.redaction.test.ts",
+            "additions": 3,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/daemon/systemd-unit.test.ts",
-            "additions": 4,
+            "path": "src/plugins/channel-plugin-ids.test.ts",
+            "additions": 133,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/channel-plugin-ids.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/current-plugin-metadata-snapshot.test.ts",
+            "additions": 29,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/current-plugin-metadata-snapshot.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/gateway-startup-plugin-ids.ts",
+            "additions": 456,
             "deletions": 3,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/daemon/systemd-unit.ts",
-            "additions": 7,
-            "deletions": 4,
+            "path": "src/plugins/installed-plugin-index-record-builder.ts",
+            "additions": 1,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server-methods/update-managed-service-handoff.test.ts",
-            "additions": 164,
+            "path": "src/plugins/installed-plugin-index-store.test.ts",
+            "additions": 31,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/installed-plugin-index-store.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/installed-plugin-index-types.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/plugin-lookup-table.test.ts",
+            "additions": 203,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/plugin-lookup-table.ts",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/plugin-metadata-snapshot.memo.test.ts",
+            "additions": 40,
             "deletions": 6,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server-methods/update-managed-service-handoff.ts",
-            "additions": 117,
-            "deletions": 7,
+            "path": "src/plugins/plugin-metadata-snapshot.ts",
+            "additions": 29,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server-methods/update.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/process-respawn.test.ts",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/process-respawn.ts",
-            "additions": 6,
+            "path": "src/plugins/plugin-metadata-snapshot.types.ts",
+            "additions": 8,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
@@ -517,875 +396,50 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84151",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84151.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84628",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84628.md",
         "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
         "review_decision": "",
         "checks": {
-          "total": 96,
+          "total": 14,
           "counts": {
-            "FAILURE": 3,
-            "SKIPPED": 22,
-            "SUCCESS": 70,
+            "SUCCESS": 5,
+            "SKIPPED": 8,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ]
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84151:4499250943:2026-05-20T14:10:42Z:re_review",
-      "comment_id": "4499250943",
-      "comment_version_key": "4499250943:2026-05-20T14:10:42Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4499250943",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84151,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T14:10:42Z",
-      "comment_updated_at": "2026-05-20T14:10:42Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(daemon): escape systemd cgroup for update handoff via systemd-run --scope",
-        "body": "## Summary\n\nOn systemd-supervised installs, clicking \"Update now\" silently fails: the update handoff helper is created but immediately killed by systemd's `KillMode=control-group` when the gateway unit restarts. The helper never executes, the version stays unchanged, and the UI shows \"Update skipped: managed-service-handoff-started.\"\n\nThis PR detects systemd supervision and launches the handoff helper via `systemd-run --user --scope` to escape the gateway's cgroup. Non-systemd supervisors (launchd, etc.) continue using the existing detached-child path.\n\n## Root cause\n\nsystemd's `KillMode=control-group` (the default) kills all processes in the service's cgroup on restart — including detached child processes. The handoff helper, despite being `unref()`'d and spawned with `detached: true`, stays in the same cgroup and is terminated before it can run `npm install`.\n\n## Fix\n\n```\nsystemd-run --user --scope --unit openclaw-update-<handoffId> --collect -- node handoff.cjs handoff.json\n```\n\nKey design choices:\n\n**`--scope` not `--service`**: `--scope` inherits the caller's environment (profile, state dir, config, PATH, proxy, package manager discovery all preserved). `--service` runs in a clean systemd environment and would lose all service env vars.\n\n**`KillMode=control-group` preserved**: The scoped update helper escapes via `systemd-run --scope` into its own cgroup, so `KillMode=control-group` safely stops the gateway and all its child workers without affecting the handoff. No change to existing shutdown semantics.\n\n**Launch failure detection**: After spawning `systemd-run`, the code awaits its exit code with a 5s timeout. If systemd-run exits non-zero (user session unavailable, D-Bus down, etc.), an error is thrown before reporting \"handoff started\" — preventing the gateway from exiting 80 and leaving the service stale.\n\n**No secret exposure via argv**: The `env` object is passed via `spawn()` option — identical to the existing non-systemd path. No `--setenv=KEY=*** args are used. Secrets stay in `/proc/PID/environ` (restricted to same UID), not in `/proc/PID/cmdline` (world-readable).\n\nAdditional hardening:\n- `sanitizeSystemdUnitName()` strips non-`[a-zA-Z0-9:._-]` chars from `handoffId`\n- `/tmp/openclaw-update-in-progress` marker file for `ExecStartPre` defense-in-depth guard\n- `--collect` flag ensures scope units are garbage-collected after exit\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `update-managed-service-handoff.ts` | Detect `supervisor === \"systemd\"` → spawn via `systemd-run --user --scope`; await exit code to detect launch failures; add marker file lifecycle; add `sanitizeSystemdUnitName()` |\n| `update-managed-service-handoff.test.ts` | 3 new tests: systemd `--scope` spawn path with env assertions, ENOENT detection, non-zero exit detection; enhanced mock with `mockChild()` helper |\n| `systemd-unit.ts` | Add `ExecStartPre` marker guard, `RestartPreventExitStatus=80`; keep `KillMode=control-group` with updated comment |\n| `systemd-unit.test.ts` | Updated KillMode assertion to verify `control-group` |\n\n## Tests\n\n```\n$ npx vitest run --project gateway-methods src/gateway/server-methods/update-managed-service-handoff.test.ts\n ✓ gateway-methods (8 tests) 632ms\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n\n$ npx vitest run --project unit-fast src/daemon/systemd-unit.test.ts\n ✓ unit-fast (4 tests) 2ms\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: systemd `KillMode=control-group` kills detached update handoff helper on gateway restart, preventing self-update.\n- **Real environment tested**: OrbStack Linux VM (Ubuntu 22.04 Jammy, kernel 6.19.13-orbstack, aarch64) with full user-level systemd and `loginctl enable-linger`. Node.js v24.15.0.\n\n### Live systemd proof: `--scope` escapes cgroup, helper survives service restart\n\nCreated a systemd user service with `KillMode=control-group` (matching OpenClaw's generated unit at `src/daemon/systemd-unit.ts:86`):\n\n```ini\n[Service]\nType=simple\nExecStart=/tmp/handoff-test/gateway-sim.sh\nKillMode=control-group\nRestart=no\n```\n\n**Test A: WITH `systemd-run --user --scope` (this PR)**\n\n```\n=== Gateway running ===\n     Active: active (running) since Wed 2026-05-20 20:08:58 CST\n   Main PID: 2797 (gateway-sim.sh)\n     CGroup: /user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway-test.service\n\n=== Helper started (in separate scope unit, sleeping 8s) ===\nHelper PID=2799 started in scope at Wed May 20 08:08:58 PM CST 2026\nHelper: sleeping 8s while gateway lives...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:00 ===\nGateway service stopped\n\n=== Immediately after kill ===\nHelper still running (no sentinel yet — helper still working)\n\n=== After 10s wait (helper finished at 20:09:06) ===\nHelper: still alive after 8s! Gateway should be dead by now\nHelper: writing sentinel at Wed May 20 08:09:06 PM CST 2026\nSentinel: update-complete\n```\n\n**Result**: Helper survived gateway service kill and completed work ✅\n\n**Test B: WITHOUT `systemd-run --scope` (current main behavior)**\n\nSame setup but using plain `bash &` with `disown` (simulating current detached spawn):\n\n```\n=== Helper started (no scope, sleeping 8s) ===\nHelper PID=2844 (NO SCOPE) started at Wed May 20 08:09:44 PM CST 2026\nHelper: sleeping 8s...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:46 ===\n\n=== After 10s wait ===\nHelper log: stopped at \"sleeping 8s...\" — no further output\nSentinel: FAILED: helper was KILLED by KillMode=control-group!\n```\n\n**Result**: Helper was killed when gateway service stopped ❌\n\n### Comparison\n\n| Scenario | Helper survives service stop? | Sentinel written? |\n|----------|------------------------------|-------------------|\n| `systemd-run --user --scope` (this PR) | ✅ Yes — ran in separate scope unit | ✅ `update-complete` |\n| Plain detached child (current main) | ❌ No — killed by `KillMode=control-group` | ❌ Never created |\n\n### Security: env via spawn(), not argv\n\n```typescript\n// env passed to spawn() for systemd-run — not in command-line args\nchild = spawn(\"systemd-run\", [...], { cwd: params.root, env, detached: true, stdio: \"ignore\" });\n```\n\nTest coverage verifies explicitly:\n```typescript\nexpect(options.env).toBeDefined();\nexpect(args).not.toContain(\"--setenv\");\n```\n\n### What was not tested\n\n- Full end-to-end `openclaw update` flow (requires published package version delta and npm registry)\n- Live `ExecStartPre` marker file guard (defense-in-depth only, verified by code inspection)\n- `--collect` garbage collection timing (non-functional, only prevents stale unit name conflicts)\n\nCloses #84068\n",
-        "branch": "fix/systemd-update-handoff-84068",
-        "head_sha": "60356e95a51feb0cfc763a2522beae9e70900a26",
-        "author": "jerry-xin",
-        "labels": [
-          "gateway",
-          "cli",
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/cli/gateway-cli/run-loop.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/systemd-unit.test.ts",
-            "additions": 4,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/systemd-unit.ts",
-            "additions": 7,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update-managed-service-handoff.test.ts",
-            "additions": 164,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update-managed-service-handoff.ts",
-            "additions": 117,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/process-respawn.test.ts",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/process-respawn.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84151",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84151.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "counts": {
-            "FAILURE": 3,
-            "SKIPPED": 22,
-            "SUCCESS": 70,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ]
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84151:4498955218:2026-05-20T13:37:46Z:re_review",
-      "comment_id": "4498955218",
-      "comment_version_key": "4498955218:2026-05-20T13:37:46Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4498955218",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84151,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T13:37:46Z",
-      "comment_updated_at": "2026-05-20T13:37:46Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(daemon): escape systemd cgroup for update handoff via systemd-run --scope",
-        "body": "## Summary\n\nOn systemd-supervised installs, clicking \"Update now\" silently fails: the update handoff helper is created but immediately killed by systemd's `KillMode=control-group` when the gateway unit restarts. The helper never executes, the version stays unchanged, and the UI shows \"Update skipped: managed-service-handoff-started.\"\n\nThis PR detects systemd supervision and launches the handoff helper via `systemd-run --user --scope` to escape the gateway's cgroup. Non-systemd supervisors (launchd, etc.) continue using the existing detached-child path.\n\n## Root cause\n\nsystemd's `KillMode=control-group` (the default) kills all processes in the service's cgroup on restart — including detached child processes. The handoff helper, despite being `unref()`'d and spawned with `detached: true`, stays in the same cgroup and is terminated before it can run `npm install`.\n\n## Fix\n\n```\nsystemd-run --user --scope --unit openclaw-update-<handoffId> --collect -- node handoff.cjs handoff.json\n```\n\nKey design choices:\n\n**`--scope` not `--service`**: `--scope` inherits the caller's environment (profile, state dir, config, PATH, proxy, package manager discovery all preserved). `--service` runs in a clean systemd environment and would lose all service env vars.\n\n**`KillMode=control-group` preserved**: The scoped update helper escapes via `systemd-run --scope` into its own cgroup, so `KillMode=control-group` safely stops the gateway and all its child workers without affecting the handoff. No change to existing shutdown semantics.\n\n**Launch failure detection**: After spawning `systemd-run`, the code awaits its exit code with a 5s timeout. If systemd-run exits non-zero (user session unavailable, D-Bus down, etc.), an error is thrown before reporting \"handoff started\" — preventing the gateway from exiting 80 and leaving the service stale.\n\n**No secret exposure via argv**: The `env` object is passed via `spawn()` option — identical to the existing non-systemd path. No `--setenv=KEY=*** args are used. Secrets stay in `/proc/PID/environ` (restricted to same UID), not in `/proc/PID/cmdline` (world-readable).\n\nAdditional hardening:\n- `sanitizeSystemdUnitName()` strips non-`[a-zA-Z0-9:._-]` chars from `handoffId`\n- `/tmp/openclaw-update-in-progress` marker file for `ExecStartPre` defense-in-depth guard\n- `--collect` flag ensures scope units are garbage-collected after exit\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `update-managed-service-handoff.ts` | Detect `supervisor === \"systemd\"` → spawn via `systemd-run --user --scope`; await exit code to detect launch failures; add marker file lifecycle; add `sanitizeSystemdUnitName()` |\n| `update-managed-service-handoff.test.ts` | 3 new tests: systemd `--scope` spawn path with env assertions, ENOENT detection, non-zero exit detection; enhanced mock with `mockChild()` helper |\n| `systemd-unit.ts` | Add `ExecStartPre` marker guard, `RestartPreventExitStatus=80`; keep `KillMode=control-group` with updated comment |\n| `systemd-unit.test.ts` | Updated KillMode assertion to verify `control-group` |\n\n## Tests\n\n```\n$ npx vitest run --project gateway-methods src/gateway/server-methods/update-managed-service-handoff.test.ts\n ✓ gateway-methods (8 tests) 632ms\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n\n$ npx vitest run --project unit-fast src/daemon/systemd-unit.test.ts\n ✓ unit-fast (4 tests) 2ms\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: systemd `KillMode=control-group` kills detached update handoff helper on gateway restart, preventing self-update.\n- **Real environment tested**: OrbStack Linux VM (Ubuntu 22.04 Jammy, kernel 6.19.13-orbstack, aarch64) with full user-level systemd and `loginctl enable-linger`. Node.js v24.15.0.\n\n### Live systemd proof: `--scope` escapes cgroup, helper survives service restart\n\nCreated a systemd user service with `KillMode=control-group` (matching OpenClaw's generated unit at `src/daemon/systemd-unit.ts:86`):\n\n```ini\n[Service]\nType=simple\nExecStart=/tmp/handoff-test/gateway-sim.sh\nKillMode=control-group\nRestart=no\n```\n\n**Test A: WITH `systemd-run --user --scope` (this PR)**\n\n```\n=== Gateway running ===\n     Active: active (running) since Wed 2026-05-20 20:08:58 CST\n   Main PID: 2797 (gateway-sim.sh)\n     CGroup: /user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway-test.service\n\n=== Helper started (in separate scope unit, sleeping 8s) ===\nHelper PID=2799 started in scope at Wed May 20 08:08:58 PM CST 2026\nHelper: sleeping 8s while gateway lives...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:00 ===\nGateway service stopped\n\n=== Immediately after kill ===\nHelper still running (no sentinel yet — helper still working)\n\n=== After 10s wait (helper finished at 20:09:06) ===\nHelper: still alive after 8s! Gateway should be dead by now\nHelper: writing sentinel at Wed May 20 08:09:06 PM CST 2026\nSentinel: update-complete\n```\n\n**Result**: Helper survived gateway service kill and completed work ✅\n\n**Test B: WITHOUT `systemd-run --scope` (current main behavior)**\n\nSame setup but using plain `bash &` with `disown` (simulating current detached spawn):\n\n```\n=== Helper started (no scope, sleeping 8s) ===\nHelper PID=2844 (NO SCOPE) started at Wed May 20 08:09:44 PM CST 2026\nHelper: sleeping 8s...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:46 ===\n\n=== After 10s wait ===\nHelper log: stopped at \"sleeping 8s...\" — no further output\nSentinel: FAILED: helper was KILLED by KillMode=control-group!\n```\n\n**Result**: Helper was killed when gateway service stopped ❌\n\n### Comparison\n\n| Scenario | Helper survives service stop? | Sentinel written? |\n|----------|------------------------------|-------------------|\n| `systemd-run --user --scope` (this PR) | ✅ Yes — ran in separate scope unit | ✅ `update-complete` |\n| Plain detached child (current main) | ❌ No — killed by `KillMode=control-group` | ❌ Never created |\n\n### Security: env via spawn(), not argv\n\n```typescript\n// env passed to spawn() for systemd-run — not in command-line args\nchild = spawn(\"systemd-run\", [...], { cwd: params.root, env, detached: true, stdio: \"ignore\" });\n```\n\nTest coverage verifies explicitly:\n```typescript\nexpect(options.env).toBeDefined();\nexpect(args).not.toContain(\"--setenv\");\n```\n\n### What was not tested\n\n- Full end-to-end `openclaw update` flow (requires published package version delta and npm registry)\n- Live `ExecStartPre` marker file guard (defense-in-depth only, verified by code inspection)\n- `--collect` garbage collection timing (non-functional, only prevents stale unit name conflicts)\n\nCloses #84068\n",
-        "branch": "fix/systemd-update-handoff-84068",
-        "head_sha": "60356e95a51feb0cfc763a2522beae9e70900a26",
-        "author": "jerry-xin",
-        "labels": [
-          "gateway",
-          "cli",
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/cli/gateway-cli/run-loop.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/systemd-unit.test.ts",
-            "additions": 4,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/systemd-unit.ts",
-            "additions": 7,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update-managed-service-handoff.test.ts",
-            "additions": 164,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update-managed-service-handoff.ts",
-            "additions": 117,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/process-respawn.test.ts",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/process-respawn.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84151",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84151.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "counts": {
-            "FAILURE": 3,
-            "SKIPPED": 22,
-            "SUCCESS": 70,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ]
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84151:4498367088:2026-05-20T12:26:16Z:re_review",
-      "comment_id": "4498367088",
-      "comment_version_key": "4498367088:2026-05-20T12:26:16Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4498367088",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84151,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T12:26:16Z",
-      "comment_updated_at": "2026-05-20T12:26:16Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(daemon): escape systemd cgroup for update handoff via systemd-run --scope",
-        "body": "## Summary\n\nOn systemd-supervised installs, clicking \"Update now\" silently fails: the update handoff helper is created but immediately killed by systemd's `KillMode=control-group` when the gateway unit restarts. The helper never executes, the version stays unchanged, and the UI shows \"Update skipped: managed-service-handoff-started.\"\n\nThis PR detects systemd supervision and launches the handoff helper via `systemd-run --user --scope` to escape the gateway's cgroup. Non-systemd supervisors (launchd, etc.) continue using the existing detached-child path.\n\n## Root cause\n\nsystemd's `KillMode=control-group` (the default) kills all processes in the service's cgroup on restart — including detached child processes. The handoff helper, despite being `unref()`'d and spawned with `detached: true`, stays in the same cgroup and is terminated before it can run `npm install`.\n\n## Fix\n\n```\nsystemd-run --user --scope --unit openclaw-update-<handoffId> --collect -- node handoff.cjs handoff.json\n```\n\nKey design choices:\n\n**`--scope` not `--service`**: `--scope` inherits the caller's environment (profile, state dir, config, PATH, proxy, package manager discovery all preserved). `--service` runs in a clean systemd environment and would lose all service env vars.\n\n**`KillMode=control-group` preserved**: The scoped update helper escapes via `systemd-run --scope` into its own cgroup, so `KillMode=control-group` safely stops the gateway and all its child workers without affecting the handoff. No change to existing shutdown semantics.\n\n**Launch failure detection**: After spawning `systemd-run`, the code awaits its exit code with a 5s timeout. If systemd-run exits non-zero (user session unavailable, D-Bus down, etc.), an error is thrown before reporting \"handoff started\" — preventing the gateway from exiting 80 and leaving the service stale.\n\n**No secret exposure via argv**: The `env` object is passed via `spawn()` option — identical to the existing non-systemd path. No `--setenv=KEY=*** args are used. Secrets stay in `/proc/PID/environ` (restricted to same UID), not in `/proc/PID/cmdline` (world-readable).\n\nAdditional hardening:\n- `sanitizeSystemdUnitName()` strips non-`[a-zA-Z0-9:._-]` chars from `handoffId`\n- `/tmp/openclaw-update-in-progress` marker file for `ExecStartPre` defense-in-depth guard\n- `--collect` flag ensures scope units are garbage-collected after exit\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `update-managed-service-handoff.ts` | Detect `supervisor === \"systemd\"` → spawn via `systemd-run --user --scope`; await exit code to detect launch failures; add marker file lifecycle; add `sanitizeSystemdUnitName()` |\n| `update-managed-service-handoff.test.ts` | 3 new tests: systemd `--scope` spawn path with env assertions, ENOENT detection, non-zero exit detection; enhanced mock with `mockChild()` helper |\n| `systemd-unit.ts` | Add `ExecStartPre` marker guard, `RestartPreventExitStatus=80`; keep `KillMode=control-group` with updated comment |\n| `systemd-unit.test.ts` | Updated KillMode assertion to verify `control-group` |\n\n## Tests\n\n```\n$ npx vitest run --project gateway-methods src/gateway/server-methods/update-managed-service-handoff.test.ts\n ✓ gateway-methods (8 tests) 632ms\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n\n$ npx vitest run --project unit-fast src/daemon/systemd-unit.test.ts\n ✓ unit-fast (4 tests) 2ms\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: systemd `KillMode=control-group` kills detached update handoff helper on gateway restart, preventing self-update.\n- **Real environment tested**: OrbStack Linux VM (Ubuntu 22.04 Jammy, kernel 6.19.13-orbstack, aarch64) with full user-level systemd and `loginctl enable-linger`. Node.js v24.15.0.\n\n### Live systemd proof: `--scope` escapes cgroup, helper survives service restart\n\nCreated a systemd user service with `KillMode=control-group` (matching OpenClaw's generated unit at `src/daemon/systemd-unit.ts:86`):\n\n```ini\n[Service]\nType=simple\nExecStart=/tmp/handoff-test/gateway-sim.sh\nKillMode=control-group\nRestart=no\n```\n\n**Test A: WITH `systemd-run --user --scope` (this PR)**\n\n```\n=== Gateway running ===\n     Active: active (running) since Wed 2026-05-20 20:08:58 CST\n   Main PID: 2797 (gateway-sim.sh)\n     CGroup: /user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway-test.service\n\n=== Helper started (in separate scope unit, sleeping 8s) ===\nHelper PID=2799 started in scope at Wed May 20 08:08:58 PM CST 2026\nHelper: sleeping 8s while gateway lives...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:00 ===\nGateway service stopped\n\n=== Immediately after kill ===\nHelper still running (no sentinel yet — helper still working)\n\n=== After 10s wait (helper finished at 20:09:06) ===\nHelper: still alive after 8s! Gateway should be dead by now\nHelper: writing sentinel at Wed May 20 08:09:06 PM CST 2026\nSentinel: update-complete\n```\n\n**Result**: Helper survived gateway service kill and completed work ✅\n\n**Test B: WITHOUT `systemd-run --scope` (current main behavior)**\n\nSame setup but using plain `bash &` with `disown` (simulating current detached spawn):\n\n```\n=== Helper started (no scope, sleeping 8s) ===\nHelper PID=2844 (NO SCOPE) started at Wed May 20 08:09:44 PM CST 2026\nHelper: sleeping 8s...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:46 ===\n\n=== After 10s wait ===\nHelper log: stopped at \"sleeping 8s...\" — no further output\nSentinel: FAILED: helper was KILLED by KillMode=control-group!\n```\n\n**Result**: Helper was killed when gateway service stopped ❌\n\n### Comparison\n\n| Scenario | Helper survives service stop? | Sentinel written? |\n|----------|------------------------------|-------------------|\n| `systemd-run --user --scope` (this PR) | ✅ Yes — ran in separate scope unit | ✅ `update-complete` |\n| Plain detached child (current main) | ❌ No — killed by `KillMode=control-group` | ❌ Never created |\n\n### Security: env via spawn(), not argv\n\n```typescript\n// env passed to spawn() for systemd-run — not in command-line args\nchild = spawn(\"systemd-run\", [...], { cwd: params.root, env, detached: true, stdio: \"ignore\" });\n```\n\nTest coverage verifies explicitly:\n```typescript\nexpect(options.env).toBeDefined();\nexpect(args).not.toContain(\"--setenv\");\n```\n\n### What was not tested\n\n- Full end-to-end `openclaw update` flow (requires published package version delta and npm registry)\n- Live `ExecStartPre` marker file guard (defense-in-depth only, verified by code inspection)\n- `--collect` garbage collection timing (non-functional, only prevents stale unit name conflicts)\n\nCloses #84068\n",
-        "branch": "fix/systemd-update-handoff-84068",
-        "head_sha": "60356e95a51feb0cfc763a2522beae9e70900a26",
-        "author": "jerry-xin",
-        "labels": [
-          "gateway",
-          "cli",
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/cli/gateway-cli/run-loop.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/systemd-unit.test.ts",
-            "additions": 4,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/systemd-unit.ts",
-            "additions": 7,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update-managed-service-handoff.test.ts",
-            "additions": 164,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update-managed-service-handoff.ts",
-            "additions": 117,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/process-respawn.test.ts",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/process-respawn.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84151",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84151.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "counts": {
-            "FAILURE": 3,
-            "SKIPPED": 22,
-            "SUCCESS": 70,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ]
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84151:4496180438:2026-05-20T08:22:59Z:re_review",
-      "comment_id": "4496180438",
-      "comment_version_key": "4496180438:2026-05-20T08:22:59Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4496180438",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84151,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T08:22:59Z",
-      "comment_updated_at": "2026-05-20T08:22:59Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(daemon): escape systemd cgroup for update handoff via systemd-run --scope",
-        "body": "## Summary\n\nOn systemd-supervised installs, clicking \"Update now\" silently fails: the update handoff helper is created but immediately killed by systemd's `KillMode=control-group` when the gateway unit restarts. The helper never executes, the version stays unchanged, and the UI shows \"Update skipped: managed-service-handoff-started.\"\n\nThis PR detects systemd supervision and launches the handoff helper via `systemd-run --user --scope` to escape the gateway's cgroup. Non-systemd supervisors (launchd, etc.) continue using the existing detached-child path.\n\n## Root cause\n\nsystemd's `KillMode=control-group` (the default) kills all processes in the service's cgroup on restart — including detached child processes. The handoff helper, despite being `unref()`'d and spawned with `detached: true`, stays in the same cgroup and is terminated before it can run `npm install`.\n\n## Fix\n\n```\nsystemd-run --user --scope --unit openclaw-update-<handoffId> --collect -- node handoff.cjs handoff.json\n```\n\nKey design choices:\n\n**`--scope` not `--service`**: `--scope` inherits the caller's environment (profile, state dir, config, PATH, proxy, package manager discovery all preserved). `--service` runs in a clean systemd environment and would lose all service env vars.\n\n**`KillMode=control-group` preserved**: The scoped update helper escapes via `systemd-run --scope` into its own cgroup, so `KillMode=control-group` safely stops the gateway and all its child workers without affecting the handoff. No change to existing shutdown semantics.\n\n**Launch failure detection**: After spawning `systemd-run`, the code awaits its exit code with a 5s timeout. If systemd-run exits non-zero (user session unavailable, D-Bus down, etc.), an error is thrown before reporting \"handoff started\" — preventing the gateway from exiting 80 and leaving the service stale.\n\n**No secret exposure via argv**: The `env` object is passed via `spawn()` option — identical to the existing non-systemd path. No `--setenv=KEY=*** args are used. Secrets stay in `/proc/PID/environ` (restricted to same UID), not in `/proc/PID/cmdline` (world-readable).\n\nAdditional hardening:\n- `sanitizeSystemdUnitName()` strips non-`[a-zA-Z0-9:._-]` chars from `handoffId`\n- `/tmp/openclaw-update-in-progress` marker file for `ExecStartPre` defense-in-depth guard\n- `--collect` flag ensures scope units are garbage-collected after exit\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `update-managed-service-handoff.ts` | Detect `supervisor === \"systemd\"` → spawn via `systemd-run --user --scope`; await exit code to detect launch failures; add marker file lifecycle; add `sanitizeSystemdUnitName()` |\n| `update-managed-service-handoff.test.ts` | 3 new tests: systemd `--scope` spawn path with env assertions, ENOENT detection, non-zero exit detection; enhanced mock with `mockChild()` helper |\n| `systemd-unit.ts` | Add `ExecStartPre` marker guard, `RestartPreventExitStatus=80`; keep `KillMode=control-group` with updated comment |\n| `systemd-unit.test.ts` | Updated KillMode assertion to verify `control-group` |\n\n## Tests\n\n```\n$ npx vitest run --project gateway-methods src/gateway/server-methods/update-managed-service-handoff.test.ts\n ✓ gateway-methods (8 tests) 632ms\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n\n$ npx vitest run --project unit-fast src/daemon/systemd-unit.test.ts\n ✓ unit-fast (4 tests) 2ms\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: systemd `KillMode=control-group` kills detached update handoff helper on gateway restart, preventing self-update.\n- **Real environment tested**: OrbStack Linux VM (Ubuntu 22.04 Jammy, kernel 6.19.13-orbstack, aarch64) with full user-level systemd and `loginctl enable-linger`. Node.js v24.15.0.\n\n### Live systemd proof: `--scope` escapes cgroup, helper survives service restart\n\nCreated a systemd user service with `KillMode=control-group` (matching OpenClaw's generated unit at `src/daemon/systemd-unit.ts:86`):\n\n```ini\n[Service]\nType=simple\nExecStart=/tmp/handoff-test/gateway-sim.sh\nKillMode=control-group\nRestart=no\n```\n\n**Test A: WITH `systemd-run --user --scope` (this PR)**\n\n```\n=== Gateway running ===\n     Active: active (running) since Wed 2026-05-20 20:08:58 CST\n   Main PID: 2797 (gateway-sim.sh)\n     CGroup: /user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway-test.service\n\n=== Helper started (in separate scope unit, sleeping 8s) ===\nHelper PID=2799 started in scope at Wed May 20 08:08:58 PM CST 2026\nHelper: sleeping 8s while gateway lives...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:00 ===\nGateway service stopped\n\n=== Immediately after kill ===\nHelper still running (no sentinel yet — helper still working)\n\n=== After 10s wait (helper finished at 20:09:06) ===\nHelper: still alive after 8s! Gateway should be dead by now\nHelper: writing sentinel at Wed May 20 08:09:06 PM CST 2026\nSentinel: update-complete\n```\n\n**Result**: Helper survived gateway service kill and completed work ✅\n\n**Test B: WITHOUT `systemd-run --scope` (current main behavior)**\n\nSame setup but using plain `bash &` with `disown` (simulating current detached spawn):\n\n```\n=== Helper started (no scope, sleeping 8s) ===\nHelper PID=2844 (NO SCOPE) started at Wed May 20 08:09:44 PM CST 2026\nHelper: sleeping 8s...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:46 ===\n\n=== After 10s wait ===\nHelper log: stopped at \"sleeping 8s...\" — no further output\nSentinel: FAILED: helper was KILLED by KillMode=control-group!\n```\n\n**Result**: Helper was killed when gateway service stopped ❌\n\n### Comparison\n\n| Scenario | Helper survives service stop? | Sentinel written? |\n|----------|------------------------------|-------------------|\n| `systemd-run --user --scope` (this PR) | ✅ Yes — ran in separate scope unit | ✅ `update-complete` |\n| Plain detached child (current main) | ❌ No — killed by `KillMode=control-group` | ❌ Never created |\n\n### Security: env via spawn(), not argv\n\n```typescript\n// env passed to spawn() for systemd-run — not in command-line args\nchild = spawn(\"systemd-run\", [...], { cwd: params.root, env, detached: true, stdio: \"ignore\" });\n```\n\nTest coverage verifies explicitly:\n```typescript\nexpect(options.env).toBeDefined();\nexpect(args).not.toContain(\"--setenv\");\n```\n\n### What was not tested\n\n- Full end-to-end `openclaw update` flow (requires published package version delta and npm registry)\n- Live `ExecStartPre` marker file guard (defense-in-depth only, verified by code inspection)\n- `--collect` garbage collection timing (non-functional, only prevents stale unit name conflicts)\n\nCloses #84068\n",
-        "branch": "fix/systemd-update-handoff-84068",
-        "head_sha": "60356e95a51feb0cfc763a2522beae9e70900a26",
-        "author": "jerry-xin",
-        "labels": [
-          "gateway",
-          "cli",
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/cli/gateway-cli/run-loop.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/systemd-unit.test.ts",
-            "additions": 4,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/systemd-unit.ts",
-            "additions": 7,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update-managed-service-handoff.test.ts",
-            "additions": 164,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update-managed-service-handoff.ts",
-            "additions": 117,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/process-respawn.test.ts",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/process-respawn.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84151",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84151.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "counts": {
-            "FAILURE": 3,
-            "SKIPPED": 22,
-            "SUCCESS": 70,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ]
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84151:4495346722:2026-05-20T06:40:23Z:re_review",
-      "comment_id": "4495346722",
-      "comment_version_key": "4495346722:2026-05-20T06:40:23Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4495346722",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84151,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T06:40:23Z",
-      "comment_updated_at": "2026-05-20T06:40:23Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(daemon): escape systemd cgroup for update handoff via systemd-run --scope",
-        "body": "## Summary\n\nOn systemd-supervised installs, clicking \"Update now\" silently fails: the update handoff helper is created but immediately killed by systemd's `KillMode=control-group` when the gateway unit restarts. The helper never executes, the version stays unchanged, and the UI shows \"Update skipped: managed-service-handoff-started.\"\n\nThis PR detects systemd supervision and launches the handoff helper via `systemd-run --user --scope` to escape the gateway's cgroup. Non-systemd supervisors (launchd, etc.) continue using the existing detached-child path.\n\n## Root cause\n\nsystemd's `KillMode=control-group` (the default) kills all processes in the service's cgroup on restart — including detached child processes. The handoff helper, despite being `unref()`'d and spawned with `detached: true`, stays in the same cgroup and is terminated before it can run `npm install`.\n\n## Fix\n\n```\nsystemd-run --user --scope --unit openclaw-update-<handoffId> --collect -- node handoff.cjs handoff.json\n```\n\nKey design choices:\n\n**`--scope` not `--service`**: `--scope` inherits the caller's environment (profile, state dir, config, PATH, proxy, package manager discovery all preserved). `--service` runs in a clean systemd environment and would lose all service env vars.\n\n**`KillMode=control-group` preserved**: The scoped update helper escapes via `systemd-run --scope` into its own cgroup, so `KillMode=control-group` safely stops the gateway and all its child workers without affecting the handoff. No change to existing shutdown semantics.\n\n**Launch failure detection**: After spawning `systemd-run`, the code awaits its exit code with a 5s timeout. If systemd-run exits non-zero (user session unavailable, D-Bus down, etc.), an error is thrown before reporting \"handoff started\" — preventing the gateway from exiting 80 and leaving the service stale.\n\n**No secret exposure via argv**: The `env` object is passed via `spawn()` option — identical to the existing non-systemd path. No `--setenv=KEY=*** args are used. Secrets stay in `/proc/PID/environ` (restricted to same UID), not in `/proc/PID/cmdline` (world-readable).\n\nAdditional hardening:\n- `sanitizeSystemdUnitName()` strips non-`[a-zA-Z0-9:._-]` chars from `handoffId`\n- `/tmp/openclaw-update-in-progress` marker file for `ExecStartPre` defense-in-depth guard\n- `--collect` flag ensures scope units are garbage-collected after exit\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `update-managed-service-handoff.ts` | Detect `supervisor === \"systemd\"` → spawn via `systemd-run --user --scope`; await exit code to detect launch failures; add marker file lifecycle; add `sanitizeSystemdUnitName()` |\n| `update-managed-service-handoff.test.ts` | 3 new tests: systemd `--scope` spawn path with env assertions, ENOENT detection, non-zero exit detection; enhanced mock with `mockChild()` helper |\n| `systemd-unit.ts` | Add `ExecStartPre` marker guard, `RestartPreventExitStatus=80`; keep `KillMode=control-group` with updated comment |\n| `systemd-unit.test.ts` | Updated KillMode assertion to verify `control-group` |\n\n## Tests\n\n```\n$ npx vitest run --project gateway-methods src/gateway/server-methods/update-managed-service-handoff.test.ts\n ✓ gateway-methods (8 tests) 632ms\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n\n$ npx vitest run --project unit-fast src/daemon/systemd-unit.test.ts\n ✓ unit-fast (4 tests) 2ms\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: systemd `KillMode=control-group` kills detached update handoff helper on gateway restart, preventing self-update.\n- **Real environment tested**: OrbStack Linux VM (Ubuntu 22.04 Jammy, kernel 6.19.13-orbstack, aarch64) with full user-level systemd and `loginctl enable-linger`. Node.js v24.15.0.\n\n### Live systemd proof: `--scope` escapes cgroup, helper survives service restart\n\nCreated a systemd user service with `KillMode=control-group` (matching OpenClaw's generated unit at `src/daemon/systemd-unit.ts:86`):\n\n```ini\n[Service]\nType=simple\nExecStart=/tmp/handoff-test/gateway-sim.sh\nKillMode=control-group\nRestart=no\n```\n\n**Test A: WITH `systemd-run --user --scope` (this PR)**\n\n```\n=== Gateway running ===\n     Active: active (running) since Wed 2026-05-20 20:08:58 CST\n   Main PID: 2797 (gateway-sim.sh)\n     CGroup: /user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway-test.service\n\n=== Helper started (in separate scope unit, sleeping 8s) ===\nHelper PID=2799 started in scope at Wed May 20 08:08:58 PM CST 2026\nHelper: sleeping 8s while gateway lives...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:00 ===\nGateway service stopped\n\n=== Immediately after kill ===\nHelper still running (no sentinel yet — helper still working)\n\n=== After 10s wait (helper finished at 20:09:06) ===\nHelper: still alive after 8s! Gateway should be dead by now\nHelper: writing sentinel at Wed May 20 08:09:06 PM CST 2026\nSentinel: update-complete\n```\n\n**Result**: Helper survived gateway service kill and completed work ✅\n\n**Test B: WITHOUT `systemd-run --scope` (current main behavior)**\n\nSame setup but using plain `bash &` with `disown` (simulating current detached spawn):\n\n```\n=== Helper started (no scope, sleeping 8s) ===\nHelper PID=2844 (NO SCOPE) started at Wed May 20 08:09:44 PM CST 2026\nHelper: sleeping 8s...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:46 ===\n\n=== After 10s wait ===\nHelper log: stopped at \"sleeping 8s...\" — no further output\nSentinel: FAILED: helper was KILLED by KillMode=control-group!\n```\n\n**Result**: Helper was killed when gateway service stopped ❌\n\n### Comparison\n\n| Scenario | Helper survives service stop? | Sentinel written? |\n|----------|------------------------------|-------------------|\n| `systemd-run --user --scope` (this PR) | ✅ Yes — ran in separate scope unit | ✅ `update-complete` |\n| Plain detached child (current main) | ❌ No — killed by `KillMode=control-group` | ❌ Never created |\n\n### Security: env via spawn(), not argv\n\n```typescript\n// env passed to spawn() for systemd-run — not in command-line args\nchild = spawn(\"systemd-run\", [...], { cwd: params.root, env, detached: true, stdio: \"ignore\" });\n```\n\nTest coverage verifies explicitly:\n```typescript\nexpect(options.env).toBeDefined();\nexpect(args).not.toContain(\"--setenv\");\n```\n\n### What was not tested\n\n- Full end-to-end `openclaw update` flow (requires published package version delta and npm registry)\n- Live `ExecStartPre` marker file guard (defense-in-depth only, verified by code inspection)\n- `--collect` garbage collection timing (non-functional, only prevents stale unit name conflicts)\n\nCloses #84068\n",
-        "branch": "fix/systemd-update-handoff-84068",
-        "head_sha": "60356e95a51feb0cfc763a2522beae9e70900a26",
-        "author": "jerry-xin",
-        "labels": [
-          "gateway",
-          "cli",
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/cli/gateway-cli/run-loop.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/systemd-unit.test.ts",
-            "additions": 4,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/systemd-unit.ts",
-            "additions": 7,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update-managed-service-handoff.test.ts",
-            "additions": 164,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update-managed-service-handoff.ts",
-            "additions": 117,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/process-respawn.test.ts",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/process-respawn.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84151",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84151.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "counts": {
-            "FAILURE": 3,
-            "SKIPPED": 22,
-            "SUCCESS": 70,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ]
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84151:4494610652:2026-05-20T04:48:21Z:re_review",
-      "comment_id": "4494610652",
-      "comment_version_key": "4494610652:2026-05-20T04:48:21Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4494610652",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84151,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T04:48:21Z",
-      "comment_updated_at": "2026-05-20T04:48:21Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(daemon): escape systemd cgroup for update handoff via systemd-run --scope",
-        "body": "## Summary\n\nOn systemd-supervised installs, clicking \"Update now\" silently fails: the update handoff helper is created but immediately killed by systemd's `KillMode=control-group` when the gateway unit restarts. The helper never executes, the version stays unchanged, and the UI shows \"Update skipped: managed-service-handoff-started.\"\n\nThis PR detects systemd supervision and launches the handoff helper via `systemd-run --user --scope` to escape the gateway's cgroup. Non-systemd supervisors (launchd, etc.) continue using the existing detached-child path.\n\n## Root cause\n\nsystemd's `KillMode=control-group` (the default) kills all processes in the service's cgroup on restart — including detached child processes. The handoff helper, despite being `unref()`'d and spawned with `detached: true`, stays in the same cgroup and is terminated before it can run `npm install`.\n\n## Fix\n\n```\nsystemd-run --user --scope --unit openclaw-update-<handoffId> --collect -- node handoff.cjs handoff.json\n```\n\nKey design choices:\n\n**`--scope` not `--service`**: `--scope` inherits the caller's environment (profile, state dir, config, PATH, proxy, package manager discovery all preserved). `--service` runs in a clean systemd environment and would lose all service env vars.\n\n**`KillMode=control-group` preserved**: The scoped update helper escapes via `systemd-run --scope` into its own cgroup, so `KillMode=control-group` safely stops the gateway and all its child workers without affecting the handoff. No change to existing shutdown semantics.\n\n**Launch failure detection**: After spawning `systemd-run`, the code awaits its exit code with a 5s timeout. If systemd-run exits non-zero (user session unavailable, D-Bus down, etc.), an error is thrown before reporting \"handoff started\" — preventing the gateway from exiting 80 and leaving the service stale.\n\n**No secret exposure via argv**: The `env` object is passed via `spawn()` option — identical to the existing non-systemd path. No `--setenv=KEY=*** args are used. Secrets stay in `/proc/PID/environ` (restricted to same UID), not in `/proc/PID/cmdline` (world-readable).\n\nAdditional hardening:\n- `sanitizeSystemdUnitName()` strips non-`[a-zA-Z0-9:._-]` chars from `handoffId`\n- `/tmp/openclaw-update-in-progress` marker file for `ExecStartPre` defense-in-depth guard\n- `--collect` flag ensures scope units are garbage-collected after exit\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `update-managed-service-handoff.ts` | Detect `supervisor === \"systemd\"` → spawn via `systemd-run --user --scope`; await exit code to detect launch failures; add marker file lifecycle; add `sanitizeSystemdUnitName()` |\n| `update-managed-service-handoff.test.ts` | 3 new tests: systemd `--scope` spawn path with env assertions, ENOENT detection, non-zero exit detection; enhanced mock with `mockChild()` helper |\n| `systemd-unit.ts` | Add `ExecStartPre` marker guard, `RestartPreventExitStatus=80`; keep `KillMode=control-group` with updated comment |\n| `systemd-unit.test.ts` | Updated KillMode assertion to verify `control-group` |\n\n## Tests\n\n```\n$ npx vitest run --project gateway-methods src/gateway/server-methods/update-managed-service-handoff.test.ts\n ✓ gateway-methods (8 tests) 632ms\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n\n$ npx vitest run --project unit-fast src/daemon/systemd-unit.test.ts\n ✓ unit-fast (4 tests) 2ms\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: systemd `KillMode=control-group` kills detached update handoff helper on gateway restart, preventing self-update.\n- **Real environment tested**: OrbStack Linux VM (Ubuntu 22.04 Jammy, kernel 6.19.13-orbstack, aarch64) with full user-level systemd and `loginctl enable-linger`. Node.js v24.15.0.\n\n### Live systemd proof: `--scope` escapes cgroup, helper survives service restart\n\nCreated a systemd user service with `KillMode=control-group` (matching OpenClaw's generated unit at `src/daemon/systemd-unit.ts:86`):\n\n```ini\n[Service]\nType=simple\nExecStart=/tmp/handoff-test/gateway-sim.sh\nKillMode=control-group\nRestart=no\n```\n\n**Test A: WITH `systemd-run --user --scope` (this PR)**\n\n```\n=== Gateway running ===\n     Active: active (running) since Wed 2026-05-20 20:08:58 CST\n   Main PID: 2797 (gateway-sim.sh)\n     CGroup: /user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway-test.service\n\n=== Helper started (in separate scope unit, sleeping 8s) ===\nHelper PID=2799 started in scope at Wed May 20 08:08:58 PM CST 2026\nHelper: sleeping 8s while gateway lives...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:00 ===\nGateway service stopped\n\n=== Immediately after kill ===\nHelper still running (no sentinel yet — helper still working)\n\n=== After 10s wait (helper finished at 20:09:06) ===\nHelper: still alive after 8s! Gateway should be dead by now\nHelper: writing sentinel at Wed May 20 08:09:06 PM CST 2026\nSentinel: update-complete\n```\n\n**Result**: Helper survived gateway service kill and completed work ✅\n\n**Test B: WITHOUT `systemd-run --scope` (current main behavior)**\n\nSame setup but using plain `bash &` with `disown` (simulating current detached spawn):\n\n```\n=== Helper started (no scope, sleeping 8s) ===\nHelper PID=2844 (NO SCOPE) started at Wed May 20 08:09:44 PM CST 2026\nHelper: sleeping 8s...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:46 ===\n\n=== After 10s wait ===\nHelper log: stopped at \"sleeping 8s...\" — no further output\nSentinel: FAILED: helper was KILLED by KillMode=control-group!\n```\n\n**Result**: Helper was killed when gateway service stopped ❌\n\n### Comparison\n\n| Scenario | Helper survives service stop? | Sentinel written? |\n|----------|------------------------------|-------------------|\n| `systemd-run --user --scope` (this PR) | ✅ Yes — ran in separate scope unit | ✅ `update-complete` |\n| Plain detached child (current main) | ❌ No — killed by `KillMode=control-group` | ❌ Never created |\n\n### Security: env via spawn(), not argv\n\n```typescript\n// env passed to spawn() for systemd-run — not in command-line args\nchild = spawn(\"systemd-run\", [...], { cwd: params.root, env, detached: true, stdio: \"ignore\" });\n```\n\nTest coverage verifies explicitly:\n```typescript\nexpect(options.env).toBeDefined();\nexpect(args).not.toContain(\"--setenv\");\n```\n\n### What was not tested\n\n- Full end-to-end `openclaw update` flow (requires published package version delta and npm registry)\n- Live `ExecStartPre` marker file guard (defense-in-depth only, verified by code inspection)\n- `--collect` garbage collection timing (non-functional, only prevents stale unit name conflicts)\n\nCloses #84068\n",
-        "branch": "fix/systemd-update-handoff-84068",
-        "head_sha": "60356e95a51feb0cfc763a2522beae9e70900a26",
-        "author": "jerry-xin",
-        "labels": [
-          "gateway",
-          "cli",
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/cli/gateway-cli/run-loop.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/systemd-unit.test.ts",
-            "additions": 4,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/systemd-unit.ts",
-            "additions": 7,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update-managed-service-handoff.test.ts",
-            "additions": 164,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update-managed-service-handoff.ts",
-            "additions": 117,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/process-respawn.test.ts",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/process-respawn.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84151",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84151.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "counts": {
-            "FAILURE": 3,
-            "SKIPPED": 22,
-            "SUCCESS": 70,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ]
+          "terminalBlockers": []
         }
       },
       "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 7321,
+    "total_ms": 3019,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 355
+        "ms": 317
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1628
+        "ms": 877
       },
       {
         "name": "classify_commands",
-        "ms": 5
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 5303
+        "ms": 1809
       },
       {
         "name": "append_ledger",
-        "ms": 2
+        "ms": 0
       }
     ]
   }
