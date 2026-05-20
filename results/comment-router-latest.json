@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-20T02:13:08.407Z",
+  "generated_at": "2026-05-20T02:13:06.547Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-19T23:13:06.609Z",
+  "since": "2026-05-19T23:13:04.576Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    84151
+    84013
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:84151:4488372170:2026-05-20T02:12:56Z:clawsweeper_auto_repair",
-      "comment_id": "4488372170",
-      "comment_version_key": "4488372170:2026-05-20T02:12:56Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4488372170",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:84013:4484968401:2026-05-20T02:12:44Z:clawsweeper_auto_repair",
+      "comment_id": "4484968401",
+      "comment_version_key": "4484968401:2026-05-20T02:12:44Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84013#issuecomment-4484968401",
       "repo": "openclaw/openclaw",
-      "issue_number": 84151,
+      "issue_number": 84013,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-19T13:45:02Z",
-      "comment_updated_at": "2026-05-20T02:12:56Z",
+      "comment_created_at": "2026-05-19T06:21:44Z",
+      "comment_updated_at": "2026-05-20T02:12:44Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -51,54 +51,40 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=66fc093549c4c6761aa08db5fe8c2a578c8e2072)",
-      "review_summary": "This PR passes the detected gateway supervisor into the managed-service update handoff and uses `systemd-run --user` for systemd-supervised handoff helpers, with mocked tests for success and failure paths.\n\nReproducibility: yes. for source-level reproduction: current main starts a detached helper inside a documented `KillMode=control-group` systemd unit, and the linked report includes concrete Linux/systemd symptoms with missing `handoff.log`. I did not run a live systemd update in this read-only review.",
-      "review_followup": "Manual review and contributor action are needed because automation cannot supply the missing real systemd proof, and the remaining transient-unit contract changes affect upgrade behavior.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=cafaa947e4dc56997f322c45a0093d7ac3da9a2c)",
+      "review_summary": "The PR adds parent-side liveness tracking and a watchdog restart path to isolated Telegram polling ingress, plus isolated-mode stall, healthy-path, and custom-threshold tests.\n\nReproducibility: yes. by source inspection: current main enables isolated ingress by default and passes pollingStallThresholdMs into TelegramPollingSession, while only the non-isolated polling cycle calls detectStall with that threshold.",
+      "review_followup": "Needs contributor real behavior proof plus maintainer availability-risk review; do not queue automated repair while the external proof gate is missing.",
       "freeform_prompt": null,
-      "expected_head_sha": "66fc093549c4c6761aa08db5fe8c2a578c8e2072",
+      "expected_head_sha": "cafaa947e4dc56997f322c45a0093d7ac3da9a2c",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(gateway): escape systemd cgroup for update handoff helper",
-        "body": "## Summary\n\nThe update button does nothing on systemd-supervised installs because the handoff helper is killed by `KillMode=control-group` before it can execute.\n\n## Root Cause\n\n`update-managed-service-handoff.ts:324` spawns the helper with `{ detached: true }`, which creates a new process group but does not escape the systemd unit's cgroup. When the gateway exits for restart, systemd kills all processes in the cgroup — including the helper.\n\n## Fix\n\nWhen the supervisor is `systemd`, spawn the helper via `systemd-run --user --scope` to place it in a transient scope unit outside the gateway's cgroup. Non-systemd paths (launchd, Windows, unsupervised) are unchanged. `KillMode=control-group` is intentionally preserved for normal child process cleanup.\n\nIf `systemd-run` fails (ENOENT, no user bus), the handoff throws immediately rather than falling back to a doomed detached spawn.\n\n## Tests\n\n3 new tests: systemd path uses `systemd-run`, non-systemd uses plain detached spawn, `systemd-run` failure throws. All existing update tests pass.\n\nFixes #84068",
-        "branch": "fix/systemd-update-handoff-84068",
-        "head_sha": "66fc093549c4c6761aa08db5fe8c2a578c8e2072",
+        "title": "fix(telegram): honor pollingStallThresholdMs in isolated ingress mode",
+        "body": "## Summary\n\nThe configured `pollingStallThresholdMs` was only consulted in the non-isolated polling cycle (`#runPollingCycle`). The isolated ingress path — which has been the default since 2026.5.12 — had no watchdog, so a wedged worker would never trigger a restart regardless of the configured threshold.\n\n## Root Cause\n\n`TelegramPollingSession` stores `#stallThresholdMs` at construction (line 234) but only references it at line 903 inside `#runPollingCycle`. The `#runIsolatedIngressCycle` path (line 661) receives `poll-start`, `poll-success`, and `poll-error` messages from the worker but never feeds them to a liveness tracker or checks for staleness.\n\n## Fix\n\nAdd a parent-side `TelegramPollingLivenessTracker` to `#runIsolatedIngressCycle()` that:\n\n1. Feeds on existing worker `poll-start`/`poll-success`/`poll-error` messages\n2. Runs a `POLL_WATCHDOG_INTERVAL_MS` interval that calls `detectStall({ thresholdMs })`\n3. On stall: marks transport dirty, sets `restartRequested`, logs, and stops the worker\n4. Cleans up the watchdog in the `finally` block\n\nThis mirrors the existing stall detection in `#runPollingCycle` (lines 897–923) and reuses the same `TelegramPollingLivenessTracker` class and `POLL_WATCHDOG_INTERVAL_MS` constant.\n\n## Tests\n\n3 new tests in `polling-session.test.ts`:\n- Stall detection fires when worker sends no messages\n- Healthy polling does not trigger false restart\n- Custom `stallThresholdMs` value is honored in isolated mode\n\nAll 45 existing + new polling session tests pass.\n\nFixes #83950",
+        "branch": "fix/telegram-isolated-stall-watchdog-83950",
+        "head_sha": "cafaa947e4dc56997f322c45a0093d7ac3da9a2c",
         "author": "jerry-xin",
         "labels": [
-          "gateway",
+          "channel: telegram",
           "size: M",
           "triage: needs-real-behavior-proof",
           "P1",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
           "merge-risk: 🚨 availability",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/gateway/server-methods/update-managed-service-handoff.test.ts",
-            "additions": 147,
+            "path": "extensions/telegram/src/polling-session.test.ts",
+            "additions": 219,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server-methods/update-managed-service-handoff.ts",
-            "additions": 86,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update.ts",
-            "additions": 1,
+            "path": "extensions/telegram/src/polling-session.ts",
+            "additions": 18,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
@@ -106,30 +92,30 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84151",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84151.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84013",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84013.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 96,
+          "total": 90,
           "counts": {
             "FAILURE": 3,
-            "SUCCESS": 71,
+            "SUCCESS": 65,
             "SKIPPED": 21,
             "NEUTRAL": 1
           },
           "blockers": [
             "Real behavior proof:FAILURE",
             "check-lint:FAILURE",
-            "check-test-types:FAILURE"
+            "check-additional-extension-bundled:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
             "Real behavior proof:FAILURE",
             "check-lint:FAILURE",
-            "check-test-types:FAILURE"
+            "check-additional-extension-bundled:FAILURE"
           ]
         }
       },
@@ -138,15 +124,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2036,
+    "total_ms": 2324,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 368
+        "ms": 411
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1415
+        "ms": 1542
       },
       {
         "name": "classify_commands",
@@ -154,7 +140,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 226
+        "ms": 341
       },
       {
         "name": "append_ledger",
