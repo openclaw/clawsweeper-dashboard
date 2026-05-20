@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-20T04:50:12.354Z",
+  "generated_at": "2026-05-20T04:50:13.948Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-20T01:50:08.889Z",
+  "since": "2026-05-20T01:50:11.228Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    83695
+    58808
   ],
   "comment_ids": [
-    4494610892
+    4494611202
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,17 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:83695:4494610892:2026-05-20T04:48:25Z:re_review",
-      "comment_id": "4494610892",
-      "comment_version_key": "4494610892:2026-05-20T04:48:25Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83695#issuecomment-4494610892",
+      "idempotency_key": "comment-router:openclaw/openclaw:58808:4494611202:2026-05-20T04:48:28Z:re_review",
+      "comment_id": "4494611202",
+      "comment_version_key": "4494611202:2026-05-20T04:48:28Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/58808#issuecomment-4494611202",
       "repo": "openclaw/openclaw",
-      "issue_number": 83695,
+      "issue_number": 58808,
       "author": "Jerry-Xin",
       "author_id": 3401616,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T04:48:25Z",
-      "comment_updated_at": "2026-05-20T04:48:25Z",
+      "comment_created_at": "2026-05-20T04:48:28Z",
+      "comment_updated_at": "2026-05-20T04:48:28Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -65,15 +65,15 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-05-20T04:50:13.534Z",
+          "dispatched_at": "2026-05-20T04:50:15.089Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 83695
+          "item_number": 58808
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-05-20T04:50:14.650Z",
+          "commented_at": "2026-05-20T04:50:16.630Z",
           "response_comment_id": null,
           "response_comment_mode": "created"
         }
@@ -81,62 +81,46 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(infra): tolerate chmod EPERM on K8s fsGroup-mounted PVC",
-        "body": "## Summary\n\nFixes #83619\n\nOn Kubernetes with `fsGroup` in the pod security context, PVC-mounted files are owned by `root:<fsGroup-gid>`. The container user can read/write via group permissions but **cannot `chmod`** — that requires UID ownership or `CAP_FCHOWN`. Multiple code paths call `chmodSync()` without catching `EPERM`, causing every exec tool invocation and task/flow registry initialization to crash.\n\n## Changes\n\n### New: `src/infra/chmod.ts`\n\nIntroduces `tryChmodSync` — a best-effort chmod wrapper that:\n1. Attempts `chmodSync(target, mode)`\n2. On `EPERM`/`EACCES`/`EROFS`: verifies the path is still accessible via `accessSync`\n3. If accessible → silently continues (permissions are \"good enough\" via group bits)\n4. If not accessible → rethrows the original error\n5. Unexpected errors (`EINVAL`, etc.) always rethrow immediately\n\n### Fixed call sites (state-dir permission hardening)\n\n| File | Function |\n|------|----------|\n| `src/infra/exec-approvals.ts` | `ensureDir()` — chmod on approvals directory |\n| `src/tasks/task-registry.store.sqlite.ts` | `ensureTaskRegistryPermissions()` — dir + sidecar files |\n| `src/tasks/task-flow-registry.store.sqlite.ts` | `ensureFlowRegistryPermissions()` — dir + sidecar files |\n| `src/plugin-state/plugin-state-store.sqlite.ts` | `ensurePluginStatePermissions()` — dir + sidecar files |\n\n### Intentionally NOT changed\n\nSecurity-critical paths that require strict chmod + re-stat verification are left untouched:\n- `src/agents/harness/native-hook-relay.ts` — bridge dir owner-only permission gate (already rejects non-UID-owner via `stats.uid` check, so fsGroup scenario does not apply)\n- `src/commands/doctor-state-integrity.ts` — interactive repair operations that should fail loudly\n\n## Real behavior proof (Docker Linux runtime)\n\n- **Behavior or issue addressed**: `fs.chmodSync()` throws EPERM on K8s fsGroup-mounted PVC volumes, crashing gateway startup for exec-approvals, task state, flow state, and plugin-state SQLite files.\n- **Real environment tested**: Docker container (`node:24-slim`, Debian GNU/Linux 12 bookworm), Node.js `v24.15.0`. Simulated K8s fsGroup PVC: file owned by `root:1000`, user `node` (uid 1000).\n- **Failing proof before fix**:\n\n```\n$ docker run --rm node:24-slim bash -c '...'\n\nFile setup (simulating K8s fsGroup PVC mount):\n  Owner: root, Group: node(1000), Perms: 0660\n-rw-rw---- 1 root node 3 May 20 04:36 /data/openclaw-state/exec-approvals.json\n\n--- Test 1: chmod as non-root user (simulates K8s pod) ---\nchmod: changing permissions of '/data/openclaw-state/exec-approvals.json': Operation not permitted\nchmod FAILED with EPERM ← This is the bug trigger\n\n--- Test 4: Without fix - unhandled EPERM crashes the process ---\nCRASH: Unhandled EPERM - EPERM: operation not permitted, chmod '/data/openclaw-state/exec-approvals.json'\nWithout the fix, this error propagates and crashes gateway startup\nExit code: 1\n```\n\n- **Exact steps or command run after this patch**:\n\n```\n--- Test 2: file is still readable/writable despite chmod failure ---\n{}\nOK: read/write works\n\n--- Test 3: Node.js tryChmodSync behavior (tolerating EPERM) ---\nCalling tryChmodSync(\"/data/openclaw-state/exec-approvals.json\", 0o600):\nchmod EPERM tolerated (fsGroup mount) — file still accessible\nResult: false\nFile still readable: \"write-test\\n\"\n```\n\n- **Evidence after fix**: `tryChmodSync()` catches EPERM and returns `false` instead of throwing, allowing the gateway to start normally on K8s fsGroup PVC mounts.\n- **Observed result after fix**: The file remains fully readable and writable — only the permission change itself is blocked by the kernel. The fix correctly tolerates this by wrapping `chmodSync` in a try/catch that allows EPERM while still re-throwing other filesystem errors.\n- **What was not tested**: Real K8s cluster with fsGroup PVC was not used. The Docker test faithfully reproduces the kernel behavior (EPERM on chmod for non-owner files on ext4/xfs) by creating the same ownership pattern as K8s fsGroup: `root:GID` with non-root user in the same group.\n",
-        "branch": "fix/k8s-fsgroup-chmod-eperm",
-        "head_sha": "94665530f0c804ee479be439ee5363dd67021b4a",
+        "title": "feat: pass requesterSenderId and senderIsOwner to ChannelAgentToolFactory",
+        "body": "## Summary\n\nPass trusted sender context (`requesterSenderId` and `senderIsOwner`) to `ChannelAgentToolFactory`, enabling channel plugins to implement sender-aware access control in their agent tools.\n\n## Problem\n\n`listChannelAgentTools()` only passes `{ cfg }` to channel agent tool factories, while the immediately following `createOpenClawTools()` call in the same function receives the full sender context. This gap means channel-registered agent tools cannot distinguish between different senders.\n\n## Changes\n\n**3 files changed, +17 / -3**\n\n### `src/channels/plugins/types.core.ts`\n- Extended `ChannelAgentToolFactory` params type to include `requesterSenderId?: string | null` and `senderIsOwner?: boolean`\n\n### `src/agents/channel-tools.ts`\n- Updated `listChannelAgentTools` function signature to accept the new fields\n- These are already forwarded to the factory via `entry(params)`\n\n### `src/agents/pi-tools.ts`\n- Pass `options?.senderId` and `options?.senderIsOwner` from the existing `options` object into `listChannelAgentTools()`\n\n## Backward Compatibility\n\nFully backward compatible. Existing factories that only destructure `{ cfg }` will simply ignore the new optional fields. No changes required for any existing channel plugin.\n\n## Use Case\n\nThe DMWork channel plugin needs sender-aware agent tools where:\n- Any user can query their own DM history with the bot\n- Any user can query groups they are a member of\n- Only the bot owner can query other users' DM history\n\nWithout sender context in the factory, the plugin must choose between `ownerOnly: true` (too restrictive) or no access control (too permissive).\n\nCloses #58806\n\n## Real behavior proof (live runtime)\n\n- **Behavior or issue addressed**: `listChannelAgentTools` and `ChannelAgentToolFactory` do not receive `requesterSenderId` or `senderIsOwner`, preventing channel plugins from implementing sender-aware access control.\n- **Real environment tested**: Local OpenClaw checkout (fix branch), macOS arm64, Node.js `v24.10.0`.\n- **Failing proof before fix**: On main, the function signature is:\n\n```\nexport function listChannelAgentTools(params: { cfg?: OpenClawConfig }): ChannelAgentTool[]\n```\n\nNo sender context is forwarded — channel plugins cannot distinguish between owner and non-owner requests.\n\n- **Exact steps or command run after this patch**:\n\n```\n$ node /tmp/test-sender-id-live.mjs\n\n--- Fix: listChannelAgentTools signature (channel-tools.ts) ---\n  L99:  export function listChannelAgentTools(params: {\n  L100:   cfg?: OpenClawConfig;\n  L101:   requesterSenderId?: string | null;\n  L102:   senderIsOwner?: boolean;\n  L103: }): ChannelAgentTool[] {\n\n--- Fix: sender context forwarding in pi-tools.ts ---\n  L918:   requesterSenderId: options?.senderId,\n  L919:   senderIsOwner: options?.senderIsOwner,\n\n--- Git diff (channel-tools.ts) ---\n-export function listChannelAgentTools(params: { cfg?: OpenClawConfig }): ChannelAgentTool[] {\n+export function listChannelAgentTools(params: {\n+  cfg?: OpenClawConfig;\n+  requesterSenderId?: string | null;\n+  senderIsOwner?: boolean;\n+}): ChannelAgentTool[] {\n\n--- Source verification ---\n  pi-tools forwards requesterSenderId: true ✓\n  pi-tools forwards senderIsOwner: true ✓\n  channel-tools accepts requesterSenderId: true ✓\n  channel-tools accepts senderIsOwner: true ✓\n```\n\n```\n$ node scripts/run-vitest.mjs src/agents/pi-tools.create-openclaw-coding-tools.test.ts\n\nTest Files  1 passed (1)\n     Tests  20 passed (20)\n  Duration  221ms\n```\n\n- **Evidence after fix**: All 20 pi-tools tests pass. The sender fields are forwarded at 3 call sites in pi-tools.ts (L851-852, L918-919, L966-968) and accepted by channel-tools.ts.\n- **Observed result after fix**: Channel plugins like openclaw-channel-octo can now inspect `requesterSenderId` and `senderIsOwner` to implement per-sender tool access policies.\n- **What was not tested**: Live channel plugin (e.g., openclaw-channel-octo) consuming these fields for access control was not tested. The fix is validated at the API boundary level, confirming the fields are correctly forwarded from the session handler through pi-tools to channel-tools.\n",
+        "branch": "feat/channel-agent-tools-sender-context",
+        "head_sha": "0a0303ad842b161299399095fddf00d541ee4852",
         "author": "jerry-xin",
         "labels": [
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "P1",
+          "agents",
+          "size: XS",
+          "proof: supplied",
+          "P2",
           "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
           "merge-risk: 🚨 security-boundary",
-          "status: 📣 needs proof"
+          "status: 🛠️ actively grinding"
         ],
         "files": [
           {
-            "path": "src/infra/chmod.test.ts",
-            "additions": 109,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/chmod.ts",
-            "additions": 31,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/exec-approvals.ts",
-            "additions": 3,
-            "deletions": 6,
+            "path": "src/agents/channel-tools.ts",
+            "additions": 5,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/plugin-state/plugin-state-store.sqlite.ts",
-            "additions": 4,
-            "deletions": 3,
+            "path": "src/agents/pi-tools.ts",
+            "additions": 7,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/tasks/task-flow-registry.store.sqlite.ts",
-            "additions": 4,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tasks/task-registry.store.sqlite.ts",
-            "additions": 4,
-            "deletions": 3,
+            "path": "src/channels/plugins/types.core.ts",
+            "additions": 7,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83695",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83695.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-58808",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-58808.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
@@ -144,35 +128,28 @@
         "checks": {
           "total": 102,
           "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 71,
-            "SKIPPED": 29,
+            "SUCCESS": 74,
+            "SKIPPED": 27,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ]
+          "terminalBlockers": []
         }
       }
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 6540,
+    "total_ms": 6178,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 837
+        "ms": 586
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2613
+        "ms": 2120
       },
       {
         "name": "classify_commands",
@@ -180,11 +157,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3063
+        "ms": 3445
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 2
       }
     ]
   }
