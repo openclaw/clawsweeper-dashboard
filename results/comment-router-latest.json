@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-20T06:55:20.727Z",
+  "generated_at": "2026-05-20T06:55:46.053Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-20T03:55:17.702Z",
+  "since": "2026-05-20T03:55:42.982Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    69059
+    53329
   ],
-  "comment_ids": [
-    4357717368
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 7,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:69059:4357717368:2026-05-20T06:53:36Z:automerge",
-      "comment_id": "4357717368",
-      "comment_version_key": "4357717368:2026-05-20T06:53:36Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/69059#issuecomment-4357717368",
+      "idempotency_key": "comment-router:openclaw/openclaw:53329:4341198309:2026-05-20T06:55:38Z:automerge",
+      "comment_id": "4341198309",
+      "comment_version_key": "4341198309:2026-05-20T06:55:38Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/53329#issuecomment-4341198309",
       "repo": "openclaw/openclaw",
-      "issue_number": 69059,
+      "issue_number": 53329,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-01T03:55:47Z",
-      "comment_updated_at": "2026-05-20T06:53:36Z",
+      "comment_created_at": "2026-04-29T05:48:02Z",
+      "comment_updated_at": "2026-05-20T06:55:38Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "automerge",
@@ -54,8 +52,8 @@
       "trusted_bot_author": null,
       "automation_source": null,
       "repair_reason": null,
-      "review_summary": "The PR updates memory-host sqlite-vec loading to retry Windows bundled `.dll` paths without the suffix, adds focused tests, and records a changelog fix entry.\n\nReproducibility: yes. for source-level review: current main still has a Windows platform-variant path ending in `vec0.dll`, and the PR body includes Windows terminal before/after output for `openclaw memory index` and `openclaw doctor`. I did not run an independent Windows smoke in this read-only pass.",
-      "review_followup": "A focused automated repair can rebase or replace the branch and compose the suffixless retry with current main's platform-variant fallback.",
+      "review_summary": "This PR adds empty exec/bash and sessions_spawn validation, a consecutive tool-error circuit breaker with session steering/truncation recovery, and focused tests for agent tool handling plus Control UI next-run formatting.\n\nReproducibility: yes. at source level for the blocking review findings. PR head still runs a pre-hook command-only guard before effective params exist and still discards the async steering promise without a catch.",
+      "review_followup": "A focused automated repair can address the duplicate pre-hook guard and uncaught steering promise, while maintainers still decide the broader circuit-breaker policy.",
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
@@ -64,84 +62,170 @@
       "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix: retry sqlite-vec load without .dll suffix on Windows",
-        "body": "## Summary\n\nFixes #68892.\n\nOn Windows, `node:sqlite`'s `DatabaseSync.loadExtension()` may require the shared-library path **without** the platform suffix so SQLite can append it automatically — the same convention already used on Linux (`.so`) and macOS (`.dylib`). When the `sqlite-vec` package's bundled `load()` call fails on Windows and the auto-resolved extension path ends with `.dll`, the loader now retries by stripping the suffix before calling `db.loadExtension()` directly.\n\n### Root cause\n\n`sqlite-vec.load(db)` resolves the bundled `vec0.dll` path via `getLoadablePath()` and passes it to `db.loadExtension()`. On some Windows Node.js builds, `loadExtension('path/to/vec0.dll')` fails because SQLite tries to open `vec0.dll` as-is; passing `'path/to/vec0'` (no suffix) allows SQLite to append `.dll` itself, matching its normal extension-loading convention.\n\n### Change\n\nApplied to `packages/memory-host-sdk/src/host/sqlite-vec.ts`:\n\n```\n// Before — no fallback when sqliteVec.load(db) fails on Windows\nsqliteVec.load(params.db);\n\n// After — retry without .dll suffix on Windows if the first attempt fails;\n// return the suffixless path so subsequent reloads stay stable\ntry {\n  sqliteVec.load(params.db);\n} catch (firstErr) {\n  if (process.platform === \"win32\" && extensionPath.toLowerCase().endsWith(\".dll\")) {\n    try {\n      params.db.loadExtension(extensionPath.slice(0, -4));\n      loadedPath = suffixlessPath;           // persist for callers\n    } catch (retryErr) {\n      throw new Error(                       // chain both errors\n        `sqlite-vec: both load attempts failed…`, { cause: firstErr });\n    }\n  } else {\n    throw firstErr;\n  }\n}\n```\n\nUser-supplied `extensionPath` overrides are checked first (before importing `sqlite-vec`) and passed through unchanged — callers who already pin a working path are unaffected.\n\n## Test plan\n\n* On Windows with `sqlite-vec-windows-x64` installed: `npx openclaw memory index` succeeds and logs no `sqlite-vec unavailable` warning\n* On Windows: `openclaw doctor` shows vector search as available\n* On macOS / Linux: existing sqlite-vec behaviour unchanged (first load attempt succeeds, fallback never reached)\n* If a user-supplied `extensionPath` is set: it is used as-is with no suffix stripping\n\n## Real behavior proof\n\n**Behavior or issue addressed:** On Windows, `sqlite-vec` memory vector search failed with \"sqlite-vec unavailable\" because `DatabaseSync.loadExtension(\"path/vec0.dll\")` fails on some Node.js 22 Windows builds; SQLite requires the path without the `.dll` suffix so it can append the suffix itself.\n\n**Real environment tested:** Windows 11 22H2, Node.js 22.4.0 x64, `sqlite-vec-windows-x64` 0.1.9, `openclaw` gateway local install.\n\n**Exact steps or command run after fix:**\n\n```powershell\n# Start the gateway with memory indexing enabled\nopenclaw start\n\n# Trigger a memory index to exercise the sqlite-vec load path\nopenclaw memory index\n\n# Check that vector search is available in the doctor output\nopenclaw doctor\n```\n\n**Evidence after fix:**\n\nTerminal capture — before and after:\n\n```\n# --- before patch ---\nPS C:\\Users\\dev> openclaw memory index\n[memory] sqlite-vec unavailable: Cannot open library vec0.dll: The specified module could not be found.\n[memory] Falling back to full-text search only.\n\n# --- after patch ---\nPS C:\\Users\\dev> openclaw memory index\n[memory] sqlite-vec loaded: C:\\...\\sqlite-vec\\vec0\n[memory] Vector index built: 1420 chunks embedded.\n\nPS C:\\Users\\dev> openclaw doctor\n✔  Memory / vector search    sqlite-vec 0.1.9 loaded (C:\\...\\vec0)\n```\n\n**Observed result after fix:** `openclaw memory index` completes without the \"sqlite-vec unavailable\" warning, the vector index is built, and `openclaw doctor` reports vector search as available.\n\n**What was not tested:** ARM64 Windows; Node.js 20 on Windows (only 22 tested).",
-        "branch": "fix/sqlite-vec-windows-dll-load",
-        "head_sha": "5e8e95ec71834cac88b45152726078f1cafd35ec",
-        "author": "justincache",
+        "title": " fix: block empty exec commands + consecutive tool-error circuit breaker (plus minor UI test stability)",
+        "body": "\r\n**Summary**\r\n- Add a guard that blocks `exec`/`bash` tool calls when the `command` parameter is missing or blank, preventing empty-command execution loops.\r\n- Add a consecutive tool-error counter and a circuit-breaker callback in the embedded subscribe tool handler chain; trip after 3 consecutive tool errors.\r\n- Stabilize UI `formatNextRun()` weekday output across locales so tests don’t fail on non-English environments.\r\n\r\n**Motivation / Context**\r\n- Following `exec-loop-fix.md`, we observed cases where empty `exec` commands could lead to ineffective retry/loop behavior.\r\n- We implement two layers of protection:\r\n  1) pre-call validation to reject empty command invocations,\r\n  2) runtime circuit breaker to stop repeated tool failures and surface a deterministic failure signal.\r\n- Additionally, UI tests were flaky on systems whose default locale is not English (weekday formatting output differed).\r\n\r\n**Implementation Details**\r\n- **Layer 1 (pre-tool-call guard)**  \r\n  - Normalize tool name (`exec`/`bash`) and validate params.\r\n  - If `command` is missing/empty/whitespace-only, return `{ blocked: true, reason }` and log a warning, preventing the call from running.\r\n- **Layer 2 (consecutive-error circuit breaker)**  \r\n  - Introduce state tracking for consecutive tool errors and an `onConsecutiveToolError` callback.\r\n  - Increment on tool failures and trip after 3 consecutive errors; invoke the callback to stop/redirect the flow.\r\n- **UI test stability**  \r\n  - `formatNextRun()` now formats the weekday with a fixed locale (`en-US`) to make output deterministic across environments.\r\n\r\n**Key Files Changed**\r\n- `src/agents/pi-tools.before-tool-call.ts` (block empty exec/bash command)\r\n- `src/agents/pi-embedded-subscribe.handlers.types.ts` (error-state types)\r\n- `src/agents/pi-embedded-subscribe.types.ts` (callback type)\r\n- `src/agents/pi-embedded-subscribe.ts` (state initialization)\r\n- `src/agents/pi-embedded-subscribe.handlers.tools.ts` (counter + threshold logic)\r\n- `src/agents/pi-embedded-runner/run/attempt.ts` (runner integration)\r\n- `ui/src/ui/presenter.ts` (locale-stable weekday formatting)\r\n\r\n**Verification**\r\n- `pnpm check` ✅\r\n- `pnpm test` ✅\r\n- `pnpm build` ✅\r\n- Branch rebased onto latest `upstream/main` to keep the PR diff minimal and clean.\r\n\r\n**Backward Compatibility**\r\n- No behavior change for valid `exec`/`bash` calls.\r\n- Invalid calls with empty/missing `command` are now rejected early with an explicit reason (intentional).\r\n\r\n**Risk / Rollback**\r\n- Risk: any external workflow relying on empty `exec` calls (considered invalid input) will now be blocked.\r\n- Rollback: revert the pre-call guard and circuit-breaker additions; UI locale stabilization can be reverted independently.\r\n\r\n**Checklist**\r\n- [x] Focused PR scope (exec safety + error circuit breaker; UI is test-stability)\r\n- [x] Up-to-date with upstream main\r\n- [x] check/test/build passing\r\n- [x] No secrets added\r\n\r\nbefore：\r\n![image](https://github.com/user-attachments/assets/d2e59add-25b3-473d-8ca1-4f7a5f364987)\r\nafter：\r\n![image](https://github.com/user-attachments/assets/ebd9ba3e-20e6-41d9-9537-f0a68d07c270)\r\n\r\nAI-assisted PR 🤖\r\n\r\nDeveloped with Claude Code (Anthropic)\r\nFully tested locally: pnpm check ✅ pnpm test ✅ pnpm build ✅\r\nAuthor has reviewed and understands all code changes\r\n\r\n**PR Creation Link**\r\n- https://github.com/openclaw/openclaw/compare/main...wuchengfeng:fix/exec-empty-command-circuit-breaker-v2026.3.12?expand=1",
+        "branch": "fix/exec-empty-command-circuit-breaker-v2026.3.12",
+        "head_sha": "aa3c92a6ec618c254ef176e3f5b6693ca9c102e8",
+        "author": "wuchengfeng",
         "labels": [
-          "size: S",
-          "proof: supplied",
+          "app: web-ui",
+          "agents",
+          "size: XL",
+          "triage: needs-real-behavior-proof",
           "proof: sufficient",
-          "P2",
-          "rating: 🦪 silver shellfish",
+          "P1",
+          "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author"
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author",
+          "proof: 📸 screenshot"
         ],
         "files": [
           {
-            "path": "CHANGELOG.md",
+            "path": "src/agents/pi-embedded-runner/run.ts",
+            "additions": 56,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
+            "additions": 16,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-subscribe.handlers.tools.test.ts",
+            "additions": 793,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-subscribe.handlers.tools.ts",
+            "additions": 126,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-subscribe.handlers.types.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-subscribe.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-subscribe.types.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-tool-definition-adapter.test.ts",
+            "additions": 16,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-tool-handler-state.test-helpers.ts",
             "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "packages/memory-host-sdk/src/host/sqlite-vec.test.ts",
-            "additions": 80,
+            "path": "src/agents/pi-tools.before-tool-call.ts",
+            "additions": 105,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/vitest/vitest.ui.config.ts",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "packages/memory-host-sdk/src/host/sqlite-vec.ts",
-            "additions": 32,
-            "deletions": 2,
-            "changeType": "MODIFIED"
+            "path": "ui/src/ui/presenter.test.ts",
+            "additions": 28,
+            "deletions": 0,
+            "changeType": "ADDED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-69059",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-69059.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-53329",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-53329.md",
         "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 113,
+          "total": 106,
           "counts": {
-            "FAILURE": 3,
-            "SUCCESS": 83,
-            "SKIPPED": 26,
+            "FAILURE": 1,
+            "SUCCESS": 77,
+            "SKIPPED": 27,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE",
-            "check:FAILURE"
+            "Real behavior proof:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE",
-            "check:FAILURE"
+            "Real behavior proof:FAILURE"
           ]
         }
       },
       "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
+    },
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:53329:4345804429:2026-04-29T16:56:44Z:clawsweeper_auto_repair",
+      "comment_id": "4345804429",
+      "comment_version_key": "4345804429:2026-04-29T16:56:44Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/53329#issuecomment-4345804429",
+      "repo": "openclaw/openclaw",
+      "issue_number": 53329,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-04-29T16:56:44Z",
+      "comment_updated_at": "2026-04-29T16:56:44Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=fecddb1722cff5b07e666ba790f820fdc8b94299)",
+      "review_summary": "This PR adds pre-tool-call empty exec/bash and sessions_spawn validation, an embedded consecutive tool-error tracker with runner steering and truncation recovery, Control UI next-run formatting tests, and an oxlint ignore-pattern entry.",
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": "fecddb1722cff5b07e666ba790f820fdc8b94299",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3321,
+    "total_ms": 3425,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 644
+        "ms": 557
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2369
+        "ms": 2499
       },
       {
         "name": "classify_commands",
@@ -149,7 +233,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 296
+        "ms": 354
       },
       {
         "name": "append_ledger",
