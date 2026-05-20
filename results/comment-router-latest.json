@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-20T18:14:33.628Z",
+  "generated_at": "2026-05-20T18:15:14.113Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-20T15:14:31.492Z",
+  "since": "2026-05-20T15:15:11.896Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    83695
+    80056
   ],
   "comment_ids": [
-    4501269445
+    4501275177
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,17 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:83695:4501269445:2026-05-20T18:12:45Z:re_review",
-      "comment_id": "4501269445",
-      "comment_version_key": "4501269445:2026-05-20T18:12:45Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83695#issuecomment-4501269445",
+      "idempotency_key": "comment-router:openclaw/openclaw:80056:4501275177:2026-05-20T18:13:21Z:re_review",
+      "comment_id": "4501275177",
+      "comment_version_key": "4501275177:2026-05-20T18:13:21Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/80056#issuecomment-4501275177",
       "repo": "openclaw/openclaw",
-      "issue_number": 83695,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
+      "issue_number": 80056,
+      "author": "giodl73-repo",
+      "author_id": 235387111,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T18:12:45Z",
-      "comment_updated_at": "2026-05-20T18:12:45Z",
+      "comment_created_at": "2026-05-20T18:13:21Z",
+      "comment_updated_at": "2026-05-20T18:13:21Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -65,100 +65,155 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-05-20T18:14:34.474Z",
+          "dispatched_at": "2026-05-20T18:15:15.094Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 83695
+          "item_number": 80056
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-05-20T18:14:35.676Z",
+          "commented_at": "2026-05-20T18:15:16.428Z",
           "response_comment_id": null,
           "response_comment_mode": "created"
         }
       ],
-      "author_repository_permission": "read",
+      "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "fix(infra): tolerate chmod EPERM on K8s fsGroup-mounted PVC",
-        "body": "## Summary\n\nOn Kubernetes deployments with `fsGroup`-mounted PVCs, `chmod(dir, 0o700)` fails with EPERM because the state directory is owned by root (with group ownership set to the fsGroup GID). This crashes exec approvals, task registry, task-flow registry, and plugin-state initialization on startup.\n\nThis PR extracts a shared `tryChmodSync` helper that:\n1. Tries `chmodSync(target, mode)` as before\n2. On EPERM/EACCES/EROFS: verifies the process can actually access the path via `accessSync`\n3. If accessible → tolerates the failure (the fsGroup grants adequate permissions via group bits)\n4. If not accessible → rethrows the original error\n\n## Root cause\n\n```\nEPERM: operation not permitted, chmod '/home/openclaw/.openclaw'\n```\n\nK8s `fsGroup` volumes are owned by `root:<fsGroup>` with setgid bit. The container process runs as a non-root UID in the fsGroup, so it has full access via group membership but cannot `chmodSync` a root-owned directory.\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `src/infra/chmod.ts` | New `tryChmodSync` helper — chmod with EPERM/EACCES/EROFS tolerance |\n| `src/infra/chmod.test.ts` | 9 tests covering all error codes and access verification paths |\n| `src/infra/exec-approvals.ts` | Use `tryChmodSync` instead of raw `chmodSync` |\n| `src/tasks/task-registry.store.sqlite.ts` | Use `tryChmodSync` |\n| `src/tasks/task-flow-registry.store.sqlite.ts` | Use `tryChmodSync` |\n| `src/plugin-state/plugin-state-store.sqlite.ts` | Use `tryChmodSync` |\n\n## Tests\n\n```\n$ node scripts/run-vitest.mjs src/infra/chmod.test.ts\n ✓ infra  ../../src/infra/chmod.test.ts (12 tests) 16ms\n Test Files  1 passed (1)\n      Tests  12 passed (12)\n   Duration  152ms\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: `chmod(dir, 0o700)` throws EPERM on K8s fsGroup-mounted PVC, crashing exec approvals and state initialization. The helper tolerates EPERM when access is verified, and rejects only the genuinely dangerous case (unexpected other-WRITE permission).\n- **Real environment tested**: Local patched OpenClaw checkout at `bfadbe3e37`, macOS arm64, Node.js `v24.10.0`. Also reproduced on OrbStack Kubernetes v1.33.9.\n- **Failing proof before fix**: On upstream/main (`a002c416c7`), `chmodSync(dir, 0o700)` on a K8s fsGroup volume throws EPERM and crashes the gateway on startup. Test file `src/infra/chmod.test.ts` does not exist on upstream/main.\n\n### Permission boundary policy (updated in `bfadbe3e37`)\n\nK8s fsGroup volumes commonly set directories to mode `2775` (setgid + rwxrwxr-x). The helper now:\n- **Accepts** `2775` (other has read+execute but NOT write) ✅\n- **Accepts** `2755`, `2751`, etc. (other read/execute without write) ✅\n- **Rejects** `2777` or any mode with unexpected other-WRITE (`0o002`) ❌ — this signals a genuine security misconfiguration\n\nThis boundary aligns with the real K8s fsGroup behavior: volume plugins set read+execute on `other`, but never write.\n\n### Live K8s reproduction\n\nPod spec:\n```yaml\nsecurityContext:\n  runAsUser: 1000\n  runAsGroup: 1000\n  fsGroup: 1000\nvolumes:\n  - name: state\n    emptyDir: {}  # simulates fsGroup PVC\n```\n\nTerminal output from `kubectl exec`:\n```\n=== K8s fsGroup EPERM Reproduction ===\nNode: v24.15.0\nUser: uid=1000(node) gid=1000(node) groups=1000(node)\n\n--- State directory (fsGroup mount) ---\ndrwxrwsr-x 1 root node  0 May 20 07:00 .openclaw\n\nOwner: 0:1000\nMode: 0o2775\n\n--- Main branch: chmod(dir, 0o700) ---\nchmod FAILED: EPERM EPERM: operation not permitted, chmod '/home/openclaw/.openclaw'\n\n--- PR fix: tryChmodSync(dir, 0o700) ---\nchmod failed with EPERM - checking access...\naccessSync(R_OK|W_OK|X_OK) PASSED ✅\nactualOtherWrite=0, requestedOtherWrite=0 → tolerating\n→ tryChmodSync tolerates EPERM, gateway starts normally\n\n--- Verify: can create state files ---\nWrite+Read: ✅ {\"test\":true}\nCleanup: ✅\n```\n\n- **Exact steps or command run after this patch**:\n\n```text\nnode scripts/run-vitest.mjs src/infra/chmod.test.ts\n```\n\n- **Evidence after fix**:\n\n```text\n ✓ infra  ../../src/infra/chmod.test.ts (12 tests) 16ms\n\n Test Files  1 passed (1)\n      Tests  12 passed (12)\n   Duration  152ms\n```\n\n- **Observed result after fix**: All 12 chmod tests pass — EPERM tolerance with accessSync fallback, K8s fsGroup mode 2775 accepted, world-writable (other-WRITE) rejected, and normal chmod behavior preserved.\n- **What was not tested**: Full OpenClaw gateway startup inside a live K8s cluster. The chmod behavior is validated via mocked fs calls and real K8s `kubectl exec` reproduction.\n\nCloses #83619\n\n",
-        "branch": "fix/k8s-fsgroup-chmod-eperm",
-        "head_sha": "e9203731aec228028817ba36ee9715f6c161e45a",
-        "author": "jerry-xin",
+        "title": "Policy: add tool metadata conformance and runtime checks",
+        "body": "# Policy: add tool metadata conformance and runtime checks\n\n## Summary\n\nThis PR extends the bundled Policy plugin from channel conformance into governed tool metadata. It keeps policy as an authored conformance layer over existing OpenClaw surfaces: `policy.jsonc` states requirements, `TOOLS.md` is observed as evidence, doctor/policy checks report drift, and the optional runtime gate consumes the same evidence when explicitly enabled.\n\n- Adds `tools.requireMetadata` policy support for `risk`, `sensitivity`, and `owner`.\n- Observes `TOOLS.md` declarations as tool evidence, including source `oc://TOOLS.md/tools/<id>` references.\n- Adds doctor/policy findings for missing or unknown tool metadata.\n- Keeps `policy check` and `doctor --lint` read-only.\n- Adds opt-in `plugins.entries.policy.config.runtimeToolPolicy` enforcement through the existing trusted tool policy hook.\n- Persists structured plugin approval metadata through `plugin.approval.request` so policy hash, evidence hash, and target references survive the gateway approval boundary.\n\n## Quick Start\n\nEnable the bundled Policy plugin and author a policy requirement:\n\n```bash\nopenclaw plugins enable policy\n```\n\n```jsonc\n{\n  \"tools\": {\n    \"requireMetadata\": [\"risk\", \"sensitivity\", \"owner\"],\n  },\n}\n```\n\nA matching `TOOLS.md` declaration should carry the required metadata, for example:\n\n```md\n## deploy\nrisk: critical\nsensitivity: restricted\nowner: ops\n```\n\nRun policy-only checks during authoring:\n\n```bash\nopenclaw policy check\nopenclaw policy check --json\n```\n\nThe same findings are available through `openclaw doctor --lint` when the Policy plugin is enabled.\n\n## Configure Policy\n\nPolicy config remains under `plugins.entries.policy.config`:\n\n```jsonc\n{\n  \"plugins\": {\n    \"entries\": {\n      \"policy\": {\n        \"enabled\": true,\n        \"config\": {\n          \"enabled\": true,\n          \"path\": \"policy.jsonc\",\n          \"runtimeToolPolicy\": false,\n          \"workspaceRepairs\": false,\n          \"expectedHash\": \"sha256:...\",\n          \"expectedAttestationHash\": \"sha256:...\",\n        },\n      },\n    },\n  },\n}\n```\n\n`runtimeToolPolicy` is config-owned rather than policy-owned so deleting or breaking `policy.jsonc` cannot silently disable the runtime gate after the operator has opted in.\n\n## Accept Policy State\n\n`policy check --json` emits the stable audit tuple:\n\n```text\npolicy hash + evidence hash + findings hash + clean result -> attestation hash\n```\n\nThe tool evidence is part of the workspace evidence hash. A clean result can be accepted by recording `attestation.policy.hash` as `expectedHash` and `attestation.attestationHash` as `expectedAttestationHash`.\n\nWhen runtime tool policy requests approval, the approval metadata now preserves the same audit values separately from the human-readable approval message:\n\n```json\n{\n  \"policyHash\": \"sha256:...\",\n  \"evidenceHash\": \"sha256:...\",\n  \"attestationHash\": \"sha256:...\",\n  \"target\": \"oc://TOOLS.md/tools/deploy\"\n}\n```\n\n## Findings\n\nThis PR adds these policy findings:\n\n| Finding | Meaning |\n| --- | --- |\n| `policy/tools-missing-owner` | A governed tool declaration is missing owner metadata. |\n| `policy/tools-missing-risk-level` | A governed tool declaration is missing risk metadata. |\n| `policy/tools-unknown-risk-level` | A governed tool declaration uses an unknown risk value. |\n| `policy/tools-missing-sensitivity-token` | A governed tool declaration is missing sensitivity metadata. |\n| `policy/tools-unknown-sensitivity-token` | A governed tool declaration uses an unknown sensitivity value. |\n\nFindings identify both sides of the decision: `target` points to the observed `TOOLS.md` declaration and `requirement` points to the authored policy requirement.\n\n## Runtime Gate\n\n`doctor --lint` and `policy check` remain read-only. `doctor --fix` does not edit `TOOLS.md` in this PR.\n\nWhen `runtimeToolPolicy` is enabled, the Policy plugin registers a trusted tool policy. It:\n\n- blocks tool calls if the enabled policy artifact is missing, invalid, or hash-mismatched;\n- blocks governed tools whose required metadata is missing or invalid;\n- asks for approval for governed tools marked `risk: critical` or `IRREVERSIBLE_EXTERNAL`;\n- includes structured approval metadata with policy/evidence/attestation values and the target tool reference;\n- otherwise lets the normal tool call path continue.\n\nThis PR does not add new approval UI, supervisor protocol, or gateway protocol concepts beyond preserving plugin approval metadata already produced by the runtime policy.\n\n## Real Behavior Proof\n\nBehavior addressed: With the Policy base now merged through #80407, this PR adds tool metadata conformance on top of the bundled Policy plugin, including `TOOLS.md` evidence, five tool finding IDs, opt-in `runtimeToolPolicy` enforcement, and structured approval metadata persistence through `plugin.approval.request`.\n\nReal environment tested: WSL source checkout on current PR head `634956d85a93d64e4c65b6525ce5355bf3c6ed92`, compared against current `origin/main` `a13468320c63573917c185db278f3d4e13389a78` after #80407 merged.\n\nExact steps or command run after this patch:\n\n- `node scripts/run-vitest.mjs extensions/policy/src/runtime-tool-policy.test.ts extensions/policy/src/doctor/register.test.ts extensions/policy/src/cli.test.ts --reporter=dot` (3 files / 44 tests)\n- `node scripts/run-vitest.mjs src/gateway/server-methods/plugin-approval.test.ts src/flows/bundled-health-checks.test.ts --reporter=dot` (3 files / 63 tests)\n- `node scripts/run-vitest.mjs test/extension-import-boundaries.test.ts --reporter=dot` (1 file / 6 tests)\n- `node scripts/run-vitest.mjs extensions/oc-path/src/oc-path/tests/parse.test.ts extensions/oc-path/src/oc-path/tests/scenarios/h2-block-split.test.ts --reporter=dot` (2 files / 34 tests)\n- `node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.extensions.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/test-extensions-policy-oc-path-api.tsbuildinfo`\n- `git diff --check`\n- deterministic before/after source probe recorded in `before.json`, `after.json`, and `summary.txt` on the proof artifact branch\n\nEvidence after fix: Focused tests passed for policy CLI, policy doctor registration, runtime tool policy, bundled health check loading, plugin approval gateway handling, extension import boundaries, oc-path Markdown H2 parsing, extension type contracts, and whitespace checks. The refreshed artifact shows `origin/main` has the merged Policy plugin/channel base but no tool metadata checks, no runtime tool policy, and no approval metadata schema, while PR head has all five registered tool finding IDs, docs rows for all five, runtime missing/unknown metadata blocks, approval-path metadata tests, gateway approval metadata persistence/broadcast coverage, and multiline `TOOLS.md` metadata parsing.\n\nObserved result after fix: PR #80056 registers policy tool checks, records tool evidence with `oc://TOOLS.md/tools/<id>` targets, parses both inline and documented multiline metadata under `### <tool>` headings, emits tool metadata findings with target/requirement references, requests approval for multiline `risk: critical` declarations in runtime policy mode, and preserves policy approval metadata across `plugin.approval.request`. Policy now imports `parseMd` from `@openclaw/oc-path/api.js` for Markdown H2 block parsing and line offsets; policy still owns the tool metadata grammar.\n\nCurrent-head deterministic proof artifact:\n\n![Fresh current-head proof for policy tool metadata, runtime gate, multiline metadata, and approval metadata](https://raw.githubusercontent.com/giodl73-repo/openclaw/proof-artifacts/pr-80056-fresh/pr-80056/pr-80056-policy-tool-metadata-runtime-before-after-proof.png)\n\nSupporting artifact files:\n\n- https://raw.githubusercontent.com/giodl73-repo/openclaw/proof-artifacts/pr-80056-fresh/pr-80056/summary.txt\n- https://raw.githubusercontent.com/giodl73-repo/openclaw/proof-artifacts/pr-80056-fresh/pr-80056/before.json\n- https://raw.githubusercontent.com/giodl73-repo/openclaw/proof-artifacts/pr-80056-fresh/pr-80056/after.json\n\nWhat was not tested: no new approval UI, supervisor protocol, or gateway protocol UI surface; those remain intentionally out of scope for this PR. Full docs formatter currently reports an unrelated `docs/reference/templates/CLAUDE.md` formatting issue on this checkout; the policy docs table was formatted and the PR-specific docs finding is fixed.\n\n## Related\n\n- Channels-first policy conformance: https://github.com/openclaw/openclaw/pull/80407\n- Model, network, and MCP conformance examples: https://github.com/openclaw/openclaw/pull/80783\n- Runtime audit metadata and attestation enforcement: https://github.com/openclaw/openclaw/pull/81104\n\n<!-- policy-stack-links:start -->\n\n## Policy stack links\n\nThis PR is part of the Policy 1.0 proof stack. Final category branches added after the runtime-audit layer:\n\n- #81974 — Policy: add secrets auth provenance checks\n- #81981 — Policy: add gateway exposure checks\n\nFull stack reference:\n\n1. #80407 — Policy: add conformance system with channel checks\n2. #80056 — Policy: add tool metadata conformance and runtime checks\n3. #80783 — Policy: add model, network, and MCP conformance checks\n4. #81104 — Policy: add runtime audit metadata and attestation enforcement\n5. #81974 — Policy: add secrets auth provenance checks\n6. #81981 — Policy: add gateway exposure checks\n\n<!-- policy-stack-links:end -->\n",
+        "branch": "policy-doctor-consumer",
+        "head_sha": "634956d85a93d64e4c65b6525ce5355bf3c6ed92",
+        "author": "giodl73-repo",
         "labels": [
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P1",
+          "docs",
+          "app: web-ui",
+          "gateway",
+          "agents",
+          "maintainer",
+          "size: XL",
+          "proof: sufficient",
+          "extensions: oc-path",
+          "dependencies-changed",
+          "P2",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
           "merge-risk: 🚨 security-boundary",
           "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "status: ⏳ waiting on author",
+          "extensions: policy"
         ],
         "files": [
           {
-            "path": "src/infra/chmod.test.ts",
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/policy.md",
             "additions": 192,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/chmod.ts",
-            "additions": 52,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/exec-approvals.ts",
-            "additions": 3,
-            "deletions": 6,
+            "deletions": 33,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/plugin-state/plugin-state-store.sqlite.ts",
+            "path": "extensions/oc-path/package.json",
             "additions": 4,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tasks/task-flow-registry.store.sqlite.ts",
-            "additions": 4,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tasks/task-registry.store.sqlite.ts",
-            "additions": 4,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/message-tool.test.ts",
-            "additions": 36,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/message-tool.ts",
-            "additions": 23,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/chat.directive-tags.test.ts",
-            "additions": 24,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server-methods/chat.ts",
+            "path": "extensions/policy/index.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/policy/openclaw.plugin.json",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/policy/package.json",
             "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/infra/outbound/message-action-runner.ts",
+            "path": "extensions/policy/src/cli.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/policy/src/doctor/register.test.ts",
+            "additions": 193,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/policy/src/doctor/register.ts",
+            "additions": 289,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/policy/src/policy-state.ts",
+            "additions": 117,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/policy/src/runtime-tool-policy.test.ts",
+            "additions": 312,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/policy/src/runtime-tool-policy.ts",
+            "additions": 395,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "pnpm-lock.yaml",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-tools.before-tool-call.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/protocol/schema/plugin-approvals.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/plugin-approval.test.ts",
+            "additions": 41,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/plugin-approval.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/plugin-approvals.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/hook-types.ts",
             "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
@@ -167,8 +222,8 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83695",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83695.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-80056",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-80056.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
@@ -176,10 +231,10 @@
         "checks": {
           "total": 24,
           "counts": {
-            "FAILURE": 1,
-            "QUEUED": 10,
             "SUCCESS": 8,
-            "SKIPPED": 5
+            "QUEUED": 10,
+            "SKIPPED": 11,
+            "NEUTRAL": 1
           },
           "blockers": [
             "Real behavior proof:FAILURE",
@@ -206,15 +261,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4701,
+    "total_ms": 5238,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 549
+        "ms": 509
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1571
+        "ms": 1694
       },
       {
         "name": "classify_commands",
@@ -222,7 +277,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2553
+        "ms": 3009
       },
       {
         "name": "append_ledger",
