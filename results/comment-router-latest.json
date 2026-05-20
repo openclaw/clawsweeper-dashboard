@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-20T13:01:13.835Z",
+  "generated_at": "2026-05-20T13:02:35.795Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-20T10:01:10.251Z",
+  "since": "2026-05-20T10:02:30.434Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    84509
+    84458
   ],
   "comment_ids": [
-    4498632795
+    4498643907
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,17 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:84509:4498632795:2026-05-20T12:59:14Z:maintainer_approve_automerge",
-      "comment_id": "4498632795",
-      "comment_version_key": "4498632795:2026-05-20T12:59:14Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84509#issuecomment-4498632795",
+      "idempotency_key": "comment-router:openclaw/openclaw:84458:4498643907:2026-05-20T13:00:27Z:maintainer_approve_automerge",
+      "comment_id": "4498643907",
+      "comment_version_key": "4498643907:2026-05-20T13:00:27Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84458#issuecomment-4498643907",
       "repo": "openclaw/openclaw",
-      "issue_number": 84509,
+      "issue_number": 84458,
       "author": "Takhoffman",
       "author_id": 781889,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T12:59:14Z",
-      "comment_updated_at": "2026-05-20T12:59:14Z",
+      "comment_created_at": "2026-05-20T13:00:27Z",
+      "comment_updated_at": "2026-05-20T13:00:27Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "merge",
@@ -64,65 +64,83 @@
       "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "fix(acp): preserve pre-tool text in final_only delivery mode",
-        "body": "## Summary\n\nIn `final_only` delivery mode (used by Feishu, QQ Bot, and other channels that prefer a single consolidated reply), text output that precedes tool calls within the same turn is lost. Only the post-tool final response reaches the user.\n\n**Root cause**: In `acp-projector.ts`, the `onEvent` handler calls `flush(true)` + `resetTurnState()` on every `done` event, including intermediate ones (e.g. `stopReason=toolUse`). This prematurely delivers accumulated text and then clears the `finalOnlyOutputText` buffer. When the model outputs more text after tool execution, it arrives as a separate \"final\" delivery — and channels like Feishu that replace the previous card only show the last one.\n\n**Fix**: In `final_only` mode, intermediate `done` events now call `resetTurnState({ preserveAccumulated: true })`, which resets per-completion state (timers, dedup hashes, pipelines) but preserves all turn-scoped accumulated state:\n- `finalOnlyOutputText` and `pendingToolDeliveries` — the text/tool content being assembled\n- `emittedOutputChars` and `truncationNoticeEmitted` — output limit enforcement across the entire turn\n- `pendingHiddenBoundary` and `lastVisibleOutputTail` — hidden-boundary separator state for correct paragraph breaks after hidden tool calls\n\nThe turn-level `flush(true)` in `dispatch-acp.ts` delivers everything as one combined message after the entire turn completes.\n\nFixes #84486.\nAlso related to #84491.\n\n## Changes\n\n- `src/auto-reply/reply/acp-projector.ts` — Parameterized `resetTurnState()` with `preserveAccumulated` option; `final_only` + `done` now uses partial reset preserving all accumulated turn state\n- `src/auto-reply/reply/acp-projector.test.ts` — 5 new tests + 1 updated existing test\n\n## Tests\n\n```\n$ node scripts/run-vitest.mjs src/auto-reply/reply/acp-projector.test.ts\n ✓ auto-reply  ../../src/auto-reply/reply/acp-projector.test.ts (28 tests) 27ms\n Test Files  1 passed (1)\n       Tests  28 passed (28)\n\n$ node scripts/run-vitest.mjs src/auto-reply/reply/dispatch-acp.test.ts\n ✓ auto-reply  ../../src/auto-reply/reply/dispatch-acp.test.ts (50 tests) 34ms\n Test Files  1 passed (1)\n       Tests  50 passed (50)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: In `final_only` delivery mode, text output before tool calls within a multi-step agentic turn is lost because `flush(true)` + `resetTurnState()` fires on intermediate `done` events, prematurely delivering and then clearing the `finalOnlyOutputText` buffer. Additionally, `maxOutputChars` enforcement and hidden-boundary separators were reset per-completion instead of being enforced across the entire turn.\n\n- **Real environment tested**: Local patched OpenClaw checkout at `c8e921de4b`, macOS arm64, Node.js `v24.10.0`.\n\n- **Failing proof before fix**: Applied the new test assertions to unpatched `upstream/main` projector code. Four tests fail, confirming all three bugs:\n\n```\n ❯ supports deliveryMode=final_only by buffering all projected output until done\nAssertionError: expected [ { kind: 'tool', …(1) }, …(2) ] to strictly equal []\n    → On main, projector delivers text+tools immediately on intermediate \"done\"\n      instead of deferring to the turn-level flush.\n\n ❯ accumulates text across intermediate done events in final_only mode\nAssertionError: expected [ { kind: 'final', …(1) } ] to strictly equal []\n    → On main, \"Searching...\" is delivered as a premature \"final\" on the first\n      \"done\" event. Subsequent text becomes a second \"final\", and channels like\n      Feishu overwrite the first message.\n\n ❯ enforces maxOutputChars across intermediate done events\nAssertionError: expected 20 to be less than or equal to 20\n    → On main, emittedOutputChars resets to 0 on each intermediate \"done\", so\n      each completion gets a full maxOutputChars budget. A turn with N completions\n      can produce up to N × maxOutputChars of text.\n\n ❯ preserves hidden-boundary separator across intermediate done events\nAssertionError: expected \"Before tool.After tool.\" to match /Before tool\\.\\n\\nAfter tool\\./\n    → On main, pendingHiddenBoundary is cleared on intermediate \"done\", so the\n      paragraph separator between pre-tool text and post-tool text is lost.\n\n Test Files  1 failed (1)\n       Tests  4 failed | 24 passed (28)\n```\n\n- **Exact steps or command run after this patch**:\n\n```bash\ngit checkout fix/final-only-text-before-tools-84486\nnode scripts/run-vitest.mjs src/auto-reply/reply/acp-projector.test.ts\nnode scripts/run-vitest.mjs src/auto-reply/reply/dispatch-acp.test.ts\n```\n\n- **Evidence after fix**:\n\n```\n ✓ auto-reply  ../../src/auto-reply/reply/acp-projector.test.ts (28 tests) 27ms\n Test Files  1 passed (1)\n       Tests  28 passed (28)\n\n ✓ auto-reply  ../../src/auto-reply/reply/dispatch-acp.test.ts (50 tests) 34ms\n Test Files  1 passed (1)\n       Tests  50 passed (50)\n```\n\n- **Observed result after fix**: The projector correctly accumulates `finalOnlyOutputText` across intermediate `done` events without flushing. Output limit (`maxOutputChars`) is enforced across the entire turn. Hidden-boundary separators are correctly inserted between pre-tool and post-tool text segments. Only the explicit turn-level `flush(true)` call delivers the combined text as a single \"final\" message.\n\n- **What was not tested**: End-to-end verification with a live Feishu or QQ Bot channel was not performed (requires deployed instance with configured channel credentials). The fix is validated at the projector unit-test level, which directly exercises the buggy code paths. The `dispatch-acp.test.ts` regression suite (50 tests) confirms no side effects on other delivery modes.\n## Docker real behavior proof (v2) — pre-tool text preserved\n\n### Environment\n\n- **Docker image**: `node:24-bookworm-slim` (Node.js v24.15.0)\n- **Container ID**: `a1a700939bfc` running patched OpenClaw gateway at commit `d170b97957`\n- **Platform**: Docker on macOS arm64 (OrbStack)\n- **LLM model**: `claude-sonnet-4-6` via `mlamp-gateway` (Anthropic Messages API)\n- **ACP delivery mode**: `final_only` (default)\n\n### Setup\n\n```bash\ndocker run -d --name openclaw-test-84486 \\\n  -v /tmp/openclaw-analysis:/app \\\n  -v /tmp/openclaw-docker-test/openclaw.json:/root/.openclaw/openclaw.json \\\n  -p 18799:18799 \\\n  -e NODE_ENV=production \\\n  -e OPENCLAW_GATEWAY_PASSWORD=*** \\\n  node:24-bookworm-slim \\\n  node /app/openclaw.mjs gateway --bind lan --port 18799\n```\n\nGateway startup:\n```\n[gateway] http server listening (8 plugins: acpx, browser, canvas, ...)\n[gateway] ready\n```\n\n### Test: pre-tool text + tool call + post-tool text\n\nSystem prompt instructs the model to **always explain before using tools**:\n\n```bash\ncurl -s -H \"Authorization: Bearer ***\" \\\n  -H \"Content-Type: application/json\" \\\n  http://localhost:18799/v1/chat/completions \\\n  -d '{\n    \"model\": \"openclaw/test-final-only\",\n    \"messages\": [\n      {\"role\": \"system\", \"content\": \"IMPORTANT: You MUST always explain what you are about to do BEFORE calling any tool. First output a brief sentence explaining your plan, then call the tool, then report the result after the tool completes. Never go straight to tool use without explaining first.\"},\n      {\"role\": \"user\", \"content\": \"Run the shell command: echo proof_84486_pretool_text\"}\n    ],\n    \"stream\": true\n  }'\n```\n\n### Streamed SSE response (complete)\n\n```\ndata: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\ndata: {\"choices\":[{\"delta\":{\"content\":\"I\"},\"finish_reason\":null}]}\ndata: {\"choices\":[{\"delta\":{\"content\":\"'ll run that command\"},\"finish_reason\":null}]}\ndata: {\"choices\":[{\"delta\":{\"content\":\" now\"},\"finish_reason\":null}]}\ndata: {\"choices\":[{\"delta\":{\"content\":\".\"},\"finish_reason\":null}]}\ndata: {\"choices\":[{\"delta\":{\"content\":\"The command ran\"},\"finish_reason\":null}]}\ndata: {\"choices\":[{\"delta\":{\"content\":\" successfully and output: `proof_84486_pretool_text`\"},\"finish_reason\":null}]}\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\ndata: [DONE]\n```\n\n### Session transcript (from container filesystem)\n\n```\n[user]       text: \"Run the shell command: echo proof_84486_pretool_text\"\n[assistant]  text: \"I'll run that command now.\"           ← PRE-TOOL TEXT\n[toolResult] text: \"proof_84486_pretool_text\"             ← TOOL EXECUTED\n[assistant]  text: \"The command ran successfully and output: `proof_84486_pretool_text`\"  ← POST-TOOL TEXT\n```\n\n### Evidence this proves the fix\n\n1. The model output **pre-tool text** (\"I'll run that command now.\") BEFORE calling the exec tool\n2. The model output **post-tool text** (\"The command ran successfully...\") AFTER the tool completed\n3. In `final_only` mode, **both texts were delivered as a single consolidated SSE stream** — no premature flush, no split messages\n4. **On unpatched `upstream/main`**: the intermediate `done` event after the first completion (stopReason=toolUse) would have called `flush(true)` + `resetTurnState()`, delivering \"I'll run that command now.\" as a premature `kind=\"final\"` delivery and clearing the buffer. The post-tool text would arrive as a second \"final\" delivery. Channels like Feishu that replace the previous card would only show the last message, losing the pre-tool text entirely.\n\n### Cleanup\n\n```bash\ndocker rm -f openclaw-test-84486\n```\n",
-        "branch": "fix/final-only-text-before-tools-84486",
-        "head_sha": "d170b97957ef7831bebf5b4a1949376d12f13411",
-        "author": "jerry-xin",
+        "title": "fix(memory-wiki): bound compile page reads",
+        "body": "## Summary\n- Bound Memory Wiki page-summary reads during compile with the existing concurrency helper.\n- Added a regression test that asserts compile never opens more than 16 page reads at once.\n- Added an Unreleased changelog entry.\n\nFixes #68738.\n\n## Real behavior proof\n- **Behavior or issue addressed**: Memory Wiki `wiki compile` now bounds compile-time source page-summary reads so a large FileProvider-backed vault does not launch an unbounded `fs.readFile` burst while compiling.\n- **Real environment tested**: Local OpenClaw source checkout on macOS under `/Users/.../Documents/Codex/openclaw-openclaw-https-github-com-openclaw-2`, using an isolated proof vault at `/Users/.../Documents/Codex/openclaw-memory-wiki-proof-20260520-1950/vault`, `memory-wiki` config, native render mode, Obsidian disabled, and 180 real Markdown source pages (`sources/proof-001.md` through `sources/proof-180.md`).\n- **Exact steps or command run after this patch**: Ran the source-checkout CLI entrypoint equivalent to `openclaw wiki compile` after applying this patch:\n\n```text\nOPENCLAW_CONFIG_PATH=$PROOF_ROOT/openclaw.json \\\n  OPENCLAW_STATE_DIR=$PROOF_ROOT/state \\\n  NODE_DISABLE_COMPILE_CACHE=1 \\\n  node --import tsx src/entry.ts wiki compile\n```\n\n- **Evidence after fix**: Copied terminal output from the real source checkout run:\n\n```text\n$ OPENCLAW_CONFIG_PATH=$PROOF_ROOT/openclaw.json \\\n  OPENCLAW_STATE_DIR=$PROOF_ROOT/state \\\n  NODE_DISABLE_COMPILE_CACHE=1 \\\n  node --import tsx src/entry.ts wiki compile\nCompiled wiki vault at $PROOF_ROOT/vault (189 pages, 0 indexes updated).\nreal 31.94\nuser 29.46\nsys 1.90\n```\n\n- **Observed result after fix**: First JSON compile completed successfully and produced the expected compiled vault counts, then the rerun completed without errors:\n\n```text\npageCounts={\"source\":180,\"report\":9,\"entity\":0,\"concept\":0,\"synthesis\":0}\ntotalPages=189\nexit=0\n```\n\n- **What was not tested**: I did not run a live Obsidian app integration or a private production vault. The after-fix proof used a local Documents/Codex OpenClaw setup with a synthetic 180-source-page vault, plus the focused automated checks below.\n\n## Testing\n- `node scripts/run-vitest.mjs run extensions/memory-wiki/src/compile.test.ts`\n- `./node_modules/.bin/oxlint -c .oxlintrc.json --type-aware --tsconfig config/tsconfig/oxlint.extensions.json --report-unused-disable-directives-severity error extensions/memory-wiki/src/compile.ts extensions/memory-wiki/src/compile.test.ts`\n- `OPENCLAW_LOCAL_CHECK=0 corepack pnpm run lint:extensions:bundled`\n- `corepack pnpm exec oxfmt --check --threads=1 extensions/memory-wiki/src/compile.ts extensions/memory-wiki/src/compile.test.ts CHANGELOG.md`\n- `git diff --check origin/main..HEAD`",
+        "branch": "zz-68738-memory-wiki-bounded-page-reads",
+        "head_sha": "d024b3fb9bdec4b5e14dcfc072f8254e1d4b0278",
+        "author": "zhengzuo0-ai",
         "labels": [
           "size: S",
+          "extensions: memory-wiki",
           "proof: supplied",
           "proof: sufficient",
           "P2",
           "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 automation",
-          "merge-risk: 🚨 message-delivery",
           "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "src/auto-reply/reply/acp-projector.test.ts",
-            "additions": 156,
+            "path": "CHANGELOG.md",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/acp-projector.ts",
-            "additions": 18,
-            "deletions": 9,
+            "path": "extensions/memory-wiki/src/compile.test.ts",
+            "additions": 56,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/compile.ts",
+            "additions": 11,
+            "deletions": 4,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84509",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84509.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84458",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84458.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 102,
+          "total": 97,
           "counts": {
-            "SUCCESS": 68,
+            "SUCCESS": 56,
             "SKIPPED": 29,
-            "CANCELLED": 2,
-            "FAILURE": 2,
+            "FAILURE": 11,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Security High (core-auth-secrets):CANCELLED",
-            "security-fast:CANCELLED",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
+            "build-artifacts:FAILURE",
+            "checks-node-core-fast:FAILURE",
+            "checks-node-core-src-security:FAILURE",
+            "checks-node-core-runtime-infra-state:FAILURE",
+            "checks-node-core-runtime-media-ui:FAILURE",
+            "checks-node-core-runtime-cron-core:FAILURE",
+            "checks-node-agentic-control-plane-agent-chat:FAILURE",
+            "checks-node-agentic-cli:FAILURE",
+            "checks-node-agentic-gateway-core:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "checks-node-agentic-plugin-sdk:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "Security High (core-auth-secrets):CANCELLED",
-            "security-fast:CANCELLED",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
+            "build-artifacts:FAILURE",
+            "checks-node-core-fast:FAILURE",
+            "checks-node-core-src-security:FAILURE",
+            "checks-node-core-runtime-infra-state:FAILURE",
+            "checks-node-core-runtime-media-ui:FAILURE",
+            "checks-node-core-runtime-cron-core:FAILURE",
+            "checks-node-agentic-control-plane-agent-chat:FAILURE",
+            "checks-node-agentic-cli:FAILURE",
+            "checks-node-agentic-gateway-core:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "checks-node-agentic-plugin-sdk:FAILURE"
           ]
         }
       },
@@ -131,15 +149,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3800,
+    "total_ms": 5634,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 619
+        "ms": 2936
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2949
+        "ms": 2409
       },
       {
         "name": "classify_commands",
@@ -147,7 +165,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 204
+        "ms": 261
       },
       {
         "name": "append_ledger",
