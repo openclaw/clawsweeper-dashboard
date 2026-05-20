@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-20T18:18:33.763Z",
+  "generated_at": "2026-05-20T18:19:15.588Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-20T15:18:31.454Z",
+  "since": "2026-05-20T15:19:11.255Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    84151
+    68967
   ],
   "comment_ids": [
-    4501306935
+    4339483128
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,29 +33,29 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:84151:4501306935:2026-05-20T18:16:22Z:re_review",
-      "comment_id": "4501306935",
-      "comment_version_key": "4501306935:2026-05-20T18:16:22Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4501306935",
+      "idempotency_key": "comment-router:openclaw/openclaw:68967:4339483128:2026-05-20T18:17:15Z:automerge",
+      "comment_id": "4339483128",
+      "comment_version_key": "4339483128:2026-05-20T18:17:15Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/68967#issuecomment-4339483128",
       "repo": "openclaw/openclaw",
-      "issue_number": 84151,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
+      "issue_number": 68967,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T18:16:22Z",
-      "comment_updated_at": "2026-05-20T18:16:22Z",
+      "comment_created_at": "2026-04-28T22:18:05Z",
+      "comment_updated_at": "2026-05-20T18:17:15Z",
       "status_comment_id": null,
       "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "command": "automerge",
+      "intent": "automerge",
       "autoclose_message": null,
       "implementation_prompt": null,
       "trusted_bot": false,
       "trusted_bot_author": null,
       "automation_source": null,
       "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
+      "review_summary": "The PR adds an opt-in Google Chat `sessionThread` config, derives thread-scoped session keys, updates config/docs/generated metadata/tests, and forces outbound replies toward the inbound Chat thread.\n\nReproducibility: yes. source-level: the PR restores an inbound Google Chat thread when `payload.replyToId` is absent, while current main's reply policy uses that absence to suppress implicit threading for `replyToMode` modes. I did not run a live Google Chat webhook in this read-only review.",
+      "review_followup": "A focused repair can remove the policy bypass and add reply-mode tests; maintainers still need final config naming and overlap review before merge.",
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
@@ -81,57 +81,85 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(daemon): escape systemd cgroup for update handoff via systemd-run --scope",
-        "body": "## Summary\n\nOn systemd-supervised installs, clicking \"Update now\" silently fails: the update handoff helper is created but immediately killed by systemd's `KillMode=control-group` when the gateway unit restarts. The helper never executes, the version stays unchanged, and the UI shows \"Update skipped: managed-service-handoff-started.\"\n\nThis PR detects systemd supervision and launches the handoff helper via `systemd-run --user --scope` to escape the gateway's cgroup. Non-systemd supervisors (launchd, etc.) continue using the existing detached-child path.\n\n## Root cause\n\nsystemd's `KillMode=control-group` (the default) kills all processes in the service's cgroup on restart — including detached child processes. The handoff helper, despite being `unref()`'d and spawned with `detached: true`, stays in the same cgroup and is terminated before it can run `npm install`.\n\n## Fix\n\n```\nsystemd-run --user --scope --unit openclaw-update-<handoffId> --collect -- node handoff.cjs handoff.json\n```\n\nKey design choices:\n\n**`--scope` not `--service`**: `--scope` inherits the caller's environment (profile, state dir, config, PATH, proxy, package manager discovery all preserved). `--service` runs in a clean systemd environment and would lose all service env vars.\n\n**`KillMode=control-group` preserved**: The scoped update helper escapes via `systemd-run --scope` into its own cgroup, so `KillMode=control-group` safely stops the gateway and all its child workers without affecting the handoff. No change to existing shutdown semantics.\n\n**Launch failure detection**: After spawning `systemd-run`, the code awaits its exit code with a 5s timeout. If systemd-run exits non-zero (user session unavailable, D-Bus down, etc.), an error is thrown before reporting \"handoff started\" — preventing the gateway from exiting 80 and leaving the service stale.\n\n**No secret exposure via argv**: The `env` object is passed via `spawn()` option — identical to the existing non-systemd path. No `--setenv=KEY=*** args are used. Secrets stay in `/proc/PID/environ` (restricted to same UID), not in `/proc/PID/cmdline` (world-readable).\n\nAdditional hardening:\n- `sanitizeSystemdUnitName()` strips non-`[a-zA-Z0-9:._-]` chars from `handoffId`\n- `/tmp/openclaw-update-in-progress` marker file for `ExecStartPre` defense-in-depth guard\n- `--collect` flag ensures scope units are garbage-collected after exit\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `update-managed-service-handoff.ts` | Detect `supervisor === \"systemd\"` → spawn via `systemd-run --user --scope`; await exit code to detect launch failures; add marker file lifecycle; add `sanitizeSystemdUnitName()` |\n| `update-managed-service-handoff.test.ts` | 3 new tests: systemd `--scope` spawn path with env assertions, ENOENT detection, non-zero exit detection; enhanced mock with `mockChild()` helper |\n| `systemd-unit.ts` | Add `ExecStartPre` marker guard, `RestartPreventExitStatus=80`; keep `KillMode=control-group` with updated comment |\n| `systemd-unit.test.ts` | Updated KillMode assertion to verify `control-group` |\n\n## Tests\n\n```\n$ npx vitest run --project gateway-methods src/gateway/server-methods/update-managed-service-handoff.test.ts\n ✓ gateway-methods (8 tests) 632ms\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n\n$ npx vitest run --project unit-fast src/daemon/systemd-unit.test.ts\n ✓ unit-fast (4 tests) 2ms\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: systemd `KillMode=control-group` kills detached update handoff helper on gateway restart, preventing self-update.\n- **Real environment tested**: OrbStack Linux VM (Ubuntu 22.04 Jammy, kernel 6.19.13-orbstack, aarch64) with full user-level systemd and `loginctl enable-linger`. Node.js v24.15.0.\n\n### Live systemd proof: `--scope` escapes cgroup, helper survives service restart\n\nCreated a systemd user service with `KillMode=control-group` (matching OpenClaw's generated unit at `src/daemon/systemd-unit.ts:86`):\n\n```ini\n[Service]\nType=simple\nExecStart=/tmp/handoff-test/gateway-sim.sh\nKillMode=control-group\nRestart=no\n```\n\n**Test A: WITH `systemd-run --user --scope` (this PR)**\n\n```\n=== Gateway running ===\n     Active: active (running) since Wed 2026-05-20 20:08:58 CST\n   Main PID: 2797 (gateway-sim.sh)\n     CGroup: /user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway-test.service\n\n=== Helper started (in separate scope unit, sleeping 8s) ===\nHelper PID=2799 started in scope at Wed May 20 08:08:58 PM CST 2026\nHelper: sleeping 8s while gateway lives...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:00 ===\nGateway service stopped\n\n=== Immediately after kill ===\nHelper still running (no sentinel yet — helper still working)\n\n=== After 10s wait (helper finished at 20:09:06) ===\nHelper: still alive after 8s! Gateway should be dead by now\nHelper: writing sentinel at Wed May 20 08:09:06 PM CST 2026\nSentinel: update-complete\n```\n\n**Result**: Helper survived gateway service kill and completed work ✅\n\n**Test B: WITHOUT `systemd-run --scope` (current main behavior)**\n\nSame setup but using plain `bash &` with `disown` (simulating current detached spawn):\n\n```\n=== Helper started (no scope, sleeping 8s) ===\nHelper PID=2844 (NO SCOPE) started at Wed May 20 08:09:44 PM CST 2026\nHelper: sleeping 8s...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:46 ===\n\n=== After 10s wait ===\nHelper log: stopped at \"sleeping 8s...\" — no further output\nSentinel: FAILED: helper was KILLED by KillMode=control-group!\n```\n\n**Result**: Helper was killed when gateway service stopped ❌\n\n### Comparison\n\n| Scenario | Helper survives service stop? | Sentinel written? |\n|----------|------------------------------|-------------------|\n| `systemd-run --user --scope` (this PR) | ✅ Yes — ran in separate scope unit | ✅ `update-complete` |\n| Plain detached child (current main) | ❌ No — killed by `KillMode=control-group` | ❌ Never created |\n\n### Security: env via spawn(), not argv\n\n```typescript\n// env passed to spawn() for systemd-run — not in command-line args\nchild = spawn(\"systemd-run\", [...], { cwd: params.root, env, detached: true, stdio: \"ignore\" });\n```\n\nTest coverage verifies explicitly:\n```typescript\nexpect(options.env).toBeDefined();\nexpect(args).not.toContain(\"--setenv\");\n```\n\n### What was not tested\n\n- Full end-to-end `openclaw update` flow (requires published package version delta and npm registry)\n- Live `ExecStartPre` marker file guard (defense-in-depth only, verified by code inspection)\n- `--collect` garbage collection timing (non-functional, only prevents stale unit name conflicts)\n\nCloses #84068\n",
-        "branch": "fix/systemd-update-handoff-84068",
-        "head_sha": "ecd18de99a7d808ff6e67e993e268880b0ebed77",
-        "author": "jerry-xin",
+        "title": "feat(googlechat): add sessionThread option to bind OpenClaw sessions to Google Chat threads",
+        "body": "AI-assisted: yes (Claude Opus 4.7).\r\n\r\n## Summary\r\n\r\n- Problem: In Google Chat, all messages in a space shared a single OpenClaw session. Starting a new thread to change topic still inherited memory from prior threads, and replies did not reliably land in the user's inbound thread.\r\n- Why it matters: Chat threads are the natural topic boundary in Google Chat. Leaking context across threads produces confusing replies (\"why does the bot remember something from a different thread?\"), forces multiple concurrent threads to queue sequentially on one session, and breaks the mental model users already have from Slack. Requested in #13373.\r\n- What changed: Added an opt-in `sessionThread` channel option. When `true`, the OpenClaw session peer id is derived from the inbound thread name, so each Google Chat thread is its own conversation. Replies are now threaded via `thread.name` + `messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD`, so bot responses land in the user's thread.\r\n- What did NOT change (scope boundary): Default behavior is unchanged (`sessionThread: false` keeps space-scoped sessions). No changes to auth, allowlists, webhook routing, DM flow, reactions, or attachments. No slash commands / `/focus`-style bindings added (see \"future work\" below).\r\n\r\n## Change Type (select all)\r\n\r\n- [x] Bug fix\r\n- [x] Feature\r\n- [ ] Refactor required for the fix\r\n- [x] Docs\r\n- [ ] Security hardening\r\n- [ ] Chore/infra\r\n\r\n## Scope (select all touched areas)\r\n\r\n- [ ] Gateway / orchestration\r\n- [ ] Skills / tool execution\r\n- [ ] Auth / tokens\r\n- [ ] Memory / storage\r\n- [x] Integrations\r\n- [ ] API / contracts\r\n- [ ] UI / DX\r\n- [ ] CI/CD / infra\r\n\r\n## Linked Issue/PR\r\n\r\n- Closes #13373 (per-thread session mode feature request)   \r\n- Closes #41788 (Google Chat replies creating new threads instead of staying in the existing one)   \r\n- Related  #44347 — resolves the first of the two requests in that issue\r\n- [x] This PR fixes a bug or regression\r\n\r\n### Note on naming vs the issue's proposal\r\n\r\nThe issue proposes `threadSessionMode: \"per-thread\" | \"per-space\"`. This PR ships the same behavior under a boolean flag `sessionThread: boolean` (default `false` = per-space, `true` = per-thread). Rationale:\r\n\r\n- A boolean matches the two-state nature of the option and is simpler to document.\r\n- The name aligns with the existing session-scoping vocabulary in the codebase.\r\n- Happy to rename to `threadSessionMode` with a string enum if maintainers prefer the issue's exact wording, it's a straightforward rename.\r\n\r\n## Root Cause (if applicable)\r\n\r\n- Root cause: The Google Chat channel used the space id as the session peer id and did not pass the inbound thread name back on outbound messages. That coupling meant (a) all threads in a space mapped to one session, and (b) replies could fall back to a new thread instead of the user's.\r\n- Missing detection / guardrail: No peer-id unit coverage for Google Chat; Slack already has `prepare.thread-session-key.test.ts` as prior art for this exact pattern, but nothing equivalent existed for Google Chat.\r\n- Contributing context (if known): Google Chat threads were less prominent historically in OpenClaw flows; the space-scoped default was acceptable until users started relying on threads to separate topics.\r\n\r\n## Regression Test Plan (if applicable)\r\n\r\n- Coverage level that should have caught this:\r\n  - [x] Unit test\r\n  - [ ] Seam / integration test\r\n  - [ ] End-to-end test\r\n  - [ ] Existing coverage already sufficient\r\n- Target test or file: `extensions/googlechat/src/monitor.session-thread.test.ts`\r\n- Scenario the test should lock in: `resolveGoogleChatPeerId` returns the thread name when `sessionThread` is enabled and an inbound thread is present; falls back to `spaceId` otherwise; and produces distinct peer ids for distinct threads so sessions do not cross.\r\n- Why this is the smallest reliable guardrail: The peer id is the single point where \"which session does this message belong to?\" is decided for Google Chat. Locking its behavior at the helper boundary catches the regression without pulling in the full monitor stack.\r\n- Existing test that already covers this (if any): None for Google Chat. Slack's `prepare.thread-session-key.test.ts` covers the analogous primitive.\r\n\r\n## User-visible / Behavior Changes\r\n\r\n- New opt-in config: `channels.googlechat.sessionThread` (default `false`).\r\n  - `false` (default): space-scoped sessions, prior behavior unchanged.\r\n  - `true`: one OpenClaw session per Google Chat thread; a new thread starts a fresh conversation.\r\n- Outbound messages now consistently target the inbound thread via `thread.name` + `messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD`, so replies land in the user's thread more reliably. This applies regardless of `sessionThread`.\r\n\r\n## Diagram (if applicable)\r\n\r\n```text\r\nsessionThread: false (default, unchanged)\r\n  space S, thread A -> session(peer=S)\r\n  space S, thread B -> session(peer=S)    # shared memory\r\n\r\nsessionThread: true\r\n  space S, thread A -> session(peer=A)\r\n  space S, thread B -> session(peer=B)    # isolated memory\r\n  space S, no thread -> session(peer=S)   # falls back to space-scoped\r\n```\r\n\r\n## Security Impact (required)\r\n\r\n- New permissions/capabilities? No\r\n- Secrets/tokens handling changed? No\r\n- New/changed network calls? No (same Chat API endpoints; only request payload now sets `thread.name` and `messageReplyOption`)\r\n- Command/tool execution surface changed? No\r\n- Data access scope changed? No (in fact, `sessionThread: true` narrows memory scope per thread)\r\n\r\n## Repro + Verification\r\n\r\n### Environment\r\n\r\n- OS: macOS\r\n- Runtime/container: Node 22 / local gateway (`pnpm openclaw gateway restart`)\r\n- Model/provider: any (provider-agnostic)\r\n- Integration/channel (if any): Google Chat\r\n- Relevant config (redacted):\r\n\r\n  ```jsonc\r\n  {\r\n    \"channels\": {\r\n      \"googlechat\": {\r\n        \"enabled\": true,\r\n        \"serviceAccountFile\": \"/path/to/service-account.json\",\r\n        \"sessionThread\": true\r\n      }\r\n    }\r\n  }\r\n  ```\r\n\r\n### Steps\r\n\r\n1. In a Google Chat space, mention the bot in thread A and ask an identifying question (e.g. \"remember the color red\").\r\n2. Start a new thread B in the same space and ask \"what color did I mention?\".\r\n3. Reply again inside thread A and ask the same question.\r\n\r\n### Expected\r\n\r\n- `sessionThread: true`: in thread B, the bot has no memory of thread A. In thread A, the bot still remembers \"red\". Replies land in the thread the user messaged in.\r\n- `sessionThread: false` (default): behavior is unchanged from prior releases.\r\n\r\n### Actual\r\n\r\n- Matches expected for both modes.\r\n\r\n## Evidence\r\n\r\n- [x] Failing test/log before + passing after\r\n\r\n  ```\r\n  pnpm test extensions/googlechat/src/monitor.session-thread.test.ts\r\n   ✓ resolveGoogleChatPeerId returns spaceId when sessionThread is disabled\r\n   ✓ resolveGoogleChatPeerId returns spaceId when sessionThread is undefined (default)\r\n   ✓ resolveGoogleChatPeerId returns thread name when sessionThread is enabled and inbound has a thread\r\n   ✓ resolveGoogleChatPeerId falls back to spaceId when sessionThread is enabled but inbound has no thread\r\n   ✓ resolveGoogleChatPeerId produces distinct peer ids for distinct threads so sessions don't cross\r\n   Test Files  1 passed (1)\r\n        Tests  5 passed (5)\r\n  ```\r\n\r\n- [ ] Trace/log snippets\r\n- [x] Screenshot/recording\r\n  - When disabled(previous behavior):\r\n    <img width=\"1762\" height=\"968\" alt=\"CleanShot 2026-04-19 at 17 58 46@2x\" src=\"https://github.com/user-attachments/assets/50c4655d-68b2-4c33-af7d-f8996a1d7f3e\" />\r\n  - When enabled:\r\n    <img width=\"2194\" height=\"1534\" alt=\"CleanShot 2026-04-19 at 20 23 42@2x\" src=\"https://github.com/user-attachments/assets/65be264c-45f5-41b1-be4c-a3f928aaa095\" />\r\n- [ ] Perf numbers (if relevant)\r\n\r\n## Human Verification (required)\r\n\r\n- Verified scenarios:\r\n  - Manually verified in a real Google Chat space against a local gateway:\r\n    - Bot replies land inside the user's inbound thread (both existing threads and thread-starter messages).\r\n    - With `sessionThread: true`: new thread = fresh session; prior thread keeps its own context; no cross-thread memory leakage.\r\n    - With `sessionThread: false`: unchanged, space-scoped memory.\r\n- Edge cases checked:\r\n  - Inbound message with no thread (thread-starter): falls back to space-scoped session as designed.\r\n  - Two concurrent threads in the same space maintain separate sessions.\r\n- What you did **not** verify:\r\n  - Bot-initiated outbound into a space with no prior inbound thread context (no webhook-origin thread). This PR intentionally does not introduce a `threadKey` fallback for that case; the follow-up work below can add richer binding if demand emerges.\r\n  - DM flow (no behavior change expected; DM scope is already per-channel-peer).\r\n  \r\n\r\n\r\n## Review Conversations\r\n\r\n- [x] I replied to or resolved every bot review conversation I addressed in this PR.\r\n- [x] I left unresolved only the conversations that still need reviewer or maintainer judgment.\r\n\r\n## Compatibility / Migration\r\n\r\n- Backward compatible? Yes\r\n- Config/env changes? Yes, additive only: new optional `channels.googlechat.sessionThread` boolean (default `false`).\r\n- Migration needed? No. Existing configs continue to behave as before.\r\n- If yes, exact upgrade steps: N/A. To opt in, set `channels.googlechat.sessionThread: true`.\r\n\r\n## Risks and Mitigations\r\n\r\n- Risk: Users relying on cross-thread memory in a space would lose that if they set `sessionThread: true` without realizing the implication.\r\n  - Mitigation: Default is `false`; docs call out the per-thread isolation explicitly; the name `sessionThread` signals the intent.\r\n- Risk: `resolveGoogleChatPeerId` is a new exported helper surface from the plugin's `monitor.ts`.\r\n  - Mitigation: Kept it narrow (one pure function) and it is only consumed inside the extension itself; no public SDK subpath added.\r\n\r\n## Future Work (non-blocking)\r\n\r\nThis PR adds the minimal primitive, matching Slack's auto thread-scoped session behavior, just gated behind an opt-in flag for Google Chat. A follow-up could align with the Telegram/Discord `session.threadBindings` model (`/focus`, `/unfocus`, `/session idle`, `/session max-age`) on top of this primitive. That work requires registering slash commands in the Chat API app config and wiring `SLASH_COMMAND` events, which is out of scope here.",
+        "branch": "feat/googlechat-session-thread",
+        "head_sha": "ab45d686dbae629555390a16ebef8682c66ae3ba",
+        "author": "dyaskur",
         "labels": [
-          "gateway",
-          "cli",
+          "docs",
+          "channel: googlechat",
           "size: M",
+          "triage: dirty-candidate",
           "triage: needs-real-behavior-proof",
-          "P1",
+          "proof: sufficient",
+          "P2",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 security-boundary",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: ⏳ waiting on author",
+          "proof: 📸 screenshot"
         ],
         "files": [
           {
-            "path": "src/cli/gateway-cli/run-loop.ts",
-            "additions": 4,
+            "path": "CHANGELOG.md",
+            "additions": 7,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/daemon/systemd-unit.test.ts",
-            "additions": 5,
-            "deletions": 4,
+            "path": "docs/.generated/config-baseline.sha256",
+            "additions": 3,
+            "deletions": 3,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/daemon/systemd-unit.ts",
-            "additions": 6,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update-managed-service-handoff.test.ts",
-            "additions": 164,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update-managed-service-handoff.ts",
-            "additions": 114,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/update.test.ts",
+            "path": "docs/channels/googlechat.md",
             "additions": 1,
             "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/googlechat/src/monitor-reply-delivery.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/googlechat/src/monitor.session-thread.test.ts",
+            "additions": 105,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/googlechat/src/monitor.ts",
+            "additions": 51,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/bundled-channel-config-metadata.generated.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.googlechat.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.providers-core.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/inbound-envelope.ts",
+            "additions": 8,
+            "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
@@ -168,71 +196,54 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84151",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84151.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-68967",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-68967.md",
         "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
         "review_decision": "",
         "checks": {
-          "total": 24,
+          "total": 113,
           "counts": {
-            "FAILURE": 1,
-            "QUEUED": 10,
-            "SUCCESS": 8,
-            "SKIPPED": 5
+            "FAILURE": 3,
+            "SUCCESS": 87,
+            "SKIPPED": 22,
+            "NEUTRAL": 1
           },
           "blockers": [
             "Real behavior proof:FAILURE",
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
+            "checks-node-core-support-boundary:FAILURE",
+            "checks-node-core:FAILURE"
           ],
-          "pending": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
+          "pending": [],
           "terminalBlockers": [
-            "Real behavior proof:FAILURE"
+            "Real behavior proof:FAILURE",
+            "checks-node-core-support-boundary:FAILURE",
+            "checks-node-core:FAILURE"
           ]
         }
       }
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5466,
+    "total_ms": 4635,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 602
+        "ms": 763
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1693
+        "ms": 3556
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 3146
+        "ms": 302
       },
       {
         "name": "append_ledger",
