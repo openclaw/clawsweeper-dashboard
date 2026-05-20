@@ -1,21 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-20T06:41:47.883Z",
+  "generated_at": "2026-05-20T06:42:18.142Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-20T03:41:46.933Z",
+  "since": "2026-05-20T03:42:15.744Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    83955
+    84151
   ],
   "comment_ids": [
-    4495339314
-  ],
-  "comment_ids": [
-    4457140261
+    4495346722
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -36,17 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:83955:4495339314:2026-05-20T06:39:17Z:re_review",
-      "comment_id": "4495339314",
-      "comment_version_key": "4495339314:2026-05-20T06:39:17Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83955#issuecomment-4495339314",
+      "idempotency_key": "comment-router:openclaw/openclaw:84151:4495346722:2026-05-20T06:40:23Z:re_review",
+      "comment_id": "4495346722",
+      "comment_version_key": "4495346722:2026-05-20T06:40:23Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4495346722",
       "repo": "openclaw/openclaw",
-      "issue_number": 83955,
-      "author": "tanshanshan",
-      "author_id": 22539261,
+      "issue_number": 84151,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T06:39:17Z",
-      "comment_updated_at": "2026-05-20T06:39:17Z",
+      "comment_created_at": "2026-05-20T06:40:23Z",
+      "comment_updated_at": "2026-05-20T06:40:23Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -62,34 +59,137 @@
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-05-20T06:42:19.222Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 84151
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-20T06:42:20.412Z",
+          "response_comment_id": null,
+          "response_comment_mode": "created"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(daemon): escape systemd cgroup for update handoff via systemd-run --scope",
+        "body": "## Summary\n\nOn systemd-supervised installs, clicking \"Update now\" silently fails: the update handoff helper is created but immediately killed by systemd's `KillMode=control-group` when the gateway unit restarts. The helper never executes, the version stays unchanged, and the UI shows \"Update skipped: managed-service-handoff-started.\"\n\nThis PR detects systemd supervision and launches the handoff helper via `systemd-run --user --scope` to escape the gateway's cgroup. Non-systemd supervisors (launchd, etc.) continue using the existing detached-child path.\n\n## Root cause\n\nsystemd's `KillMode=control-group` (the default) kills all processes in the service's cgroup on restart — including detached child processes. The handoff helper, despite being `unref()`'d and spawned with `detached: true`, stays in the same cgroup and is terminated before it can run `npm install`.\n\n## Fix\n\n```\nsystemd-run --user --scope --unit openclaw-update-<handoffId> --collect -- node handoff.cjs handoff.json\n```\n\nKey design choice: **`--scope` not `--service`**. This matters because:\n- `--scope`: child **inherits the caller's environment** (profile, state dir, config, PATH, proxy, package manager discovery all preserved)\n- `--service`: child runs in a **clean systemd environment** (would lose all service env vars)\n\nThe `env` object is built from `stripSupervisorHintEnv(process.env)` plus update-specific vars, and passed directly to `spawn()` — identical to the existing non-systemd path. Since `--scope` preserves caller env, no `--setenv` forwarding is needed.\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `update-managed-service-handoff.ts` | Detect `supervisor === \"systemd\"` → spawn via `systemd-run --user --scope` |\n| `update-managed-service-handoff.test.ts` | 2 new tests: systemd path uses `systemd-run --scope`, non-systemd path uses plain detached node |\n\n## Tests\n\n```\n$ node scripts/run-vitest.mjs src/gateway/server-methods/update-managed-service-handoff.test.ts\n ✓ gateway-client (7 tests) 640ms\n ✓ gateway-methods (7 tests) 634ms\n Test Files  2 passed (2)\n      Tests  14 passed (14)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: systemd `KillMode=control-group` kills detached update handoff helper on gateway restart, preventing self-update.\n- **Real environment tested**: Docker (node:24-slim, Debian bookworm) for cgroup escape demonstration; macOS arm64 for unit tests.\n\n### Docker proof: process group isolation\n\n```\n--- Test A: Non-detached child — same process group → killed together ---\nParent PID=200 PGID=200\nChild  PID=208 PGID=200\nSame process group: YES\nSending SIGTERM to process group -200...\nChild marker: tick 1, tick 2 (only 2 ticks before killed)\n\n--- Test B: Detached child — new process group → survives group kill ---\nParent PID=247 PGID=247\nChild  PID=255 PGID=255\nSame process group: NO\nSending SIGTERM to process group -247...\nChild marker: tick 1-6 + COMPLETED (survived and finished)\n```\n\n### Source inspection: env forwarding is correct\n\n```typescript\n// Line 343: env built from full process.env\nconst env = {\n    ...stripSupervisorHintEnv(params.env ?? process.env),\n    [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,\n    OPENCLAW_UPDATE_RUN_HANDOFF: \"1\",\n};\n\n// Line 352: env passed to spawn() for systemd-run\nchild = spawn(\"systemd-run\", [...], { cwd: params.root, env, detached: true, stdio: \"ignore\" });\n//                                                         ^^^ full env\n```\n\n`systemd-run --scope` inherits caller env (unlike `--service` which runs in a clean env). Profile, state dir, config, PATH, proxy, and package-manager discovery are all preserved.\n\n- **What was not tested**: Live user-systemd update cycle (requires a Linux server with systemd, OpenClaw installed via npm, and a version upgrade available). The cgroup escape mechanism and env forwarding are validated at source and Docker levels.\n\nCloses #84068\n",
+        "branch": "fix/systemd-update-handoff-84068",
+        "head_sha": "3dbb2247d0b8ec6d939ebb811b1eb90051ee4d18",
+        "author": "jerry-xin",
+        "labels": [
+          "gateway",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/server-methods/update-managed-service-handoff.test.ts",
+            "additions": 150,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update-managed-service-handoff.ts",
+            "additions": 99,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84151",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84151.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 106,
+          "counts": {
+            "FAILURE": 9,
+            "SUCCESS": 69,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "build-artifacts:FAILURE",
+            "check-guards:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "build-artifacts:FAILURE",
+            "check-guards:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ]
+        }
+      }
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 1281,
+    "total_ms": 5302,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 940
+        "ms": 693
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1693
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 332
+        "ms": 2893
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
