@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-21T04:37:24.515Z",
+  "generated_at": "2026-05-21T04:38:29.720Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-21T01:37:21.828Z",
+  "since": "2026-05-21T01:38:29.459Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    81304
+    84808
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 4,
-  "commands_seen": 1,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,116 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:81304:4437526886:2026-05-21T04:37:15Z:clawsweeper_needs_human",
-      "comment_id": "4437526886",
-      "comment_version_key": "4437526886:2026-05-21T04:37:15Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/81304#issuecomment-4437526886",
-      "repo": "openclaw/openclaw",
-      "issue_number": 81304,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-13T05:11:48Z",
-      "comment_updated_at": "2026-05-21T04:37:15Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "No repair PR is needed because the proposed code change is already the narrow fix; the remaining blocker is contributor real behavior proof plus normal maintainer/check gating.; Cleared: The diff only forwards an existing setup/auth option and adds a test; it does not add dependencies, CI execution, secret handling, or a broader security boundary change. (sha=2913eeb365dee8c36c170edd0ef2730ab858bba8)",
-      "review_summary": "The PR forwards `preserveExistingDefaultModel: true` from `runSetupWizard` to `applyAuthChoice` and adds a regression test asserting setup passes the flag.\n\nReproducibility: yes. at source level: current setup passes `setDefaultModel: true` without the preservation flag, the provider-auth helper overwrites unless that flag is true, and heartbeat can inherit the resulting primary model. I did not run a live paid Google billing reproduction.",
-      "review_followup": "No repair PR is needed because the proposed code change is already the narrow fix; the remaining blocker is contributor real behavior proof plus normal maintainer/check gating.",
-      "freeform_prompt": null,
-      "expected_head_sha": "2913eeb365dee8c36c170edd0ef2730ab858bba8",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(setup): preserve existing primary model when applying provider auth (#64129)",
-        "body": "## Summary\n\nWhen `runSetupWizard` reaches the provider auth step (e.g. Google API-key), it calls `applyAuthChoice({ ..., setDefaultModel: true })` WITHOUT `preserveExistingDefaultModel`. As a result, the provider's advertised default model (currently `google/gemini-3.1-pro-preview`) silently replaces the operator's existing `agents.defaults.model.primary` even when one is already configured. Because heartbeat runs that do not set an explicit `heartbeat.model` fall through to that primary (`src/infra/heartbeat-runner.ts:372`), this turns existing free-tier heartbeat traffic into paid Gemini API calls without any user-facing confirmation. The parallel `configure gateway-auth` command already passes `preserveExistingDefaultModel: true` (`src/commands/configure.gateway-auth.ts:228`); setup is the only remaining path that omitted the flag.\n\n## Root Cause\n\n- `src/wizard/setup.ts:651` (before): the `applyAuthChoice` invocation omitted `preserveExistingDefaultModel`. The flag defaults to `undefined`, so `applyDefaultModelFromAuthChoice` (`src/plugins/provider-auth-choice.ts:145`) does NOT preserve a pre-existing primary and applies the provider's advertised default.\n- `extensions/google/provider-registration.ts:35` advertises `GOOGLE_GEMINI_DEFAULT_MODEL = \"google/gemini-3.1-pro-preview\"`, which is a paid model.\n- `src/infra/heartbeat-runner.ts:372` (`resolveHeartbeatModelRef`) checks per-heartbeat / default heartbeat overrides first, then falls back to the session model or `agents.defaults.model.primary`. With heartbeat enabled and no `heartbeat.model`, the now-promoted Google default becomes the heartbeat model — producing the reported paid background traffic.\n- Execution path: existing operator runs `openclaw onboard` (or `setup`) → picks Google as the auth choice for any reason → `applyAuthChoice` returns `agents.defaults.model.primary = \"google/gemini-3.1-pro-preview\"` → next heartbeat tick uses that paid model.\n- clawsweeper review on #64129 said: *\"The narrow maintainable repair is to pass the existing `preserveExistingDefaultModel` seam through setup/provider auth for existing primaries, rather than special-casing Google or changing heartbeat runtime model resolution.\"*\n\n## Changes\n\n- `src/wizard/setup.ts`: add `preserveExistingDefaultModel: true` to the `applyAuthChoice` call (mirrors `configure.gateway-auth.ts:228`). The flag is safe to pass unconditionally — `applyDefaultModelFromAuthChoice` only preserves when a `previousPrimary` exists, so first-run setups (no previous primary) still pick up the provider default and the operator's existing primary is now preserved on re-run.\n- `src/wizard/setup.test.ts`: add `\"passes preserveExistingDefaultModel to applyAuthChoice so existing primaries are not silently promoted (#64129)\"`, asserting the flag is forwarded with `setDefaultModel: true`.\n\nNet diff: **+52 / 0 LOC across 2 files** (+7 production, +45 test).\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: An operator with a configured primary model (the reporter had `agents.defaults.model.primary` already set to a non-Google model) runs `openclaw onboard` or `setup` with a Google API-key auth choice. The setup wizard silently promotes the Google paid default to the primary. Heartbeat without an explicit override then runs on the paid Google model in the background, billing the operator's API key. Issue: https://github.com/openclaw/openclaw/issues/64129\n- **Real environment tested**: Local OpenClaw checkout at `../openclaw-65656` on Windows 11. The fix is a one-flag change at a documented seam; verification is source-pattern proof against the patched file plus a colocated unit test that asserts the flag is now forwarded through `runSetupWizard` to the mocked `applyAuthChoice`. PR head: `9defba01`.\n- **Exact steps or command run after this patch**: `git diff src/wizard/setup.ts` shows the new `preserveExistingDefaultModel: true` flag in the same `applyAuthChoice` call as `setDefaultModel: true`. `sed -n '/const authResult = await applyAuthChoice/,/});/p' src/wizard/setup.ts | sha256sum` produces the integrity hash. The new test invokes `runSetupWizard` and asserts `applyAuthChoice` received `{ setDefaultModel: true, preserveExistingDefaultModel: true }` via `expectRecordFields`.\n- **Evidence after fix**: Terminal output captured locally on PR head `9defba01` (Windows 11; patched `applyAuthChoice` invocation block SHA-256 `d523daba99344c77802b35eeb671e030c83d646a80891d0955ce1d8cf27a94a1`).\n\n~~~text\n$ sed -n '/const authResult = await applyAuthChoice/,/});/p' src/wizard/setup.ts\n    const authResult = await applyAuthChoice({\n      authChoice,\n      config: nextConfig,\n      prompter,\n      runtime,\n      setDefaultModel: true,\n      // Preserve an existing primary model so that running setup again with a\n      // different provider's auth (e.g. picking Google API-key while an\n      // OpenAI primary is already configured) does not silently promote the\n      // provider's default model. This mirrors the configure.gateway-auth\n      // path which already passes this flag, and stops heartbeat traffic\n      // from falling through to a freshly-promoted paid default (#64129).\n      preserveExistingDefaultModel: true,\n      opts: {\n        tokenProvider: opts.tokenProvider,\n        token: opts.authChoice === \"apiKey\" && opts.token ? opts.token : undefined,\n      },\n    });\n$ sed -n '/const authResult = await applyAuthChoice/,/});/p' src/wizard/setup.ts | sha256sum\nd523daba99344c77802b35eeb671e030c83d646a80891d0955ce1d8cf27a94a1 *-\n\n$ grep -B 1 -A 2 \"preserveExistingDefaultModel\" src/commands/configure.gateway-auth.ts | head -8\n      setDefaultModel: true,\n      preserveExistingDefaultModel: true,\n    });\n    next = applied.config;\n~~~\n\n- **Observed result after fix**: The patched `applyAuthChoice` call in `src/wizard/setup.ts` now carries `preserveExistingDefaultModel: true` — pinned by SHA-256 `d523daba99344c77802b35eeb671e030c83d646a80891d0955ce1d8cf27a94a1`. The verbatim block shows the flag adjacent to `setDefaultModel: true`, in the same shape `configure.gateway-auth.ts:228` already uses. Because `applyDefaultModelFromAuthChoice` (`src/plugins/provider-auth-choice.ts:145`) only preserves a previous primary when that flag is `true`, this change exactly stops the Google-default promotion documented by the reporter while preserving first-run setups (no `previousPrimary` → no preservation logic kicks in → provider default still picked, same as before).\n- **What was not tested**: A live paid Google Gemini billing reproduction was not run on the contributor machine; the fix is a flag-propagation change at a documented internal seam (`preserveExistingDefaultModel` was added by PR #70793 and is already exercised by `configure.gateway-auth`). Maintainers may apply `proof: override` if a live setup-wizard recording with a non-Google primary is required.\n\n## Test\n\n- `pnpm test src/wizard/setup.test.ts` — adds `\"passes preserveExistingDefaultModel to applyAuthChoice so existing primaries are not silently promoted (#64129)\"` which invokes `runSetupWizard` and asserts the mocked `applyAuthChoice` received `{ setDefaultModel: true, preserveExistingDefaultModel: true }` via `expectRecordFields`. Pre-existing test coverage of `applyAuthChoice` retry semantics and the broader setup flow is unaffected.\n- `pnpm test src/commands/auth-choice.test.ts` — unchanged; this suite already locks in the `preserveExistingDefaultModel: true` semantics via the configure path (lines 1059, 1124) and continues to pass.\n- `pnpm test extensions/google/default-model.test.ts src/infra/heartbeat-runner.model-override.test.ts` — unchanged; runtime model resolution is not modified by this fix.\n\n## Notes\n\n- Scope: smallest complete fix per clawsweeper guidance — a single flag added to a single call. No public seam change, no policy decision needed. The flag is no-op on first-run setups and effective on re-runs against an existing primary.\n- Compatibility: first-run setups (empty config, no `agents.defaults.model.primary`) still get the provider's advertised default — same as before the fix. Re-runs against an existing primary now keep that primary; the operator can still explicitly change it via the model-picker prompt that runs later in setup (`applyPrimaryModel` at `setup.ts:670`).\n- This follows the conservative direction in clawsweeper's review on #64129: *\"Apply the existing default-preservation contract to setup provider auth when an existing primary model is present, while preserving first-run default selection and explicit model-picker choices.\"*\n\nCloses #64129\n",
-        "branch": "fix/setup-preserve-existing-primary-model",
-        "head_sha": "2913eeb365dee8c36c170edd0ef2730ab858bba8",
-        "author": "moerai",
-        "labels": [
-          "size: S",
-          "proof: supplied",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/wizard/setup.test.ts",
-            "additions": 45,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/wizard/setup.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-81304",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-81304.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 29,
-            "SUCCESS": 70,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3022,
+    "total_ms": 519,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 440
+        "ms": 248
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2233
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 320
+        "ms": 259
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
