@@ -4,7 +4,7 @@ Generated from the durable state branch for [openclaw/clawsweeper](https://githu
 
 ## Sweep Dashboard
 
-Last source update: May 21, 2026, 18:55 UTC
+Last source update: May 21, 2026, 19:01 UTC
 
 ### Fleet
 
@@ -12,9 +12,9 @@ Last source update: May 21, 2026, 18:55 UTC
 | --- | ---: |
 | Covered repositories | 3 |
 | Open review records | 7354 |
-| Archived closed records | 24525 |
+| Archived closed records | 24526 |
 | Fresh reviews, 7d | 7191 |
-| Proposed closes awaiting apply | 2 |
+| Proposed closes awaiting apply | 0 |
 | Work candidates awaiting promotion | 900 |
 | Failed or stale reviews | 2474 |
 
@@ -22,7 +22,7 @@ Last source update: May 21, 2026, 18:55 UTC
 
 | Repository | State | Updated | Run |
 | --- | --- | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Review publish complete | May 21, 2026, 18:55 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/26245443022) |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Apply finished | May 21, 2026, 19:01 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/26246814142) |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | Audit finished | May 21, 2026, 18:51 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/26246361060) |
 | [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Planning review | May 21, 2026, 16:27 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/26238927178) |
 
@@ -30,7 +30,7 @@ Last source update: May 21, 2026, 18:55 UTC
 
 | Repository | Open records | Archived | Fresh | Proposed closes | Work candidates | Failed/stale | Last review | Last close |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 7243 | 23376 | 7080 | 2 | 894 | 2474 | May 21, 2026, 18:55 UTC | May 21, 2026, 18:49 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 7243 | 23377 | 7080 | 0 | 894 | 2474 | May 21, 2026, 18:55 UTC | May 21, 2026, 18:52 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | 109 | 1143 | 109 | 0 | 6 | 0 | May 21, 2026, 18:10 UTC | May 21, 2026, 17:38 UTC |
 | [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | 2 | 6 | 2 | 0 | 0 | 0 | May 21, 2026, 11:54 UTC | May 6, 2026, 01:07 UTC |
 
@@ -63,6 +63,7 @@ Last source update: May 21, 2026, 18:55 UTC
 
 | Repository | Item | Title | Reason | Closed | Report |
 | --- | --- | --- | --- | --- | --- |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#85066](https://github.com/openclaw/openclaw/pull/85066) | fix(qa-lab): rename codex lifecycle fixtures to match knip ignore pattern | none | May 21, 2026, 18:52 UTC | [records/openclaw-openclaw/closed/85066.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/85066.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#85036](https://github.com/openclaw/openclaw/pull/85036) | Openclaw original v2026.5.18 | closed externally after review | May 21, 2026, 18:49 UTC | [records/openclaw-openclaw/closed/85036.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/85036.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#85056](https://github.com/openclaw/openclaw/issues/85056) | Recurring: Telegram + Slack channels silently fail — grammy/@grammyjs/* and @slack/web-api missing from nod... | implemented_on_main | May 21, 2026, 18:27 UTC | [records/openclaw-openclaw/closed/85056.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/85056.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#85047](https://github.com/openclaw/openclaw/issues/85047) | TUI streaming watchdog (30s) fires false-positive on long tool-call turns; config knob already 80% wired bu... | duplicate_or_superseded | May 21, 2026, 18:26 UTC | [records/openclaw-openclaw/closed/85047.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/85047.md) |
@@ -77,7 +78,6 @@ Last source update: May 21, 2026, 18:55 UTC
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#61001](https://github.com/openclaw/openclaw/issues/61001) | Feature Request: Conditional boot context injection by session type | closed externally after review | May 21, 2026, 17:38 UTC | [records/openclaw-openclaw/closed/61001.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/61001.md) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#60620](https://github.com/openclaw/openclaw/issues/60620) | Plugins initialized twice per gateway restart (duplicate register/load cycle) | closed externally after review | May 21, 2026, 17:38 UTC | [records/openclaw-openclaw/closed/60620.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/60620.md) |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | [#2362](https://github.com/openclaw/clawhub/pull/2362) | fix: contain skill install command card | none | May 21, 2026, 17:38 UTC | [records/openclaw-clawhub/closed/2362.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-clawhub/closed/2362.md) |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#85011](https://github.com/openclaw/openclaw/issues/85011) | Bug: before_tool_call approval requests not deliverable to WebChat in offline deployments | duplicate_or_superseded | May 21, 2026, 17:09 UTC | [records/openclaw-openclaw/closed/85011.md](https://github.com/openclaw/clawsweeper-state/blob/state/records/openclaw-openclaw/closed/85011.md) |
 
 <details>
 <summary>Recently Reviewed</summary>
@@ -108,7 +108,7 @@ Last source update: May 21, 2026, 18:55 UTC
 | --- | --- | --- | ---: | ---: | ---: | --- |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | missing records | May 21, 2026, 18:53 UTC | 48 | 0 | 0 | yes |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | clean | May 21, 2026, 18:51 UTC | 0 | 0 | 0 | yes |
-| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | missing records | May 21, 2026, 13:48 UTC | 4 | 0 | 0 | yes |
+| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | missing records | May 21, 2026, 18:58 UTC | 4 | 0 | 0 | yes |
 
 
 ## Repair Dashboard
