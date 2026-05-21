@@ -1,15 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-21T21:05:32.469Z",
+  "generated_at": "2026-05-21T21:05:33.579Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-21T18:05:28.377Z",
+  "since": "2026-05-21T18:05:29.448Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    65783
+    56145
+  ],
+  "comment_ids": [
+    4336358176
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,29 +34,29 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:65783:4323789294:2026-05-21T20:59:23Z:clawsweeper_needs_human",
-      "comment_id": "4323789294",
-      "comment_version_key": "4323789294:2026-05-21T20:59:23Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/65783#issuecomment-4323789294",
+      "idempotency_key": "comment-router:openclaw/openclaw:56145:4336358176:2026-05-21T21:03:27Z:automerge",
+      "comment_id": "4336358176",
+      "comment_version_key": "4336358176:2026-05-21T21:03:27Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/56145#issuecomment-4336358176",
       "repo": "openclaw/openclaw",
-      "issue_number": 65783,
+      "issue_number": 56145,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-27T02:31:10Z",
-      "comment_updated_at": "2026-05-21T20:59:23Z",
+      "comment_created_at": "2026-04-28T14:44:32Z",
+      "comment_updated_at": "2026-05-21T21:03:27Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
       "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "Review did not complete, so no work-lane recommendation was made. (sha=8436d9c01f5ed5c9a3ae8377dd98fe0237460fd0)",
-      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
-      "review_followup": "Review did not complete, so no work-lane recommendation was made.",
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": "The branch adds a helper to recombine non-streaming gateway reply payloads without per-chunk trimming and adds focused tests for final replies, /btw side results, single-newline boundaries, and CRLF trimming.\n\nReproducibility: yes. source-level. Current main still trims split non-streaming payload text in transcript construction, display extraction, and /btw aggregation, which explains indentation loss when YAML, lists, or code blocks cross payload boundaries.",
+      "review_followup": "A focused repair can transplant the existing combiner/tests into current main's active gateway reply assembly; no product or security decision is required.",
       "freeform_prompt": null,
       "expected_head_sha": "8436d9c01f5ed5c9a3ae8377dd98fe0237460fd0",
       "finding_id": null,
@@ -61,40 +64,45 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(memory): preserve surrogate pairs in chunker; sanitize embed inputs",
-        "body": "## Summary\n\n- Fix the outer coarse-split loop in `chunkMarkdown` so it does not bisect a UTF-16 surrogate pair (root cause of indexing stalls).\n- Add a defensive `stripUnpairedSurrogates` sanitizer at the embed boundary (the safety net #27753 originally requested).\n- Tests for both, including a new regression test that triggers the exact code path the existing surrogate-pair test missed.\n\nCloses #27753.\nFixes #65782.\n\n## Why\n\nMemory indexing stalls permanently for any agent whose content contains an emoji or supplementary-plane character that the chunker happens to split across a surrogate-pair boundary. `openclaw memory status` reports the index as `clean / no issues` while ~98% of sessions are unindexed.\n\nEnd-to-end symptom (verbose):\n\n```\n[memory] embeddings: batch start  (×N)\nMemory index failed (<agent>): openai embeddings failed: 500\n{\"error\":{\"message\":\"... 'utf-8' codec can't encode character '\\\\ud83c'\nin position 3229: surrogates not allowed ...\"}}\n```\n\nTwo failure modes compound:\n\n1. **Chunker** (`packages/memory-host-sdk/src/host/internal.ts`) — the inner fine-split loop already guards against splitting inside a surrogate pair, but the outer coarse loop advances by `start += maxChars` without checking the boundary. When the cut lands inside e.g. an emoji like 🌸 (`U+1F338` = `\\uD83C\\uDF38`), the chunk ends with a lone high surrogate and the next begins with a lone low surrogate. The existing surrogate-pair test (`\"does not break surrogate pairs when splitting long CJK lines\"`) does not catch this because it uses an all-surrogate-pair line — the high `estimateStringChars` weight forces the inner pass, which is correct.\n2. **Embedding HTTP path** — Python JSON encoders (e.g. via LiteLLM proxies) reject lone surrogates with a 500 wrapping a `UnicodeEncodeError`. The retry policy only matches `rate_limit | 429 | 5\\d\\d | cloudflare | tokens per day`, but the body shape is a connect-error, not a transient one — and the indexer is transactional, so a single bad batch rolls back the entire run. Every subsequent `openclaw memory index` invocation reproduces the same failure.\n\n## What changed\n\n### `packages/memory-host-sdk/src/host/internal.ts`\n\n```diff\n- for (let start = 0; start < line.length; start += maxChars) {\n-   const coarse = line.slice(start, start + maxChars);\n+ for (let start = 0; start < line.length; ) {\n+   let coarseEnd = Math.min(line.length, start + maxChars);\n+   // Avoid splitting inside a UTF-16 surrogate pair (emoji, CJK Extension B+).\n+   if (coarseEnd < line.length) {\n+     const lastCode = line.charCodeAt(coarseEnd - 1);\n+     if (lastCode >= 0xd800 && lastCode <= 0xdbff) {\n+       coarseEnd += 1; // include the trailing low surrogate\n+     }\n+   }\n+   const coarse = line.slice(start, coarseEnd);\n+   start = coarseEnd;\n```\n\nMirrors the existing inner-loop guard at the same file/line. New regression test (`\"does not break surrogate pairs at the coarse split boundary (issue #27753)\"`) constructs a line of `39 ASCII + 🌸 + 39 ASCII` so the outer cut at `start + maxChars = 40` lands between the high and low surrogate. Without the fix, the test fails by producing chunks containing lone surrogates.\n\n### `extensions/memory-core/src/memory/manager-embedding-ops.ts`\n\nAdds a tiny exported helper:\n\n```ts\nexport function stripUnpairedSurrogates(text: string): string {\n  return text.replace(\n    /[\\uD800-\\uDBFF](?![\\uDC00-\\uDFFF])|(?<![\\uD800-\\uDBFF])[\\uDC00-\\uDFFF]/g,\n    \"\\uFFFD\",\n  );\n}\n```\n\n…and applies it at the entry of `embedBatchWithRetry` and `embedBatchInputsWithRetry`. This is the change #27753 originally requested. It protects against any other code path that might produce a lone surrogate (LLM tool output, file ingestion, future chunkers) — chunker-only fix is necessary but not sufficient.\n\nAdds `manager-embedding-ops.test.ts` with focused unit tests for the helper (preserves valid pairs, replaces lone high/low surrogates, handles reversed pairs, no-op on empty/non-string).\n\n## Test plan\n\n- [x] Verified live on installed runtime (`openclaw 2026.4.5`) by patching the equivalent bundled artifact under `dist/manager-CKYnEo0k.js` and running `openclaw memory index --agent <id>`:\n\n  | | before | after |\n  |---|---:|---:|\n  | clawdea files | 6 | **166** |\n  | clawdea chunks | 93 | **4584** |\n  | dev files | 2 | **17** |\n  | dev chunks | 251 | **588** |\n\n  `openclaw memory search` works end-to-end after the fix.\n- [ ] CI runs `pnpm test` against the new unit tests in `extensions/memory-core` and `packages/memory-host-sdk`.\n- [ ] Existing surrogate-pair test (`\"does not break surrogate pairs when splitting long CJK lines\"`) still passes.\n\n## Notes for reviewers\n\n- I did not run `pnpm install` locally to execute vitest — the runtime fix is verified live, and the new tests follow the same vitest patterns as adjacent files (`manager-embedding-cache.test.ts`, `internal.test.ts`).\n- The retry-policy gap (`fetch failed` / `UnicodeEncodeError` 500 not retried) is a separate concern tracked in #56815 / #58255 — out of scope for this PR. With the chunker + sanitizer in place, the original failure no longer reaches the retry path.\n- If the team prefers the helper to live in a shared utility module (e.g. under `packages/memory-host-sdk`) rather than `manager-embedding-ops.ts`, happy to relocate.",
-        "branch": "fix/embedding-surrogate-pair-split-27753",
-        "head_sha": "8436d9c01f5ed5c9a3ae8377dd98fe0237460fd0",
-        "author": "jensenwang560-blip",
+        "title": "fix(gateway): preserve indentation when recombining non-streaming replies",
+        "body": "AI-assisted: yes (OpenClaw agent-authored).\nTesting: targeted local validation (gateway regression tests + targeted lint + pre-commit repo checks).\n\n## Summary\n\n- Companion to merged #55960, not a duplicate: #55960 fixed indentation loss while stripping inline reply directives in `src/utils/directive-tags.ts`; this PR fixes the remaining gateway-layer loss when non-streaming reply parts are recombined in `src/gateway/server-methods/chat.ts`.\n- Preserve each non-streaming payload chunk as authored when recombining it, so indentation-sensitive content survives payload boundaries.\n- Reuse that same combiner for `/btw` side results so sibling non-streaming gateway paths behave consistently.\n- Normalize `CRLF` / `CR` / `LF` boundary trimming and add focused regression coverage for the single-newline, `/btw`, and CRLF cases.\n- Scope boundary: no streaming-path formatting changes, no Markdown parsing changes, and no channel-specific formatting rules.\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [ ] Skills / tool execution\n- [ ] Auth / tokens\n- [ ] Memory / storage\n- [ ] Integrations\n- [ ] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- Closes #42576\n- Related #29377\n- Companion to merged #55960\n\n## Relationship to #55960\n\nMerged PR #55960 fixed one real whitespace-loss layer: inline reply-directive stripping in the shared parser (`src/utils/directive-tags.ts`).\n\nThis PR fixes a separate remaining layer later in the pipeline: gateway non-streaming recombination of final reply chunks (and `/btw` side-result chunks) in `src/gateway/server-methods/chat.ts`.\n\nSo the two PRs are adjacent and complementary, not overlapping duplicates.\n\n## User-visible / Behavior Changes\n\nNon-streaming final replies and `/btw` side results now preserve indentation when formatted content spans multiple payloads. When one chunk already ends with a single newline and the next chunk does not start with one, the gateway now preserves that authored single newline instead of forcing a blank line. The combiner also trims `CRLF` / `CR` / `LF` cleanly at outer boundaries so Windows-style line endings do not leak stray carriage returns.\n\nThis fixes the flattened-output symptom reported against Matrix, but the bug itself is generic to gateway non-streaming recombination of indentation-sensitive content rather than Matrix-specific formatting.\n\n## Security Impact (required)\n\n- New permissions/capabilities? (`Yes/No`) No\n- Secrets/tokens handling changed? (`Yes/No`) No\n- New/changed network calls? (`Yes/No`) No\n- Command/tool execution surface changed? (`Yes/No`) No\n- Data access scope changed? (`Yes/No`) No\n- If any `Yes`, explain risk + mitigation:\n\n## Repro + Verification\n\n### Environment\n\n- OS: Linux\n- Runtime/container: local Node.js checkout\n- Model/provider: n/a (gateway-side reply recombination)\n- Integration/channel (if any): reproduced against the gateway non-streaming `chat.send` path; user report was on Matrix\n- Relevant config (redacted): n/a\n\n### Steps\n\n1. Produce a non-streaming assistant reply whose formatted block is emitted across multiple final payloads.\n2. Include indentation-sensitive content such as nested YAML, a nested list, or a fenced code block.\n3. Observe the stored/broadcast final message text.\n\n### Expected\n\n- Indentation from each payload chunk is preserved in the final combined reply.\n\n### Actual\n\n- Leading whitespace at payload boundaries was trimmed away, flattening structured content.\n\n## Evidence\n\nAttach at least one:\n\n- [ ] Failing test/log before + passing after\n- [ ] Trace/log snippets\n- [x] Screenshot/recording\n- [ ] Perf numbers (if relevant)\n\nAdded focused regression coverage for:\n- the authored single-newline separator case\n- an indentation-sensitive `/btw` YAML side result\n- `CRLF` boundary trimming\n\nThe linked user issue includes before/after screenshots of the real-world symptom.\n\n## Human Verification (required)\n\nWhat you personally verified (not just CI), and how:\n\n- Verified scenarios: targeted gateway regression test for the single-newline recombination edge case; targeted `/btw` side-result regression test for an indented YAML block; targeted `CRLF` boundary regression coverage; targeted lint on the changed files; repo pre-commit checks during commit.\n- Edge cases checked: whitespace-only payload chunks are still ignored; separator insertion still only happens when adjacent chunks are not already separated by line breaks; authored single-newline separators are preserved instead of expanded to blank lines; `CRLF` boundaries do not leave stray carriage returns.\n- What you did **not** verify: live Matrix delivery against a running instance, broader streaming reply behavior outside the existing `/btw` block-side-result coverage, or full-repo test suites.\n\n## Review Conversations\n\n- [x] I replied to or resolved every bot review conversation I addressed in this PR.\n- [x] I left unresolved only the conversations that still need reviewer or maintainer judgment.\n\nIf a bot review conversation is addressed by this PR, resolve that conversation yourself. Do not leave bot review conversation cleanup for maintainers.\n\n## Compatibility / Migration\n\n- Backward compatible? (`Yes/No`) Yes\n- Config/env changes? (`Yes/No`) No\n- Migration needed? (`Yes/No`) No\n- If yes, exact upgrade steps:\n\n## Failure Recovery (if this breaks)\n\n- How to disable/revert this change quickly: revert commits `6b2461a11`, `c753cd0af`, and `d667f18f1` (or revert the PR branch changes as a unit)\n- Files/config to restore: `src/gateway/server-methods/chat.ts`, `src/gateway/server-methods/server-methods.test.ts`, and `src/gateway/server.chat.gateway-server-chat.test.ts`\n- Known bad symptoms reviewers should watch for: unexpected extra blank lines between merged payload chunks, unexpected loss of an authored single newline between chunks, stray carriage returns from `CRLF` boundaries, or lost indentation in `/btw` side results\n\n## Risks and Mitigations\n\n- Risk: preserving authored separators changes the old trim/join behavior for payloads that already end in a single newline.\n  - Mitigation: this is intentional, explicitly regression-tested, and still bounded by the same whitespace-only-chunk skipping plus separator insertion only when neither side already provides a line break.\n- Risk: preserving chunk text could expose `CRLF` edge cases at outer boundaries.\n  - Mitigation: the combiner now trims `CRLF` / `CR` / `LF` consistently at the start/end, with targeted regression coverage.\n- Risk: reviewers may mistake this PR for a duplicate of #55960.\n  - Mitigation: this description now names the exact layer split: `#55960` fixes directive parsing, this PR fixes gateway non-streaming recombination.\n",
+        "branch": "fix/non-streaming-indent-42576",
+        "head_sha": "601957a086c477a6bd501e173826944d6683d1b4",
+        "author": "vrurg",
         "labels": [
-          "extensions: memory-core",
+          "app: web-ui",
+          "gateway",
           "size: S",
           "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🌊 off-meta tidepool"
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "status: ⏳ waiting on author",
+          "proof: 📸 screenshot"
         ],
         "files": [
           {
-            "path": "extensions/memory-core/src/memory/manager-embedding-ops.test.ts",
-            "additions": 36,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager-embedding-ops.ts",
-            "additions": 28,
-            "deletions": 4,
+            "path": "src/gateway/server-methods/chat.directive-tags.test.ts",
+            "additions": 26,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "packages/memory-host-sdk/src/host/internal.test.ts",
-            "additions": 27,
-            "deletions": 0,
+            "path": "src/gateway/server-methods/chat.ts",
+            "additions": 29,
+            "deletions": 12,
             "changeType": "MODIFIED"
           },
           {
-            "path": "packages/memory-host-sdk/src/host/internal.ts",
-            "additions": 11,
+            "path": "src/gateway/server-methods/server-methods.test.ts",
+            "additions": 15,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.chat.gateway-server-chat.test.ts",
+            "additions": 42,
             "deletions": 2,
             "changeType": "MODIFIED"
           }
@@ -102,18 +110,18 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-65783",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-65783.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-56145",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-56145.md",
         "mode": "autonomous",
         "mergeable": "CONFLICTING",
         "merge_state_status": "DIRTY",
         "review_decision": "",
         "checks": {
-          "total": 57,
+          "total": 12,
           "counts": {
             "FAILURE": 1,
-            "SUCCESS": 47,
-            "SKIPPED": 9
+            "SUCCESS": 4,
+            "SKIPPED": 7
           },
           "blockers": [
             "Real behavior proof:FAILURE"
@@ -124,20 +132,20 @@
           ]
         }
       },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4482,
+    "total_ms": 4408,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 635
+        "ms": 645
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 3442
+        "ms": 3468
       },
       {
         "name": "classify_commands",
@@ -145,7 +153,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 378
+        "ms": 278
       },
       {
         "name": "append_ledger",
