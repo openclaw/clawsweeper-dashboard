@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-21T11:06:28.018Z",
+  "generated_at": "2026-05-21T11:06:43.051Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-21T08:06:24.306Z",
+  "since": "2026-05-21T08:06:42.551Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    83368
+    84922
   ],
-  "comment_ids": [
-    4473388185
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,236 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:83368:4473388185:2026-05-21T11:04:27Z:automerge",
-      "comment_id": "4473388185",
-      "comment_version_key": "4473388185:2026-05-21T11:04:27Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83368#issuecomment-4473388185",
-      "repo": "openclaw/openclaw",
-      "issue_number": 83368,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-18T01:27:11Z",
-      "comment_updated_at": "2026-05-21T11:04:27Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "automerge",
-      "intent": "automerge",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": "The branch adds shared gateway session-store alias helpers, routes gateway/session/plugin mutations through them, and expands regression coverage for raw/canonical external session aliases.\n\nReproducibility: yes. source-level for the review findings: a store with a canonical key and a fresher hidden raw alias is enough to see that migration selects only `target.storeKeys` and list filtering drops the raw alias before freshness-sensitive filters. I did not run tests because this review was required to keep the checkout read-only.",
-      "review_followup": "The remaining blockers are narrow mechanical alias freshness and list-collapse repairs with clear files and validation paths.",
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "ignored",
-      "actions": [],
-      "author_repository_permission": "none",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): preserve raw external session aliases",
-        "body": "Closes #63005.\n\n## Behavior addressed\n\nExternal raw session keys such as `conversation:pair:...` and opaque provider keys such as `Signal:Group:<mixed-case-id>` should survive gateway session-key canonicalization. Any follow-up mutation should keep the raw key and the visible `agent:<id>:` canonical key pointing at the same session entry instead of splitting history or plugin-owned state.\n\n## Root cause\n\n`migrateAndPruneGatewaySessionStoreKey` canonicalized raw external keys before preserving the raw-key store entry as an alias of the canonical agent key. The first fix preserved that raw alias, but some write paths still replaced, mutated, or deleted only one key.\n\nThe later review findings exposed the remaining gaps:\n\n- checkpoint restore, checkpoint metadata, manual compaction, and maxLines compaction metadata paths still wrote only the canonical entry\n- alias discovery lowercased opaque Signal group peer IDs\n- after `sessions.list` hid the raw alias, canonical-key patch/delete/reset/compact flows did not rediscover the hidden raw alias\n- plugin host-hook writers (`enqueuePluginNextTurnInjection`, `drainPluginNextTurnInjections`, and `patchPluginSessionExtension`) updated only `loaded.storeKey`, leaving hidden raw aliases with stale plugin state\n\nThe canonical-key derivation also has to preserve separators such as `user_a::user_b`, so it cannot use `parseAgentSessionKey` for raw-rest extraction because that parser drops empty segments.\n\n## Fix\n\nThe preserved raw-alias logic is now shared in `src/gateway/session-store-aliases.ts`, with alias-aware write, sync, and delete helpers.\n\nCovered mutation paths now route writes through the shared alias contract:\n\n- `sessions.patch`\n- `sessions.delete`\n- `sessions.reset`\n- agent writeback\n- node-event store touches\n- resolver sync\n- `sessions.compaction.restore`\n- compaction checkpoint metadata persistence\n- `sessions.compact` manual metadata updates\n- `sessions.compact` maxLines metadata updates\n- plugin next-turn injection enqueue/drain\n- plugin session-extension patch/unset\n\nPreserved raw aliases stay internal-only for lookup continuity: `sessions.list` filtering/search/count collapses a raw+canonical alias pair into one visible canonical session row.\n\nCanonical visible keys now rediscover an existing hidden raw alias by stripping the `agent:<id>:` prefix while preserving the rest of the key exactly. Canonical-only sessions do not grow a new raw alias.\n\nOpaque Signal group peer IDs are preserved when deriving raw aliases, so mixed-case group IDs do not create lowercased duplicate logical session rows.\n\n## Real Behavior Proof\n\n**Behavior or issue addressed:** Raw external session aliases are preserved during canonicalization, stay synchronized across direct session mutations, compaction/checkpoint lifecycle writes, canonical visible-key follow-ups, and plugin host-hook writes, while keeping only one visible canonical row in list/search/count.\n\n**Real environment tested:** Source checkout on PR head `1cde6d4a5d222273ed4c9c69b5d6e4ac402282c9`, base `f07c87405c3094feceaaf2f0f19a2e765a25e78d`, Node 22, repo dependencies installed.\n\n**Exact steps or command run after this patch:**\n\n```text\nnode --import tsx /private/tmp/pr83368-proof.ts\n```\n\nAlso ran the targeted and broader regression commands listed in the Validation section below.\n\n**Evidence after fix:**\n\n```json\n{\n  \"primaryKey\": \"agent:main:conversation:pair:user_a::user_b:space:space_123\",\n  \"preservedAliasKeys\": [\n    \"conversation:pair:user_a::user_b:space:space_123\"\n  ],\n  \"afterWrite\": {\n    \"canonicalSessionId\": \"sess-write\",\n    \"rawSessionId\": \"sess-write\",\n    \"rawSendPolicy\": \"deny\",\n    \"sameEntry\": true\n  },\n  \"visible\": {\n    \"listKeys\": [\n      \"agent:main:conversation:pair:user_a::user_b:space:space_123\"\n    ],\n    \"listCount\": 1,\n    \"listTotalCount\": 1,\n    \"searchKeys\": [\n      \"agent:main:conversation:pair:user_a::user_b:space:space_123\"\n    ],\n    \"searchCount\": 1,\n    \"searchTotalCount\": 1\n  },\n  \"deleted\": true,\n  \"afterDelete\": {\n    \"canonicalSessionId\": null,\n    \"rawSessionId\": null\n  },\n  \"canonicalVisibleKeyFlow\": {\n    \"listedKeys\": [\n      \"agent:main:conversation:pair:user_a::user_b:space:space_123\"\n    ],\n    \"afterWrite\": {\n      \"visibleKey\": \"agent:main:conversation:pair:user_a::user_b:space:space_123\",\n      \"primaryKey\": \"agent:main:conversation:pair:user_a::user_b:space:space_123\",\n      \"preservedAliasKeys\": [\n        \"conversation:pair:user_a::user_b:space:space_123\"\n      ],\n      \"canonicalSessionId\": \"sess-visible-write\",\n      \"rawSessionId\": \"sess-visible-write\",\n      \"rawSendPolicy\": \"deny\",\n      \"sameEntry\": true\n    },\n    \"deleted\": true,\n    \"afterDelete\": {\n      \"canonicalSessionId\": null,\n      \"rawSessionId\": null\n    }\n  }\n}\n```\n\nThe command printed local stale-plugin config warnings for `multica`; they are unrelated to this PR and did not affect the session-store proof.\n\n**Observed result after fix:** The raw alias and canonical key share the same written entry after replacement, including patched `sendPolicy`; list and search return one visible canonical row with `totalCount: 1`; delete removes both keys. Starting from the visible canonical list key also rediscovers the hidden raw alias, writes both aliases, and deletes both aliases. The plugin regressions show canonical-key plugin next-turn enqueue/drain and session-extension patch/unset update or clear the hidden raw alias too.\n\n**What was not tested:** No full live external chat-channel round trip was run. No screenshots are attached because this is backend session-store behavior with no visual UI surface.\n\n## Regression Coverage\n\n- `src/gateway/session-utils.test.ts` covers raw/canonical alias collapse, mixed-case Signal opaque-ID preservation, canonical-key rediscovery, and canonical-only no-new-raw-alias behavior.\n- `src/gateway/server.sessions.store-rpc.test.ts` covers list-to-patch/list-to-delete using the visible canonical key while the hidden raw alias follows.\n- `src/gateway/server.sessions.reset-cleanup.test.ts` covers reset alias synchronization.\n- `src/gateway/session-compaction-checkpoints.test.ts` covers checkpoint metadata persistence to both aliases.\n- `src/gateway/server.sessions.compaction.test.ts` covers checkpoint restore, manual compaction metadata, and maxLines compaction metadata alias sync.\n- `src/plugins/contracts/host-hooks.contract.test.ts` covers canonical-key plugin next-turn injection enqueue and drain syncing the hidden raw alias.\n- `src/plugins/contracts/session-entry-projection.contract.test.ts` covers canonical-key plugin session-extension patch and unset syncing the hidden raw alias and promoted slot.\n\n## Validation\n\nRan on head `1cde6d4a5d222273ed4c9c69b5d6e4ac402282c9`:\n\n```text\nnode scripts/run-vitest.mjs src/gateway/session-utils.test.ts src/gateway/server.sessions.store-rpc.test.ts src/plugins/contracts/host-hooks.contract.test.ts src/plugins/contracts/session-entry-projection.contract.test.ts\nTest Files  6 passed (6)\nTests       347 passed (347)\n```\n\n```text\nnode scripts/run-vitest.mjs src/gateway/session-utils.test.ts src/gateway/server.sessions.store-rpc.test.ts src/gateway/server.sessions.reset-cleanup.test.ts src/gateway/server-methods/agent.test.ts src/gateway/server-node-events.test.ts src/gateway/sessions-resolve.test.ts src/gateway/session-compaction-checkpoints.test.ts src/gateway/server.sessions.compaction.test.ts src/plugins/contracts/host-hooks.contract.test.ts src/plugins/contracts/session-entry-projection.contract.test.ts\nTest Files  17 passed (17)\nTests       650 passed (650)\n```\n\n```text\nnode scripts/run-oxlint.mjs src/gateway/session-store-aliases.ts src/gateway/session-utils.ts src/gateway/server-methods/sessions.ts src/plugins/host-hook-state.ts\nFound 0 warnings and 0 errors.\n```\n\n```text\n./node_modules/.bin/oxfmt --check --threads=1 src/gateway/session-store-aliases.ts src/gateway/session-utils.ts src/plugins/host-hook-state.ts src/plugins/contracts/host-hooks.contract.test.ts src/plugins/contracts/session-entry-projection.contract.test.ts\nAll matched files use the correct format.\n```\n\n```text\ngit diff --check\n```\n\n`pnpm docs:list` was run before editing. Broad Testbox changed gate was not run because the `blacksmith` CLI is not installed in this environment; local validation was kept to targeted gateway/plugin proof and GitHub CI is running on the pushed head.\n\n## Screenshots\n\nNo screenshots apply because this is backend session-store alias synchronization, not a visual UI surface.\n",
-        "branch": "fix/session-raw-external-alias",
-        "head_sha": "1cde6d4a5d222273ed4c9c69b5d6e4ac402282c9",
-        "author": "stainlu",
-        "labels": [
-          "gateway",
-          "size: XL",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/gateway/server-methods/agent.ts",
-            "additions": 8,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/sessions.ts",
-            "additions": 57,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-node-events.runtime.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-node-events.test.ts",
-            "additions": 21,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-node-events.ts",
-            "additions": 22,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.sessions.compaction.test.ts",
-            "additions": 222,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.sessions.reset-cleanup.test.ts",
-            "additions": 40,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.sessions.store-rpc.test.ts",
-            "additions": 84,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-compaction-checkpoints.test.ts",
-            "additions": 58,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-compaction-checkpoints.ts",
-            "additions": 24,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-reset-service.ts",
-            "additions": 8,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-store-aliases.ts",
-            "additions": 152,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/session-utils.test.ts",
-            "additions": 285,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-utils.ts",
-            "additions": 75,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/sessions-resolve.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/sessions-resolve.ts",
-            "additions": 15,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/contracts/host-hooks.contract.test.ts",
-            "additions": 101,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/contracts/session-entry-projection.contract.test.ts",
-            "additions": 104,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/host-hook-state.ts",
-            "additions": 76,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83368",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83368.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 106,
-          "counts": {
-            "SUCCESS": 72,
-            "SKIPPED": 25,
-            "FAILURE": 8,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "build-artifacts:FAILURE",
-            "check-guards:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-channels:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "build-artifacts:FAILURE",
-            "check-guards:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-channels:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
-          ]
-        }
-      },
-      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
-    }
-  ],
+  "commands": [],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 4051,
+    "total_ms": 897,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 654
+        "ms": 490
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 3043
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 338
+        "ms": 398
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
