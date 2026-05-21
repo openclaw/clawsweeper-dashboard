@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-21T10:20:06.834Z",
+  "generated_at": "2026-05-21T10:22:13.691Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-21T07:20:03.586Z",
+  "since": "2026-05-21T07:22:10.748Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    83933
+    84009
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4484888291
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 26,
-  "commands_seen": 5,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,17 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:83933:4483960885:2026-05-21T10:19:55Z:automerge",
-      "comment_id": "4483960885",
-      "comment_version_key": "4483960885:2026-05-21T10:19:55Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83933#issuecomment-4483960885",
+      "idempotency_key": "comment-router:openclaw/openclaw:84009:4484888291:2026-05-21T10:20:25Z:automerge",
+      "comment_id": "4484888291",
+      "comment_version_key": "4484888291:2026-05-21T10:20:25Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84009#issuecomment-4484888291",
       "repo": "openclaw/openclaw",
-      "issue_number": 83933,
+      "issue_number": 84009,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-19T02:43:26Z",
-      "comment_updated_at": "2026-05-21T10:19:55Z",
+      "comment_created_at": "2026-05-19T06:07:01Z",
+      "comment_updated_at": "2026-05-21T10:20:25Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "automerge",
@@ -52,8 +54,8 @@
       "trusted_bot_author": null,
       "automation_source": null,
       "repair_reason": null,
-      "review_summary": "The PR adds an isManual option to cron result application, marks manual run completions as manual, and adds timer/failure-alert regression coverage for deleteAfterRun, counters, alerts, and at-job state.\n\nReproducibility: yes. source-level reproduction is high confidence: current main manual run paths call applyJobResult without a manual discriminator, and current applyJobResult deletes deleteAfterRun at-jobs on ok results while mutating retry counters. I did not run tests in this read-only review.",
-      "review_followup": "A narrow repair remains: add the manual-run guard to the non-at error/backoff branch and cover every/cron manual-error state preservation.",
+      "review_summary": "The PR adds a gateway maintenance scheduler for stale daily sessions, wires its timer into gateway lifecycle cleanup, extends reset-service reason handling, adds focused tests, and updates session docs.\n\nReproducibility: yes. Source inspection shows current main only evaluates daily freshness in the inbound requested-session path, and the linked issue gives a concrete no-message-after-boundary scenario.",
+      "review_followup": "A focused repair can bind the scheduled reset to the scanned row and add the missing duplicate-store regression coverage; maintainer review still owns accepting proactive rollover compatibility.",
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
@@ -62,539 +64,164 @@
       "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix(cron): skip deleteAfterRun and preserve counters for manual runs (#83538)",
-        "body": "## Summary\n\n`openclaw cron run` (manual/debug runs) on a `deleteAfterRun` at-job deletes the job on success — consuming the one-shot and preventing its scheduled execution. Manual runs also mutate `consecutiveErrors`/`consecutiveSkipped` counters, interfering with scheduled retry/backoff state.\n\nThis PR adds an `isManual` flag to `applyJobResult` so manual runs preserve the job and leave scheduled execution state untouched.\n\n## Root cause\n\n`applyJobResult()` has no concept of manual vs scheduled runs. When a manual run succeeds on a `deleteAfterRun: true` at-job, `shouldDelete` evaluates to `true` and the job is removed from the store — the scheduled fire never happens.\n\nAdditionally, manual error/skipped/success outcomes unconditionally mutate `consecutiveErrors` and `consecutiveSkipped` counters, which control retry backoff and auto-disable behavior for scheduled runs.\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `timer.ts` | Add `isManual` option to `applyJobResult`; skip `deleteAfterRun` for manual runs; guard all counter mutations and alert emissions with `!isManual` |\n| `ops.ts` | Pass `isManual: true` from manual run completion and invalid-persisted-run handling |\n| `timer.regression.test.ts` | 5 new tests: manual ok/error preserve job, manual doesn't increment/reset counters |\n\n## Tests\n\n```\n$ node scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts\n ✓ cron (45 tests) 144ms\n Test Files  1 passed (1)\n      Tests  45 passed (45)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Manual `cron run` on a `deleteAfterRun` at-job deletes it, preventing scheduled execution. Manual runs also mutate scheduled retry counters.\n- **Real environment tested**: Local OpenClaw checkout at `aa92a4a5b0`, macOS arm64, Node.js v24.10.0.\n\n### Source-level proof\n\n```\nMain branch applyJobResult():\n  - shouldDelete = kind === \"at\" && deleteAfterRun && status === \"ok\"\n    → no manual discriminator, always deletes on success\n  - consecutiveErrors incremented unconditionally on error\n  - consecutiveSkipped incremented unconditionally on skip\n\nFix branch:\n  - shouldDelete = wouldDelete && !opts?.isManual\n    → manual runs never trigger deletion\n  - Counter mutations guarded: if (!opts?.isManual) { ... }\n    → manual runs don't affect retry/backoff state\n```\n\n### Regression test coverage\n\n```\n✅ manual ok on deleteAfterRun at-job → job preserved, not deleted\n✅ manual error on deleteAfterRun at-job → job preserved, not deleted  \n✅ scheduled ok on deleteAfterRun at-job → job deleted (unchanged behavior)\n✅ manual error does not increment consecutiveErrors (pre-existing=3 → still 3)\n✅ manual success does not reset consecutiveErrors (pre-existing=3 → still 3)\n```\n\n- **What was not tested**: Live `openclaw cron run` CLI flow (requires a running gateway with a configured `deleteAfterRun` at-job). The `isManual` flag propagation from `ops.ts` to `applyJobResult` is validated at the unit level.\n\nCloses #83538\n\n\n### Re-verification (2026-05-20)\n\nLocal checkout at `d89f14de26`, macOS arm64, Node.js `v24.10.0`.\n\n```\n$ node scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts\n\n ✓ cron  ../../src/cron/service/timer.regression.test.ts (39 tests) 116ms\n\n Test Files  1 passed (1)\n      Tests  39 passed (39)\n   Duration  152ms\n```\n\nFull cron suite (`src/cron/`) also run: 94 test files, 901 passed. The 7 failures are in unrelated files (`run-log.test.ts`, `service.failure-alert.test.ts`) pre-existing on upstream/main.\n\n\n## Real behavior proof\n\n- **Behavior addressed**: `openclaw cron run` (manual) of a `deleteAfterRun: true` at-job incorrectly deletes the job. Manual runs also pollute `consecutiveErrors`/`consecutiveSkipped` counters.\n- **Real environment tested**: Local patched checkout at `0cec2acc7a`, macOS arm64, Node.js v24.10.0.\n- **Failing proof before fix**: On `upstream/main`, counter mutations and `shouldDelete` run unconditionally — no `isManual` discriminator exists.\n- **Exact steps after patch**: `node scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts` + `src/cron/service.failure-alert.test.ts`\n- **Evidence after fix**: 46/46 timer regression tests pass (including 7 new #83538/#83933-specific tests). 7/7 failure-alert tests pass.\n- **What was not tested**: Live Gateway CLI flow; the tests exercise the same `applyJobResult` code path the Gateway calls internally.\n\n### Key test results\n\n| Scenario | Result |\n|----------|--------|\n| Manual run + deleteAfterRun + success | NOT deleted ✅ |\n| Scheduled run + deleteAfterRun + success | Deleted ✅ |\n| Manual error + consecutiveErrors=3 | Stays 3 ✅ |\n| Manual success + consecutiveErrors=5 | Stays 5 ✅ |\n| Manual error → failure alert | NOT triggered ✅ |\n| Scheduled error → failure alert | Triggered ✅ |\n\n\n## Real behavior proof (Docker, 2026-05-21)\n\n**Environment**: Docker container, `node:24-bookworm-slim` (aarch64), patched source at `885d605e56`.\n\n### Latest fixes\n\n| Issue | Problem | Fix |\n|-------|---------|-----|\n| P1 | Manual at-job error was disabling job (`enabled=false`, `nextRunAtMs=undefined`) | At-job error retry/disable block now guarded with `if (opts?.isManual)` |\n| P2 | Manual success was clearing `lastFailureAlertAtMs` cooldown | Cooldown clearing now inside `if (!opts?.isManual)` guard |\n\n### Test results\n\n| Test Suite | Result |\n|------------|--------|\n| Timer regression (49 tests) | ✅ All passed |\n| Failure-alert (7 tests) | ✅ All passed |\n\n### Key verified behaviors\n\n| Scenario | Result |\n|----------|--------|\n| Manual at-job error | `enabled` stays true, `nextRunAtMs` preserved ✅ |\n| Manual success | `lastFailureAlertAtMs` cooldown preserved ✅ |\n| Manual run + deleteAfterRun | Job NOT deleted ✅ |\n| Scheduled run + deleteAfterRun | Job deleted ✅ |\n| Manual error + consecutiveErrors=3 | Stays 3 ✅ |\n| Manual success + consecutiveErrors=5 | Stays 5 ✅ |\n\n\n## Real CLI proof (Docker Gateway, 2026-05-21)\n\n**Environment**: Docker `node:24-bookworm-slim` (aarch64), patched Gateway at `885d605e56` running with `--allow-unconfigured`.\n\n**Terminal transcript**: `openclaw cron add` → `cron show` → `cron run` (manual, triggers error) → `cron show` (job still exists, enabled=true, nextRunAtMs preserved) → `cron list` (job present) → `cron runs` (run history with error status, nextRunAtMs unchanged).\n\n| Step | Command | Result |\n|------|---------|--------|\n| Add job | `openclaw cron add --name proof-job --at ... --delete-after-run` | Created with `deleteAfterRun: true` |\n| Manual run | `openclaw cron run <id>` | `{\"ok\": true, \"enqueued\": true}` |\n| After run | `openclaw cron show <id>` | `enabled: true`, `nextRunAtMs: preserved` ✅ |\n| Job exists | `openclaw cron list` | Job still listed ✅ |\n| Run history | `openclaw cron runs --id <id>` | `status: \"error\"`, `nextRunAtMs: preserved` ✅ |\n",
-        "branch": "fix/cron-delete-after-run-manual-83538",
-        "head_sha": "885d605e56e507f262af2036f53962ae6e9e0a13",
-        "author": "jerry-xin",
+        "title": "fix(gateway): run daily session resets on schedule",
+        "body": "## Summary\n\n- Daily session resets now run from gateway maintenance instead of waiting for the next inbound session use.\n- The scheduler scans configured session stores and calls the existing reset service for stale daily sessions after the configured boundary.\n- The maintenance timer now reads current runtime config on each sweep, so hot config changes to `session.reset`, `session.resetByType`, `session.resetByChannel`, or store targets are applied without a gateway restart.\n- Docs now describe proactive daily rollover and the implicit provider-owned CLI session exemption.\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor required for the fix\n- [x] Docs\n- [ ] Security hardening\n- [x] Chore/infra\n\n## Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [ ] Skills / tool execution\n- [ ] Auth / tokens\n- [x] Memory / storage\n- [ ] Integrations\n- [ ] API / contracts\n- [ ] UI / DX\n- [x] CI/CD / infra\n- [x] Docs\n\n## Linked Issue/PR\n\n- Fixes #82321\n- Related: N/A\n- [x] This PR fixes a bug or regression\n\n## Motivation\n\nA daily reset with `atHour` is a wall-clock policy. Users should not need to send a new message after the reset boundary before stale session context is cleared. The maintenance sweep should also honor the current runtime config after hot reloads, not the startup snapshot.\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: Daily sessions stale past `atHour` are reset by gateway maintenance without waiting for a new inbound message, while active runs and implicit provider-owned CLI sessions are preserved.\n- Real environment tested: Local OpenClaw checkout in a Linux container, on branch `fix-daily-session-reset`, running the patched gateway maintenance timer against an isolated temp `OPENCLAW_STATE_DIR`. Bundled plugin facades were disabled for the proof process with `OPENCLAW_DISABLE_BUNDLED_PLUGINS=1` so the reset service did not depend on source-checkout plugin artifacts.\n- Exact steps or command run after this patch:\n  - Ran a live Node command that starts `startGatewayMaintenanceTimers` with the patched daily reset scheduler, current-config getter, real `performGatewaySessionReset` path, isolated temp session store, one stale daily session, one stale active-run session, and one implicit provider-owned CLI session.\n  - Command shape: `OPENCLAW_STATE_DIR=<tmp> OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 node --import tsx - <<'TS' ... startGatewayMaintenanceTimers(...) ... TS`\n  - Supplemental verification: `./node_modules/.bin/vitest run src/gateway/session-daily-reset-scheduler.test.ts src/gateway/server-maintenance.test.ts --config test/vitest/vitest.gateway.config.ts`\n  - Supplemental type gates: `pnpm check:test-types && pnpm tsgo:prod`\n- Evidence after fix:\n  ```text\n  $ OPENCLAW_STATE_DIR=<tmp> OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 node --import tsx - <<'TS'\n  # creates isolated agents/main/sessions/sessions.json\n  # starts patched gateway maintenance timers\n  # waits for daily reset sweep to invoke the real reset service\n  TS\n  gateway-proof: before {\"stale\":\"old-regular-session\",\"active\":\"old-active-session\",\"cli\":\"old-cli-session\"}\n  [session-daily-reset] daily session reset sweep complete\n  gateway-proof: after {\"stale\":\"5f959c12-f0ed-4ed1-99d2-cc158c66ac87\",\"active\":\"old-active-session\",\"cli\":\"old-cli-session\"}\n  gateway-proof: staleReset true\n  gateway-proof: activePreserved true\n  gateway-proof: implicitCliPreserved true\n\n  $ ./node_modules/.bin/vitest run src/gateway/session-daily-reset-scheduler.test.ts src/gateway/server-maintenance.test.ts --config test/vitest/vitest.gateway.config.ts\n  Test Files  2 passed (2)\n  Tests       18 passed (18)\n\n  $ pnpm check:test-types && pnpm tsgo:prod\n  exit_code=0\n  ```\n- Observed result after fix: The running gateway maintenance timer reset the stale daily session through the actual reset service without any inbound message. The active-run session and implicit provider-owned CLI session kept their original session IDs. Focused coverage also verifies fresh sessions are left alone and later sweeps use current runtime config after reset policy changes.\n- What was not tested: A multi-hour live gateway wait that naturally crosses the configured reset hour.\n\n## Root Cause (if applicable)\n\nDaily reset freshness was only evaluated through session-use paths. If no message arrived after `atHour`, the stale session could remain active even though the configured reset time had passed. The initial scheduler also captured the startup config, which meant hot reloads could leave the sweep using stale reset policy until restart.\n\n## Regression Test Plan (if applicable)\n\n- Coverage level:\n  - [ ] Unit test\n  - [x] Seam / integration test\n  - [ ] End-to-end test\n  - [ ] Existing coverage already sufficient\n- Target test or file:\n  - `src/gateway/session-daily-reset-scheduler.test.ts`\n  - `src/gateway/server-maintenance.test.ts`\n- Locked-in scenarios:\n  - A stale daily session resets during a scheduler sweep without a new message.\n  - A fresh daily session is left alone.\n  - Implicit provider-owned CLI sessions are not cut by the default daily policy.\n  - Sessions with active runs are skipped.\n  - Scheduler sweeps use current runtime config after a reset-policy change.\n- Existing coverage before this patch covered stale detection when called, but not proactive scheduled execution or reload-aware maintenance behavior.\n\n## User-visible / Behavior Changes\n\nConfigured daily session resets now happen on schedule during gateway uptime, even if no message arrives after the reset boundary. The public docs now state that proactive rollover can happen from gateway maintenance and that implicit provider-owned CLI sessions keep continuity unless reset is explicit.\n\n## Diagram (if applicable)\n\n```text\ndaily reset boundary\n  -> gateway maintenance sweep\n  -> read current runtime config\n  -> skip active runs and implicit provider-owned CLI sessions\n  -> stale daily sessions reset through existing reset service\n```\n\n## Security Impact (required)\n\n- New permissions/capabilities? (`Yes/No`) No\n- Secrets/tokens handling changed? (`Yes/No`) No\n- New/changed network calls? (`Yes/No`) No\n- Command/tool execution surface changed? (`Yes/No`) No\n- Data access scope changed? (`Yes/No`) No\n- No security-impacting changes identified.\n\n## Repro + Verification\n\n### Environment\n\n- OS: Linux container\n- Runtime/container: Local OpenClaw checkout\n- Model/provider: N/A\n- Integration/channel: N/A\n- Relevant config: `session.reset.mode=daily`, `session.reset.atHour=4`\n\n### Steps\n\n1. Create a session store entry with `sessionStartedAt` before the daily reset boundary.\n2. Run the daily reset scheduler scan with `nowMs` after the reset boundary.\n3. Confirm the reset callback runs for the stale session.\n4. Repeat with a fresh post-boundary session and confirm it is not reset.\n5. Mark a stale session key active and confirm it is skipped.\n6. Add provider-owned CLI continuity under the implicit reset policy and confirm it is skipped.\n7. Change the scheduler's runtime config from a noon reset boundary to a 4 AM reset boundary and confirm the next sweep uses the new policy.\n\n### Expected\n\nStale daily sessions reset without inbound traffic; fresh, active, and implicitly provider-owned CLI sessions remain unchanged; config reloads affect future scheduler sweeps.\n\n### Actual\n\nThe focused scheduler and gateway maintenance tests match that behavior.\n\n## Evidence\n\nIncluded evidence:\n\n- Focused scheduler and maintenance test output.\n- Test and production typecheck output.\n- Docs updated in:\n  - `docs/concepts/session.md`\n  - `docs/gateway/config-agents.md`\n  - `docs/reference/session-management-compaction.md`\n\n## Human Verification (required)\n\n- Verified scenarios: stale daily reset scheduler path, fresh-session no-op path, active-run skip, implicit provider-owned CLI skip, runtime-config reload path, gateway maintenance timer lifecycle.\n- Edge cases checked: scheduler skips overlapping sweeps; shutdown/runtime cleanup clears the timer; type gates pass.\n- Not verified: a live gateway instance naturally crossing the configured reset hour.\n\n## Review Conversations\n\n- [x] I replied to or resolved every bot review conversation I addressed in this PR.\n- [x] I left unresolved only the conversations that still need reviewer or maintainer judgment.\n\n## Compatibility / Migration\n\n- Backward compatible? (`Yes/No`) Yes\n- Config/env changes? (`Yes/No`) No\n- Migration needed? (`Yes/No`) No\n- Upgrade steps: N/A\n\n## Risks and Mitigations\n\n- Risk: the gateway now scans configured session stores every minute.\n- Mitigation: scans are bounded to discovered session stores, skip overlapping runs, and only call reset for stale daily sessions.\n- Risk: deployments that assumed lazy daily resets may observe earlier reset behavior.\n- Mitigation: the new behavior matches the configured wall-clock expectation for `mode: daily` and `atHour`.\n- Risk: hot config changes could otherwise make the scheduler use stale reset policy.\n- Mitigation: future sweeps call the gateway runtime config getter before scanning.",
+        "branch": "fix-daily-session-reset",
+        "head_sha": "85361df6fda446c876a0d90b09d84b248327bf63",
+        "author": "stevenepalmer",
         "labels": [
-          "size: L",
-          "triage: needs-real-behavior-proof",
+          "docs",
+          "gateway",
+          "size: M",
+          "proof: supplied",
           "proof: sufficient",
-          "P1",
+          "P2",
           "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
           "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
           "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/cron/service.failure-alert.test.ts",
-            "additions": 28,
-            "deletions": 15,
+            "path": "docs/concepts/session.md",
+            "additions": 3,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cron/service/ops.ts",
+            "path": "docs/gateway/config-agents.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/reference/session-management-compaction.md",
             "additions": 2,
-            "deletions": 2,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cron/service/timer.regression.test.ts",
-            "additions": 368,
+            "path": "src/gateway/server-close.test.ts",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cron/service/timer.ts",
-            "additions": 88,
-            "deletions": 56,
+            "path": "src/gateway/server-close.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-maintenance.test.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-maintenance.ts",
+            "additions": 21,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-runtime-handles.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-runtime-services.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-runtime-services.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-early.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.impl.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-daily-reset-scheduler.test.ts",
+            "additions": 185,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/session-daily-reset-scheduler.ts",
+            "additions": 141,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/session-reset-service.ts",
+            "additions": 3,
+            "deletions": 3,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83933",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83933.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84009",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84009.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 103,
+          "total": 102,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 27,
-            "SUCCESS": 70,
-            "FAILURE": 3,
+            "SUCCESS": 73,
+            "SKIPPED": 28,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ]
+          "terminalBlockers": []
         }
       },
       "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:83933:4502354045:2026-05-20T20:24:19Z:re_review",
-      "comment_id": "4502354045",
-      "comment_version_key": "4502354045:2026-05-20T20:24:19Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83933#issuecomment-4502354045",
-      "repo": "openclaw/openclaw",
-      "issue_number": 83933,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T20:24:19Z",
-      "comment_updated_at": "2026-05-20T20:24:19Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): skip deleteAfterRun and preserve counters for manual runs (#83538)",
-        "body": "## Summary\n\n`openclaw cron run` (manual/debug runs) on a `deleteAfterRun` at-job deletes the job on success — consuming the one-shot and preventing its scheduled execution. Manual runs also mutate `consecutiveErrors`/`consecutiveSkipped` counters, interfering with scheduled retry/backoff state.\n\nThis PR adds an `isManual` flag to `applyJobResult` so manual runs preserve the job and leave scheduled execution state untouched.\n\n## Root cause\n\n`applyJobResult()` has no concept of manual vs scheduled runs. When a manual run succeeds on a `deleteAfterRun: true` at-job, `shouldDelete` evaluates to `true` and the job is removed from the store — the scheduled fire never happens.\n\nAdditionally, manual error/skipped/success outcomes unconditionally mutate `consecutiveErrors` and `consecutiveSkipped` counters, which control retry backoff and auto-disable behavior for scheduled runs.\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `timer.ts` | Add `isManual` option to `applyJobResult`; skip `deleteAfterRun` for manual runs; guard all counter mutations and alert emissions with `!isManual` |\n| `ops.ts` | Pass `isManual: true` from manual run completion and invalid-persisted-run handling |\n| `timer.regression.test.ts` | 5 new tests: manual ok/error preserve job, manual doesn't increment/reset counters |\n\n## Tests\n\n```\n$ node scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts\n ✓ cron (45 tests) 144ms\n Test Files  1 passed (1)\n      Tests  45 passed (45)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Manual `cron run` on a `deleteAfterRun` at-job deletes it, preventing scheduled execution. Manual runs also mutate scheduled retry counters.\n- **Real environment tested**: Local OpenClaw checkout at `aa92a4a5b0`, macOS arm64, Node.js v24.10.0.\n\n### Source-level proof\n\n```\nMain branch applyJobResult():\n  - shouldDelete = kind === \"at\" && deleteAfterRun && status === \"ok\"\n    → no manual discriminator, always deletes on success\n  - consecutiveErrors incremented unconditionally on error\n  - consecutiveSkipped incremented unconditionally on skip\n\nFix branch:\n  - shouldDelete = wouldDelete && !opts?.isManual\n    → manual runs never trigger deletion\n  - Counter mutations guarded: if (!opts?.isManual) { ... }\n    → manual runs don't affect retry/backoff state\n```\n\n### Regression test coverage\n\n```\n✅ manual ok on deleteAfterRun at-job → job preserved, not deleted\n✅ manual error on deleteAfterRun at-job → job preserved, not deleted  \n✅ scheduled ok on deleteAfterRun at-job → job deleted (unchanged behavior)\n✅ manual error does not increment consecutiveErrors (pre-existing=3 → still 3)\n✅ manual success does not reset consecutiveErrors (pre-existing=3 → still 3)\n```\n\n- **What was not tested**: Live `openclaw cron run` CLI flow (requires a running gateway with a configured `deleteAfterRun` at-job). The `isManual` flag propagation from `ops.ts` to `applyJobResult` is validated at the unit level.\n\nCloses #83538\n\n\n### Re-verification (2026-05-20)\n\nLocal checkout at `d89f14de26`, macOS arm64, Node.js `v24.10.0`.\n\n```\n$ node scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts\n\n ✓ cron  ../../src/cron/service/timer.regression.test.ts (39 tests) 116ms\n\n Test Files  1 passed (1)\n      Tests  39 passed (39)\n   Duration  152ms\n```\n\nFull cron suite (`src/cron/`) also run: 94 test files, 901 passed. The 7 failures are in unrelated files (`run-log.test.ts`, `service.failure-alert.test.ts`) pre-existing on upstream/main.\n\n\n## Real behavior proof\n\n- **Behavior addressed**: `openclaw cron run` (manual) of a `deleteAfterRun: true` at-job incorrectly deletes the job. Manual runs also pollute `consecutiveErrors`/`consecutiveSkipped` counters.\n- **Real environment tested**: Local patched checkout at `0cec2acc7a`, macOS arm64, Node.js v24.10.0.\n- **Failing proof before fix**: On `upstream/main`, counter mutations and `shouldDelete` run unconditionally — no `isManual` discriminator exists.\n- **Exact steps after patch**: `node scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts` + `src/cron/service.failure-alert.test.ts`\n- **Evidence after fix**: 46/46 timer regression tests pass (including 7 new #83538/#83933-specific tests). 7/7 failure-alert tests pass.\n- **What was not tested**: Live Gateway CLI flow; the tests exercise the same `applyJobResult` code path the Gateway calls internally.\n\n### Key test results\n\n| Scenario | Result |\n|----------|--------|\n| Manual run + deleteAfterRun + success | NOT deleted ✅ |\n| Scheduled run + deleteAfterRun + success | Deleted ✅ |\n| Manual error + consecutiveErrors=3 | Stays 3 ✅ |\n| Manual success + consecutiveErrors=5 | Stays 5 ✅ |\n| Manual error → failure alert | NOT triggered ✅ |\n| Scheduled error → failure alert | Triggered ✅ |\n\n\n## Real behavior proof (Docker, 2026-05-21)\n\n**Environment**: Docker container, `node:24-bookworm-slim` (aarch64), patched source at `885d605e56`.\n\n### Latest fixes\n\n| Issue | Problem | Fix |\n|-------|---------|-----|\n| P1 | Manual at-job error was disabling job (`enabled=false`, `nextRunAtMs=undefined`) | At-job error retry/disable block now guarded with `if (opts?.isManual)` |\n| P2 | Manual success was clearing `lastFailureAlertAtMs` cooldown | Cooldown clearing now inside `if (!opts?.isManual)` guard |\n\n### Test results\n\n| Test Suite | Result |\n|------------|--------|\n| Timer regression (49 tests) | ✅ All passed |\n| Failure-alert (7 tests) | ✅ All passed |\n\n### Key verified behaviors\n\n| Scenario | Result |\n|----------|--------|\n| Manual at-job error | `enabled` stays true, `nextRunAtMs` preserved ✅ |\n| Manual success | `lastFailureAlertAtMs` cooldown preserved ✅ |\n| Manual run + deleteAfterRun | Job NOT deleted ✅ |\n| Scheduled run + deleteAfterRun | Job deleted ✅ |\n| Manual error + consecutiveErrors=3 | Stays 3 ✅ |\n| Manual success + consecutiveErrors=5 | Stays 5 ✅ |\n\n\n## Real CLI proof (Docker Gateway, 2026-05-21)\n\n**Environment**: Docker `node:24-bookworm-slim` (aarch64), patched Gateway at `885d605e56` running with `--allow-unconfigured`.\n\n**Terminal transcript**: `openclaw cron add` → `cron show` → `cron run` (manual, triggers error) → `cron show` (job still exists, enabled=true, nextRunAtMs preserved) → `cron list` (job present) → `cron runs` (run history with error status, nextRunAtMs unchanged).\n\n| Step | Command | Result |\n|------|---------|--------|\n| Add job | `openclaw cron add --name proof-job --at ... --delete-after-run` | Created with `deleteAfterRun: true` |\n| Manual run | `openclaw cron run <id>` | `{\"ok\": true, \"enqueued\": true}` |\n| After run | `openclaw cron show <id>` | `enabled: true`, `nextRunAtMs: preserved` ✅ |\n| Job exists | `openclaw cron list` | Job still listed ✅ |\n| Run history | `openclaw cron runs --id <id>` | `status: \"error\"`, `nextRunAtMs: preserved` ✅ |\n",
-        "branch": "fix/cron-delete-after-run-manual-83538",
-        "head_sha": "885d605e56e507f262af2036f53962ae6e9e0a13",
-        "author": "jerry-xin",
-        "labels": [
-          "size: L",
-          "triage: needs-real-behavior-proof",
-          "proof: sufficient",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/cron/service.failure-alert.test.ts",
-            "additions": 28,
-            "deletions": 15,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/ops.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/timer.regression.test.ts",
-            "additions": 368,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/timer.ts",
-            "additions": 88,
-            "deletions": 56,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83933",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83933.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 103,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 27,
-            "SUCCESS": 70,
-            "FAILURE": 3,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ]
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:83933:4496179057:2026-05-20T08:22:49Z:re_review",
-      "comment_id": "4496179057",
-      "comment_version_key": "4496179057:2026-05-20T08:22:49Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83933#issuecomment-4496179057",
-      "repo": "openclaw/openclaw",
-      "issue_number": 83933,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T08:22:49Z",
-      "comment_updated_at": "2026-05-20T08:22:49Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): skip deleteAfterRun and preserve counters for manual runs (#83538)",
-        "body": "## Summary\n\n`openclaw cron run` (manual/debug runs) on a `deleteAfterRun` at-job deletes the job on success — consuming the one-shot and preventing its scheduled execution. Manual runs also mutate `consecutiveErrors`/`consecutiveSkipped` counters, interfering with scheduled retry/backoff state.\n\nThis PR adds an `isManual` flag to `applyJobResult` so manual runs preserve the job and leave scheduled execution state untouched.\n\n## Root cause\n\n`applyJobResult()` has no concept of manual vs scheduled runs. When a manual run succeeds on a `deleteAfterRun: true` at-job, `shouldDelete` evaluates to `true` and the job is removed from the store — the scheduled fire never happens.\n\nAdditionally, manual error/skipped/success outcomes unconditionally mutate `consecutiveErrors` and `consecutiveSkipped` counters, which control retry backoff and auto-disable behavior for scheduled runs.\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `timer.ts` | Add `isManual` option to `applyJobResult`; skip `deleteAfterRun` for manual runs; guard all counter mutations and alert emissions with `!isManual` |\n| `ops.ts` | Pass `isManual: true` from manual run completion and invalid-persisted-run handling |\n| `timer.regression.test.ts` | 5 new tests: manual ok/error preserve job, manual doesn't increment/reset counters |\n\n## Tests\n\n```\n$ node scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts\n ✓ cron (45 tests) 144ms\n Test Files  1 passed (1)\n      Tests  45 passed (45)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Manual `cron run` on a `deleteAfterRun` at-job deletes it, preventing scheduled execution. Manual runs also mutate scheduled retry counters.\n- **Real environment tested**: Local OpenClaw checkout at `aa92a4a5b0`, macOS arm64, Node.js v24.10.0.\n\n### Source-level proof\n\n```\nMain branch applyJobResult():\n  - shouldDelete = kind === \"at\" && deleteAfterRun && status === \"ok\"\n    → no manual discriminator, always deletes on success\n  - consecutiveErrors incremented unconditionally on error\n  - consecutiveSkipped incremented unconditionally on skip\n\nFix branch:\n  - shouldDelete = wouldDelete && !opts?.isManual\n    → manual runs never trigger deletion\n  - Counter mutations guarded: if (!opts?.isManual) { ... }\n    → manual runs don't affect retry/backoff state\n```\n\n### Regression test coverage\n\n```\n✅ manual ok on deleteAfterRun at-job → job preserved, not deleted\n✅ manual error on deleteAfterRun at-job → job preserved, not deleted  \n✅ scheduled ok on deleteAfterRun at-job → job deleted (unchanged behavior)\n✅ manual error does not increment consecutiveErrors (pre-existing=3 → still 3)\n✅ manual success does not reset consecutiveErrors (pre-existing=3 → still 3)\n```\n\n- **What was not tested**: Live `openclaw cron run` CLI flow (requires a running gateway with a configured `deleteAfterRun` at-job). The `isManual` flag propagation from `ops.ts` to `applyJobResult` is validated at the unit level.\n\nCloses #83538\n\n\n### Re-verification (2026-05-20)\n\nLocal checkout at `d89f14de26`, macOS arm64, Node.js `v24.10.0`.\n\n```\n$ node scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts\n\n ✓ cron  ../../src/cron/service/timer.regression.test.ts (39 tests) 116ms\n\n Test Files  1 passed (1)\n      Tests  39 passed (39)\n   Duration  152ms\n```\n\nFull cron suite (`src/cron/`) also run: 94 test files, 901 passed. The 7 failures are in unrelated files (`run-log.test.ts`, `service.failure-alert.test.ts`) pre-existing on upstream/main.\n\n\n## Real behavior proof\n\n- **Behavior addressed**: `openclaw cron run` (manual) of a `deleteAfterRun: true` at-job incorrectly deletes the job. Manual runs also pollute `consecutiveErrors`/`consecutiveSkipped` counters.\n- **Real environment tested**: Local patched checkout at `0cec2acc7a`, macOS arm64, Node.js v24.10.0.\n- **Failing proof before fix**: On `upstream/main`, counter mutations and `shouldDelete` run unconditionally — no `isManual` discriminator exists.\n- **Exact steps after patch**: `node scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts` + `src/cron/service.failure-alert.test.ts`\n- **Evidence after fix**: 46/46 timer regression tests pass (including 7 new #83538/#83933-specific tests). 7/7 failure-alert tests pass.\n- **What was not tested**: Live Gateway CLI flow; the tests exercise the same `applyJobResult` code path the Gateway calls internally.\n\n### Key test results\n\n| Scenario | Result |\n|----------|--------|\n| Manual run + deleteAfterRun + success | NOT deleted ✅ |\n| Scheduled run + deleteAfterRun + success | Deleted ✅ |\n| Manual error + consecutiveErrors=3 | Stays 3 ✅ |\n| Manual success + consecutiveErrors=5 | Stays 5 ✅ |\n| Manual error → failure alert | NOT triggered ✅ |\n| Scheduled error → failure alert | Triggered ✅ |\n\n\n## Real behavior proof (Docker, 2026-05-21)\n\n**Environment**: Docker container, `node:24-bookworm-slim` (aarch64), patched source at `885d605e56`.\n\n### Latest fixes\n\n| Issue | Problem | Fix |\n|-------|---------|-----|\n| P1 | Manual at-job error was disabling job (`enabled=false`, `nextRunAtMs=undefined`) | At-job error retry/disable block now guarded with `if (opts?.isManual)` |\n| P2 | Manual success was clearing `lastFailureAlertAtMs` cooldown | Cooldown clearing now inside `if (!opts?.isManual)` guard |\n\n### Test results\n\n| Test Suite | Result |\n|------------|--------|\n| Timer regression (49 tests) | ✅ All passed |\n| Failure-alert (7 tests) | ✅ All passed |\n\n### Key verified behaviors\n\n| Scenario | Result |\n|----------|--------|\n| Manual at-job error | `enabled` stays true, `nextRunAtMs` preserved ✅ |\n| Manual success | `lastFailureAlertAtMs` cooldown preserved ✅ |\n| Manual run + deleteAfterRun | Job NOT deleted ✅ |\n| Scheduled run + deleteAfterRun | Job deleted ✅ |\n| Manual error + consecutiveErrors=3 | Stays 3 ✅ |\n| Manual success + consecutiveErrors=5 | Stays 5 ✅ |\n\n\n## Real CLI proof (Docker Gateway, 2026-05-21)\n\n**Environment**: Docker `node:24-bookworm-slim` (aarch64), patched Gateway at `885d605e56` running with `--allow-unconfigured`.\n\n**Terminal transcript**: `openclaw cron add` → `cron show` → `cron run` (manual, triggers error) → `cron show` (job still exists, enabled=true, nextRunAtMs preserved) → `cron list` (job present) → `cron runs` (run history with error status, nextRunAtMs unchanged).\n\n| Step | Command | Result |\n|------|---------|--------|\n| Add job | `openclaw cron add --name proof-job --at ... --delete-after-run` | Created with `deleteAfterRun: true` |\n| Manual run | `openclaw cron run <id>` | `{\"ok\": true, \"enqueued\": true}` |\n| After run | `openclaw cron show <id>` | `enabled: true`, `nextRunAtMs: preserved` ✅ |\n| Job exists | `openclaw cron list` | Job still listed ✅ |\n| Run history | `openclaw cron runs --id <id>` | `status: \"error\"`, `nextRunAtMs: preserved` ✅ |\n",
-        "branch": "fix/cron-delete-after-run-manual-83538",
-        "head_sha": "885d605e56e507f262af2036f53962ae6e9e0a13",
-        "author": "jerry-xin",
-        "labels": [
-          "size: L",
-          "triage: needs-real-behavior-proof",
-          "proof: sufficient",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/cron/service.failure-alert.test.ts",
-            "additions": 28,
-            "deletions": 15,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/ops.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/timer.regression.test.ts",
-            "additions": 368,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/timer.ts",
-            "additions": 88,
-            "deletions": 56,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83933",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83933.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 103,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 27,
-            "SUCCESS": 70,
-            "FAILURE": 3,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ]
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:83933:4495631656:2026-05-20T07:19:31Z:re_review",
-      "comment_id": "4495631656",
-      "comment_version_key": "4495631656:2026-05-20T07:19:31Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83933#issuecomment-4495631656",
-      "repo": "openclaw/openclaw",
-      "issue_number": 83933,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T07:19:31Z",
-      "comment_updated_at": "2026-05-20T07:19:31Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): skip deleteAfterRun and preserve counters for manual runs (#83538)",
-        "body": "## Summary\n\n`openclaw cron run` (manual/debug runs) on a `deleteAfterRun` at-job deletes the job on success — consuming the one-shot and preventing its scheduled execution. Manual runs also mutate `consecutiveErrors`/`consecutiveSkipped` counters, interfering with scheduled retry/backoff state.\n\nThis PR adds an `isManual` flag to `applyJobResult` so manual runs preserve the job and leave scheduled execution state untouched.\n\n## Root cause\n\n`applyJobResult()` has no concept of manual vs scheduled runs. When a manual run succeeds on a `deleteAfterRun: true` at-job, `shouldDelete` evaluates to `true` and the job is removed from the store — the scheduled fire never happens.\n\nAdditionally, manual error/skipped/success outcomes unconditionally mutate `consecutiveErrors` and `consecutiveSkipped` counters, which control retry backoff and auto-disable behavior for scheduled runs.\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `timer.ts` | Add `isManual` option to `applyJobResult`; skip `deleteAfterRun` for manual runs; guard all counter mutations and alert emissions with `!isManual` |\n| `ops.ts` | Pass `isManual: true` from manual run completion and invalid-persisted-run handling |\n| `timer.regression.test.ts` | 5 new tests: manual ok/error preserve job, manual doesn't increment/reset counters |\n\n## Tests\n\n```\n$ node scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts\n ✓ cron (45 tests) 144ms\n Test Files  1 passed (1)\n      Tests  45 passed (45)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Manual `cron run` on a `deleteAfterRun` at-job deletes it, preventing scheduled execution. Manual runs also mutate scheduled retry counters.\n- **Real environment tested**: Local OpenClaw checkout at `aa92a4a5b0`, macOS arm64, Node.js v24.10.0.\n\n### Source-level proof\n\n```\nMain branch applyJobResult():\n  - shouldDelete = kind === \"at\" && deleteAfterRun && status === \"ok\"\n    → no manual discriminator, always deletes on success\n  - consecutiveErrors incremented unconditionally on error\n  - consecutiveSkipped incremented unconditionally on skip\n\nFix branch:\n  - shouldDelete = wouldDelete && !opts?.isManual\n    → manual runs never trigger deletion\n  - Counter mutations guarded: if (!opts?.isManual) { ... }\n    → manual runs don't affect retry/backoff state\n```\n\n### Regression test coverage\n\n```\n✅ manual ok on deleteAfterRun at-job → job preserved, not deleted\n✅ manual error on deleteAfterRun at-job → job preserved, not deleted  \n✅ scheduled ok on deleteAfterRun at-job → job deleted (unchanged behavior)\n✅ manual error does not increment consecutiveErrors (pre-existing=3 → still 3)\n✅ manual success does not reset consecutiveErrors (pre-existing=3 → still 3)\n```\n\n- **What was not tested**: Live `openclaw cron run` CLI flow (requires a running gateway with a configured `deleteAfterRun` at-job). The `isManual` flag propagation from `ops.ts` to `applyJobResult` is validated at the unit level.\n\nCloses #83538\n\n\n### Re-verification (2026-05-20)\n\nLocal checkout at `d89f14de26`, macOS arm64, Node.js `v24.10.0`.\n\n```\n$ node scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts\n\n ✓ cron  ../../src/cron/service/timer.regression.test.ts (39 tests) 116ms\n\n Test Files  1 passed (1)\n      Tests  39 passed (39)\n   Duration  152ms\n```\n\nFull cron suite (`src/cron/`) also run: 94 test files, 901 passed. The 7 failures are in unrelated files (`run-log.test.ts`, `service.failure-alert.test.ts`) pre-existing on upstream/main.\n\n\n## Real behavior proof\n\n- **Behavior addressed**: `openclaw cron run` (manual) of a `deleteAfterRun: true` at-job incorrectly deletes the job. Manual runs also pollute `consecutiveErrors`/`consecutiveSkipped` counters.\n- **Real environment tested**: Local patched checkout at `0cec2acc7a`, macOS arm64, Node.js v24.10.0.\n- **Failing proof before fix**: On `upstream/main`, counter mutations and `shouldDelete` run unconditionally — no `isManual` discriminator exists.\n- **Exact steps after patch**: `node scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts` + `src/cron/service.failure-alert.test.ts`\n- **Evidence after fix**: 46/46 timer regression tests pass (including 7 new #83538/#83933-specific tests). 7/7 failure-alert tests pass.\n- **What was not tested**: Live Gateway CLI flow; the tests exercise the same `applyJobResult` code path the Gateway calls internally.\n\n### Key test results\n\n| Scenario | Result |\n|----------|--------|\n| Manual run + deleteAfterRun + success | NOT deleted ✅ |\n| Scheduled run + deleteAfterRun + success | Deleted ✅ |\n| Manual error + consecutiveErrors=3 | Stays 3 ✅ |\n| Manual success + consecutiveErrors=5 | Stays 5 ✅ |\n| Manual error → failure alert | NOT triggered ✅ |\n| Scheduled error → failure alert | Triggered ✅ |\n\n\n## Real behavior proof (Docker, 2026-05-21)\n\n**Environment**: Docker container, `node:24-bookworm-slim` (aarch64), patched source at `885d605e56`.\n\n### Latest fixes\n\n| Issue | Problem | Fix |\n|-------|---------|-----|\n| P1 | Manual at-job error was disabling job (`enabled=false`, `nextRunAtMs=undefined`) | At-job error retry/disable block now guarded with `if (opts?.isManual)` |\n| P2 | Manual success was clearing `lastFailureAlertAtMs` cooldown | Cooldown clearing now inside `if (!opts?.isManual)` guard |\n\n### Test results\n\n| Test Suite | Result |\n|------------|--------|\n| Timer regression (49 tests) | ✅ All passed |\n| Failure-alert (7 tests) | ✅ All passed |\n\n### Key verified behaviors\n\n| Scenario | Result |\n|----------|--------|\n| Manual at-job error | `enabled` stays true, `nextRunAtMs` preserved ✅ |\n| Manual success | `lastFailureAlertAtMs` cooldown preserved ✅ |\n| Manual run + deleteAfterRun | Job NOT deleted ✅ |\n| Scheduled run + deleteAfterRun | Job deleted ✅ |\n| Manual error + consecutiveErrors=3 | Stays 3 ✅ |\n| Manual success + consecutiveErrors=5 | Stays 5 ✅ |\n\n\n## Real CLI proof (Docker Gateway, 2026-05-21)\n\n**Environment**: Docker `node:24-bookworm-slim` (aarch64), patched Gateway at `885d605e56` running with `--allow-unconfigured`.\n\n**Terminal transcript**: `openclaw cron add` → `cron show` → `cron run` (manual, triggers error) → `cron show` (job still exists, enabled=true, nextRunAtMs preserved) → `cron list` (job present) → `cron runs` (run history with error status, nextRunAtMs unchanged).\n\n| Step | Command | Result |\n|------|---------|--------|\n| Add job | `openclaw cron add --name proof-job --at ... --delete-after-run` | Created with `deleteAfterRun: true` |\n| Manual run | `openclaw cron run <id>` | `{\"ok\": true, \"enqueued\": true}` |\n| After run | `openclaw cron show <id>` | `enabled: true`, `nextRunAtMs: preserved` ✅ |\n| Job exists | `openclaw cron list` | Job still listed ✅ |\n| Run history | `openclaw cron runs --id <id>` | `status: \"error\"`, `nextRunAtMs: preserved` ✅ |\n",
-        "branch": "fix/cron-delete-after-run-manual-83538",
-        "head_sha": "885d605e56e507f262af2036f53962ae6e9e0a13",
-        "author": "jerry-xin",
-        "labels": [
-          "size: L",
-          "triage: needs-real-behavior-proof",
-          "proof: sufficient",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/cron/service.failure-alert.test.ts",
-            "additions": 28,
-            "deletions": 15,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/ops.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/timer.regression.test.ts",
-            "additions": 368,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/timer.ts",
-            "additions": 88,
-            "deletions": 56,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83933",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83933.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 103,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 27,
-            "SUCCESS": 70,
-            "FAILURE": 3,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ]
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:83933:4494610785:2026-05-20T04:48:23Z:re_review",
-      "comment_id": "4494610785",
-      "comment_version_key": "4494610785:2026-05-20T04:48:23Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83933#issuecomment-4494610785",
-      "repo": "openclaw/openclaw",
-      "issue_number": 83933,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T04:48:23Z",
-      "comment_updated_at": "2026-05-20T04:48:23Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): skip deleteAfterRun and preserve counters for manual runs (#83538)",
-        "body": "## Summary\n\n`openclaw cron run` (manual/debug runs) on a `deleteAfterRun` at-job deletes the job on success — consuming the one-shot and preventing its scheduled execution. Manual runs also mutate `consecutiveErrors`/`consecutiveSkipped` counters, interfering with scheduled retry/backoff state.\n\nThis PR adds an `isManual` flag to `applyJobResult` so manual runs preserve the job and leave scheduled execution state untouched.\n\n## Root cause\n\n`applyJobResult()` has no concept of manual vs scheduled runs. When a manual run succeeds on a `deleteAfterRun: true` at-job, `shouldDelete` evaluates to `true` and the job is removed from the store — the scheduled fire never happens.\n\nAdditionally, manual error/skipped/success outcomes unconditionally mutate `consecutiveErrors` and `consecutiveSkipped` counters, which control retry backoff and auto-disable behavior for scheduled runs.\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `timer.ts` | Add `isManual` option to `applyJobResult`; skip `deleteAfterRun` for manual runs; guard all counter mutations and alert emissions with `!isManual` |\n| `ops.ts` | Pass `isManual: true` from manual run completion and invalid-persisted-run handling |\n| `timer.regression.test.ts` | 5 new tests: manual ok/error preserve job, manual doesn't increment/reset counters |\n\n## Tests\n\n```\n$ node scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts\n ✓ cron (45 tests) 144ms\n Test Files  1 passed (1)\n      Tests  45 passed (45)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Manual `cron run` on a `deleteAfterRun` at-job deletes it, preventing scheduled execution. Manual runs also mutate scheduled retry counters.\n- **Real environment tested**: Local OpenClaw checkout at `aa92a4a5b0`, macOS arm64, Node.js v24.10.0.\n\n### Source-level proof\n\n```\nMain branch applyJobResult():\n  - shouldDelete = kind === \"at\" && deleteAfterRun && status === \"ok\"\n    → no manual discriminator, always deletes on success\n  - consecutiveErrors incremented unconditionally on error\n  - consecutiveSkipped incremented unconditionally on skip\n\nFix branch:\n  - shouldDelete = wouldDelete && !opts?.isManual\n    → manual runs never trigger deletion\n  - Counter mutations guarded: if (!opts?.isManual) { ... }\n    → manual runs don't affect retry/backoff state\n```\n\n### Regression test coverage\n\n```\n✅ manual ok on deleteAfterRun at-job → job preserved, not deleted\n✅ manual error on deleteAfterRun at-job → job preserved, not deleted  \n✅ scheduled ok on deleteAfterRun at-job → job deleted (unchanged behavior)\n✅ manual error does not increment consecutiveErrors (pre-existing=3 → still 3)\n✅ manual success does not reset consecutiveErrors (pre-existing=3 → still 3)\n```\n\n- **What was not tested**: Live `openclaw cron run` CLI flow (requires a running gateway with a configured `deleteAfterRun` at-job). The `isManual` flag propagation from `ops.ts` to `applyJobResult` is validated at the unit level.\n\nCloses #83538\n\n\n### Re-verification (2026-05-20)\n\nLocal checkout at `d89f14de26`, macOS arm64, Node.js `v24.10.0`.\n\n```\n$ node scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts\n\n ✓ cron  ../../src/cron/service/timer.regression.test.ts (39 tests) 116ms\n\n Test Files  1 passed (1)\n      Tests  39 passed (39)\n   Duration  152ms\n```\n\nFull cron suite (`src/cron/`) also run: 94 test files, 901 passed. The 7 failures are in unrelated files (`run-log.test.ts`, `service.failure-alert.test.ts`) pre-existing on upstream/main.\n\n\n## Real behavior proof\n\n- **Behavior addressed**: `openclaw cron run` (manual) of a `deleteAfterRun: true` at-job incorrectly deletes the job. Manual runs also pollute `consecutiveErrors`/`consecutiveSkipped` counters.\n- **Real environment tested**: Local patched checkout at `0cec2acc7a`, macOS arm64, Node.js v24.10.0.\n- **Failing proof before fix**: On `upstream/main`, counter mutations and `shouldDelete` run unconditionally — no `isManual` discriminator exists.\n- **Exact steps after patch**: `node scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts` + `src/cron/service.failure-alert.test.ts`\n- **Evidence after fix**: 46/46 timer regression tests pass (including 7 new #83538/#83933-specific tests). 7/7 failure-alert tests pass.\n- **What was not tested**: Live Gateway CLI flow; the tests exercise the same `applyJobResult` code path the Gateway calls internally.\n\n### Key test results\n\n| Scenario | Result |\n|----------|--------|\n| Manual run + deleteAfterRun + success | NOT deleted ✅ |\n| Scheduled run + deleteAfterRun + success | Deleted ✅ |\n| Manual error + consecutiveErrors=3 | Stays 3 ✅ |\n| Manual success + consecutiveErrors=5 | Stays 5 ✅ |\n| Manual error → failure alert | NOT triggered ✅ |\n| Scheduled error → failure alert | Triggered ✅ |\n\n\n## Real behavior proof (Docker, 2026-05-21)\n\n**Environment**: Docker container, `node:24-bookworm-slim` (aarch64), patched source at `885d605e56`.\n\n### Latest fixes\n\n| Issue | Problem | Fix |\n|-------|---------|-----|\n| P1 | Manual at-job error was disabling job (`enabled=false`, `nextRunAtMs=undefined`) | At-job error retry/disable block now guarded with `if (opts?.isManual)` |\n| P2 | Manual success was clearing `lastFailureAlertAtMs` cooldown | Cooldown clearing now inside `if (!opts?.isManual)` guard |\n\n### Test results\n\n| Test Suite | Result |\n|------------|--------|\n| Timer regression (49 tests) | ✅ All passed |\n| Failure-alert (7 tests) | ✅ All passed |\n\n### Key verified behaviors\n\n| Scenario | Result |\n|----------|--------|\n| Manual at-job error | `enabled` stays true, `nextRunAtMs` preserved ✅ |\n| Manual success | `lastFailureAlertAtMs` cooldown preserved ✅ |\n| Manual run + deleteAfterRun | Job NOT deleted ✅ |\n| Scheduled run + deleteAfterRun | Job deleted ✅ |\n| Manual error + consecutiveErrors=3 | Stays 3 ✅ |\n| Manual success + consecutiveErrors=5 | Stays 5 ✅ |\n\n\n## Real CLI proof (Docker Gateway, 2026-05-21)\n\n**Environment**: Docker `node:24-bookworm-slim` (aarch64), patched Gateway at `885d605e56` running with `--allow-unconfigured`.\n\n**Terminal transcript**: `openclaw cron add` → `cron show` → `cron run` (manual, triggers error) → `cron show` (job still exists, enabled=true, nextRunAtMs preserved) → `cron list` (job present) → `cron runs` (run history with error status, nextRunAtMs unchanged).\n\n| Step | Command | Result |\n|------|---------|--------|\n| Add job | `openclaw cron add --name proof-job --at ... --delete-after-run` | Created with `deleteAfterRun: true` |\n| Manual run | `openclaw cron run <id>` | `{\"ok\": true, \"enqueued\": true}` |\n| After run | `openclaw cron show <id>` | `enabled: true`, `nextRunAtMs: preserved` ✅ |\n| Job exists | `openclaw cron list` | Job still listed ✅ |\n| Run history | `openclaw cron runs --id <id>` | `status: \"error\"`, `nextRunAtMs: preserved` ✅ |\n",
-        "branch": "fix/cron-delete-after-run-manual-83538",
-        "head_sha": "885d605e56e507f262af2036f53962ae6e9e0a13",
-        "author": "jerry-xin",
-        "labels": [
-          "size: L",
-          "triage: needs-real-behavior-proof",
-          "proof: sufficient",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/cron/service.failure-alert.test.ts",
-            "additions": 28,
-            "deletions": 15,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/ops.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/timer.regression.test.ts",
-            "additions": 368,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/timer.ts",
-            "additions": 88,
-            "deletions": 56,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83933",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83933.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 103,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 27,
-            "SUCCESS": 70,
-            "FAILURE": 3,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ]
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3630,
+    "total_ms": 3186,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 565
+        "ms": 642
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2662
+        "ms": 2285
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 382
+        "ms": 243
       },
       {
         "name": "append_ledger",
