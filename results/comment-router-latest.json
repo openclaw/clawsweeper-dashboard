@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-21T07:52:27.449Z",
+  "generated_at": "2026-05-21T07:53:08.265Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-21T04:52:25.611Z",
+  "since": "2026-05-21T04:53:05.584Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     84863
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4385451970
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 4,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -86,26 +88,32 @@
       "review_summary": "The branch adds a helper to detect version-mismatched path install records pointing at packaged bundled plugin output and wires it into post-core update convergence plus doctor registry repair with focused tests.\n\nReproducibility: yes. at source level, not via a live run: current main preserves path install records while existing bundled-shadow cleanup only covers managed npm/clawhub-style records, so the stale compiled path shadow is credible from code inspection.",
       "review_followup": "Human review should wait on contributor real behavior proof and consciously accept the local compiled-path cleanup compatibility boundary.",
       "freeform_prompt": null,
-      "expected_head_sha": "ed744adc9d4fcd7e86800b0e1255d440ad5caead",
+      "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
+      "status": "ignored",
       "actions": [],
+      "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix(update): prune stale local bundled plugin shadows",
-        "body": "## Summary\n- Add a version-aware stale local bundled-plugin install-record detector for official bundled plugin IDs.\n- Prune those stale records during post-core update convergence before repair/smoke checks run.\n- Teach `openclaw doctor --fix` to warn on and remove stale local bundled install-record shadows while preserving current, same-version, versionless, source-checkout, and arbitrary local path records.\n- Add a changelog entry and explicit sort comparators so the lint shard accepts the new deterministic iteration.\n\n## Verification\n- `node scripts/run-vitest.mjs src/plugins/stale-local-bundled-plugin-install-records.test.ts src/cli/update-cli/post-core-plugin-convergence.test.ts src/commands/doctor-plugin-registry.test.ts`\n  - 3 files passed, 31 tests passed.\n- `node scripts/run-oxlint-shards.mjs --threads=8`\n  - core/extensions/scripts all reported 0 warnings and 0 errors.\n- `./node_modules/.bin/oxfmt --check --threads=1 CHANGELOG.md src/plugins/stale-local-bundled-plugin-install-records.ts src/commands/doctor-plugin-registry.ts`\n  - all matched files use the correct format.\n- `git diff --check`\n\n## Real behavior proof\n**Behavior addressed:** A stale persisted path install record for an official bundled plugin can make old compiled bundled output, such as `old-checkout/dist/extensions/discord`, shadow the current bundled plugin after an update. This patch removes only stale compiled bundled path records so the current bundled plugin wins again.\n\n**Real environment tested:** Local OpenClaw source checkout on macOS with the PR branch checked out at `97e2080a85b1c2df15465b038947f1c68b54bba6`, isolated temporary `HOME` and `OPENCLAW_STATE_DIR`, and a temporary trusted bundled plugin root containing a current `discord` plugin at `2026.5.20-beta.1` plus a stale compiled `discord` path record at `2026.5.4-beta.3`.\n\n**Exact steps or command run after this patch:** Ran a local terminal command with `node --import tsx --input-type=module` that created the temporary OpenClaw setup, loaded the plugin registry before pruning with the stale install record, called `pruneStaleLocalBundledPluginInstallRecords`, then loaded the plugin registry again with the pruned records.\n\n**Evidence after fix:** Copied terminal output from the hermetic runtime command:\n\n```json\n{\n  \"before\": [\n    {\n      \"id\": \"discord\",\n      \"origin\": \"global\",\n      \"version\": \"2026.5.4-beta.3\"\n    }\n  ],\n  \"staleRemoved\": [\n    {\n      \"pluginId\": \"discord\",\n      \"recordPathField\": \"installPath\"\n    }\n  ],\n  \"remainingInstallRecords\": [],\n  \"after\": [\n    {\n      \"id\": \"discord\",\n      \"origin\": \"bundled\",\n      \"version\": \"2026.5.20-beta.1\"\n    }\n  ]\n}\n```\n\n**Observed result after fix:** Before pruning, `discord` resolved from the stale global path at `2026.5.4-beta.3`. After pruning, the stale `installPath` record was removed, no install records remained for `discord`, and the registry resolved `discord` from the current bundled plugin at `2026.5.20-beta.1`.\n\n**What was not tested:** Full end-to-end updater restart on a packaged beta install was not run locally; the post-core convergence and doctor repair call paths are covered by the targeted tests listed above.\n\nThe helper keeps non-stale local overrides covered by tests: current bundled paths, same-version compiled paths, versionless compiled paths, source-checkout `extensions/<id>` paths, and arbitrary local plugin paths are not pruned.\n",
-        "branch": "fix/stale-local-official-plugin-shadows",
-        "head_sha": "8bcbf681ec66b3db71cd6a7c2c6a34ecb439d9b8",
-        "author": "fuller-stack-dev",
+        "title": "feat(mcp): channel-mediated approval for MCP tool calls (consent envelope)",
+        "body": "Closes #78308\n\n## Summary\n\nToday, when a bundle-MCP tool returns to the agent, OpenClaw passes the result straight through to the model — there's no approval gate analogous to the one [`exec-approvals`](../tools/exec-approvals.md) provides for shell commands. For act-tier MCP tools (send email, create vault entry, set HA state, etc.), the only thing standing between the user and the action is *the model deciding to call it*.\n\nThis PR adds a small, additive contract — the **MCP consent envelope** — that lets MCP servers opt into the existing `/approve <id> allow-once|allow-always|deny` pipeline that already backs shell-exec approvals. **Servers that don't opt in are unaffected.**\n\n## The contract\n\nWhen a server wants user approval for a call, it returns:\n\n```json\n{\n  \"ok\": false,\n  \"requires_confirmation\": true,\n  \"action_id\": \"<server-side single-use token>\",\n  \"summary\": \"<one-line description of the action>\",\n  \"expires_in_seconds\": 60\n}\n```\n\n…in either `structuredContent` or as JSON inside `content[0].text`. OpenClaw recognises the envelope, suppresses the result, and:\n\n1. Issues a `plugin.approval.request` to the local gateway (reuses everything: `channel-approval-auth`, ID-prefix routing, the magic-word reply parser).\n2. Blocks until the user replies on the trusted channel.\n3. On `allow-once` / `allow-always`: re-calls the tool with `confirmation_token = action_id` set on the input. Returns that second result to the agent.\n4. On `deny` / expiry / error: returns a synthetic `{ok:false, approved:false, reason}` result. The model never sees `action_id`.\n\n## Why the trust boundary actually moves\n\nThe model never sees `action_id` and **`confirmation_token` is stripped from any model-supplied input** on the first call. Even if a malicious or careless agent fabricates a token, the MCP server's redemption check rejects it (the server is responsible for one-shot/TTL enforcement of `action_id`).\n\nThis is the same pattern OpenClaw already enforces for shell exec via `exec-approvals` — *agent asks, user authorises, runtime executes*. The PR just generalises that pattern to MCP tools that opt into the contract.\n\n## What changed\n\n| File | Change |\n|---|---|\n| `src/agents/pi-bundle-mcp-consent.ts` | **New.** Envelope detection, the default approval requester (calls `plugin.approval.request` + `waitDecision`), `confirmation_token` scrubber, denied-result builder, **`sanitiseToolEmittedApprovalText`** (review-comment defence — neutralises `/approve` in MCP-emitted text). ~270 lines. |\n| `src/agents/pi-bundle-mcp-materialize.ts` | Wraps every tool's `execute()` in a new `callMcpToolWithConsent` orchestrator. Plumbs `requestApproval`, `consentEnabled`, **`agentId`, and `sessionKey`** through `materializeBundleMcpToolsForRun` and `createBundleMcpToolRuntime`. |\n| `src/agents/pi-embedded-runner/run/attempt.ts`, `compact.ts` | Pass the agent harness's existing `agentId` + `sessionKey` into the materialize layer so the gateway forwarder can resolve the user's actual delivery channel (WhatsApp / Telegram / Slack / web UI). |\n| `src/auto-reply/reply/commands-approve.ts` | Accept bare `/approve allow-once` (no id) when there's exactly one pending approval — typing a uuid on a phone is unrealistic UX. On ambiguity (>1 pending), refuses with a hint including the explicit form. |\n| `src/infra/plugin-approvals.ts` | Cleaner reply prompt: shows all three decisions (`allow-once \\| allow-always \\| deny`) inline, copy-paste-ready, with the id on its own line for the explicit fallback. |\n| `src/config/types.mcp.ts` | Adds `mcp.approvals.enabled?: boolean` (default true). |\n| `src/agents/pi-bundle-mcp-consent.test.ts` | **New.** 21 unit tests including a live-caught `decision: null` regression and a `agentId/sessionKey` propagation regression. |\n| `docs/tools/mcp-consent-envelope.md` | **New.** Server-author contract, configuration, trust-boundary explanation. |\n| `CHANGELOG.md` | Entry under `Unreleased`. |\n\nNo new approval kind is introduced — the implementation **reuses the existing `\"plugin\"` ApprovalKind**.\n\n## Test plan\n\n- ✅ `pnpm install`\n- ✅ `pnpm lint` — 8234 files, 213 rules, 0 warnings, 0 errors.\n- ✅ Full agents-core suite: **272 files passed (272), 3515 tests passed | 4 skipped**.\n- ✅ `pi-bundle-mcp-consent.test.ts` — 21/21 green.\n- ✅ `commands-approve.test.ts` — 18/18 green (existing tests still pass after the implicit-id parser change).\n\n## Real behavior proof\n\n**Behavior addressed:** Without channel-mediated approval, the model is the trust gate for MCP tool calls that want user approval. Captured live on **vanilla `OpenClaw 2026.4.24`** with HomeBrain's MCP servers: when the agent fired `homebrain-nextcloud__nc-files_share`, the consent envelope (with `action_id`) passed straight to the model, which **leaked the token verbatim into chat**, **offered to self-confirm**, and **hallucinated a second action_id off-by-one** when it lost track of the first. Full screenshot + analysis: [#78308 comment](https://github.com/openclaw/openclaw/issues/78308#issuecomment-4391533882). This PR replaces that prompt-level honour-system with runtime-enforced channel approval.\n\n**Environment tested:** `homebrain@192.168.178.58`. x86_64 Ubuntu 24.04. AMD Radeon RX 9060 XT (16 GB VRAM). llama.cpp + Qwen3.6-35B-A3B (Q5_K_XL). HomeBrain reference MCP servers from [oalterg/HomeBrain](https://github.com/oalterg/HomeBrain). **OpenClaw built directly from this PR branch and installed live** in place of the npm-shipped 2026.4.24 binary for the runtime-side tests.\n\n**Steps run after the patch:**\n\n```bash\n// Local: build + pack the PR branch\npnpm build && npm pack\n// Deploy the .tgz to the target box\nscp openclaw-2026.5.6.tgz homebrain@192.168.178.58:/tmp/\nssh homebrain@192.168.178.58 'echo admin | sudo -S bash -c \"\n  cd /usr/lib/node_modules\n  rm -rf openclaw && mkdir openclaw && cd openclaw\n  tar xzf /tmp/openclaw-2026.5.6.tgz --strip-components=1\n  npm install --omit=dev --no-audit --no-fund --silent\"'\n// Set the missing approvals.plugin config (the forwarder needs it to deliver)\nssh homebrain@192.168.178.58 'sudo -u homebrain jq \".approvals = {plugin:{enabled:true,mode:\\\"session\\\"}}\" \\\n  ~/.openclaw/openclaw.json > /tmp/c && sudo -u homebrain cp /tmp/c ~/.openclaw/openclaw.json'\nssh homebrain@192.168.178.58 'sudo -u homebrain systemctl --user restart openclaw-gateway'\n\n// User sends on WhatsApp:\n//   \"Create a public share link to /uploads in Nextcloud, expires in 7 days.\"\n// OpenClaw routes through the agent harness, which fires nc.files_share.\n// My code intercepts the consent envelope, calls plugin.approval.request.\n// The forwarder delivers the prompt to the user's WhatsApp + web UI.\n// User taps Allow once on the web UI (or replies /approve allow-once on WhatsApp).\n// Runtime re-calls the tool with confirmation_token. Real share URL returns.\n```\n\n**Evidence after fix:**\n\nThe web UI's native plugin-approval modal renders my PR's `plugin.approval.request` exactly right — title `MCP tool approval`, description `homebrain-nextcloud.nc.files_share — Nextcloud: create public share link for /uploads (expires in 7 days)`, severity `warning`, plugin `mcp:homebrain-nextcloud`, three buttons `Allow once / Always allow / Deny`, expiry countdown. The user pressed `Allow once`. Screenshot captured (not committed; happy to attach for maintainer review). Same approval was offered on the user's WhatsApp simultaneously via the routing-fix commit.\n\n```text\n$ openclaw --version  # the deployed PR build\nOpenClaw 2026.5.6 (a2cd999)\n\n// Gateway log (verbatim) at the moment the user tapped Allow once:\n2026-05-06T20:01:22 ⇄ res ✓ plugin.approval.waitDecision 59412ms\n                    conn=6f5914ca…dfe2 id=0c6f887a…7e6d\n\n// /var/log/homebrain/mcp-nextcloud-audit.log — the result of the consent loop:\n2026-05-06T20:01:22 {\"server\":\"nextcloud\",\"action\":\"share\",\n                     \"path\":\"/uploads\",\"expire_days\":7}\n\n// Nextcloud confirms the actual share resource exists on disk:\n$ curl -u admin:<app-pass> -H 'OCS-APIRequest: true' \\\n  http://127.0.0.1:8080/ocs/v2.php/apps/files_sharing/api/v1/shares\n{\"id\":\"2\",\"share_type\":3,\"path\":\"/uploads\",\"stime\":1778097682,\n \"url\":\"http://127.0.0.1:8080/s/iiaRr54CKLnZ7sC\", ...}\n```\n\n**Observed result after the fix:**\n\n- **Vanilla baseline (without PR):** the model leaks `action_id` to chat, offers to self-confirm, hallucinates a second action_id off-by-one. Trust boundary is the model's behavior — soft gate. [Screenshot + analysis in #78308 comment](https://github.com/openclaw/openclaw/issues/78308#issuecomment-4391533882).\n- **PR build:** the agent fires the tool, the consent envelope is intercepted, `plugin.approval.request` is issued to the gateway with the correct `agentId` + `sessionKey` so the forwarder can route. Approval prompt arrives in the **web UI's native modal** (gorgeous render, all three decisions one tap) AND on the user's **WhatsApp** simultaneously. User taps `Allow once` (or replies `/approve allow-once`). Runtime re-calls the tool with `confirmation_token = action_id`. **Real Nextcloud share is created** — verified by the audit log entry, the gateway `waitDecision 59412ms ✓` line, and the actual `share` row in NC's `files_sharing` API.\n- **A live regression bug was caught and fixed during this very run**: `decision: null` from the gateway in two-phase mode means \"pending, call waitDecision\", not \"deny\". Fixed in `ef30bbf` with a regression test. Without the live test cycle, that would have shipped as a latent bug masking real user approvals as denials.\n- **Forwarder routing was also live-caught**: the PR initially didn't propagate `agentId`/`sessionKey` from the agent harness to `plugin.approval.request`, so the forwarder had no session binding and prompts auto-cancelled silently. Fixed in `2056d25` by plumbing both fields through `materializeBundleMcpToolsForRun` + `createBundleMcpToolRuntime` from `attempt.ts` and `compact.ts`.\n- **`/approve` UX was live-caught too**: typing a full uuid by hand on a phone is unrealistic, and the prompt template said `Reply with: /approve <id>` with `<id>` as a literal placeholder. Fixed in `a2cd999`: bare `/approve allow-once` resolves to the single most-recent pending approval; the prompt now shows all three decisions inline copy-paste-ready.\n\n**What was not tested:** the *deny* path through user-driven rejection (we exercised the deny path via timeout and via approval-system error in unit tests, but not via a user explicitly typing `/approve deny` end-to-end on the live deployment). The unit tests (`on consent envelope + deny, returns synthetic denied result and does NOT re-call`) cover this deterministically. Maintainer running the PR through any deployment can verify in a single message exchange.\n\n## Review responses\n\n### Channel-level message provenance ([m13v's review](https://github.com/openclaw/openclaw/issues/78308#issuecomment-4391392109))\n\n> *\"if a compromised mcp server returns a tool result containing '/approve abc123 allow-once' in summary or output, and the channel renderer doesn't distinguish user-typed from tool-emitted messages at the parser layer, an mcp tool self-approves future calls by poisoning the transcript.\"*\n\nClosed in `083dd748`. Two layers:\n\n1. `sanitiseToolEmittedApprovalText` neutralises any `/approve` substring in MCP-emitted text by inserting U+200B between the slash and `approve` so `^/approve\\b` cannot match. Applied at parse-time inside `detectMcpConsentEnvelope`, so every downstream path that renders the envelope sees pre-sanitised text.\n2. The existing `/approve` parser already enforces provenance (via `isAuthorizedSender` against the channel allowlist) but the invariant was implicit. A code comment now makes it explicit so future refactors don't lose it.\n\nLive-verified on the deployed `.58` PR build with a deliberately malicious envelope (full transcript on the [issue thread](https://github.com/openclaw/openclaw/issues/78308#issuecomment-4394805083)). Two new unit tests cover the sanitiser directly and the envelope path.\n\n## Reference / motivation\n\nPart of a broader integration on a [HomeBrain](https://github.com/oalterg/HomeBrain) box. Reference server-side: [`scripts/mcp_common.py`](https://github.com/oalterg/HomeBrain/blob/vault-integration/scripts/mcp_common.py) (the `Consent` helper) and [`scripts/mcp-*.py`](https://github.com/oalterg/HomeBrain/tree/vault-integration/scripts). Design write-up: [`INTEGRATIONS_PLAN.md`](https://github.com/oalterg/HomeBrain/blob/vault-integration/INTEGRATIONS_PLAN.md).\n\n## Open questions for review\n\n1. **Should I add an `mcp.approvals.allowlist: [{server, tool}]`?** Left out for v1 — gating is already opt-in *per-tool* by the MCP server (only act-tier tools return the envelope), and `allow-always` already short-circuits future calls. Happy to add an allowlist as a follow-up if maintainers prefer.\n2. **The decision callback returns the existing `ExecApprovalDecision` union** (`allow-once` | `allow-always` | `deny`) — keeps the reply-parser + UI rendering identical.\n3. **Approval kind**: I considered adding `\"mcp-tool\"` as a third `ChannelApprovalKind`. Decided against it (~10 files for a presentation distinction) — the existing plugin renderer already shows `pluginId: mcp:<server>`, `toolName: <tool>`, `description: <summary>`. Open to redoing as a separate kind if maintainers prefer.\n4. **Should `approvals.plugin.enabled = true, mode = \"session\"` be the default?** Currently the gateway's plugin-approval forwarder is fully gated on this config block being explicitly set. Without it set, requests are accepted but never delivered — the boundary becomes a permanent deny gate (caught live during this PR's testing). Sensible default seems to be on-with-session-routing, especially now that the contract is broadly useful for MCP tool calls. Happy to add that as a separate PR if maintainers agree.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n\n\n",
+        "branch": "feat/mcp-tool-call-approvals",
+        "head_sha": "596393e7cacab3bd5df9d9d4b5efcfa66c9df6c3",
+        "author": "oalterg",
         "labels": [
-          "cli",
-          "commands",
-          "size: L",
+          "docs",
+          "gateway",
+          "agents",
+          "size: XL",
           "proof: supplied",
+          "proof: sufficient",
+          "mantis: telegram-visible-proof",
           "P2",
-          "rating: 🧂 unranked krab",
+          "rating: 🐚 platinum hermit",
           "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
+          "merge-risk: 🚨 security-boundary",
+          "status: 👀 ready for maintainer look",
+          "feature: ✨ showcase"
         ],
         "files": [
           {
@@ -115,62 +123,110 @@
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cli/update-cli/post-core-plugin-convergence.test.ts",
-            "additions": 92,
-            "deletions": 1,
+            "path": "docs/gateway/configuration-reference.md",
+            "additions": 13,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cli/update-cli/post-core-plugin-convergence.ts",
-            "additions": 14,
+            "path": "docs/tools/mcp-consent-envelope.md",
+            "additions": 151,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/pi-bundle-mcp-consent.test.ts",
+            "additions": 623,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/pi-bundle-mcp-consent.ts",
+            "additions": 345,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/pi-bundle-mcp-materialize.ts",
+            "additions": 205,
             "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/commands/doctor-plugin-registry.test.ts",
-            "additions": 124,
+            "path": "src/agents/pi-bundle-mcp-tools.ts",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/commands/doctor-plugin-registry.ts",
-            "additions": 94,
-            "deletions": 4,
+            "path": "src/agents/pi-embedded-runner/compact.ts",
+            "additions": 5,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/commands/doctor/shared/plugin-registry-migration.ts",
+            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/commands-approve.test.ts",
+            "additions": 114,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/commands-approve.ts",
+            "additions": 154,
+            "deletions": 22,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.help.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.labels.ts",
             "additions": 3,
-            "deletions": 1,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/plugins/stale-local-bundled-plugin-install-records.test.ts",
-            "additions": 158,
+            "path": "src/config/types.mcp.ts",
+            "additions": 28,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/plugins/stale-local-bundled-plugin-install-records.ts",
-            "additions": 123,
+            "path": "src/config/zod-schema.ts",
+            "additions": 10,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/plugin-approvals.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84863",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84863.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-78303",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-78303.md",
         "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 96,
+          "total": 102,
           "counts": {
-            "SUCCESS": 74,
-            "SKIPPED": 21,
+            "SUCCESS": 75,
+            "SKIPPED": 26,
             "NEUTRAL": 1
           },
           "blockers": [],
@@ -178,20 +234,20 @@
           "terminalBlockers": []
         }
       },
-      "reason": "target is not open"
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3154,
+    "total_ms": 2889,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 385
+        "ms": 555
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1437
+        "ms": 2113
       },
       {
         "name": "classify_commands",
@@ -199,7 +255,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1304
+        "ms": 208
       },
       {
         "name": "append_ledger",
