@@ -2,18 +2,18 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-84699"
 mode: "autonomous"
-run_id: "26199925537"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26199925537"
+run_id: "26201705595"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26201705595"
 head_sha: "3477775b50d9fb1d14c3fc2453e6d865507eb961"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-21T01:58:42.108Z"
+published_at: "2026-05-21T02:43:30.823Z"
 canonical: "https://github.com/openclaw/openclaw/pull/84742"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/80909"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/84742"
 actions_total: 4
 fix_executed: 0
-fix_failed: 0
+fix_failed: 1
 fix_blocked: 0
 apply_executed: 0
 apply_blocked: 1
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/26199925537](https://github.com/openclaw/clawsweeper/actions/runs/26199925537)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/26201705595](https://github.com/openclaw/clawsweeper/actions/runs/26201705595)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/84742
 
 ## Summary
 
-The current canonical path is the writable ClawSweeper replacement PR #84742. Source PR #84699 is already closed as superseded, #80909 should remain open until the fix lands, and #84742 still needs the repair/review loop because the hydrated artifact has no clean post-repair Codex review despite green checks.
+#84699 has already been superseded by writable replacement PR #84742. #84742 is the canonical repair path for #80909, but it is not merge-ready because the artifact shows mergeable_state=dirty and a ClawSweeper/Codex review comment still says needs changes; merge and close are blocked by job policy, so the next deterministic step is a repair fix artifact for the existing replacement branch.
 
 ## Impact
 
@@ -43,7 +43,7 @@ The current canonical path is the writable ClawSweeper replacement PR #84742. So
 | --- | ---: |
 | Worker actions | 4 |
 | Fix executed | 0 |
-| Fix failed | 0 |
+| Fix failed | 1 |
 | Fix blocked | 0 |
 | Applied executions | 0 |
 | Apply blocked | 1 |
@@ -54,7 +54,8 @@ The current canonical path is the writable ClawSweeper replacement PR #84742. So
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | pushed | https://github.com/openclaw/openclaw/pull/84742 |  |  |
+| repair_contributor_branch | failed |  |  | source PR #84699 is closed |
+| open_fix_pr | opened | https://github.com/openclaw/openclaw/pull/84742 | clawsweeper/automerge-openclaw-openclaw-84699 |  |
 
 ## Apply Actions
 
@@ -66,10 +67,10 @@ The current canonical path is the writable ClawSweeper replacement PR #84742. So
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #80909 | keep_related | planned | fixed_by_candidate | Keep the issue open until the canonical fix PR lands; closure is blocked by require_fix_before_close and allow_post_merge_close=false. |
-| #84699 | keep_closed | skipped | superseded | Already closed; no close action is valid for an already-closed PR. |
-| #84742 | fix_needed | planned | canonical | Repair #84742 in place, rerun Codex review, and rerun changed-surface validation before any future merge-capable applicator considers it. |
-| cluster:automerge-openclaw-openclaw-84699 | build_fix_artifact | planned |  | Create an executor-readable repair plan for the writable canonical PR branch. |
+| #80909 | keep_canonical | planned | canonical | Canonical issue remains open while the repair PR is made merge-ready. |
+| #84699 | keep_closed | skipped | superseded | Historical source PR only; replacement #84742 owns continued repair. |
+| #84742 | fix_needed | planned | canonical | Canonical PR is repairable but not merge-ready; job blocks merge and requires a fix artifact. |
+| cluster:automerge-openclaw-openclaw-84699 | build_fix_artifact | planned |  | Repair artifact is needed so the deterministic edit pass can rebase #84742, address the durable review finding, and rerun validation. |
 
 ## Needs Human
 
