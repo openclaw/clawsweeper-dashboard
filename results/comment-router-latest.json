@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-21T00:23:34.937Z",
+  "generated_at": "2026-05-21T00:23:31.128Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-20T21:23:33.234Z",
+  "since": "2026-05-20T21:23:28.374Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    84737
+    84151
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 37,
+  "commands_seen": 12,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,17 +31,152 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:84737:4503692161:2026-05-21T00:23:28Z:clawsweeper_needs_human",
-      "comment_id": "4503692161",
-      "comment_version_key": "4503692161:2026-05-21T00:23:28Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84737#issuecomment-4503692161",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:84151:4488372170:2026-05-21T00:23:24Z:clawsweeper_needs_human",
+      "comment_id": "4488372170",
+      "comment_version_key": "4488372170:2026-05-21T00:23:24Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4488372170",
       "repo": "openclaw/openclaw",
-      "issue_number": 84737,
+      "issue_number": 84151,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-21T00:17:20Z",
-      "comment_updated_at": "2026-05-21T00:23:28Z",
+      "comment_created_at": "2026-05-19T13:45:02Z",
+      "comment_updated_at": "2026-05-21T00:23:24Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "The remaining blocker is contributor/maintainer proof and acceptance of the systemd lifecycle risk, not a narrow repair that ClawSweeper should patch automatically.; Cleared: No concrete security or supply-chain regression found; the PR uses argv-based process execution, validates unit names before restart, and adds no dependencies or workflow execution surface. (sha=ee8f59275bb703893869e77a6c161cb5f511c4d5)",
+      "review_summary": "This PR routes systemd-supervised managed update handoffs through `systemd-run --user --scope`, uses exit 78 for update restarts, adds marker/recovery handling, and expands focused tests.\n\nReproducibility: yes. at source/proof level: current main uses a detached helper while generated systemd units use `KillMode=control-group`, matching the linked issue's missing handoff log and unchanged version. I did not run a live packaged OpenClaw update in this read-only review.",
+      "review_followup": "The remaining blocker is contributor/maintainer proof and acceptance of the systemd lifecycle risk, not a narrow repair that ClawSweeper should patch automatically.",
+      "freeform_prompt": null,
+      "expected_head_sha": "ee8f59275bb703893869e77a6c161cb5f511c4d5",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(daemon): escape systemd cgroup for update handoff via systemd-run --scope",
+        "body": "## Summary\n\nOn systemd-supervised installs, clicking \"Update now\" silently fails: the update handoff helper is created but immediately killed by systemd's `KillMode=control-group` when the gateway unit restarts. The helper never executes, the version stays unchanged, and the UI shows \"Update skipped: managed-service-handoff-started.\"\n\nThis PR detects systemd supervision and launches the handoff helper via `systemd-run --user --scope` to escape the gateway's cgroup. Non-systemd supervisors (launchd, etc.) continue using the existing detached-child path.\n\n## Root cause\n\nsystemd's `KillMode=control-group` (the default) kills all processes in the service's cgroup on restart — including detached child processes. The handoff helper, despite being `unref()`'d and spawned with `detached: true`, stays in the same cgroup and is terminated before it can run `npm install`.\n\n## Fix\n\n```\nsystemd-run --user --scope --unit openclaw-update-<handoffId> --collect -- node handoff.cjs handoff.json\n```\n\nKey design choices:\n\n**`--scope` not `--service`**: `--scope` inherits the caller's environment (profile, state dir, config, PATH, proxy, package manager discovery all preserved). `--service` runs in a clean systemd environment and would lose all service env vars.\n\n**`KillMode=control-group` preserved**: The scoped update helper escapes via `systemd-run --scope` into its own cgroup, so `KillMode=control-group` safely stops the gateway and all its child workers without affecting the handoff. No change to existing shutdown semantics.\n\n**Launch failure detection**: After spawning `systemd-run`, the code awaits its exit code with a 5s timeout. If systemd-run exits non-zero (user session unavailable, D-Bus down, etc.), an error is thrown before reporting \"handoff started\" — preventing the gateway from exiting 80 and leaving the service stale.\n\n**No secret exposure via argv**: The `env` object is passed via `spawn()` option — identical to the existing non-systemd path. No `--setenv=KEY=*** args are used. Secrets stay in `/proc/PID/environ` (restricted to same UID), not in `/proc/PID/cmdline` (world-readable).\n\nAdditional hardening:\n- `sanitizeSystemdUnitName()` strips non-`[a-zA-Z0-9:._-]` chars from `handoffId`\n- `/tmp/openclaw-update-in-progress` marker file for `ExecStartPre` defense-in-depth guard\n- `--collect` flag ensures scope units are garbage-collected after exit\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `update-managed-service-handoff.ts` | Detect `supervisor === \"systemd\"` → spawn via `systemd-run --user --scope`; await exit code to detect launch failures; add marker file lifecycle; add `sanitizeSystemdUnitName()` |\n| `update-managed-service-handoff.test.ts` | 3 new tests: systemd `--scope` spawn path with env assertions, ENOENT detection, non-zero exit detection; enhanced mock with `mockChild()` helper |\n| `systemd-unit.ts` | Add `ExecStartPre` marker guard, `RestartPreventExitStatus=80`; keep `KillMode=control-group` with updated comment |\n| `systemd-unit.test.ts` | Updated KillMode assertion to verify `control-group` |\n\n## Tests\n\n```\n$ npx vitest run --project gateway-methods src/gateway/server-methods/update-managed-service-handoff.test.ts\n ✓ gateway-methods (8 tests) 632ms\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n\n$ npx vitest run --project unit-fast src/daemon/systemd-unit.test.ts\n ✓ unit-fast (4 tests) 2ms\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: systemd `KillMode=control-group` kills detached update handoff helper on gateway restart, preventing self-update.\n- **Real environment tested**: OrbStack Linux VM (Ubuntu 22.04 Jammy, kernel 6.19.13-orbstack, aarch64) with full user-level systemd and `loginctl enable-linger`. Node.js v24.15.0.\n\n### Live systemd proof: `--scope` escapes cgroup, helper survives service restart\n\nCreated a systemd user service with `KillMode=control-group` (matching OpenClaw's generated unit at `src/daemon/systemd-unit.ts:86`):\n\n```ini\n[Service]\nType=simple\nExecStart=/tmp/handoff-test/gateway-sim.sh\nKillMode=control-group\nRestart=no\n```\n\n**Test A: WITH `systemd-run --user --scope` (this PR)**\n\n```\n=== Gateway running ===\n     Active: active (running) since Wed 2026-05-20 20:08:58 CST\n   Main PID: 2797 (gateway-sim.sh)\n     CGroup: /user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway-test.service\n\n=== Helper started (in separate scope unit, sleeping 8s) ===\nHelper PID=2799 started in scope at Wed May 20 08:08:58 PM CST 2026\nHelper: sleeping 8s while gateway lives...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:00 ===\nGateway service stopped\n\n=== Immediately after kill ===\nHelper still running (no sentinel yet — helper still working)\n\n=== After 10s wait (helper finished at 20:09:06) ===\nHelper: still alive after 8s! Gateway should be dead by now\nHelper: writing sentinel at Wed May 20 08:09:06 PM CST 2026\nSentinel: update-complete\n```\n\n**Result**: Helper survived gateway service kill and completed work ✅\n\n**Test B: WITHOUT `systemd-run --scope` (current main behavior)**\n\nSame setup but using plain `bash &` with `disown` (simulating current detached spawn):\n\n```\n=== Helper started (no scope, sleeping 8s) ===\nHelper PID=2844 (NO SCOPE) started at Wed May 20 08:09:44 PM CST 2026\nHelper: sleeping 8s...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:46 ===\n\n=== After 10s wait ===\nHelper log: stopped at \"sleeping 8s...\" — no further output\nSentinel: FAILED: helper was KILLED by KillMode=control-group!\n```\n\n**Result**: Helper was killed when gateway service stopped ❌\n\n### Comparison\n\n| Scenario | Helper survives service stop? | Sentinel written? |\n|----------|------------------------------|-------------------|\n| `systemd-run --user --scope` (this PR) | ✅ Yes — ran in separate scope unit | ✅ `update-complete` |\n| Plain detached child (current main) | ❌ No — killed by `KillMode=control-group` | ❌ Never created |\n\n### Security: env via spawn(), not argv\n\n```typescript\n// env passed to spawn() for systemd-run — not in command-line args\nchild = spawn(\"systemd-run\", [...], { cwd: params.root, env, detached: true, stdio: \"ignore\" });\n```\n\nTest coverage verifies explicitly:\n```typescript\nexpect(options.env).toBeDefined();\nexpect(args).not.toContain(\"--setenv\");\n```\n\n### What was not tested\n\n- Full end-to-end `openclaw update` flow (requires published package version delta and npm registry)\n- Live `ExecStartPre` marker file guard (defense-in-depth only, verified by code inspection)\n- `--collect` garbage collection timing (non-functional, only prevents stale unit name conflicts)\n\nCloses #84068\n",
+        "branch": "fix/systemd-update-handoff-84068",
+        "head_sha": "ee8f59275bb703893869e77a6c161cb5f511c4d5",
+        "author": "jerry-xin",
+        "labels": [
+          "gateway",
+          "cli",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/cli/gateway-cli/run-loop.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/daemon/systemd-unit.test.ts",
+            "additions": 4,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/daemon/systemd-unit.ts",
+            "additions": 7,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update-managed-service-handoff.test.ts",
+            "additions": 164,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update-managed-service-handoff.ts",
+            "additions": 117,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/process-respawn.test.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/process-respawn.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84151",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84151.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "FAILURE": 3,
+            "SUCCESS": 70,
+            "SKIPPED": 28,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84151:4502307666:2026-05-20T20:17:45Z:re_review",
+      "comment_id": "4502307666",
+      "comment_version_key": "4502307666:2026-05-20T20:17:45Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4502307666",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84151,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-20T20:17:45Z",
+      "comment_updated_at": "2026-05-20T20:17:45Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -59,81 +194,1283 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84151:4501306935:2026-05-20T18:16:22Z:re_review",
+      "comment_id": "4501306935",
+      "comment_version_key": "4501306935:2026-05-20T18:16:22Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4501306935",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84151,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-20T18:16:22Z",
+      "comment_updated_at": "2026-05-20T18:16:22Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(update): avoid broad tag fetches for dev updates",
-        "body": "## Summary\n\n- Problem: `openclaw update --channel dev` could fail before updating `main` when a release tag on the remote conflicted with an existing local tag.\n- Solution: make dev updates fetch branches/remotes with `--no-tags`, while keeping release-channel tag fetching unchanged.\n- What changed: explicit dev tag targets now fetch only the requested tag from configured remotes before resolving it.\n- What did NOT change (scope boundary): stable/beta updates remain tag-driven and still fetch tags broadly.\n\n## Motivation\n\n- This fixes the observed beta-to-dev switch failure where an unrelated moved beta tag blocked a dev update that should track git `main`.\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor required for the fix\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all touched areas)\n\n- [ ] Gateway / orchestration\n- [ ] Skills / tool execution\n- [ ] Auth / tokens\n- [ ] Memory / storage\n- [ ] Integrations\n- [ ] API / contracts\n- [x] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- Closes #\n- Related #\n- [x] This PR fixes a bug or regression\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: `openclaw update --channel dev` no longer performs a broad tag fetch that can fail on unrelated moved release tags before updating from `main`.\n- Real environment tested: Local contributor worktree at PR head with mocked git command runner coverage in `src/infra/update-runner.test.ts`.\n- Exact steps or command run after this patch: `node scripts/run-vitest.mjs src/infra/update-runner.test.ts`\n- Evidence after fix (screenshot, recording, terminal capture, console output, redacted runtime log, linked artifact, or copied live output): `Test Files 1 passed (1); Tests 46 passed (46)`.\n- Observed result after fix: Dev update tests assert `git fetch --all --prune --no-tags`, no broad `--tags` fetch, targeted explicit tag fetch, and no stale local tag resolution after targeted tag fetch failure.\n- What was not tested: A live openclaw-prod update was not run from this agent; broad validation is left to PR CI.\n- Before evidence (optional but encouraged): User-reported failure showed `openclaw update --channel dev` rejected `v2026.5.19-beta.2` during broad tag fetch with `would clobber existing tag`.\n\n## Root Cause (if applicable)\n\n- Root cause: Dev updates used the same broad tag-fetch behavior as release-channel updates even though dev is branch/main based.\n- Missing detection / guardrail: Tests covered dev update fetch failures but did not assert that dev avoids broad tag fetching.\n- Contributing context (if known): Switching from beta to dev can leave local release tags around, and Git rejects clobbering changed tags unless forced.\n\n## Regression Test Plan (if applicable)\n\n- Coverage level that should have caught this:\n  - [x] Unit test\n  - [ ] Seam / integration test\n  - [ ] End-to-end test\n  - [ ] Existing coverage already sufficient\n- Target test or file: `src/infra/update-runner.test.ts`\n- Scenario the test should lock in: Dev updates fetch with `--no-tags`; explicit dev tag targets fetch only the requested tag; failed targeted tag fetches do not fall back to stale local tags.\n- Why this is the smallest reliable guardrail: The update runner already injects the git command runner, so these tests verify the exact command contract without needing a mutable remote fixture.\n- Existing test that already covers this (if any): Existing dev update tests covered fetch sequencing but not the tag-fetch mode.\n- If no new test is added, why not: N/A\n\n## User-visible / Behavior Changes\n\n`openclaw update --channel dev` now ignores unrelated remote tags during the normal branch update path. Explicit dev tag targets still fetch the requested tag.\n\n## Diagram (if applicable)\n\n```text\nBefore:\nopenclaw update --channel dev -> git fetch --all --prune --tags -> unrelated tag conflict -> update fails\n\nAfter:\nopenclaw update --channel dev -> git fetch --all --prune --no-tags -> rebase main -> update continues\n```\n\n## Security Impact (required)\n\n- New permissions/capabilities? (`Yes/No`) No\n- Secrets/tokens handling changed? (`Yes/No`) No\n- New/changed network calls? (`Yes/No`) No\n- Command/tool execution surface changed? (`Yes/No`) Yes\n- Data access scope changed? (`Yes/No`) No\n- If any `Yes`, explain risk + mitigation: The git fetch command changes for dev updates only. It narrows normal dev fetch behavior by suppressing tag fetches; explicit tag targets fetch only the requested tag ref.\n\n## Repro + Verification\n\n### Environment\n\n- OS: Linux worktree\n- Runtime/container: Node via repo test wrapper\n- Model/provider: N/A\n- Integration/channel (if any): update CLI git mode\n- Relevant config (redacted): N/A\n\n### Steps\n\n1. Run `node scripts/run-vitest.mjs src/infra/update-runner.test.ts`.\n2. Review dev update command assertions for normal and explicit tag-target paths.\n\n### Expected\n\n- Dev update uses `git fetch --all --prune --no-tags`.\n- Stable/beta paths continue to use tag fetching.\n- Explicit dev tag targets do not use a stale local tag after targeted tag fetch failure.\n\n### Actual\n\n- `src/infra/update-runner.test.ts` passed 46/46.\n\n## Evidence\n\nAttach at least one:\n\n- [x] Failing test/log before + passing after\n- [ ] Trace/log snippets\n- [ ] Screenshot/recording\n- [ ] Perf numbers (if relevant)\n\n## Human Verification (required)\n\nWhat you personally verified (not just CI), and how:\n\n- Verified scenarios: targeted update-runner tests, `git diff --check`, and `codex review --base origin/main` after rebase.\n- Edge cases checked: default dev update, explicit dev tag target, failed targeted tag fetch with a stale local tag candidate.\n- What you did **not** verify: live update on openclaw-prod.\n\n## Review Conversations\n\n- [x] I replied to or resolved every bot review conversation I addressed in this PR.\n- [ ] I left unresolved only the conversations that still need reviewer or maintainer judgment.\n\n## Compatibility / Migration\n\n- Backward compatible? (`Yes/No`) Yes\n- Config/env changes? (`Yes/No`) No\n- Migration needed? (`Yes/No`) No\n- If yes, exact upgrade steps: N/A\n\n## Risks and Mitigations\n\n- Risk: Explicit dev tag targets could otherwise resolve stale local tags after a failed targeted fetch.\n  - Mitigation: The targeted tag fetch is forced for the requested ref and local tag resolution is skipped when all configured remote fetches fail.",
-        "branch": "codex/dev-update-no-tags",
-        "head_sha": "e57cf4ea9721f4dd2429e0894f9169d035e4ee21",
-        "author": "rubencu",
+        "title": "fix(daemon): escape systemd cgroup for update handoff via systemd-run --scope",
+        "body": "## Summary\n\nOn systemd-supervised installs, clicking \"Update now\" silently fails: the update handoff helper is created but immediately killed by systemd's `KillMode=control-group` when the gateway unit restarts. The helper never executes, the version stays unchanged, and the UI shows \"Update skipped: managed-service-handoff-started.\"\n\nThis PR detects systemd supervision and launches the handoff helper via `systemd-run --user --scope` to escape the gateway's cgroup. Non-systemd supervisors (launchd, etc.) continue using the existing detached-child path.\n\n## Root cause\n\nsystemd's `KillMode=control-group` (the default) kills all processes in the service's cgroup on restart — including detached child processes. The handoff helper, despite being `unref()`'d and spawned with `detached: true`, stays in the same cgroup and is terminated before it can run `npm install`.\n\n## Fix\n\n```\nsystemd-run --user --scope --unit openclaw-update-<handoffId> --collect -- node handoff.cjs handoff.json\n```\n\nKey design choices:\n\n**`--scope` not `--service`**: `--scope` inherits the caller's environment (profile, state dir, config, PATH, proxy, package manager discovery all preserved). `--service` runs in a clean systemd environment and would lose all service env vars.\n\n**`KillMode=control-group` preserved**: The scoped update helper escapes via `systemd-run --scope` into its own cgroup, so `KillMode=control-group` safely stops the gateway and all its child workers without affecting the handoff. No change to existing shutdown semantics.\n\n**Launch failure detection**: After spawning `systemd-run`, the code awaits its exit code with a 5s timeout. If systemd-run exits non-zero (user session unavailable, D-Bus down, etc.), an error is thrown before reporting \"handoff started\" — preventing the gateway from exiting 80 and leaving the service stale.\n\n**No secret exposure via argv**: The `env` object is passed via `spawn()` option — identical to the existing non-systemd path. No `--setenv=KEY=*** args are used. Secrets stay in `/proc/PID/environ` (restricted to same UID), not in `/proc/PID/cmdline` (world-readable).\n\nAdditional hardening:\n- `sanitizeSystemdUnitName()` strips non-`[a-zA-Z0-9:._-]` chars from `handoffId`\n- `/tmp/openclaw-update-in-progress` marker file for `ExecStartPre` defense-in-depth guard\n- `--collect` flag ensures scope units are garbage-collected after exit\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `update-managed-service-handoff.ts` | Detect `supervisor === \"systemd\"` → spawn via `systemd-run --user --scope`; await exit code to detect launch failures; add marker file lifecycle; add `sanitizeSystemdUnitName()` |\n| `update-managed-service-handoff.test.ts` | 3 new tests: systemd `--scope` spawn path with env assertions, ENOENT detection, non-zero exit detection; enhanced mock with `mockChild()` helper |\n| `systemd-unit.ts` | Add `ExecStartPre` marker guard, `RestartPreventExitStatus=80`; keep `KillMode=control-group` with updated comment |\n| `systemd-unit.test.ts` | Updated KillMode assertion to verify `control-group` |\n\n## Tests\n\n```\n$ npx vitest run --project gateway-methods src/gateway/server-methods/update-managed-service-handoff.test.ts\n ✓ gateway-methods (8 tests) 632ms\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n\n$ npx vitest run --project unit-fast src/daemon/systemd-unit.test.ts\n ✓ unit-fast (4 tests) 2ms\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: systemd `KillMode=control-group` kills detached update handoff helper on gateway restart, preventing self-update.\n- **Real environment tested**: OrbStack Linux VM (Ubuntu 22.04 Jammy, kernel 6.19.13-orbstack, aarch64) with full user-level systemd and `loginctl enable-linger`. Node.js v24.15.0.\n\n### Live systemd proof: `--scope` escapes cgroup, helper survives service restart\n\nCreated a systemd user service with `KillMode=control-group` (matching OpenClaw's generated unit at `src/daemon/systemd-unit.ts:86`):\n\n```ini\n[Service]\nType=simple\nExecStart=/tmp/handoff-test/gateway-sim.sh\nKillMode=control-group\nRestart=no\n```\n\n**Test A: WITH `systemd-run --user --scope` (this PR)**\n\n```\n=== Gateway running ===\n     Active: active (running) since Wed 2026-05-20 20:08:58 CST\n   Main PID: 2797 (gateway-sim.sh)\n     CGroup: /user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway-test.service\n\n=== Helper started (in separate scope unit, sleeping 8s) ===\nHelper PID=2799 started in scope at Wed May 20 08:08:58 PM CST 2026\nHelper: sleeping 8s while gateway lives...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:00 ===\nGateway service stopped\n\n=== Immediately after kill ===\nHelper still running (no sentinel yet — helper still working)\n\n=== After 10s wait (helper finished at 20:09:06) ===\nHelper: still alive after 8s! Gateway should be dead by now\nHelper: writing sentinel at Wed May 20 08:09:06 PM CST 2026\nSentinel: update-complete\n```\n\n**Result**: Helper survived gateway service kill and completed work ✅\n\n**Test B: WITHOUT `systemd-run --scope` (current main behavior)**\n\nSame setup but using plain `bash &` with `disown` (simulating current detached spawn):\n\n```\n=== Helper started (no scope, sleeping 8s) ===\nHelper PID=2844 (NO SCOPE) started at Wed May 20 08:09:44 PM CST 2026\nHelper: sleeping 8s...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:46 ===\n\n=== After 10s wait ===\nHelper log: stopped at \"sleeping 8s...\" — no further output\nSentinel: FAILED: helper was KILLED by KillMode=control-group!\n```\n\n**Result**: Helper was killed when gateway service stopped ❌\n\n### Comparison\n\n| Scenario | Helper survives service stop? | Sentinel written? |\n|----------|------------------------------|-------------------|\n| `systemd-run --user --scope` (this PR) | ✅ Yes — ran in separate scope unit | ✅ `update-complete` |\n| Plain detached child (current main) | ❌ No — killed by `KillMode=control-group` | ❌ Never created |\n\n### Security: env via spawn(), not argv\n\n```typescript\n// env passed to spawn() for systemd-run — not in command-line args\nchild = spawn(\"systemd-run\", [...], { cwd: params.root, env, detached: true, stdio: \"ignore\" });\n```\n\nTest coverage verifies explicitly:\n```typescript\nexpect(options.env).toBeDefined();\nexpect(args).not.toContain(\"--setenv\");\n```\n\n### What was not tested\n\n- Full end-to-end `openclaw update` flow (requires published package version delta and npm registry)\n- Live `ExecStartPre` marker file guard (defense-in-depth only, verified by code inspection)\n- `--collect` garbage collection timing (non-functional, only prevents stale unit name conflicts)\n\nCloses #84068\n",
+        "branch": "fix/systemd-update-handoff-84068",
+        "head_sha": "ee8f59275bb703893869e77a6c161cb5f511c4d5",
+        "author": "jerry-xin",
         "labels": [
-          "size: S",
-          "triage: mock-only-proof",
-          "P2",
+          "gateway",
+          "cli",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P1",
           "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/infra/update-runner.test.ts",
-            "additions": 108,
-            "deletions": 12,
+            "path": "src/cli/gateway-cli/run-loop.ts",
+            "additions": 4,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/infra/update-runner.ts",
-            "additions": 55,
-            "deletions": 2,
+            "path": "src/daemon/systemd-unit.test.ts",
+            "additions": 4,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/daemon/systemd-unit.ts",
+            "additions": 7,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update-managed-service-handoff.test.ts",
+            "additions": 164,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update-managed-service-handoff.ts",
+            "additions": 117,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/process-respawn.test.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/process-respawn.ts",
+            "additions": 6,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84737",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84737.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84151",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84151.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 45,
+          "total": 102,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 38,
-            "SUCCESS": 5
+            "FAILURE": 3,
+            "SUCCESS": 70,
+            "SKIPPED": 28,
+            "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:CANCELLED"
+            "Real behavior proof:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
+            "Real behavior proof:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
           ]
         }
       },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84151:4500498963:2026-05-20T16:32:09Z:re_review",
+      "comment_id": "4500498963",
+      "comment_version_key": "4500498963:2026-05-20T16:32:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4500498963",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84151,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-20T16:32:09Z",
+      "comment_updated_at": "2026-05-20T16:32:09Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(daemon): escape systemd cgroup for update handoff via systemd-run --scope",
+        "body": "## Summary\n\nOn systemd-supervised installs, clicking \"Update now\" silently fails: the update handoff helper is created but immediately killed by systemd's `KillMode=control-group` when the gateway unit restarts. The helper never executes, the version stays unchanged, and the UI shows \"Update skipped: managed-service-handoff-started.\"\n\nThis PR detects systemd supervision and launches the handoff helper via `systemd-run --user --scope` to escape the gateway's cgroup. Non-systemd supervisors (launchd, etc.) continue using the existing detached-child path.\n\n## Root cause\n\nsystemd's `KillMode=control-group` (the default) kills all processes in the service's cgroup on restart — including detached child processes. The handoff helper, despite being `unref()`'d and spawned with `detached: true`, stays in the same cgroup and is terminated before it can run `npm install`.\n\n## Fix\n\n```\nsystemd-run --user --scope --unit openclaw-update-<handoffId> --collect -- node handoff.cjs handoff.json\n```\n\nKey design choices:\n\n**`--scope` not `--service`**: `--scope` inherits the caller's environment (profile, state dir, config, PATH, proxy, package manager discovery all preserved). `--service` runs in a clean systemd environment and would lose all service env vars.\n\n**`KillMode=control-group` preserved**: The scoped update helper escapes via `systemd-run --scope` into its own cgroup, so `KillMode=control-group` safely stops the gateway and all its child workers without affecting the handoff. No change to existing shutdown semantics.\n\n**Launch failure detection**: After spawning `systemd-run`, the code awaits its exit code with a 5s timeout. If systemd-run exits non-zero (user session unavailable, D-Bus down, etc.), an error is thrown before reporting \"handoff started\" — preventing the gateway from exiting 80 and leaving the service stale.\n\n**No secret exposure via argv**: The `env` object is passed via `spawn()` option — identical to the existing non-systemd path. No `--setenv=KEY=*** args are used. Secrets stay in `/proc/PID/environ` (restricted to same UID), not in `/proc/PID/cmdline` (world-readable).\n\nAdditional hardening:\n- `sanitizeSystemdUnitName()` strips non-`[a-zA-Z0-9:._-]` chars from `handoffId`\n- `/tmp/openclaw-update-in-progress` marker file for `ExecStartPre` defense-in-depth guard\n- `--collect` flag ensures scope units are garbage-collected after exit\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `update-managed-service-handoff.ts` | Detect `supervisor === \"systemd\"` → spawn via `systemd-run --user --scope`; await exit code to detect launch failures; add marker file lifecycle; add `sanitizeSystemdUnitName()` |\n| `update-managed-service-handoff.test.ts` | 3 new tests: systemd `--scope` spawn path with env assertions, ENOENT detection, non-zero exit detection; enhanced mock with `mockChild()` helper |\n| `systemd-unit.ts` | Add `ExecStartPre` marker guard, `RestartPreventExitStatus=80`; keep `KillMode=control-group` with updated comment |\n| `systemd-unit.test.ts` | Updated KillMode assertion to verify `control-group` |\n\n## Tests\n\n```\n$ npx vitest run --project gateway-methods src/gateway/server-methods/update-managed-service-handoff.test.ts\n ✓ gateway-methods (8 tests) 632ms\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n\n$ npx vitest run --project unit-fast src/daemon/systemd-unit.test.ts\n ✓ unit-fast (4 tests) 2ms\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: systemd `KillMode=control-group` kills detached update handoff helper on gateway restart, preventing self-update.\n- **Real environment tested**: OrbStack Linux VM (Ubuntu 22.04 Jammy, kernel 6.19.13-orbstack, aarch64) with full user-level systemd and `loginctl enable-linger`. Node.js v24.15.0.\n\n### Live systemd proof: `--scope` escapes cgroup, helper survives service restart\n\nCreated a systemd user service with `KillMode=control-group` (matching OpenClaw's generated unit at `src/daemon/systemd-unit.ts:86`):\n\n```ini\n[Service]\nType=simple\nExecStart=/tmp/handoff-test/gateway-sim.sh\nKillMode=control-group\nRestart=no\n```\n\n**Test A: WITH `systemd-run --user --scope` (this PR)**\n\n```\n=== Gateway running ===\n     Active: active (running) since Wed 2026-05-20 20:08:58 CST\n   Main PID: 2797 (gateway-sim.sh)\n     CGroup: /user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway-test.service\n\n=== Helper started (in separate scope unit, sleeping 8s) ===\nHelper PID=2799 started in scope at Wed May 20 08:08:58 PM CST 2026\nHelper: sleeping 8s while gateway lives...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:00 ===\nGateway service stopped\n\n=== Immediately after kill ===\nHelper still running (no sentinel yet — helper still working)\n\n=== After 10s wait (helper finished at 20:09:06) ===\nHelper: still alive after 8s! Gateway should be dead by now\nHelper: writing sentinel at Wed May 20 08:09:06 PM CST 2026\nSentinel: update-complete\n```\n\n**Result**: Helper survived gateway service kill and completed work ✅\n\n**Test B: WITHOUT `systemd-run --scope` (current main behavior)**\n\nSame setup but using plain `bash &` with `disown` (simulating current detached spawn):\n\n```\n=== Helper started (no scope, sleeping 8s) ===\nHelper PID=2844 (NO SCOPE) started at Wed May 20 08:09:44 PM CST 2026\nHelper: sleeping 8s...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:46 ===\n\n=== After 10s wait ===\nHelper log: stopped at \"sleeping 8s...\" — no further output\nSentinel: FAILED: helper was KILLED by KillMode=control-group!\n```\n\n**Result**: Helper was killed when gateway service stopped ❌\n\n### Comparison\n\n| Scenario | Helper survives service stop? | Sentinel written? |\n|----------|------------------------------|-------------------|\n| `systemd-run --user --scope` (this PR) | ✅ Yes — ran in separate scope unit | ✅ `update-complete` |\n| Plain detached child (current main) | ❌ No — killed by `KillMode=control-group` | ❌ Never created |\n\n### Security: env via spawn(), not argv\n\n```typescript\n// env passed to spawn() for systemd-run — not in command-line args\nchild = spawn(\"systemd-run\", [...], { cwd: params.root, env, detached: true, stdio: \"ignore\" });\n```\n\nTest coverage verifies explicitly:\n```typescript\nexpect(options.env).toBeDefined();\nexpect(args).not.toContain(\"--setenv\");\n```\n\n### What was not tested\n\n- Full end-to-end `openclaw update` flow (requires published package version delta and npm registry)\n- Live `ExecStartPre` marker file guard (defense-in-depth only, verified by code inspection)\n- `--collect` garbage collection timing (non-functional, only prevents stale unit name conflicts)\n\nCloses #84068\n",
+        "branch": "fix/systemd-update-handoff-84068",
+        "head_sha": "ee8f59275bb703893869e77a6c161cb5f511c4d5",
+        "author": "jerry-xin",
+        "labels": [
+          "gateway",
+          "cli",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/cli/gateway-cli/run-loop.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/daemon/systemd-unit.test.ts",
+            "additions": 4,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/daemon/systemd-unit.ts",
+            "additions": 7,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update-managed-service-handoff.test.ts",
+            "additions": 164,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update-managed-service-handoff.ts",
+            "additions": 117,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/process-respawn.test.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/process-respawn.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84151",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84151.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "FAILURE": 3,
+            "SUCCESS": 70,
+            "SKIPPED": 28,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84151:4500448172:2026-05-20T16:25:16Z:re_review",
+      "comment_id": "4500448172",
+      "comment_version_key": "4500448172:2026-05-20T16:25:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4500448172",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84151,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-20T16:25:16Z",
+      "comment_updated_at": "2026-05-20T16:25:16Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84151:4499977625:2026-05-20T15:32:15Z:re_review",
+      "comment_id": "4499977625",
+      "comment_version_key": "4499977625:2026-05-20T15:32:15Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4499977625",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84151,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-20T15:32:15Z",
+      "comment_updated_at": "2026-05-20T15:32:15Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(daemon): escape systemd cgroup for update handoff via systemd-run --scope",
+        "body": "## Summary\n\nOn systemd-supervised installs, clicking \"Update now\" silently fails: the update handoff helper is created but immediately killed by systemd's `KillMode=control-group` when the gateway unit restarts. The helper never executes, the version stays unchanged, and the UI shows \"Update skipped: managed-service-handoff-started.\"\n\nThis PR detects systemd supervision and launches the handoff helper via `systemd-run --user --scope` to escape the gateway's cgroup. Non-systemd supervisors (launchd, etc.) continue using the existing detached-child path.\n\n## Root cause\n\nsystemd's `KillMode=control-group` (the default) kills all processes in the service's cgroup on restart — including detached child processes. The handoff helper, despite being `unref()`'d and spawned with `detached: true`, stays in the same cgroup and is terminated before it can run `npm install`.\n\n## Fix\n\n```\nsystemd-run --user --scope --unit openclaw-update-<handoffId> --collect -- node handoff.cjs handoff.json\n```\n\nKey design choices:\n\n**`--scope` not `--service`**: `--scope` inherits the caller's environment (profile, state dir, config, PATH, proxy, package manager discovery all preserved). `--service` runs in a clean systemd environment and would lose all service env vars.\n\n**`KillMode=control-group` preserved**: The scoped update helper escapes via `systemd-run --scope` into its own cgroup, so `KillMode=control-group` safely stops the gateway and all its child workers without affecting the handoff. No change to existing shutdown semantics.\n\n**Launch failure detection**: After spawning `systemd-run`, the code awaits its exit code with a 5s timeout. If systemd-run exits non-zero (user session unavailable, D-Bus down, etc.), an error is thrown before reporting \"handoff started\" — preventing the gateway from exiting 80 and leaving the service stale.\n\n**No secret exposure via argv**: The `env` object is passed via `spawn()` option — identical to the existing non-systemd path. No `--setenv=KEY=*** args are used. Secrets stay in `/proc/PID/environ` (restricted to same UID), not in `/proc/PID/cmdline` (world-readable).\n\nAdditional hardening:\n- `sanitizeSystemdUnitName()` strips non-`[a-zA-Z0-9:._-]` chars from `handoffId`\n- `/tmp/openclaw-update-in-progress` marker file for `ExecStartPre` defense-in-depth guard\n- `--collect` flag ensures scope units are garbage-collected after exit\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `update-managed-service-handoff.ts` | Detect `supervisor === \"systemd\"` → spawn via `systemd-run --user --scope`; await exit code to detect launch failures; add marker file lifecycle; add `sanitizeSystemdUnitName()` |\n| `update-managed-service-handoff.test.ts` | 3 new tests: systemd `--scope` spawn path with env assertions, ENOENT detection, non-zero exit detection; enhanced mock with `mockChild()` helper |\n| `systemd-unit.ts` | Add `ExecStartPre` marker guard, `RestartPreventExitStatus=80`; keep `KillMode=control-group` with updated comment |\n| `systemd-unit.test.ts` | Updated KillMode assertion to verify `control-group` |\n\n## Tests\n\n```\n$ npx vitest run --project gateway-methods src/gateway/server-methods/update-managed-service-handoff.test.ts\n ✓ gateway-methods (8 tests) 632ms\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n\n$ npx vitest run --project unit-fast src/daemon/systemd-unit.test.ts\n ✓ unit-fast (4 tests) 2ms\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: systemd `KillMode=control-group` kills detached update handoff helper on gateway restart, preventing self-update.\n- **Real environment tested**: OrbStack Linux VM (Ubuntu 22.04 Jammy, kernel 6.19.13-orbstack, aarch64) with full user-level systemd and `loginctl enable-linger`. Node.js v24.15.0.\n\n### Live systemd proof: `--scope` escapes cgroup, helper survives service restart\n\nCreated a systemd user service with `KillMode=control-group` (matching OpenClaw's generated unit at `src/daemon/systemd-unit.ts:86`):\n\n```ini\n[Service]\nType=simple\nExecStart=/tmp/handoff-test/gateway-sim.sh\nKillMode=control-group\nRestart=no\n```\n\n**Test A: WITH `systemd-run --user --scope` (this PR)**\n\n```\n=== Gateway running ===\n     Active: active (running) since Wed 2026-05-20 20:08:58 CST\n   Main PID: 2797 (gateway-sim.sh)\n     CGroup: /user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway-test.service\n\n=== Helper started (in separate scope unit, sleeping 8s) ===\nHelper PID=2799 started in scope at Wed May 20 08:08:58 PM CST 2026\nHelper: sleeping 8s while gateway lives...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:00 ===\nGateway service stopped\n\n=== Immediately after kill ===\nHelper still running (no sentinel yet — helper still working)\n\n=== After 10s wait (helper finished at 20:09:06) ===\nHelper: still alive after 8s! Gateway should be dead by now\nHelper: writing sentinel at Wed May 20 08:09:06 PM CST 2026\nSentinel: update-complete\n```\n\n**Result**: Helper survived gateway service kill and completed work ✅\n\n**Test B: WITHOUT `systemd-run --scope` (current main behavior)**\n\nSame setup but using plain `bash &` with `disown` (simulating current detached spawn):\n\n```\n=== Helper started (no scope, sleeping 8s) ===\nHelper PID=2844 (NO SCOPE) started at Wed May 20 08:09:44 PM CST 2026\nHelper: sleeping 8s...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:46 ===\n\n=== After 10s wait ===\nHelper log: stopped at \"sleeping 8s...\" — no further output\nSentinel: FAILED: helper was KILLED by KillMode=control-group!\n```\n\n**Result**: Helper was killed when gateway service stopped ❌\n\n### Comparison\n\n| Scenario | Helper survives service stop? | Sentinel written? |\n|----------|------------------------------|-------------------|\n| `systemd-run --user --scope` (this PR) | ✅ Yes — ran in separate scope unit | ✅ `update-complete` |\n| Plain detached child (current main) | ❌ No — killed by `KillMode=control-group` | ❌ Never created |\n\n### Security: env via spawn(), not argv\n\n```typescript\n// env passed to spawn() for systemd-run — not in command-line args\nchild = spawn(\"systemd-run\", [...], { cwd: params.root, env, detached: true, stdio: \"ignore\" });\n```\n\nTest coverage verifies explicitly:\n```typescript\nexpect(options.env).toBeDefined();\nexpect(args).not.toContain(\"--setenv\");\n```\n\n### What was not tested\n\n- Full end-to-end `openclaw update` flow (requires published package version delta and npm registry)\n- Live `ExecStartPre` marker file guard (defense-in-depth only, verified by code inspection)\n- `--collect` garbage collection timing (non-functional, only prevents stale unit name conflicts)\n\nCloses #84068\n",
+        "branch": "fix/systemd-update-handoff-84068",
+        "head_sha": "ee8f59275bb703893869e77a6c161cb5f511c4d5",
+        "author": "jerry-xin",
+        "labels": [
+          "gateway",
+          "cli",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/cli/gateway-cli/run-loop.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/daemon/systemd-unit.test.ts",
+            "additions": 4,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/daemon/systemd-unit.ts",
+            "additions": 7,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update-managed-service-handoff.test.ts",
+            "additions": 164,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update-managed-service-handoff.ts",
+            "additions": 117,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/process-respawn.test.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/process-respawn.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84151",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84151.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "FAILURE": 3,
+            "SUCCESS": 70,
+            "SKIPPED": 28,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84151:4499250943:2026-05-20T14:10:42Z:re_review",
+      "comment_id": "4499250943",
+      "comment_version_key": "4499250943:2026-05-20T14:10:42Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4499250943",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84151,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-20T14:10:42Z",
+      "comment_updated_at": "2026-05-20T14:10:42Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(daemon): escape systemd cgroup for update handoff via systemd-run --scope",
+        "body": "## Summary\n\nOn systemd-supervised installs, clicking \"Update now\" silently fails: the update handoff helper is created but immediately killed by systemd's `KillMode=control-group` when the gateway unit restarts. The helper never executes, the version stays unchanged, and the UI shows \"Update skipped: managed-service-handoff-started.\"\n\nThis PR detects systemd supervision and launches the handoff helper via `systemd-run --user --scope` to escape the gateway's cgroup. Non-systemd supervisors (launchd, etc.) continue using the existing detached-child path.\n\n## Root cause\n\nsystemd's `KillMode=control-group` (the default) kills all processes in the service's cgroup on restart — including detached child processes. The handoff helper, despite being `unref()`'d and spawned with `detached: true`, stays in the same cgroup and is terminated before it can run `npm install`.\n\n## Fix\n\n```\nsystemd-run --user --scope --unit openclaw-update-<handoffId> --collect -- node handoff.cjs handoff.json\n```\n\nKey design choices:\n\n**`--scope` not `--service`**: `--scope` inherits the caller's environment (profile, state dir, config, PATH, proxy, package manager discovery all preserved). `--service` runs in a clean systemd environment and would lose all service env vars.\n\n**`KillMode=control-group` preserved**: The scoped update helper escapes via `systemd-run --scope` into its own cgroup, so `KillMode=control-group` safely stops the gateway and all its child workers without affecting the handoff. No change to existing shutdown semantics.\n\n**Launch failure detection**: After spawning `systemd-run`, the code awaits its exit code with a 5s timeout. If systemd-run exits non-zero (user session unavailable, D-Bus down, etc.), an error is thrown before reporting \"handoff started\" — preventing the gateway from exiting 80 and leaving the service stale.\n\n**No secret exposure via argv**: The `env` object is passed via `spawn()` option — identical to the existing non-systemd path. No `--setenv=KEY=*** args are used. Secrets stay in `/proc/PID/environ` (restricted to same UID), not in `/proc/PID/cmdline` (world-readable).\n\nAdditional hardening:\n- `sanitizeSystemdUnitName()` strips non-`[a-zA-Z0-9:._-]` chars from `handoffId`\n- `/tmp/openclaw-update-in-progress` marker file for `ExecStartPre` defense-in-depth guard\n- `--collect` flag ensures scope units are garbage-collected after exit\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `update-managed-service-handoff.ts` | Detect `supervisor === \"systemd\"` → spawn via `systemd-run --user --scope`; await exit code to detect launch failures; add marker file lifecycle; add `sanitizeSystemdUnitName()` |\n| `update-managed-service-handoff.test.ts` | 3 new tests: systemd `--scope` spawn path with env assertions, ENOENT detection, non-zero exit detection; enhanced mock with `mockChild()` helper |\n| `systemd-unit.ts` | Add `ExecStartPre` marker guard, `RestartPreventExitStatus=80`; keep `KillMode=control-group` with updated comment |\n| `systemd-unit.test.ts` | Updated KillMode assertion to verify `control-group` |\n\n## Tests\n\n```\n$ npx vitest run --project gateway-methods src/gateway/server-methods/update-managed-service-handoff.test.ts\n ✓ gateway-methods (8 tests) 632ms\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n\n$ npx vitest run --project unit-fast src/daemon/systemd-unit.test.ts\n ✓ unit-fast (4 tests) 2ms\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: systemd `KillMode=control-group` kills detached update handoff helper on gateway restart, preventing self-update.\n- **Real environment tested**: OrbStack Linux VM (Ubuntu 22.04 Jammy, kernel 6.19.13-orbstack, aarch64) with full user-level systemd and `loginctl enable-linger`. Node.js v24.15.0.\n\n### Live systemd proof: `--scope` escapes cgroup, helper survives service restart\n\nCreated a systemd user service with `KillMode=control-group` (matching OpenClaw's generated unit at `src/daemon/systemd-unit.ts:86`):\n\n```ini\n[Service]\nType=simple\nExecStart=/tmp/handoff-test/gateway-sim.sh\nKillMode=control-group\nRestart=no\n```\n\n**Test A: WITH `systemd-run --user --scope` (this PR)**\n\n```\n=== Gateway running ===\n     Active: active (running) since Wed 2026-05-20 20:08:58 CST\n   Main PID: 2797 (gateway-sim.sh)\n     CGroup: /user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway-test.service\n\n=== Helper started (in separate scope unit, sleeping 8s) ===\nHelper PID=2799 started in scope at Wed May 20 08:08:58 PM CST 2026\nHelper: sleeping 8s while gateway lives...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:00 ===\nGateway service stopped\n\n=== Immediately after kill ===\nHelper still running (no sentinel yet — helper still working)\n\n=== After 10s wait (helper finished at 20:09:06) ===\nHelper: still alive after 8s! Gateway should be dead by now\nHelper: writing sentinel at Wed May 20 08:09:06 PM CST 2026\nSentinel: update-complete\n```\n\n**Result**: Helper survived gateway service kill and completed work ✅\n\n**Test B: WITHOUT `systemd-run --scope` (current main behavior)**\n\nSame setup but using plain `bash &` with `disown` (simulating current detached spawn):\n\n```\n=== Helper started (no scope, sleeping 8s) ===\nHelper PID=2844 (NO SCOPE) started at Wed May 20 08:09:44 PM CST 2026\nHelper: sleeping 8s...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:46 ===\n\n=== After 10s wait ===\nHelper log: stopped at \"sleeping 8s...\" — no further output\nSentinel: FAILED: helper was KILLED by KillMode=control-group!\n```\n\n**Result**: Helper was killed when gateway service stopped ❌\n\n### Comparison\n\n| Scenario | Helper survives service stop? | Sentinel written? |\n|----------|------------------------------|-------------------|\n| `systemd-run --user --scope` (this PR) | ✅ Yes — ran in separate scope unit | ✅ `update-complete` |\n| Plain detached child (current main) | ❌ No — killed by `KillMode=control-group` | ❌ Never created |\n\n### Security: env via spawn(), not argv\n\n```typescript\n// env passed to spawn() for systemd-run — not in command-line args\nchild = spawn(\"systemd-run\", [...], { cwd: params.root, env, detached: true, stdio: \"ignore\" });\n```\n\nTest coverage verifies explicitly:\n```typescript\nexpect(options.env).toBeDefined();\nexpect(args).not.toContain(\"--setenv\");\n```\n\n### What was not tested\n\n- Full end-to-end `openclaw update` flow (requires published package version delta and npm registry)\n- Live `ExecStartPre` marker file guard (defense-in-depth only, verified by code inspection)\n- `--collect` garbage collection timing (non-functional, only prevents stale unit name conflicts)\n\nCloses #84068\n",
+        "branch": "fix/systemd-update-handoff-84068",
+        "head_sha": "ee8f59275bb703893869e77a6c161cb5f511c4d5",
+        "author": "jerry-xin",
+        "labels": [
+          "gateway",
+          "cli",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/cli/gateway-cli/run-loop.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/daemon/systemd-unit.test.ts",
+            "additions": 4,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/daemon/systemd-unit.ts",
+            "additions": 7,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update-managed-service-handoff.test.ts",
+            "additions": 164,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update-managed-service-handoff.ts",
+            "additions": 117,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/process-respawn.test.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/process-respawn.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84151",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84151.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "FAILURE": 3,
+            "SUCCESS": 70,
+            "SKIPPED": 28,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84151:4498955218:2026-05-20T13:37:46Z:re_review",
+      "comment_id": "4498955218",
+      "comment_version_key": "4498955218:2026-05-20T13:37:46Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4498955218",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84151,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-20T13:37:46Z",
+      "comment_updated_at": "2026-05-20T13:37:46Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(daemon): escape systemd cgroup for update handoff via systemd-run --scope",
+        "body": "## Summary\n\nOn systemd-supervised installs, clicking \"Update now\" silently fails: the update handoff helper is created but immediately killed by systemd's `KillMode=control-group` when the gateway unit restarts. The helper never executes, the version stays unchanged, and the UI shows \"Update skipped: managed-service-handoff-started.\"\n\nThis PR detects systemd supervision and launches the handoff helper via `systemd-run --user --scope` to escape the gateway's cgroup. Non-systemd supervisors (launchd, etc.) continue using the existing detached-child path.\n\n## Root cause\n\nsystemd's `KillMode=control-group` (the default) kills all processes in the service's cgroup on restart — including detached child processes. The handoff helper, despite being `unref()`'d and spawned with `detached: true`, stays in the same cgroup and is terminated before it can run `npm install`.\n\n## Fix\n\n```\nsystemd-run --user --scope --unit openclaw-update-<handoffId> --collect -- node handoff.cjs handoff.json\n```\n\nKey design choices:\n\n**`--scope` not `--service`**: `--scope` inherits the caller's environment (profile, state dir, config, PATH, proxy, package manager discovery all preserved). `--service` runs in a clean systemd environment and would lose all service env vars.\n\n**`KillMode=control-group` preserved**: The scoped update helper escapes via `systemd-run --scope` into its own cgroup, so `KillMode=control-group` safely stops the gateway and all its child workers without affecting the handoff. No change to existing shutdown semantics.\n\n**Launch failure detection**: After spawning `systemd-run`, the code awaits its exit code with a 5s timeout. If systemd-run exits non-zero (user session unavailable, D-Bus down, etc.), an error is thrown before reporting \"handoff started\" — preventing the gateway from exiting 80 and leaving the service stale.\n\n**No secret exposure via argv**: The `env` object is passed via `spawn()` option — identical to the existing non-systemd path. No `--setenv=KEY=*** args are used. Secrets stay in `/proc/PID/environ` (restricted to same UID), not in `/proc/PID/cmdline` (world-readable).\n\nAdditional hardening:\n- `sanitizeSystemdUnitName()` strips non-`[a-zA-Z0-9:._-]` chars from `handoffId`\n- `/tmp/openclaw-update-in-progress` marker file for `ExecStartPre` defense-in-depth guard\n- `--collect` flag ensures scope units are garbage-collected after exit\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `update-managed-service-handoff.ts` | Detect `supervisor === \"systemd\"` → spawn via `systemd-run --user --scope`; await exit code to detect launch failures; add marker file lifecycle; add `sanitizeSystemdUnitName()` |\n| `update-managed-service-handoff.test.ts` | 3 new tests: systemd `--scope` spawn path with env assertions, ENOENT detection, non-zero exit detection; enhanced mock with `mockChild()` helper |\n| `systemd-unit.ts` | Add `ExecStartPre` marker guard, `RestartPreventExitStatus=80`; keep `KillMode=control-group` with updated comment |\n| `systemd-unit.test.ts` | Updated KillMode assertion to verify `control-group` |\n\n## Tests\n\n```\n$ npx vitest run --project gateway-methods src/gateway/server-methods/update-managed-service-handoff.test.ts\n ✓ gateway-methods (8 tests) 632ms\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n\n$ npx vitest run --project unit-fast src/daemon/systemd-unit.test.ts\n ✓ unit-fast (4 tests) 2ms\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: systemd `KillMode=control-group` kills detached update handoff helper on gateway restart, preventing self-update.\n- **Real environment tested**: OrbStack Linux VM (Ubuntu 22.04 Jammy, kernel 6.19.13-orbstack, aarch64) with full user-level systemd and `loginctl enable-linger`. Node.js v24.15.0.\n\n### Live systemd proof: `--scope` escapes cgroup, helper survives service restart\n\nCreated a systemd user service with `KillMode=control-group` (matching OpenClaw's generated unit at `src/daemon/systemd-unit.ts:86`):\n\n```ini\n[Service]\nType=simple\nExecStart=/tmp/handoff-test/gateway-sim.sh\nKillMode=control-group\nRestart=no\n```\n\n**Test A: WITH `systemd-run --user --scope` (this PR)**\n\n```\n=== Gateway running ===\n     Active: active (running) since Wed 2026-05-20 20:08:58 CST\n   Main PID: 2797 (gateway-sim.sh)\n     CGroup: /user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway-test.service\n\n=== Helper started (in separate scope unit, sleeping 8s) ===\nHelper PID=2799 started in scope at Wed May 20 08:08:58 PM CST 2026\nHelper: sleeping 8s while gateway lives...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:00 ===\nGateway service stopped\n\n=== Immediately after kill ===\nHelper still running (no sentinel yet — helper still working)\n\n=== After 10s wait (helper finished at 20:09:06) ===\nHelper: still alive after 8s! Gateway should be dead by now\nHelper: writing sentinel at Wed May 20 08:09:06 PM CST 2026\nSentinel: update-complete\n```\n\n**Result**: Helper survived gateway service kill and completed work ✅\n\n**Test B: WITHOUT `systemd-run --scope` (current main behavior)**\n\nSame setup but using plain `bash &` with `disown` (simulating current detached spawn):\n\n```\n=== Helper started (no scope, sleeping 8s) ===\nHelper PID=2844 (NO SCOPE) started at Wed May 20 08:09:44 PM CST 2026\nHelper: sleeping 8s...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:46 ===\n\n=== After 10s wait ===\nHelper log: stopped at \"sleeping 8s...\" — no further output\nSentinel: FAILED: helper was KILLED by KillMode=control-group!\n```\n\n**Result**: Helper was killed when gateway service stopped ❌\n\n### Comparison\n\n| Scenario | Helper survives service stop? | Sentinel written? |\n|----------|------------------------------|-------------------|\n| `systemd-run --user --scope` (this PR) | ✅ Yes — ran in separate scope unit | ✅ `update-complete` |\n| Plain detached child (current main) | ❌ No — killed by `KillMode=control-group` | ❌ Never created |\n\n### Security: env via spawn(), not argv\n\n```typescript\n// env passed to spawn() for systemd-run — not in command-line args\nchild = spawn(\"systemd-run\", [...], { cwd: params.root, env, detached: true, stdio: \"ignore\" });\n```\n\nTest coverage verifies explicitly:\n```typescript\nexpect(options.env).toBeDefined();\nexpect(args).not.toContain(\"--setenv\");\n```\n\n### What was not tested\n\n- Full end-to-end `openclaw update` flow (requires published package version delta and npm registry)\n- Live `ExecStartPre` marker file guard (defense-in-depth only, verified by code inspection)\n- `--collect` garbage collection timing (non-functional, only prevents stale unit name conflicts)\n\nCloses #84068\n",
+        "branch": "fix/systemd-update-handoff-84068",
+        "head_sha": "ee8f59275bb703893869e77a6c161cb5f511c4d5",
+        "author": "jerry-xin",
+        "labels": [
+          "gateway",
+          "cli",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/cli/gateway-cli/run-loop.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/daemon/systemd-unit.test.ts",
+            "additions": 4,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/daemon/systemd-unit.ts",
+            "additions": 7,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update-managed-service-handoff.test.ts",
+            "additions": 164,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update-managed-service-handoff.ts",
+            "additions": 117,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/process-respawn.test.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/process-respawn.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84151",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84151.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "FAILURE": 3,
+            "SUCCESS": 70,
+            "SKIPPED": 28,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84151:4498367088:2026-05-20T12:26:16Z:re_review",
+      "comment_id": "4498367088",
+      "comment_version_key": "4498367088:2026-05-20T12:26:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4498367088",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84151,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-20T12:26:16Z",
+      "comment_updated_at": "2026-05-20T12:26:16Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(daemon): escape systemd cgroup for update handoff via systemd-run --scope",
+        "body": "## Summary\n\nOn systemd-supervised installs, clicking \"Update now\" silently fails: the update handoff helper is created but immediately killed by systemd's `KillMode=control-group` when the gateway unit restarts. The helper never executes, the version stays unchanged, and the UI shows \"Update skipped: managed-service-handoff-started.\"\n\nThis PR detects systemd supervision and launches the handoff helper via `systemd-run --user --scope` to escape the gateway's cgroup. Non-systemd supervisors (launchd, etc.) continue using the existing detached-child path.\n\n## Root cause\n\nsystemd's `KillMode=control-group` (the default) kills all processes in the service's cgroup on restart — including detached child processes. The handoff helper, despite being `unref()`'d and spawned with `detached: true`, stays in the same cgroup and is terminated before it can run `npm install`.\n\n## Fix\n\n```\nsystemd-run --user --scope --unit openclaw-update-<handoffId> --collect -- node handoff.cjs handoff.json\n```\n\nKey design choices:\n\n**`--scope` not `--service`**: `--scope` inherits the caller's environment (profile, state dir, config, PATH, proxy, package manager discovery all preserved). `--service` runs in a clean systemd environment and would lose all service env vars.\n\n**`KillMode=control-group` preserved**: The scoped update helper escapes via `systemd-run --scope` into its own cgroup, so `KillMode=control-group` safely stops the gateway and all its child workers without affecting the handoff. No change to existing shutdown semantics.\n\n**Launch failure detection**: After spawning `systemd-run`, the code awaits its exit code with a 5s timeout. If systemd-run exits non-zero (user session unavailable, D-Bus down, etc.), an error is thrown before reporting \"handoff started\" — preventing the gateway from exiting 80 and leaving the service stale.\n\n**No secret exposure via argv**: The `env` object is passed via `spawn()` option — identical to the existing non-systemd path. No `--setenv=KEY=*** args are used. Secrets stay in `/proc/PID/environ` (restricted to same UID), not in `/proc/PID/cmdline` (world-readable).\n\nAdditional hardening:\n- `sanitizeSystemdUnitName()` strips non-`[a-zA-Z0-9:._-]` chars from `handoffId`\n- `/tmp/openclaw-update-in-progress` marker file for `ExecStartPre` defense-in-depth guard\n- `--collect` flag ensures scope units are garbage-collected after exit\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `update-managed-service-handoff.ts` | Detect `supervisor === \"systemd\"` → spawn via `systemd-run --user --scope`; await exit code to detect launch failures; add marker file lifecycle; add `sanitizeSystemdUnitName()` |\n| `update-managed-service-handoff.test.ts` | 3 new tests: systemd `--scope` spawn path with env assertions, ENOENT detection, non-zero exit detection; enhanced mock with `mockChild()` helper |\n| `systemd-unit.ts` | Add `ExecStartPre` marker guard, `RestartPreventExitStatus=80`; keep `KillMode=control-group` with updated comment |\n| `systemd-unit.test.ts` | Updated KillMode assertion to verify `control-group` |\n\n## Tests\n\n```\n$ npx vitest run --project gateway-methods src/gateway/server-methods/update-managed-service-handoff.test.ts\n ✓ gateway-methods (8 tests) 632ms\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n\n$ npx vitest run --project unit-fast src/daemon/systemd-unit.test.ts\n ✓ unit-fast (4 tests) 2ms\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: systemd `KillMode=control-group` kills detached update handoff helper on gateway restart, preventing self-update.\n- **Real environment tested**: OrbStack Linux VM (Ubuntu 22.04 Jammy, kernel 6.19.13-orbstack, aarch64) with full user-level systemd and `loginctl enable-linger`. Node.js v24.15.0.\n\n### Live systemd proof: `--scope` escapes cgroup, helper survives service restart\n\nCreated a systemd user service with `KillMode=control-group` (matching OpenClaw's generated unit at `src/daemon/systemd-unit.ts:86`):\n\n```ini\n[Service]\nType=simple\nExecStart=/tmp/handoff-test/gateway-sim.sh\nKillMode=control-group\nRestart=no\n```\n\n**Test A: WITH `systemd-run --user --scope` (this PR)**\n\n```\n=== Gateway running ===\n     Active: active (running) since Wed 2026-05-20 20:08:58 CST\n   Main PID: 2797 (gateway-sim.sh)\n     CGroup: /user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway-test.service\n\n=== Helper started (in separate scope unit, sleeping 8s) ===\nHelper PID=2799 started in scope at Wed May 20 08:08:58 PM CST 2026\nHelper: sleeping 8s while gateway lives...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:00 ===\nGateway service stopped\n\n=== Immediately after kill ===\nHelper still running (no sentinel yet — helper still working)\n\n=== After 10s wait (helper finished at 20:09:06) ===\nHelper: still alive after 8s! Gateway should be dead by now\nHelper: writing sentinel at Wed May 20 08:09:06 PM CST 2026\nSentinel: update-complete\n```\n\n**Result**: Helper survived gateway service kill and completed work ✅\n\n**Test B: WITHOUT `systemd-run --scope` (current main behavior)**\n\nSame setup but using plain `bash &` with `disown` (simulating current detached spawn):\n\n```\n=== Helper started (no scope, sleeping 8s) ===\nHelper PID=2844 (NO SCOPE) started at Wed May 20 08:09:44 PM CST 2026\nHelper: sleeping 8s...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:46 ===\n\n=== After 10s wait ===\nHelper log: stopped at \"sleeping 8s...\" — no further output\nSentinel: FAILED: helper was KILLED by KillMode=control-group!\n```\n\n**Result**: Helper was killed when gateway service stopped ❌\n\n### Comparison\n\n| Scenario | Helper survives service stop? | Sentinel written? |\n|----------|------------------------------|-------------------|\n| `systemd-run --user --scope` (this PR) | ✅ Yes — ran in separate scope unit | ✅ `update-complete` |\n| Plain detached child (current main) | ❌ No — killed by `KillMode=control-group` | ❌ Never created |\n\n### Security: env via spawn(), not argv\n\n```typescript\n// env passed to spawn() for systemd-run — not in command-line args\nchild = spawn(\"systemd-run\", [...], { cwd: params.root, env, detached: true, stdio: \"ignore\" });\n```\n\nTest coverage verifies explicitly:\n```typescript\nexpect(options.env).toBeDefined();\nexpect(args).not.toContain(\"--setenv\");\n```\n\n### What was not tested\n\n- Full end-to-end `openclaw update` flow (requires published package version delta and npm registry)\n- Live `ExecStartPre` marker file guard (defense-in-depth only, verified by code inspection)\n- `--collect` garbage collection timing (non-functional, only prevents stale unit name conflicts)\n\nCloses #84068\n",
+        "branch": "fix/systemd-update-handoff-84068",
+        "head_sha": "ee8f59275bb703893869e77a6c161cb5f511c4d5",
+        "author": "jerry-xin",
+        "labels": [
+          "gateway",
+          "cli",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/cli/gateway-cli/run-loop.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/daemon/systemd-unit.test.ts",
+            "additions": 4,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/daemon/systemd-unit.ts",
+            "additions": 7,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update-managed-service-handoff.test.ts",
+            "additions": 164,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update-managed-service-handoff.ts",
+            "additions": 117,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/process-respawn.test.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/process-respawn.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84151",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84151.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "FAILURE": 3,
+            "SUCCESS": 70,
+            "SKIPPED": 28,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84151:4496180438:2026-05-20T08:22:59Z:re_review",
+      "comment_id": "4496180438",
+      "comment_version_key": "4496180438:2026-05-20T08:22:59Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4496180438",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84151,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-20T08:22:59Z",
+      "comment_updated_at": "2026-05-20T08:22:59Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(daemon): escape systemd cgroup for update handoff via systemd-run --scope",
+        "body": "## Summary\n\nOn systemd-supervised installs, clicking \"Update now\" silently fails: the update handoff helper is created but immediately killed by systemd's `KillMode=control-group` when the gateway unit restarts. The helper never executes, the version stays unchanged, and the UI shows \"Update skipped: managed-service-handoff-started.\"\n\nThis PR detects systemd supervision and launches the handoff helper via `systemd-run --user --scope` to escape the gateway's cgroup. Non-systemd supervisors (launchd, etc.) continue using the existing detached-child path.\n\n## Root cause\n\nsystemd's `KillMode=control-group` (the default) kills all processes in the service's cgroup on restart — including detached child processes. The handoff helper, despite being `unref()`'d and spawned with `detached: true`, stays in the same cgroup and is terminated before it can run `npm install`.\n\n## Fix\n\n```\nsystemd-run --user --scope --unit openclaw-update-<handoffId> --collect -- node handoff.cjs handoff.json\n```\n\nKey design choices:\n\n**`--scope` not `--service`**: `--scope` inherits the caller's environment (profile, state dir, config, PATH, proxy, package manager discovery all preserved). `--service` runs in a clean systemd environment and would lose all service env vars.\n\n**`KillMode=control-group` preserved**: The scoped update helper escapes via `systemd-run --scope` into its own cgroup, so `KillMode=control-group` safely stops the gateway and all its child workers without affecting the handoff. No change to existing shutdown semantics.\n\n**Launch failure detection**: After spawning `systemd-run`, the code awaits its exit code with a 5s timeout. If systemd-run exits non-zero (user session unavailable, D-Bus down, etc.), an error is thrown before reporting \"handoff started\" — preventing the gateway from exiting 80 and leaving the service stale.\n\n**No secret exposure via argv**: The `env` object is passed via `spawn()` option — identical to the existing non-systemd path. No `--setenv=KEY=*** args are used. Secrets stay in `/proc/PID/environ` (restricted to same UID), not in `/proc/PID/cmdline` (world-readable).\n\nAdditional hardening:\n- `sanitizeSystemdUnitName()` strips non-`[a-zA-Z0-9:._-]` chars from `handoffId`\n- `/tmp/openclaw-update-in-progress` marker file for `ExecStartPre` defense-in-depth guard\n- `--collect` flag ensures scope units are garbage-collected after exit\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `update-managed-service-handoff.ts` | Detect `supervisor === \"systemd\"` → spawn via `systemd-run --user --scope`; await exit code to detect launch failures; add marker file lifecycle; add `sanitizeSystemdUnitName()` |\n| `update-managed-service-handoff.test.ts` | 3 new tests: systemd `--scope` spawn path with env assertions, ENOENT detection, non-zero exit detection; enhanced mock with `mockChild()` helper |\n| `systemd-unit.ts` | Add `ExecStartPre` marker guard, `RestartPreventExitStatus=80`; keep `KillMode=control-group` with updated comment |\n| `systemd-unit.test.ts` | Updated KillMode assertion to verify `control-group` |\n\n## Tests\n\n```\n$ npx vitest run --project gateway-methods src/gateway/server-methods/update-managed-service-handoff.test.ts\n ✓ gateway-methods (8 tests) 632ms\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n\n$ npx vitest run --project unit-fast src/daemon/systemd-unit.test.ts\n ✓ unit-fast (4 tests) 2ms\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: systemd `KillMode=control-group` kills detached update handoff helper on gateway restart, preventing self-update.\n- **Real environment tested**: OrbStack Linux VM (Ubuntu 22.04 Jammy, kernel 6.19.13-orbstack, aarch64) with full user-level systemd and `loginctl enable-linger`. Node.js v24.15.0.\n\n### Live systemd proof: `--scope` escapes cgroup, helper survives service restart\n\nCreated a systemd user service with `KillMode=control-group` (matching OpenClaw's generated unit at `src/daemon/systemd-unit.ts:86`):\n\n```ini\n[Service]\nType=simple\nExecStart=/tmp/handoff-test/gateway-sim.sh\nKillMode=control-group\nRestart=no\n```\n\n**Test A: WITH `systemd-run --user --scope` (this PR)**\n\n```\n=== Gateway running ===\n     Active: active (running) since Wed 2026-05-20 20:08:58 CST\n   Main PID: 2797 (gateway-sim.sh)\n     CGroup: /user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway-test.service\n\n=== Helper started (in separate scope unit, sleeping 8s) ===\nHelper PID=2799 started in scope at Wed May 20 08:08:58 PM CST 2026\nHelper: sleeping 8s while gateway lives...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:00 ===\nGateway service stopped\n\n=== Immediately after kill ===\nHelper still running (no sentinel yet — helper still working)\n\n=== After 10s wait (helper finished at 20:09:06) ===\nHelper: still alive after 8s! Gateway should be dead by now\nHelper: writing sentinel at Wed May 20 08:09:06 PM CST 2026\nSentinel: update-complete\n```\n\n**Result**: Helper survived gateway service kill and completed work ✅\n\n**Test B: WITHOUT `systemd-run --scope` (current main behavior)**\n\nSame setup but using plain `bash &` with `disown` (simulating current detached spawn):\n\n```\n=== Helper started (no scope, sleeping 8s) ===\nHelper PID=2844 (NO SCOPE) started at Wed May 20 08:09:44 PM CST 2026\nHelper: sleeping 8s...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:46 ===\n\n=== After 10s wait ===\nHelper log: stopped at \"sleeping 8s...\" — no further output\nSentinel: FAILED: helper was KILLED by KillMode=control-group!\n```\n\n**Result**: Helper was killed when gateway service stopped ❌\n\n### Comparison\n\n| Scenario | Helper survives service stop? | Sentinel written? |\n|----------|------------------------------|-------------------|\n| `systemd-run --user --scope` (this PR) | ✅ Yes — ran in separate scope unit | ✅ `update-complete` |\n| Plain detached child (current main) | ❌ No — killed by `KillMode=control-group` | ❌ Never created |\n\n### Security: env via spawn(), not argv\n\n```typescript\n// env passed to spawn() for systemd-run — not in command-line args\nchild = spawn(\"systemd-run\", [...], { cwd: params.root, env, detached: true, stdio: \"ignore\" });\n```\n\nTest coverage verifies explicitly:\n```typescript\nexpect(options.env).toBeDefined();\nexpect(args).not.toContain(\"--setenv\");\n```\n\n### What was not tested\n\n- Full end-to-end `openclaw update` flow (requires published package version delta and npm registry)\n- Live `ExecStartPre` marker file guard (defense-in-depth only, verified by code inspection)\n- `--collect` garbage collection timing (non-functional, only prevents stale unit name conflicts)\n\nCloses #84068\n",
+        "branch": "fix/systemd-update-handoff-84068",
+        "head_sha": "ee8f59275bb703893869e77a6c161cb5f511c4d5",
+        "author": "jerry-xin",
+        "labels": [
+          "gateway",
+          "cli",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/cli/gateway-cli/run-loop.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/daemon/systemd-unit.test.ts",
+            "additions": 4,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/daemon/systemd-unit.ts",
+            "additions": 7,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update-managed-service-handoff.test.ts",
+            "additions": 164,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update-managed-service-handoff.ts",
+            "additions": 117,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/process-respawn.test.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/process-respawn.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84151",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84151.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "FAILURE": 3,
+            "SUCCESS": 70,
+            "SKIPPED": 28,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84151:4495346722:2026-05-20T06:40:23Z:re_review",
+      "comment_id": "4495346722",
+      "comment_version_key": "4495346722:2026-05-20T06:40:23Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4495346722",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84151,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-20T06:40:23Z",
+      "comment_updated_at": "2026-05-20T06:40:23Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(daemon): escape systemd cgroup for update handoff via systemd-run --scope",
+        "body": "## Summary\n\nOn systemd-supervised installs, clicking \"Update now\" silently fails: the update handoff helper is created but immediately killed by systemd's `KillMode=control-group` when the gateway unit restarts. The helper never executes, the version stays unchanged, and the UI shows \"Update skipped: managed-service-handoff-started.\"\n\nThis PR detects systemd supervision and launches the handoff helper via `systemd-run --user --scope` to escape the gateway's cgroup. Non-systemd supervisors (launchd, etc.) continue using the existing detached-child path.\n\n## Root cause\n\nsystemd's `KillMode=control-group` (the default) kills all processes in the service's cgroup on restart — including detached child processes. The handoff helper, despite being `unref()`'d and spawned with `detached: true`, stays in the same cgroup and is terminated before it can run `npm install`.\n\n## Fix\n\n```\nsystemd-run --user --scope --unit openclaw-update-<handoffId> --collect -- node handoff.cjs handoff.json\n```\n\nKey design choices:\n\n**`--scope` not `--service`**: `--scope` inherits the caller's environment (profile, state dir, config, PATH, proxy, package manager discovery all preserved). `--service` runs in a clean systemd environment and would lose all service env vars.\n\n**`KillMode=control-group` preserved**: The scoped update helper escapes via `systemd-run --scope` into its own cgroup, so `KillMode=control-group` safely stops the gateway and all its child workers without affecting the handoff. No change to existing shutdown semantics.\n\n**Launch failure detection**: After spawning `systemd-run`, the code awaits its exit code with a 5s timeout. If systemd-run exits non-zero (user session unavailable, D-Bus down, etc.), an error is thrown before reporting \"handoff started\" — preventing the gateway from exiting 80 and leaving the service stale.\n\n**No secret exposure via argv**: The `env` object is passed via `spawn()` option — identical to the existing non-systemd path. No `--setenv=KEY=*** args are used. Secrets stay in `/proc/PID/environ` (restricted to same UID), not in `/proc/PID/cmdline` (world-readable).\n\nAdditional hardening:\n- `sanitizeSystemdUnitName()` strips non-`[a-zA-Z0-9:._-]` chars from `handoffId`\n- `/tmp/openclaw-update-in-progress` marker file for `ExecStartPre` defense-in-depth guard\n- `--collect` flag ensures scope units are garbage-collected after exit\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `update-managed-service-handoff.ts` | Detect `supervisor === \"systemd\"` → spawn via `systemd-run --user --scope`; await exit code to detect launch failures; add marker file lifecycle; add `sanitizeSystemdUnitName()` |\n| `update-managed-service-handoff.test.ts` | 3 new tests: systemd `--scope` spawn path with env assertions, ENOENT detection, non-zero exit detection; enhanced mock with `mockChild()` helper |\n| `systemd-unit.ts` | Add `ExecStartPre` marker guard, `RestartPreventExitStatus=80`; keep `KillMode=control-group` with updated comment |\n| `systemd-unit.test.ts` | Updated KillMode assertion to verify `control-group` |\n\n## Tests\n\n```\n$ npx vitest run --project gateway-methods src/gateway/server-methods/update-managed-service-handoff.test.ts\n ✓ gateway-methods (8 tests) 632ms\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n\n$ npx vitest run --project unit-fast src/daemon/systemd-unit.test.ts\n ✓ unit-fast (4 tests) 2ms\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: systemd `KillMode=control-group` kills detached update handoff helper on gateway restart, preventing self-update.\n- **Real environment tested**: OrbStack Linux VM (Ubuntu 22.04 Jammy, kernel 6.19.13-orbstack, aarch64) with full user-level systemd and `loginctl enable-linger`. Node.js v24.15.0.\n\n### Live systemd proof: `--scope` escapes cgroup, helper survives service restart\n\nCreated a systemd user service with `KillMode=control-group` (matching OpenClaw's generated unit at `src/daemon/systemd-unit.ts:86`):\n\n```ini\n[Service]\nType=simple\nExecStart=/tmp/handoff-test/gateway-sim.sh\nKillMode=control-group\nRestart=no\n```\n\n**Test A: WITH `systemd-run --user --scope` (this PR)**\n\n```\n=== Gateway running ===\n     Active: active (running) since Wed 2026-05-20 20:08:58 CST\n   Main PID: 2797 (gateway-sim.sh)\n     CGroup: /user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway-test.service\n\n=== Helper started (in separate scope unit, sleeping 8s) ===\nHelper PID=2799 started in scope at Wed May 20 08:08:58 PM CST 2026\nHelper: sleeping 8s while gateway lives...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:00 ===\nGateway service stopped\n\n=== Immediately after kill ===\nHelper still running (no sentinel yet — helper still working)\n\n=== After 10s wait (helper finished at 20:09:06) ===\nHelper: still alive after 8s! Gateway should be dead by now\nHelper: writing sentinel at Wed May 20 08:09:06 PM CST 2026\nSentinel: update-complete\n```\n\n**Result**: Helper survived gateway service kill and completed work ✅\n\n**Test B: WITHOUT `systemd-run --scope` (current main behavior)**\n\nSame setup but using plain `bash &` with `disown` (simulating current detached spawn):\n\n```\n=== Helper started (no scope, sleeping 8s) ===\nHelper PID=2844 (NO SCOPE) started at Wed May 20 08:09:44 PM CST 2026\nHelper: sleeping 8s...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:46 ===\n\n=== After 10s wait ===\nHelper log: stopped at \"sleeping 8s...\" — no further output\nSentinel: FAILED: helper was KILLED by KillMode=control-group!\n```\n\n**Result**: Helper was killed when gateway service stopped ❌\n\n### Comparison\n\n| Scenario | Helper survives service stop? | Sentinel written? |\n|----------|------------------------------|-------------------|\n| `systemd-run --user --scope` (this PR) | ✅ Yes — ran in separate scope unit | ✅ `update-complete` |\n| Plain detached child (current main) | ❌ No — killed by `KillMode=control-group` | ❌ Never created |\n\n### Security: env via spawn(), not argv\n\n```typescript\n// env passed to spawn() for systemd-run — not in command-line args\nchild = spawn(\"systemd-run\", [...], { cwd: params.root, env, detached: true, stdio: \"ignore\" });\n```\n\nTest coverage verifies explicitly:\n```typescript\nexpect(options.env).toBeDefined();\nexpect(args).not.toContain(\"--setenv\");\n```\n\n### What was not tested\n\n- Full end-to-end `openclaw update` flow (requires published package version delta and npm registry)\n- Live `ExecStartPre` marker file guard (defense-in-depth only, verified by code inspection)\n- `--collect` garbage collection timing (non-functional, only prevents stale unit name conflicts)\n\nCloses #84068\n",
+        "branch": "fix/systemd-update-handoff-84068",
+        "head_sha": "ee8f59275bb703893869e77a6c161cb5f511c4d5",
+        "author": "jerry-xin",
+        "labels": [
+          "gateway",
+          "cli",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/cli/gateway-cli/run-loop.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/daemon/systemd-unit.test.ts",
+            "additions": 4,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/daemon/systemd-unit.ts",
+            "additions": 7,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update-managed-service-handoff.test.ts",
+            "additions": 164,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update-managed-service-handoff.ts",
+            "additions": 117,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/process-respawn.test.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/process-respawn.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84151",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84151.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "FAILURE": 3,
+            "SUCCESS": 70,
+            "SKIPPED": 28,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84151:4494610652:2026-05-20T04:48:21Z:re_review",
+      "comment_id": "4494610652",
+      "comment_version_key": "4494610652:2026-05-20T04:48:21Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84151#issuecomment-4494610652",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84151,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-20T04:48:21Z",
+      "comment_updated_at": "2026-05-20T04:48:21Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(daemon): escape systemd cgroup for update handoff via systemd-run --scope",
+        "body": "## Summary\n\nOn systemd-supervised installs, clicking \"Update now\" silently fails: the update handoff helper is created but immediately killed by systemd's `KillMode=control-group` when the gateway unit restarts. The helper never executes, the version stays unchanged, and the UI shows \"Update skipped: managed-service-handoff-started.\"\n\nThis PR detects systemd supervision and launches the handoff helper via `systemd-run --user --scope` to escape the gateway's cgroup. Non-systemd supervisors (launchd, etc.) continue using the existing detached-child path.\n\n## Root cause\n\nsystemd's `KillMode=control-group` (the default) kills all processes in the service's cgroup on restart — including detached child processes. The handoff helper, despite being `unref()`'d and spawned with `detached: true`, stays in the same cgroup and is terminated before it can run `npm install`.\n\n## Fix\n\n```\nsystemd-run --user --scope --unit openclaw-update-<handoffId> --collect -- node handoff.cjs handoff.json\n```\n\nKey design choices:\n\n**`--scope` not `--service`**: `--scope` inherits the caller's environment (profile, state dir, config, PATH, proxy, package manager discovery all preserved). `--service` runs in a clean systemd environment and would lose all service env vars.\n\n**`KillMode=control-group` preserved**: The scoped update helper escapes via `systemd-run --scope` into its own cgroup, so `KillMode=control-group` safely stops the gateway and all its child workers without affecting the handoff. No change to existing shutdown semantics.\n\n**Launch failure detection**: After spawning `systemd-run`, the code awaits its exit code with a 5s timeout. If systemd-run exits non-zero (user session unavailable, D-Bus down, etc.), an error is thrown before reporting \"handoff started\" — preventing the gateway from exiting 80 and leaving the service stale.\n\n**No secret exposure via argv**: The `env` object is passed via `spawn()` option — identical to the existing non-systemd path. No `--setenv=KEY=*** args are used. Secrets stay in `/proc/PID/environ` (restricted to same UID), not in `/proc/PID/cmdline` (world-readable).\n\nAdditional hardening:\n- `sanitizeSystemdUnitName()` strips non-`[a-zA-Z0-9:._-]` chars from `handoffId`\n- `/tmp/openclaw-update-in-progress` marker file for `ExecStartPre` defense-in-depth guard\n- `--collect` flag ensures scope units are garbage-collected after exit\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `update-managed-service-handoff.ts` | Detect `supervisor === \"systemd\"` → spawn via `systemd-run --user --scope`; await exit code to detect launch failures; add marker file lifecycle; add `sanitizeSystemdUnitName()` |\n| `update-managed-service-handoff.test.ts` | 3 new tests: systemd `--scope` spawn path with env assertions, ENOENT detection, non-zero exit detection; enhanced mock with `mockChild()` helper |\n| `systemd-unit.ts` | Add `ExecStartPre` marker guard, `RestartPreventExitStatus=80`; keep `KillMode=control-group` with updated comment |\n| `systemd-unit.test.ts` | Updated KillMode assertion to verify `control-group` |\n\n## Tests\n\n```\n$ npx vitest run --project gateway-methods src/gateway/server-methods/update-managed-service-handoff.test.ts\n ✓ gateway-methods (8 tests) 632ms\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n\n$ npx vitest run --project unit-fast src/daemon/systemd-unit.test.ts\n ✓ unit-fast (4 tests) 2ms\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: systemd `KillMode=control-group` kills detached update handoff helper on gateway restart, preventing self-update.\n- **Real environment tested**: OrbStack Linux VM (Ubuntu 22.04 Jammy, kernel 6.19.13-orbstack, aarch64) with full user-level systemd and `loginctl enable-linger`. Node.js v24.15.0.\n\n### Live systemd proof: `--scope` escapes cgroup, helper survives service restart\n\nCreated a systemd user service with `KillMode=control-group` (matching OpenClaw's generated unit at `src/daemon/systemd-unit.ts:86`):\n\n```ini\n[Service]\nType=simple\nExecStart=/tmp/handoff-test/gateway-sim.sh\nKillMode=control-group\nRestart=no\n```\n\n**Test A: WITH `systemd-run --user --scope` (this PR)**\n\n```\n=== Gateway running ===\n     Active: active (running) since Wed 2026-05-20 20:08:58 CST\n   Main PID: 2797 (gateway-sim.sh)\n     CGroup: /user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway-test.service\n\n=== Helper started (in separate scope unit, sleeping 8s) ===\nHelper PID=2799 started in scope at Wed May 20 08:08:58 PM CST 2026\nHelper: sleeping 8s while gateway lives...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:00 ===\nGateway service stopped\n\n=== Immediately after kill ===\nHelper still running (no sentinel yet — helper still working)\n\n=== After 10s wait (helper finished at 20:09:06) ===\nHelper: still alive after 8s! Gateway should be dead by now\nHelper: writing sentinel at Wed May 20 08:09:06 PM CST 2026\nSentinel: update-complete\n```\n\n**Result**: Helper survived gateway service kill and completed work ✅\n\n**Test B: WITHOUT `systemd-run --scope` (current main behavior)**\n\nSame setup but using plain `bash &` with `disown` (simulating current detached spawn):\n\n```\n=== Helper started (no scope, sleeping 8s) ===\nHelper PID=2844 (NO SCOPE) started at Wed May 20 08:09:44 PM CST 2026\nHelper: sleeping 8s...\n\n=== KILLING GATEWAY (KillMode=control-group) at 20:09:46 ===\n\n=== After 10s wait ===\nHelper log: stopped at \"sleeping 8s...\" — no further output\nSentinel: FAILED: helper was KILLED by KillMode=control-group!\n```\n\n**Result**: Helper was killed when gateway service stopped ❌\n\n### Comparison\n\n| Scenario | Helper survives service stop? | Sentinel written? |\n|----------|------------------------------|-------------------|\n| `systemd-run --user --scope` (this PR) | ✅ Yes — ran in separate scope unit | ✅ `update-complete` |\n| Plain detached child (current main) | ❌ No — killed by `KillMode=control-group` | ❌ Never created |\n\n### Security: env via spawn(), not argv\n\n```typescript\n// env passed to spawn() for systemd-run — not in command-line args\nchild = spawn(\"systemd-run\", [...], { cwd: params.root, env, detached: true, stdio: \"ignore\" });\n```\n\nTest coverage verifies explicitly:\n```typescript\nexpect(options.env).toBeDefined();\nexpect(args).not.toContain(\"--setenv\");\n```\n\n### What was not tested\n\n- Full end-to-end `openclaw update` flow (requires published package version delta and npm registry)\n- Live `ExecStartPre` marker file guard (defense-in-depth only, verified by code inspection)\n- `--collect` garbage collection timing (non-functional, only prevents stale unit name conflicts)\n\nCloses #84068\n",
+        "branch": "fix/systemd-update-handoff-84068",
+        "head_sha": "ee8f59275bb703893869e77a6c161cb5f511c4d5",
+        "author": "jerry-xin",
+        "labels": [
+          "gateway",
+          "cli",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/cli/gateway-cli/run-loop.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/daemon/systemd-unit.test.ts",
+            "additions": 4,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/daemon/systemd-unit.ts",
+            "additions": 7,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update-managed-service-handoff.test.ts",
+            "additions": 164,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update-managed-service-handoff.ts",
+            "additions": 117,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/process-respawn.test.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/process-respawn.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84151",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84151.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "FAILURE": 3,
+            "SUCCESS": 70,
+            "SKIPPED": 28,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1945,
+    "total_ms": 5292,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 345
+        "ms": 481
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1343
+        "ms": 2253
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 5
       },
       {
         "name": "execute_commands",
-        "ms": 231
+        "ms": 2525
       },
       {
         "name": "append_ledger",
