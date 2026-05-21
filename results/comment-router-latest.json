@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-21T06:36:12.047Z",
+  "generated_at": "2026-05-21T06:37:11.502Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-21T03:36:09.921Z",
+  "since": "2026-05-21T03:37:09.117Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     59365
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4425476205
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 7,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -118,111 +120,20 @@
           "terminalBlockers": []
         }
       },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:59365:4501382774:2026-05-20T18:24:08Z:re_review",
-      "comment_id": "4501382774",
-      "comment_version_key": "4501382774:2026-05-20T18:24:08Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/59365#issuecomment-4501382774",
-      "repo": "openclaw/openclaw",
-      "issue_number": 59365,
-      "author": "alkor2000",
-      "author_id": 131229172,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-20T18:24:08Z",
-      "comment_updated_at": "2026-05-20T18:24:08Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(doctor): detect volatile filesystem (tmpfs/ramfs/overlay) for state directory",
-        "body": "## Summary\n\nAdd detection for state directories on volatile filesystems (tmpfs, ramfs, overlay) that lose all data on reboot. This complements the existing SD/eMMC storage and iCloud cloud-sync detection in `doctor-state-integrity`.\n\n## Problem\n\nContainer deployments (Docker, LXC) and certain Linux configurations may place the state directory on tmpfs, ramfs, or an overlay root filesystem. When this happens, sessions, credentials, and config are silently destroyed on every reboot. Doctor currently checks for cloud-synced dirs (macOS) and SD/eMMC media (Linux) but has no detection for volatile filesystems.\n\n## Solution\n\nReuse the existing `/proc/self/mountinfo` parsing infrastructure (`parseLinuxMountInfo` + `findLinuxMountInfoEntryForPath`) to check whether the state directory's filesystem type is in the volatile set (`tmpfs`, `ramfs`, `overlay`).\n\n### Modified: `src/commands/doctor-state-integrity.ts`\n- `LinuxVolatileStateDir` type — mirrors `LinuxSdBackedStateDir` structure\n- `VOLATILE_FS_TYPES` — `Set` of volatile filesystem type strings\n- `detectLinuxVolatileStateDir()` — reuses mountinfo parsing, checks fsType against volatile set\n- `formatLinuxVolatileStateDirWarning()` — follows existing warning format conventions\n- `noteStateIntegrity()` — register volatile-fs warning between SD/eMMC and state-dir-exists checks\n\n### New: `src/commands/doctor-volatile-fs.test.ts` (10 tests)\n- tmpfs / ramfs / overlay detection\n- ext4 non-detection (no false positive)\n- Non-linux platform skip\n- Null mountInfo handling\n- Most-specific mount point selection\n- No false positive when `/tmp` is tmpfs but state dir is on ext4\n- Warning format validation\n\n## Design decisions\n\n1. **Reuse existing infrastructure** — `parseLinuxMountInfo` and `findLinuxMountInfoEntryForPath` already solve mount-point matching. No new parsing code needed.\n2. **Same dependency injection pattern** — `deps?` parameter with `platform`, `mountInfo`, `resolveRealPath` for testability, consistent with `detectLinuxSdBackedStateDir`.\n3. **overlay included** — Docker's default storage driver uses overlay2/overlay. A state directory on an overlay root without a volume mount will lose data.\n4. **Warning placement** — after SD/eMMC check, before state-dir-exists check, so volatile-fs warning appears alongside other storage-quality warnings.\n\n## Verification\n\n- `pnpm check`: 0 errors\n- `pnpm vitest run src/commands/doctor-volatile-fs.test.ts`: 10/10 passed\n\n---\n\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** OpenClaw doctor had no detection for state directories on volatile filesystems (tmpfs/ramfs). On such mounts, sessions, credentials, and config are silently destroyed on reboot. This patch adds a state-integrity warning for that case.\n\n- **Real environment tested:** Linux (Ubuntu 24.04, WSL2), OpenClaw built from this PR head (`openclaw doctor` run from source). `/run/user/1000` is a real `tmpfs` mount per `/proc/self/mountinfo`.\n\n- **Exact steps or command run after this patch:**\n```bash\n$ grep '/run/user/1000 ' /proc/self/mountinfo\n169 132 0:78 / /run/user/1000 rw,nosuid,nodev,relatime shared:235 - tmpfs tmpfs rw,size=1637856k,...\n\n$ mkdir -p /run/user/1000/openclaw-vol-test\n$ OPENCLAW_STATE_DIR=/run/user/1000/openclaw-vol-test openclaw doctor\n```\n\n- **Evidence after fix:** Live `openclaw doctor` terminal output, \"State integrity\" section, when the state dir is on the tmpfs mount:\n```\nState integrity\n  - State directory is on a volatile filesystem\n    (/run/user/1000/openclaw-vol-test; fs tmpfs, mount /run/user/1000).\n  - Sessions, credentials, and config will be lost on reboot.\n  - Move OPENCLAW_STATE_DIR to a persistent filesystem to avoid data loss.\n```\n\n- **Observed result after fix:** Running `openclaw doctor` with the state dir on the tmpfs mount emits the volatile-filesystem warning shown above. Running `openclaw doctor` with the default `~/.openclaw` (ext4) emits no such warning, confirming no false positive. The warning fires only for `tmpfs`/`ramfs` mounts.\n\n- **What was not tested:** ramfs was not exercised on a live mount (tmpfs and ramfs share the same code path via the volatile fs-type set); macOS and Windows paths are skipped by design as the check is Linux-only.\n",
-        "branch": "feat/doctor-volatile-fs-detection",
-        "head_sha": "a823a7754ba3afe57a1e677fb3c3438bcc9c48f7",
-        "author": "alkor2000",
-        "labels": [
-          "docs",
-          "gateway",
-          "commands",
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "docs/gateway/doctor.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor-state-integrity.ts",
-            "additions": 84,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor-volatile-fs.test.ts",
-            "additions": 134,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-59365",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-59365.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "SUCCESS": 73,
-            "SKIPPED": 28,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2324,
+    "total_ms": 2651,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 336
+        "ms": 646
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1775
+        "ms": 1726
       },
       {
         "name": "classify_commands",
@@ -230,7 +141,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 187
+        "ms": 266
       },
       {
         "name": "append_ledger",
