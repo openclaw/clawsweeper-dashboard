@@ -1,19 +1,19 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-05-21T15:57:19.135Z
+Generated: 2026-05-21T20:49:39.933Z
 
 ## Summary
 
 | Metric | Count |
 | --- | ---: |
-| open_prs | 2 |
+| open_prs | 3 |
 | ready_candidates | 0 |
 | security_hold | 0 |
 | needs_rebase | 2 |
 | mergeability_unknown | 0 |
-| needs_checks | 2 |
+| needs_checks | 3 |
 | needs_review | 0 |
-| needs_merge_preflight | 2 |
+| needs_merge_preflight | 3 |
 | needs_result_backfill | 0 |
 
 ## Dispatch
@@ -30,5 +30,6 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| [#85091](https://github.com/openclaw/openclaw/pull/85091) | Fix Ollama cloud API key discovery | automerge-openclaw-openclaw-85037 | MERGEABLE | UNSTABLE | CANCELLED:5 SKIPPED:99 SUCCESS:62 IN_PROGRESS:9; blockers:11 | needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; CI / build-artifacts:IN_PROGRESS, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
 | [#84814](https://github.com/openclaw/openclaw/pull/84814) | fix(agents): classify embedded provider business denials for fallback | automerge-openclaw-openclaw-83042 | CONFLICTING | DIRTY | CANCELLED:20 SKIPPED:114 SUCCESS:80 NEUTRAL:1; blockers:9 | needs_rebase:CONFLICTING, needs_merge_state:DIRTY, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | resume branch, rebase onto current main, repair conflicts, run changed checks, rerun review |
 | [#84764](https://github.com/openclaw/openclaw/pull/84764) | fix(minimax): stream music generation responses | automerge-openclaw-openclaw-84561 | CONFLICTING | DIRTY | CANCELLED:19 SKIPPED:110 SUCCESS:72 NEUTRAL:1; blockers:11 | needs_rebase:CONFLICTING, needs_merge_state:DIRTY, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | resume branch, rebase onto current main, repair conflicts, run changed checks, rerun review |
