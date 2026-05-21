@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-21T06:26:32.405Z",
+  "generated_at": "2026-05-21T06:26:34.097Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-21T03:26:30.285Z",
+  "since": "2026-05-21T03:26:29.909Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    84816
+    84525
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4505370998
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 8,
-  "commands_seen": 4,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,139 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:84816:4505017847:2026-05-21T06:26:25Z:automerge",
-      "comment_id": "4505017847",
-      "comment_version_key": "4505017847:2026-05-21T06:26:25Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84816#issuecomment-4505017847",
+      "idempotency_key": "comment-router:openclaw/openclaw:84525:4505370998:2026-05-21T06:24:40Z:re_review",
+      "comment_id": "4505370998",
+      "comment_version_key": "4505370998:2026-05-21T06:24:40Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84525#issuecomment-4505370998",
       "repo": "openclaw/openclaw",
-      "issue_number": 84816,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-21T05:15:45Z",
-      "comment_updated_at": "2026-05-21T06:26:25Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "automerge",
-      "intent": "automerge",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": "The PR adds a pre-warmed provider-auth map for model listing paths, wires it into gateway startup/reload/logout, adds focused tests, and updates the changelog.\n\nReproducibility: yes. The PR body gives live Discord /models timing proof for the original failure, and source inspection gives high-confidence reproduction paths for the remaining startup-warm and stale-auth blockers.",
-      "review_followup": "The remaining blockers are concrete auth freshness and gateway startup lifecycle repairs with clear files and focused regression paths.",
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "ignored",
-      "actions": [],
-      "author_repository_permission": "none",
-      "target": {
-        "kind": "pull_request",
-        "title": "perf(models): /models 20s → 5ms via pre-warmed provider auth state",
-        "body": "Listing models went from **~55 s cold / ~20 s every subsequent call** to **~5 ms (pre-warmed)** — a ~4,100× speedup on the hot path. Every `/models` call (Discord/Telegram pickers, CLI, status commands) now short-circuits through a prepared provider-auth map built once at gateway startup instead of rediscovering every provider's auth state from scratch on every invocation.\n\nThis also fixes the \"This interaction failed\" error in Discord's `/models` picker. Discord requires bots to ack or defer an interaction within 3 seconds. With the gateway's event loop blocked on a ~20 s auth-discovery sweep, the immediate `interaction.acknowledge()` in the picker handler couldn't actually run inside Discord's 3 s window — Discord invalidated the interaction token and the picker rendered the failure state. Cutting the hot-path work to ~5 ms keeps the gateway responsive so the ack happens immediately.\n\n## Summary\n\n`buildModelsProviderData` was spending ~20 s in `resolveVisibleModelCatalog`'s auth-filter loop — 30+ unique providers × ~600 ms each of plugin-runtime / external-CLI / auth-profile-store discovery, redone fresh on every call. The catalog itself was already cached via `modelCatalogPromise`; the per-provider auth check was the duplicate-lookup-branch the user-facing pickers were eating on every interaction.\n\nThis moves the canonical fact earlier: compute a `Map<provider, boolean>` once at gateway startup via `warmCurrentProviderAuthState`, hold it module-level, and have `hasAuthForModelProvider` consult it first. If a provider's answer is in the prepared map the function returns immediately; otherwise it falls through to the existing compute path. Invalidated on config reload alongside `resetModelCatalogCache` so the next read after a relevant config change rewarms.\n\nPer CLAUDE.md \"move the canonical fact earlier; reuse prepared runtime objects; delete duplicate lookup branches\" — no new caches scattered through request-time code, no per-channel plumbing, no new SDK surface. One module-level prepared object with an explicit set / clear lifecycle modeled on `PluginMetadataSnapshot`.\n\n## Verification\n\nBenchmarked on local dev gateway (`./run.sh openclaw gateway run`), catalog of 955 entries / 40 unique providers / 167 visible after auth, single machine same config, captured back-to-back. Trigger was `/models` via Discord (`@sjf_claw`) — same code path every other model-listing call hits.\n\nBehavior addressed: `buildModelsProviderData` (the chokepoint behind `/models` / model pickers) recomputes the per-provider auth state on every call.\nReal environment tested: macOS local openclaw dev, catalog with bundled + external plugins, Discord channel live.\nExact steps or command run after this patch: SIGINT the gateway to rebuild on this branch; let warmer complete after `[gateway] gateway ready`; trigger `/models` 12 times in Discord; grep `sjfsjfsjf buildModelsProviderData done` from `/tmp/openclaw/openclaw-*.log` (instrumentation since stripped before commit).\nEvidence after fix: see Timings table below. Raw samples preserved in `PICKER-PERF-TIMINGS.md` in the dev workspace.\nObserved result after fix: per-call `buildModelsProviderData` dropped from ~20.5 s (n=8) to ~5 ms (n=12). Discord no longer shows \"This interaction failed\" on the picker.\nWhat was not tested: Telegram + CLI `/models` paths (same code path, expected to benefit identically); Crabbox; multi-agent gateways where multiple `agentId` values flow through the picker (the prepared map is cfg-keyed, not agent-keyed — both before this PR and after, `hasAuthForModelProvider` is agent-agnostic).\n\n### Timings\n\nBEFORE (HEAD without this patch), n=8 subsequent + 1 cold:\n\n| Metric | ms |\n|---|---|\n| First call (cold catalog) | 54,812 |\n| Subsequent calls min | 20,403 |\n| Subsequent calls median | ~20,570 |\n| Subsequent calls max | 20,766 |\n| Subsequent calls mean | ~20,569 |\n\nAFTER (this PR), n=12 post-warm + warmer:\n\n| Metric | ms |\n|---|---|\n| Hot-path call min | 1 |\n| Hot-path call median | ~5 |\n| Hot-path call max | 6 |\n| Hot-path call mean | ~4.3 |\n| One-time gateway-startup warm (40 providers) | 49,203 |\n\nHeadline:\n\n| Scenario | BEFORE | AFTER | Speedup |\n|---|---|---|---|\n| First `/models` after restart | 54,812 ms | ~5 ms (post-warm) | ~10,000× |\n| Every subsequent `/models` | ~20,569 ms | ~5 ms | ~4,100× |\n| One-time startup warm cost | n/a | 49,203 ms | — |\n\nThe 49 s warm cost is not a regression: it's the same auth-discovery sweep the BEFORE workload was paying on every call, plus the cold-catalog `loadModelCatalog` (~26 s) which BEFORE also pays on its first call. AFTER pays both once at startup. On a reload that clears only the auth state (catalog already cached), warm is the ~23 s auth portion only.\n",
-        "branch": "perf/models-provider-data-snapshot",
-        "head_sha": "79925de0144747bc5448011a4353b889f6d24c7e",
-        "author": "sjf",
-        "labels": [
-          "gateway",
-          "agents",
-          "maintainer",
-          "size: M",
-          "proof: sufficient",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/model-provider-auth.test.ts",
-            "additions": 140,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/model-provider-auth.ts",
-            "additions": 81,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/commands-models.test.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/models-auth-status.ts",
-            "additions": 13,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-reload-handlers.ts",
-            "additions": 34,
-            "deletions": 11,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-startup-post-attach.ts",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84816",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84816.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 103,
-          "counts": {
-            "SUCCESS": 74,
-            "SKIPPED": 27,
-            "IN_PROGRESS": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "security-fast:IN_PROGRESS"
-          ],
-          "pending": [
-            "security-fast:IN_PROGRESS"
-          ],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84816:4505314995:2026-05-21T06:14:43Z:re_review",
-      "comment_id": "4505314995",
-      "comment_version_key": "4505314995:2026-05-21T06:14:43Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84816#issuecomment-4505314995",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84816,
-      "author": "sjf",
-      "author_id": 153992,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-21T06:14:43Z",
-      "comment_updated_at": "2026-05-21T06:14:43Z",
+      "issue_number": 84525,
+      "author": "gKev1n",
+      "author_id": 39189948,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-21T06:24:40Z",
+      "comment_updated_at": "2026-05-21T06:24:40Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -179,78 +59,82 @@
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "write",
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-05-21T06:26:34.998Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 84525
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-21T06:26:36.104Z",
+          "response_comment_id": null,
+          "response_comment_mode": "created"
+        }
+      ],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "perf(models): /models 20s → 5ms via pre-warmed provider auth state",
-        "body": "Listing models went from **~55 s cold / ~20 s every subsequent call** to **~5 ms (pre-warmed)** — a ~4,100× speedup on the hot path. Every `/models` call (Discord/Telegram pickers, CLI, status commands) now short-circuits through a prepared provider-auth map built once at gateway startup instead of rediscovering every provider's auth state from scratch on every invocation.\n\nThis also fixes the \"This interaction failed\" error in Discord's `/models` picker. Discord requires bots to ack or defer an interaction within 3 seconds. With the gateway's event loop blocked on a ~20 s auth-discovery sweep, the immediate `interaction.acknowledge()` in the picker handler couldn't actually run inside Discord's 3 s window — Discord invalidated the interaction token and the picker rendered the failure state. Cutting the hot-path work to ~5 ms keeps the gateway responsive so the ack happens immediately.\n\n## Summary\n\n`buildModelsProviderData` was spending ~20 s in `resolveVisibleModelCatalog`'s auth-filter loop — 30+ unique providers × ~600 ms each of plugin-runtime / external-CLI / auth-profile-store discovery, redone fresh on every call. The catalog itself was already cached via `modelCatalogPromise`; the per-provider auth check was the duplicate-lookup-branch the user-facing pickers were eating on every interaction.\n\nThis moves the canonical fact earlier: compute a `Map<provider, boolean>` once at gateway startup via `warmCurrentProviderAuthState`, hold it module-level, and have `hasAuthForModelProvider` consult it first. If a provider's answer is in the prepared map the function returns immediately; otherwise it falls through to the existing compute path. Invalidated on config reload alongside `resetModelCatalogCache` so the next read after a relevant config change rewarms.\n\nPer CLAUDE.md \"move the canonical fact earlier; reuse prepared runtime objects; delete duplicate lookup branches\" — no new caches scattered through request-time code, no per-channel plumbing, no new SDK surface. One module-level prepared object with an explicit set / clear lifecycle modeled on `PluginMetadataSnapshot`.\n\n## Verification\n\nBenchmarked on local dev gateway (`./run.sh openclaw gateway run`), catalog of 955 entries / 40 unique providers / 167 visible after auth, single machine same config, captured back-to-back. Trigger was `/models` via Discord (`@sjf_claw`) — same code path every other model-listing call hits.\n\nBehavior addressed: `buildModelsProviderData` (the chokepoint behind `/models` / model pickers) recomputes the per-provider auth state on every call.\nReal environment tested: macOS local openclaw dev, catalog with bundled + external plugins, Discord channel live.\nExact steps or command run after this patch: SIGINT the gateway to rebuild on this branch; let warmer complete after `[gateway] gateway ready`; trigger `/models` 12 times in Discord; grep `sjfsjfsjf buildModelsProviderData done` from `/tmp/openclaw/openclaw-*.log` (instrumentation since stripped before commit).\nEvidence after fix: see Timings table below. Raw samples preserved in `PICKER-PERF-TIMINGS.md` in the dev workspace.\nObserved result after fix: per-call `buildModelsProviderData` dropped from ~20.5 s (n=8) to ~5 ms (n=12). Discord no longer shows \"This interaction failed\" on the picker.\nWhat was not tested: Telegram + CLI `/models` paths (same code path, expected to benefit identically); Crabbox; multi-agent gateways where multiple `agentId` values flow through the picker (the prepared map is cfg-keyed, not agent-keyed — both before this PR and after, `hasAuthForModelProvider` is agent-agnostic).\n\n### Timings\n\nBEFORE (HEAD without this patch), n=8 subsequent + 1 cold:\n\n| Metric | ms |\n|---|---|\n| First call (cold catalog) | 54,812 |\n| Subsequent calls min | 20,403 |\n| Subsequent calls median | ~20,570 |\n| Subsequent calls max | 20,766 |\n| Subsequent calls mean | ~20,569 |\n\nAFTER (this PR), n=12 post-warm + warmer:\n\n| Metric | ms |\n|---|---|\n| Hot-path call min | 1 |\n| Hot-path call median | ~5 |\n| Hot-path call max | 6 |\n| Hot-path call mean | ~4.3 |\n| One-time gateway-startup warm (40 providers) | 49,203 |\n\nHeadline:\n\n| Scenario | BEFORE | AFTER | Speedup |\n|---|---|---|---|\n| First `/models` after restart | 54,812 ms | ~5 ms (post-warm) | ~10,000× |\n| Every subsequent `/models` | ~20,569 ms | ~5 ms | ~4,100× |\n| One-time startup warm cost | n/a | 49,203 ms | — |\n\nThe 49 s warm cost is not a regression: it's the same auth-discovery sweep the BEFORE workload was paying on every call, plus the cold-catalog `loadModelCatalog` (~26 s) which BEFORE also pays on its first call. AFTER pays both once at startup. On a reload that clears only the auth state (catalog already cached), warm is the ~23 s auth portion only.\n",
-        "branch": "perf/models-provider-data-snapshot",
-        "head_sha": "79925de0144747bc5448011a4353b889f6d24c7e",
-        "author": "sjf",
+        "title": "fix: avoid serializing plaintext model api keys",
+        "body": "## Summary\n- Prevent plaintext provider API keys from being serialized into generated models.json contents.\n- Preserve non-secret auth markers such as env/secretref references so runtime auth still works.\n- Add regression coverage for new plaintext config values, managed env secret markers, and existing models.json merges.\n\nFixes #11829.\n\n## Verification\n- npm exec --yes pnpm@11.1.0 -- exec vitest run --config test/vitest/vitest.agents.config.ts src/agents/models-config.applies-config-env-vars.test.ts src/agents/models-config.merge.test.ts src/agents/models-config.providers.auth-provenance.test.ts src/agents/model-auth-markers.test.ts\n- npm exec --yes pnpm@11.1.0 -- tsgo:core\n- git diff --check\n\nResult: targeted Vitest run passed 4 files / 40 tests, tsgo:core passed, and git diff --check passed.\n\n## Security Impact\n- New permissions/capabilities? No\n- Secrets/tokens handling changed? Yes\n- New/changed network calls? No\n- Command/tool execution surface changed? No\n- Data access scope changed? No\n\nThis reduces token persistence by stripping plaintext apiKey values before writing models.json, while preserving marker-based runtime auth references.\n\n## Notes\nI did not verify a full interactive OpenClaw agent runtime session with live provider credentials. The regression tests exercise the affected planner serialization boundary directly.",
+        "branch": "fix/models-json-api-key-redaction",
+        "head_sha": "dd10217eacfee4d91cf3821b7c8ec346139344bc",
+        "author": "gkev1n",
         "labels": [
-          "gateway",
           "agents",
-          "maintainer",
           "size: M",
-          "proof: sufficient",
+          "triage: refactor-only",
+          "triage: blank-template",
+          "triage: needs-real-behavior-proof",
           "P1",
           "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
           "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "CHANGELOG.md",
-            "additions": 1,
+            "path": "src/agents/model-auth-markers.test.ts",
+            "additions": 4,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/model-provider-auth.test.ts",
-            "additions": 140,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/model-provider-auth.ts",
-            "additions": 81,
+            "path": "src/agents/model-auth-markers.ts",
+            "additions": 2,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/commands-models.test.ts",
-            "additions": 3,
+            "path": "src/agents/models-config.applies-config-env-vars.test.ts",
+            "additions": 193,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server-methods/models-auth-status.ts",
+            "path": "src/agents/models-config.plan.ts",
+            "additions": 68,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-model-discovery.test.ts",
             "additions": 13,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-reload-handlers.ts",
-            "additions": 34,
-            "deletions": 11,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-startup-post-attach.ts",
-            "additions": 14,
-            "deletions": 0,
+            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84816",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84816.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84525",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84525.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
@@ -258,187 +142,49 @@
         "checks": {
           "total": 103,
           "counts": {
-            "SUCCESS": 74,
-            "SKIPPED": 27,
-            "IN_PROGRESS": 1,
+            "FAILURE": 1,
+            "SUCCESS": 65,
+            "SKIPPED": 28,
+            "IN_PROGRESS": 7,
             "NEUTRAL": 1
           },
           "blockers": [
-            "security-fast:IN_PROGRESS"
+            "Real behavior proof:FAILURE",
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
+            "checks-node-agentic-commands-models:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS"
           ],
           "pending": [
-            "security-fast:IN_PROGRESS"
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
+            "checks-node-agentic-commands-models:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS"
           ],
-          "terminalBlockers": []
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ]
         }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84816:4505189810:2026-05-21T05:52:52Z:re_review",
-      "comment_id": "4505189810",
-      "comment_version_key": "4505189810:2026-05-21T05:52:52Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84816#issuecomment-4505189810",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84816,
-      "author": "sjf",
-      "author_id": 153992,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-21T05:52:52Z",
-      "comment_updated_at": "2026-05-21T05:52:52Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84816:4505117492:2026-05-21T05:38:19Z:re_review",
-      "comment_id": "4505117492",
-      "comment_version_key": "4505117492:2026-05-21T05:38:19Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84816#issuecomment-4505117492",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84816,
-      "author": "sjf",
-      "author_id": 153992,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-21T05:38:19Z",
-      "comment_updated_at": "2026-05-21T05:38:19Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "write",
-      "target": {
-        "kind": "pull_request",
-        "title": "perf(models): /models 20s → 5ms via pre-warmed provider auth state",
-        "body": "Listing models went from **~55 s cold / ~20 s every subsequent call** to **~5 ms (pre-warmed)** — a ~4,100× speedup on the hot path. Every `/models` call (Discord/Telegram pickers, CLI, status commands) now short-circuits through a prepared provider-auth map built once at gateway startup instead of rediscovering every provider's auth state from scratch on every invocation.\n\nThis also fixes the \"This interaction failed\" error in Discord's `/models` picker. Discord requires bots to ack or defer an interaction within 3 seconds. With the gateway's event loop blocked on a ~20 s auth-discovery sweep, the immediate `interaction.acknowledge()` in the picker handler couldn't actually run inside Discord's 3 s window — Discord invalidated the interaction token and the picker rendered the failure state. Cutting the hot-path work to ~5 ms keeps the gateway responsive so the ack happens immediately.\n\n## Summary\n\n`buildModelsProviderData` was spending ~20 s in `resolveVisibleModelCatalog`'s auth-filter loop — 30+ unique providers × ~600 ms each of plugin-runtime / external-CLI / auth-profile-store discovery, redone fresh on every call. The catalog itself was already cached via `modelCatalogPromise`; the per-provider auth check was the duplicate-lookup-branch the user-facing pickers were eating on every interaction.\n\nThis moves the canonical fact earlier: compute a `Map<provider, boolean>` once at gateway startup via `warmCurrentProviderAuthState`, hold it module-level, and have `hasAuthForModelProvider` consult it first. If a provider's answer is in the prepared map the function returns immediately; otherwise it falls through to the existing compute path. Invalidated on config reload alongside `resetModelCatalogCache` so the next read after a relevant config change rewarms.\n\nPer CLAUDE.md \"move the canonical fact earlier; reuse prepared runtime objects; delete duplicate lookup branches\" — no new caches scattered through request-time code, no per-channel plumbing, no new SDK surface. One module-level prepared object with an explicit set / clear lifecycle modeled on `PluginMetadataSnapshot`.\n\n## Verification\n\nBenchmarked on local dev gateway (`./run.sh openclaw gateway run`), catalog of 955 entries / 40 unique providers / 167 visible after auth, single machine same config, captured back-to-back. Trigger was `/models` via Discord (`@sjf_claw`) — same code path every other model-listing call hits.\n\nBehavior addressed: `buildModelsProviderData` (the chokepoint behind `/models` / model pickers) recomputes the per-provider auth state on every call.\nReal environment tested: macOS local openclaw dev, catalog with bundled + external plugins, Discord channel live.\nExact steps or command run after this patch: SIGINT the gateway to rebuild on this branch; let warmer complete after `[gateway] gateway ready`; trigger `/models` 12 times in Discord; grep `sjfsjfsjf buildModelsProviderData done` from `/tmp/openclaw/openclaw-*.log` (instrumentation since stripped before commit).\nEvidence after fix: see Timings table below. Raw samples preserved in `PICKER-PERF-TIMINGS.md` in the dev workspace.\nObserved result after fix: per-call `buildModelsProviderData` dropped from ~20.5 s (n=8) to ~5 ms (n=12). Discord no longer shows \"This interaction failed\" on the picker.\nWhat was not tested: Telegram + CLI `/models` paths (same code path, expected to benefit identically); Crabbox; multi-agent gateways where multiple `agentId` values flow through the picker (the prepared map is cfg-keyed, not agent-keyed — both before this PR and after, `hasAuthForModelProvider` is agent-agnostic).\n\n### Timings\n\nBEFORE (HEAD without this patch), n=8 subsequent + 1 cold:\n\n| Metric | ms |\n|---|---|\n| First call (cold catalog) | 54,812 |\n| Subsequent calls min | 20,403 |\n| Subsequent calls median | ~20,570 |\n| Subsequent calls max | 20,766 |\n| Subsequent calls mean | ~20,569 |\n\nAFTER (this PR), n=12 post-warm + warmer:\n\n| Metric | ms |\n|---|---|\n| Hot-path call min | 1 |\n| Hot-path call median | ~5 |\n| Hot-path call max | 6 |\n| Hot-path call mean | ~4.3 |\n| One-time gateway-startup warm (40 providers) | 49,203 |\n\nHeadline:\n\n| Scenario | BEFORE | AFTER | Speedup |\n|---|---|---|---|\n| First `/models` after restart | 54,812 ms | ~5 ms (post-warm) | ~10,000× |\n| Every subsequent `/models` | ~20,569 ms | ~5 ms | ~4,100× |\n| One-time startup warm cost | n/a | 49,203 ms | — |\n\nThe 49 s warm cost is not a regression: it's the same auth-discovery sweep the BEFORE workload was paying on every call, plus the cold-catalog `loadModelCatalog` (~26 s) which BEFORE also pays on its first call. AFTER pays both once at startup. On a reload that clears only the auth state (catalog already cached), warm is the ~23 s auth portion only.\n",
-        "branch": "perf/models-provider-data-snapshot",
-        "head_sha": "79925de0144747bc5448011a4353b889f6d24c7e",
-        "author": "sjf",
-        "labels": [
-          "gateway",
-          "agents",
-          "maintainer",
-          "size: M",
-          "proof: sufficient",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/model-provider-auth.test.ts",
-            "additions": 140,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/model-provider-auth.ts",
-            "additions": 81,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/commands-models.test.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/models-auth-status.ts",
-            "additions": 13,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-reload-handlers.ts",
-            "additions": 34,
-            "deletions": 11,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-startup-post-attach.ts",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84816",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84816.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 103,
-          "counts": {
-            "SUCCESS": 74,
-            "SKIPPED": 27,
-            "IN_PROGRESS": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "security-fast:IN_PROGRESS"
-          ],
-          "pending": [
-            "security-fast:IN_PROGRESS"
-          ],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
+      }
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 3239,
+    "total_ms": 6831,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 335
+        "ms": 2230
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1770
+        "ms": 1944
       },
       {
         "name": "classify_commands",
@@ -446,7 +192,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1119
+        "ms": 2632
       },
       {
         "name": "append_ledger",
