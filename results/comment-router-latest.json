@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-21T05:30:21.557Z",
+  "generated_at": "2026-05-21T05:30:36.085Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-21T02:30:19.693Z",
+  "since": "2026-05-21T02:30:34.052Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    84816
+    80783
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4505072688
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
+  "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,129 +33,168 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:84816:4505017847:2026-05-21T05:30:14Z:automerge",
-      "comment_id": "4505017847",
-      "comment_version_key": "4505017847:2026-05-21T05:30:14Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84816#issuecomment-4505017847",
+      "idempotency_key": "comment-router:openclaw/openclaw:80783:4505072688:2026-05-21T05:28:53Z:re_review",
+      "comment_id": "4505072688",
+      "comment_version_key": "4505072688:2026-05-21T05:28:53Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/80783#issuecomment-4505072688",
       "repo": "openclaw/openclaw",
-      "issue_number": 84816,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 80783,
+      "author": "giodl73-repo",
+      "author_id": 235387111,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-21T05:15:45Z",
-      "comment_updated_at": "2026-05-21T05:30:14Z",
+      "comment_created_at": "2026-05-21T05:28:53Z",
+      "comment_updated_at": "2026-05-21T05:28:53Z",
       "status_comment_id": null,
       "trigger": "mention",
-      "command": "automerge",
-      "intent": "automerge",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "trusted_bot": false,
       "trusted_bot_author": null,
       "automation_source": null,
       "repair_reason": null,
-      "review_summary": "The PR adds a gateway-startup provider-auth prewarm path and uses the prepared map to speed up `/models` and other model-listing calls.\n\nReproducibility: yes. Source inspection gives a high-confidence reproduction path: warm the provider map with broad discovery, then call a gateway-style model list with `runtimeAuthDiscovery: false`; the prepared answer returns before the false discovery flags can take effect.",
-      "review_followup": "The remaining blockers are narrow code/test repairs in the model-provider auth and gateway reload paths, so a focused repair PR is feasible if maintainers promote it.",
+      "review_summary": null,
+      "review_followup": null,
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "ignored",
-      "actions": [],
-      "author_repository_permission": "none",
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-05-21T05:30:36.809Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 80783
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-21T05:30:37.719Z",
+          "response_comment_id": null,
+          "response_comment_mode": "created"
+        }
+      ],
+      "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "perf(models): /models 20s → 5ms via pre-warmed provider auth state",
-        "body": "Listing models went from **~55 s cold / ~20 s every subsequent call** to **~5 ms (pre-warmed)** — a ~4,100× speedup on the hot path. Every `/models` call (Discord/Telegram pickers, CLI, status commands) now short-circuits through a prepared provider-auth map built once at gateway startup instead of rediscovering every provider's auth state from scratch on every invocation.\n\nThis also fixes the \"This interaction failed\" error in Discord's `/models` picker. Discord requires bots to ack or defer an interaction within 3 seconds. With the gateway's event loop blocked on a ~20 s auth-discovery sweep, the immediate `interaction.acknowledge()` in the picker handler couldn't actually run inside Discord's 3 s window — Discord invalidated the interaction token and the picker rendered the failure state. Cutting the hot-path work to ~5 ms keeps the gateway responsive so the ack happens immediately.\n\n## Summary\n\n`buildModelsProviderData` was spending ~20 s in `resolveVisibleModelCatalog`'s auth-filter loop — 30+ unique providers × ~600 ms each of plugin-runtime / external-CLI / auth-profile-store discovery, redone fresh on every call. The catalog itself was already cached via `modelCatalogPromise`; the per-provider auth check was the duplicate-lookup-branch the user-facing pickers were eating on every interaction.\n\nThis moves the canonical fact earlier: compute a `Map<provider, boolean>` once at gateway startup via `warmCurrentProviderAuthState`, hold it module-level, and have `hasAuthForModelProvider` consult it first. If a provider's answer is in the prepared map the function returns immediately; otherwise it falls through to the existing compute path. Invalidated on config reload alongside `resetModelCatalogCache` so the next read after a relevant config change rewarms.\n\nPer CLAUDE.md \"move the canonical fact earlier; reuse prepared runtime objects; delete duplicate lookup branches\" — no new caches scattered through request-time code, no per-channel plumbing, no new SDK surface. One module-level prepared object with an explicit set / clear lifecycle modeled on `PluginMetadataSnapshot`.\n\n## Verification\n\nBenchmarked on local dev gateway (`./run.sh openclaw gateway run`), catalog of 955 entries / 40 unique providers / 167 visible after auth, single machine same config, captured back-to-back. Trigger was `/models` via Discord (`@sjf_claw`) — same code path every other model-listing call hits.\n\nBehavior addressed: `buildModelsProviderData` (the chokepoint behind `/models` / model pickers) recomputes the per-provider auth state on every call.\nReal environment tested: macOS local openclaw dev, catalog with bundled + external plugins, Discord channel live.\nExact steps or command run after this patch: SIGINT the gateway to rebuild on this branch; let warmer complete after `[gateway] gateway ready`; trigger `/models` 12 times in Discord; grep `sjfsjfsjf buildModelsProviderData done` from `/tmp/openclaw/openclaw-*.log` (instrumentation since stripped before commit).\nEvidence after fix: see Timings table below. Raw samples preserved in `PICKER-PERF-TIMINGS.md` in the dev workspace.\nObserved result after fix: per-call `buildModelsProviderData` dropped from ~20.5 s (n=8) to ~5 ms (n=12). Discord no longer shows \"This interaction failed\" on the picker.\nWhat was not tested: Telegram + CLI `/models` paths (same code path, expected to benefit identically); Crabbox; multi-agent gateways where multiple `agentId` values flow through the picker (the prepared map is cfg-keyed, not agent-keyed — both before this PR and after, `hasAuthForModelProvider` is agent-agnostic).\n\n### Timings\n\nBEFORE (HEAD without this patch), n=8 subsequent + 1 cold:\n\n| Metric | ms |\n|---|---|\n| First call (cold catalog) | 54,812 |\n| Subsequent calls min | 20,403 |\n| Subsequent calls median | ~20,570 |\n| Subsequent calls max | 20,766 |\n| Subsequent calls mean | ~20,569 |\n\nAFTER (this PR), n=12 post-warm + warmer:\n\n| Metric | ms |\n|---|---|\n| Hot-path call min | 1 |\n| Hot-path call median | ~5 |\n| Hot-path call max | 6 |\n| Hot-path call mean | ~4.3 |\n| One-time gateway-startup warm (40 providers) | 49,203 |\n\nHeadline:\n\n| Scenario | BEFORE | AFTER | Speedup |\n|---|---|---|---|\n| First `/models` after restart | 54,812 ms | ~5 ms (post-warm) | ~10,000× |\n| Every subsequent `/models` | ~20,569 ms | ~5 ms | ~4,100× |\n| One-time startup warm cost | n/a | 49,203 ms | — |\n\nThe 49 s warm cost is not a regression: it's the same auth-discovery sweep the BEFORE workload was paying on every call, plus the cold-catalog `loadModelCatalog` (~26 s) which BEFORE also pays on its first call. AFTER pays both once at startup. On a reload that clears only the auth state (catalog already cached), warm is the ~23 s auth portion only.\n",
-        "branch": "perf/models-provider-data-snapshot",
-        "head_sha": "439c8bd0d753c8ded0266f7271478ded58ecc962",
-        "author": "sjf",
+        "title": "Policy: add model, network, and MCP conformance checks",
+        "body": "# Policy: add model, network, and MCP conformance checks\n\nBranch: `policy-conformance-examples`\nGitHub base: `main`\nLogical base: `main` after #80056 merged\nStatus: ready for maintainer review\n\n## Summary\n\nThis PR extends the bundled Policy plugin with three additional config-level conformance areas: model providers and model refs, private-network SSRF settings, and OpenClaw-managed MCP servers.\n\nPolicy stays a read-only conformance layer over existing OpenClaw config:\n\n- `policy.jsonc` defines authored requirements.\n- OpenClaw config remains the source of truth for observed workspace state.\n- Policy extracts evidence from existing settings.\n- The Policy plugin registers doctor health checks for concrete authored rules.\n- `doctor --lint` and `policy check` report drift without mutating config or runtime state.\n- `policy check --json` emits the recordable audit tuple: `policyHash + evidenceHash + findingsHash + clean result -> attestationHash`.\n\nThis follows the channels and tools policy slices, but keeps the added areas read-only. It proves the shape works across several OpenClaw settings categories without adding runtime enforcement or duplicate registries.\n\n## What Changed\n\n- Added model-provider evidence to `policy check --json`: `modelProviders` and `modelRefs`.\n- Added `models.providers.allow` and `models.providers.deny` policy support.\n- Added `policy/models-denied-provider` and `policy/models-unapproved-provider`.\n- Added network evidence to `policy check --json`.\n- Added `network.privateNetwork.allow`.\n- Added `policy/network-private-access-enabled`.\n- Added MCP server evidence to `policy check --json`.\n- Added `mcp.servers.allow` and `mcp.servers.deny` policy support.\n- Added `policy/mcp-denied-server` and `policy/mcp-unapproved-server`.\n- Updated policy CLI and plugin reference docs.\n- Added tests for denied rules, allowlists, evidence extraction, and empty category namespaces.\n\n## Policy Shape\n\n```jsonc\n{\n  \"models\": {\n    \"providers\": {\n      \"allow\": [\"openai\", \"anthropic\"],\n      \"deny\": [\"openrouter\"],\n    },\n  },\n  \"network\": {\n    \"privateNetwork\": {\n      \"allow\": false,\n    },\n  },\n  \"mcp\": {\n    \"servers\": {\n      \"allow\": [\"docs\"],\n      \"deny\": [\"untrusted\"],\n    },\n  },\n}\n```\n\nCategory blocks are namespaces. A block such as `models: {}`, `network: {}`, or `mcp: {}` does not run a check by itself. A check runs when a concrete authored requirement is present, such as `models.providers.allow`, `network.privateNetwork.allow`, or `mcp.servers.deny`.\n\nDeny wins over allow. If a provider or server is denied, the finding reports the deny rule and does not also report the allowlist rule for the same target.\n\n## Evidence Shape\n\n```json\n{\n  \"evidence\": {\n    \"modelProviders\": [\n      {\n        \"id\": \"openai\",\n        \"source\": \"oc://openclaw.config/models/providers/openai\"\n      }\n    ],\n    \"modelRefs\": [\n      {\n        \"ref\": \"openai/gpt-5.5\",\n        \"provider\": \"openai\",\n        \"model\": \"gpt-5.5\",\n        \"source\": \"oc://openclaw.config/agents/defaults/model\"\n      }\n    ],\n    \"network\": [\n      {\n        \"id\": \"browser-private-network\",\n        \"source\": \"oc://openclaw.config/browser/ssrfPolicy/dangerouslyAllowPrivateNetwork\",\n        \"value\": false\n      }\n    ],\n    \"mcpServers\": [\n      {\n        \"id\": \"docs\",\n        \"transport\": \"stdio\",\n        \"source\": \"oc://openclaw.config/mcp/servers/docs\",\n        \"command\": \"npx\"\n      }\n    ]\n  }\n}\n```\n\n## Safety\n\n`doctor --lint` and `policy check` are read-only for these areas. This PR does not:\n\n- change model config or intercept model runtime calls;\n- change browser or web-fetch network config;\n- edit `mcp.servers`, start MCP runtimes, stop MCP runtimes, or contact remote MCP servers;\n- add gateway protocol, approval, before-tool-call, or runtime policy enforcement surfaces.\n\nFindings identify both sides of the decision:\n\n- `target` points to the observed OpenClaw setting.\n- `requirement` points to the authored policy rule.\n\n## Real Behavior Proof\n\nBehavior addressed: Enabled bundled Policy registers model-provider, MCP-server, and private-network health checks, collects config-derived evidence, and emits structured findings with `oc://` target/requirement paths when configured model providers, MCP servers, or private-network SSRF posture violates policy.\n\nReal environment tested: Windows source worktree restacked on `origin/main` after #80056 merge, head `6f6e7c8283`; previous before/after WSL proof artifact remains linked below.\n\nExact steps or command run after this patch:\n\n- `pnpm docs:list`\n- `node --no-maglev node_modules\\\\vitest\\\\vitest.mjs extensions/policy/src/policy-state.test.ts extensions/policy/src/cli.test.ts extensions/policy/src/doctor/register.test.ts src/flows/bundled-health-checks.test.ts --run`\n- `node node_modules\\\\@typescript\\\\native-preview\\\\bin\\\\tsgo.js --project tsconfig.json --noEmit`\n- `pnpm docs:check-mdx -- docs/cli/policy.md docs/plugins/reference/policy.md`\n- `git diff --check origin/main...HEAD`\n\nEvidence after fix:\n\n![Fresh before/after proof for model, MCP, and network policy checks](https://raw.githubusercontent.com/giodl73-repo/openclaw/proof-artifacts/pr-80783-fresh/pr-80783/pr-80783-policy-model-mcp-network-conformance-before-after-proof.png)\n\nObserved result after fix: Focused policy and bundled health-check tests passed 4 files and 70 tests. `tsgo`, docs MDX, and diff whitespace checks passed. The restacked diff is limited to Policy docs, Policy source/tests, and the bundled health-check registration test.\n\nWhat was not tested: Runtime policy enforcement, approval metadata propagation, approval UI, supervisor protocol, gateway protocol, Swift protocol surfaces, and MCP runtime execution are intentionally not part of this PR. Local `oxfmt` could not be run in this Windows worktree because the formatter process failed with `spawn EPERM` / `Access is denied`; docs MDX and whitespace checks passed.\n\n## Related\n\n- Doctor health contract and lint validation: https://github.com/openclaw/openclaw/pull/80055\n- Channels-first policy conformance: https://github.com/openclaw/openclaw/pull/80407\n- Tool metadata conformance: https://github.com/openclaw/openclaw/pull/80056\n- Runtime audit metadata and attestation enforcement: https://github.com/openclaw/openclaw/pull/81104\n\n<!-- policy-stack-links:start -->\n\n## Policy stack links\n\nThis PR is part of the Policy 1.0 proof stack:\n\n1. #80407 — Policy: add conformance system with channel checks\n2. #80056 — Policy: add tool metadata conformance\n3. #80783 — Policy: add model, network, and MCP conformance checks\n4. #81104 — Policy: add runtime audit metadata and attestation enforcement\n5. #81974 — Policy: add secrets auth provenance checks\n6. #81981 — Policy: add gateway exposure checks\n\n<!-- policy-stack-links:end -->\r\n",
+        "branch": "policy-conformance-examples",
+        "head_sha": "66495f031fbdb2ab010036d16840b690839945e2",
+        "author": "giodl73-repo",
         "labels": [
           "gateway",
           "agents",
           "maintainer",
-          "size: S",
+          "size: XL",
           "proof: sufficient",
-          "rating: 🧂 unranked krab",
-          "status: ⏳ waiting on author"
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
+          "status: ⏳ waiting on author",
+          "proof: 📸 screenshot",
+          "extensions: policy"
         ],
         "files": [
           {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
+            "path": "docs/cli/policy.md",
+            "additions": 121,
+            "deletions": 20,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/model-provider-auth.test.ts",
-            "additions": 77,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/model-provider-auth.ts",
-            "additions": 48,
-            "deletions": 0,
+            "path": "docs/plugins/reference/policy.md",
+            "additions": 18,
+            "deletions": 4,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/commands-models.test.ts",
+            "path": "extensions/policy/src/cli.test.ts",
+            "additions": 45,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/policy/src/doctor/register.test.ts",
+            "additions": 604,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/policy/src/doctor/register.ts",
+            "additions": 386,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/policy/src/policy-state.ts",
+            "additions": 285,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/bundled-health-checks.test.ts",
             "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-reload-handlers.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-startup-post-attach.ts",
-            "additions": 14,
-            "deletions": 0,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84816",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84816.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-80783",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-80783.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 103,
+          "total": 96,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 28,
-            "SUCCESS": 72,
+            "IN_PROGRESS": 7,
+            "SUCCESS": 67,
+            "SKIPPED": 21,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:CANCELLED"
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
+            "checks-node-agentic-commands-models:IN_PROGRESS"
           ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
+          "pending": [
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
+            "checks-node-agentic-commands-models:IN_PROGRESS"
+          ],
+          "terminalBlockers": []
         }
-      },
-      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
+      }
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2050,
+    "total_ms": 4223,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 281
+        "ms": 497
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1567
+        "ms": 1521
       },
       {
         "name": "classify_commands",
@@ -161,7 +202,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 187
+        "ms": 2180
       },
       {
         "name": "append_ledger",
