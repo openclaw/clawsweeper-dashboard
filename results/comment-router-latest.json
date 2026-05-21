@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-21T18:29:16.307Z",
+  "generated_at": "2026-05-21T18:29:59.295Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-21T15:29:10.937Z",
+  "since": "2026-05-21T15:29:57.820Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    81069
+    84816
   ],
-  "comment_ids": [
-    4511444124
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 8,
+  "commands_seen": 4,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,17 +31,152 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:81069:4511444124:2026-05-21T18:27:05Z:re_review",
-      "comment_id": "4511444124",
-      "comment_version_key": "4511444124:2026-05-21T18:27:05Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/81069#issuecomment-4511444124",
+      "idempotency_key": "comment-router:openclaw/openclaw:84816:4505017847:2026-05-21T18:29:53Z:automerge",
+      "comment_id": "4505017847",
+      "comment_version_key": "4505017847:2026-05-21T18:29:53Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84816#issuecomment-4505017847",
       "repo": "openclaw/openclaw",
-      "issue_number": 81069,
-      "author": "eleqtrizit",
-      "author_id": 31522568,
+      "issue_number": 84816,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-21T18:27:05Z",
-      "comment_updated_at": "2026-05-21T18:27:05Z",
+      "comment_created_at": "2026-05-21T05:15:45Z",
+      "comment_updated_at": "2026-05-21T18:29:53Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "automerge",
+      "intent": "automerge",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": "This PR adds a prepared provider-auth snapshot warmed at gateway startup, hot reload, and auth logout so model-listing auth checks can short-circuit per-provider discovery.\n\nReproducibility: yes. for the PR blockers by source inspection: the branch test itself proves fallback after 10,001ms, and startup code schedules the warm after `gateway ready`. I did not run tests because this review is read-only.",
+      "review_followup": "The blockers are concrete code-path repairs in the PR branch: keep model listing off synchronous auth discovery during expiry/startup/reload windows and add focused regression coverage.",
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "ignored",
+      "actions": [],
+      "author_repository_permission": "none",
+      "target": {
+        "kind": "pull_request",
+        "title": "perf(models): /models 20s → 5ms via pre-warmed provider auth state",
+        "body": "Listing models went from **~55 s cold / ~20 s every subsequent call** to **~5 ms (pre-warmed)** — a ~4,100× speedup on the hot path. Every `/models` call (Discord/Telegram pickers, CLI, status commands) now short-circuits through a prepared provider-auth map built once at gateway startup instead of rediscovering every provider's auth state from scratch on every invocation.\n\nThis also fixes the \"This interaction failed\" error in Discord's `/models` picker. Discord requires bots to ack or defer an interaction within 3 seconds. With the gateway's event loop blocked on a ~20 s auth-discovery sweep, the immediate `interaction.acknowledge()` in the picker handler couldn't actually run inside Discord's 3 s window — Discord invalidated the interaction token and the picker rendered the failure state. Cutting the hot-path work to ~5 ms keeps the gateway responsive so the ack happens immediately.\n\n## Summary\n\n`buildModelsProviderData` was spending ~20 s in `resolveVisibleModelCatalog`'s auth-filter loop — 30+ unique providers × ~600 ms each of plugin-runtime / external-CLI / auth-profile-store discovery, redone fresh on every call. The catalog itself was already cached via `modelCatalogPromise`; the per-provider auth check was the duplicate-lookup-branch the user-facing pickers were eating on every interaction.\n\nThis moves the canonical fact earlier: compute a `Map<provider, boolean>` once at gateway startup via `warmCurrentProviderAuthState`, hold it module-level, and have `hasAuthForModelProvider` consult it first. If a provider's answer is in the prepared map the function returns immediately; otherwise it falls through to the existing compute path. Invalidated on config reload alongside `resetModelCatalogCache` so the next read after a relevant config change rewarms.\n\nPer CLAUDE.md \"move the canonical fact earlier; reuse prepared runtime objects; delete duplicate lookup branches\" — no new caches scattered through request-time code, no per-channel plumbing, no new SDK surface. One module-level prepared object with an explicit set / clear lifecycle modeled on `PluginMetadataSnapshot`.\n\n## Verification\n\nBenchmarked on local dev gateway (`./run.sh openclaw gateway run`), catalog of 955 entries / 40 unique providers / 167 visible after auth, single machine same config, captured back-to-back. Trigger was `/models` via Discord (`@sjf_claw`) — same code path every other model-listing call hits.\n\nBehavior addressed: `buildModelsProviderData` (the chokepoint behind `/models` / model pickers) recomputes the per-provider auth state on every call.\nReal environment tested: macOS local openclaw dev, catalog with bundled + external plugins, Discord channel live.\nExact steps or command run after this patch: SIGINT the gateway to rebuild on this branch; let warmer complete after `[gateway] gateway ready`; trigger `/models` 12 times in Discord; grep `sjfsjfsjf buildModelsProviderData done` from `/tmp/openclaw/openclaw-*.log` (instrumentation since stripped before commit).\nEvidence after fix: see Timings table below. Raw samples preserved in `PICKER-PERF-TIMINGS.md` in the dev workspace.\nObserved result after fix: per-call `buildModelsProviderData` dropped from ~20.5 s (n=8) to ~5 ms (n=12). Discord no longer shows \"This interaction failed\" on the picker.\nWhat was not tested: Telegram + CLI `/models` paths (same code path, expected to benefit identically); Crabbox; multi-agent gateways where multiple `agentId` values flow through the picker (the prepared map is cfg-keyed, not agent-keyed — both before this PR and after, `hasAuthForModelProvider` is agent-agnostic).\n\n### Timings\n\nBEFORE (HEAD without this patch), n=8 subsequent + 1 cold:\n\n| Metric | ms |\n|---|---|\n| First call (cold catalog) | 54,812 |\n| Subsequent calls min | 20,403 |\n| Subsequent calls median | ~20,570 |\n| Subsequent calls max | 20,766 |\n| Subsequent calls mean | ~20,569 |\n\nAFTER (this PR), n=12 post-warm + warmer:\n\n| Metric | ms |\n|---|---|\n| Hot-path call min | 1 |\n| Hot-path call median | ~5 |\n| Hot-path call max | 6 |\n| Hot-path call mean | ~4.3 |\n| One-time gateway-startup warm (40 providers) | 49,203 |\n\nHeadline:\n\n| Scenario | BEFORE | AFTER | Speedup |\n|---|---|---|---|\n| First `/models` after restart | 54,812 ms | ~5 ms (post-warm) | ~10,000× |\n| Every subsequent `/models` | ~20,569 ms | ~5 ms | ~4,100× |\n| One-time startup warm cost | n/a | 49,203 ms | — |\n\nThe 49 s warm cost is not a regression: it's the same auth-discovery sweep the BEFORE workload was paying on every call, plus the cold-catalog `loadModelCatalog` (~26 s) which BEFORE also pays on its first call. AFTER pays both once at startup. On a reload that clears only the auth state (catalog already cached), warm is the ~23 s auth portion only.\n",
+        "branch": "perf/models-provider-data-snapshot",
+        "head_sha": "f875661460b4f2a06a5f04368726458434564641",
+        "author": "sjf",
+        "labels": [
+          "gateway",
+          "agents",
+          "maintainer",
+          "size: L",
+          "proof: sufficient",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-provider-auth.test.ts",
+            "additions": 215,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/model-provider-auth.ts",
+            "additions": 113,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/commands-models.test.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/models-auth-status.test.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/models-auth-status.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-reload-handlers.test.ts",
+            "additions": 92,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-reload-handlers.ts",
+            "additions": 16,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.reload.test.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84816",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84816.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "",
+        "checks": {
+          "total": 10,
+          "counts": {
+            "SUCCESS": 6,
+            "SKIPPED": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84816:4505314995:2026-05-21T06:14:43Z:re_review",
+      "comment_id": "4505314995",
+      "comment_version_key": "4505314995:2026-05-21T06:14:43Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84816#issuecomment-4505314995",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84816,
+      "author": "sjf",
+      "author_id": 153992,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-21T06:14:43Z",
+      "comment_updated_at": "2026-05-21T06:14:43Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -59,101 +192,292 @@
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-21T18:29:17.459Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 81069
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-21T18:29:18.579Z",
-          "response_comment_id": null,
-          "response_comment_mode": "created"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "fix(plugins): secure setup-mode provider discovery against untrusted workspace plugins [AI-assisted]",
-        "body": "## Summary\n\n- **Problem:** Default setup-mode provider discovery called `resolveDiscoveredProviderPluginIds` / `resolveDiscoverableProviderOwnerPluginIds` with `includeUntrustedWorkspacePlugins` unset (`undefined`), which evaluated `undefined === false` as `false` — leaving `shouldFilterUntrustedWorkspacePlugins = false` and allowing untrusted workspace plugin code to be imported and executed before any explicit user trust.\n- **Why it matters:** A malicious or accidental workspace-local plugin placed in `.openclaw/extensions/` could run arbitrary code at setup-discovery time, before the user has ever enabled or approved that plugin.\n- **What changed:** Two conditions in `providers.ts` changed from `=== false` to `!== true`, making the default (undefined) secure — untrusted workspace plugins are filtered unless the caller explicitly passes `includeUntrustedWorkspacePlugins: true`.\n- **What did NOT change:** Runtime (non-setup) provider loading, bundled plugin behavior, behavior when `includeUntrustedWorkspacePlugins` is explicitly `false` or `true`, and the `provider-install-catalog` / `provider-auth-choices` paths (which use a different, intentional semantic for that flag).\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [x] Security hardening\n\n## Scope (select all touched areas)\n\n- [x] Auth / tokens\n\n## Linked Issue/PR\n\n- [ ] This PR fixes a bug or regression\n\n## Real behavior proof (required for external PRs)\n\n- **Behavior or issue addressed:** Untrusted workspace provider plugin code (top-level module + `register()`) executed during default setup discovery with no explicit trust granted.\n- **Real environment tested:** Linux, Node 22, source checkout.\n- **Exact steps or command run after this patch:** `pnpm test src/plugins/providers.setup-trust.test.ts` and `pnpm test src/plugins/providers.test.ts`\n- **Evidence after fix:** Both new test files pass. The integration test in `providers.setup-trust.test.ts` uses filesystem markers written by the plugin's top-level code and `register()` to prove no plugin code runs for the untrusted case, and that it does run for the explicitly-trusted (allowlisted) case.\n- **Observed result after fix:** `resolvePluginProviders({ mode: \"setup\" })` without explicit trust returns `[]` and produces zero filesystem side effects from the workspace plugin.\n- **What was not tested:** Live macOS gateway, E2E provider auth flow.\n- **Before evidence:** PoC log showed `register()` called with `registrationMode: \"discovery\"` and `top-level` marker written during default setup-mode call with no explicit trust.\n\n## Root Cause\n\n- **Root cause:** `=== false` strict-equality check treated `undefined` (parameter omitted) identically to `true` — both left `shouldFilterUntrustedWorkspacePlugins = false`, disabling the workspace-plugin filter by default.\n- **Missing detection / guardrail:** No test covered the omitted-parameter (default) case for setup-mode discovery; only the explicit `false` path was tested.\n- **Contributing context:** The flag was introduced with the safe explicit-`false` call sites in auth helpers, masking that the default left the gate open in the setup discovery path.\n\n## Regression Test Plan\n\n- Coverage level that should have caught this:\n  - [x] Seam / integration test\n- **Target test or file:** `src/plugins/providers.setup-trust.test.ts` (new), `src/plugins/providers.test.ts` (updated)\n- **Scenario the test should lock in:** Default-params setup-mode call must not import or execute workspace plugin code; file-system markers confirm no side effects.\n- **Why this is the smallest reliable guardrail:** The integration test drives the real runtime path with a real filesystem plugin fixture, so a regression in the flag logic will fail the marker assertions regardless of mock layering.\n- **Existing test that already covered this:** None — prior tests only covered the explicit `false` path.\n\n## User-visible / Behavior Changes\n\nWorkspace-origin provider plugins are no longer loaded during setup-mode discovery unless they appear in `config.plugins.allow`. Users relying on implicit setup-mode loading of workspace plugins must add those plugin IDs to their `allow` list.\n\n## Diagram\n\n```text\nBefore:\n[setup discovery, no includeUntrustedWorkspacePlugins param]\n  -> shouldFilterUntrustedWorkspacePlugins = (undefined === false) = false\n  -> workspace plugin imported + register() called\n\nAfter:\n[setup discovery, no includeUntrustedWorkspacePlugins param]\n  -> shouldFilterUntrustedWorkspacePlugins = (undefined !== true) = true\n  -> workspace plugin skipped unless in config.plugins.allow\n```\n\n## Security Impact\n\n- New permissions/capabilities? No\n- Secrets/tokens handling changed? No\n- New/changed network calls? No\n- Command/tool execution surface changed? Yes — workspace plugin code is no longer executed at setup-discovery time without explicit trust.\n- Data access scope changed? No\n- **Explanation:** The surface reduction is the fix: untrusted workspace plugin `register()` and module-level code can no longer run during setup-mode provider discovery.\n\n## Repro + Verification\n\n### Environment\n\n- OS: Linux (Node 22)\n- Runtime/container: source checkout, `pnpm`\n- Relevant config: `config.plugins.enabled: true`, no `allow` list\n\n### Steps\n\n1. Place a workspace plugin in `.openclaw/extensions/<id>/` with a `register()` that writes a filesystem marker.\n2. Call `resolvePluginProviders({ mode: \"setup\", config: { plugins: { enabled: true } } })` without setting `includeUntrustedWorkspacePlugins`.\n3. Check for marker files.\n\n### Expected\n\n- No providers returned, no marker files written.\n\n### Actual (after fix)\n\n- No providers returned, no marker files written.\n\n## Evidence\n\n- [x] Failing test/log before + passing after — `providers.setup-trust.test.ts` integration markers + updated `providers.test.ts` assertions.\n\n## Human Verification (required)\n\n- **Verified scenarios:** Default-omitted param filters workspace plugin; explicit `true` includes it; explicit `false` still filters; bundled plugins unaffected.\n- **Edge cases checked:** Plugin in `allow` list is still discoverable in setup mode (second integration test).\n- **What you did not verify:** Downstream callers that pass `includeUntrustedWorkspacePlugins` explicitly (all confirmed to pass `false`, which remains filtering behavior).\n\n## Review Conversations\n\n- [x] I replied to or resolved every bot review conversation I addressed in this PR.\n- [x] I left unresolved only the conversations that still need reviewer or maintainer judgment.\n\n## Compatibility / Migration\n\n- Backward compatible? No — workspace plugins no longer auto-discovered in setup mode without allowlisting.\n- Config/env changes? No\n- Migration needed? Yes — users with workspace provider plugins must add plugin IDs to `config.plugins.allow`.\n- Exact upgrade steps: Add the plugin ID string to the `plugins.allow` array in your OpenClaw config.\n\n## Risks and Mitigations\n\n- Risk: Workspace provider plugins that were previously auto-discovered in setup mode will no longer appear until explicitly trusted.\n  - Mitigation: The new behavior is intentional and correct; affected users must opt in via `config.plugins.allow`. Error messaging in setup flows should guide users to add the plugin to their allow list.",
-        "branch": "fix/fix-627",
-        "head_sha": "926cf98da6e026d48922213277c63cdc8e263849",
-        "author": "mmaps",
+        "title": "perf(models): /models 20s → 5ms via pre-warmed provider auth state",
+        "body": "Listing models went from **~55 s cold / ~20 s every subsequent call** to **~5 ms (pre-warmed)** — a ~4,100× speedup on the hot path. Every `/models` call (Discord/Telegram pickers, CLI, status commands) now short-circuits through a prepared provider-auth map built once at gateway startup instead of rediscovering every provider's auth state from scratch on every invocation.\n\nThis also fixes the \"This interaction failed\" error in Discord's `/models` picker. Discord requires bots to ack or defer an interaction within 3 seconds. With the gateway's event loop blocked on a ~20 s auth-discovery sweep, the immediate `interaction.acknowledge()` in the picker handler couldn't actually run inside Discord's 3 s window — Discord invalidated the interaction token and the picker rendered the failure state. Cutting the hot-path work to ~5 ms keeps the gateway responsive so the ack happens immediately.\n\n## Summary\n\n`buildModelsProviderData` was spending ~20 s in `resolveVisibleModelCatalog`'s auth-filter loop — 30+ unique providers × ~600 ms each of plugin-runtime / external-CLI / auth-profile-store discovery, redone fresh on every call. The catalog itself was already cached via `modelCatalogPromise`; the per-provider auth check was the duplicate-lookup-branch the user-facing pickers were eating on every interaction.\n\nThis moves the canonical fact earlier: compute a `Map<provider, boolean>` once at gateway startup via `warmCurrentProviderAuthState`, hold it module-level, and have `hasAuthForModelProvider` consult it first. If a provider's answer is in the prepared map the function returns immediately; otherwise it falls through to the existing compute path. Invalidated on config reload alongside `resetModelCatalogCache` so the next read after a relevant config change rewarms.\n\nPer CLAUDE.md \"move the canonical fact earlier; reuse prepared runtime objects; delete duplicate lookup branches\" — no new caches scattered through request-time code, no per-channel plumbing, no new SDK surface. One module-level prepared object with an explicit set / clear lifecycle modeled on `PluginMetadataSnapshot`.\n\n## Verification\n\nBenchmarked on local dev gateway (`./run.sh openclaw gateway run`), catalog of 955 entries / 40 unique providers / 167 visible after auth, single machine same config, captured back-to-back. Trigger was `/models` via Discord (`@sjf_claw`) — same code path every other model-listing call hits.\n\nBehavior addressed: `buildModelsProviderData` (the chokepoint behind `/models` / model pickers) recomputes the per-provider auth state on every call.\nReal environment tested: macOS local openclaw dev, catalog with bundled + external plugins, Discord channel live.\nExact steps or command run after this patch: SIGINT the gateway to rebuild on this branch; let warmer complete after `[gateway] gateway ready`; trigger `/models` 12 times in Discord; grep `sjfsjfsjf buildModelsProviderData done` from `/tmp/openclaw/openclaw-*.log` (instrumentation since stripped before commit).\nEvidence after fix: see Timings table below. Raw samples preserved in `PICKER-PERF-TIMINGS.md` in the dev workspace.\nObserved result after fix: per-call `buildModelsProviderData` dropped from ~20.5 s (n=8) to ~5 ms (n=12). Discord no longer shows \"This interaction failed\" on the picker.\nWhat was not tested: Telegram + CLI `/models` paths (same code path, expected to benefit identically); Crabbox; multi-agent gateways where multiple `agentId` values flow through the picker (the prepared map is cfg-keyed, not agent-keyed — both before this PR and after, `hasAuthForModelProvider` is agent-agnostic).\n\n### Timings\n\nBEFORE (HEAD without this patch), n=8 subsequent + 1 cold:\n\n| Metric | ms |\n|---|---|\n| First call (cold catalog) | 54,812 |\n| Subsequent calls min | 20,403 |\n| Subsequent calls median | ~20,570 |\n| Subsequent calls max | 20,766 |\n| Subsequent calls mean | ~20,569 |\n\nAFTER (this PR), n=12 post-warm + warmer:\n\n| Metric | ms |\n|---|---|\n| Hot-path call min | 1 |\n| Hot-path call median | ~5 |\n| Hot-path call max | 6 |\n| Hot-path call mean | ~4.3 |\n| One-time gateway-startup warm (40 providers) | 49,203 |\n\nHeadline:\n\n| Scenario | BEFORE | AFTER | Speedup |\n|---|---|---|---|\n| First `/models` after restart | 54,812 ms | ~5 ms (post-warm) | ~10,000× |\n| Every subsequent `/models` | ~20,569 ms | ~5 ms | ~4,100× |\n| One-time startup warm cost | n/a | 49,203 ms | — |\n\nThe 49 s warm cost is not a regression: it's the same auth-discovery sweep the BEFORE workload was paying on every call, plus the cold-catalog `loadModelCatalog` (~26 s) which BEFORE also pays on its first call. AFTER pays both once at startup. On a reload that clears only the auth state (catalog already cached), warm is the ~23 s auth portion only.\n",
+        "branch": "perf/models-provider-data-snapshot",
+        "head_sha": "f875661460b4f2a06a5f04368726458434564641",
+        "author": "sjf",
         "labels": [
-          "size: M",
-          "triage: mock-only-proof",
+          "gateway",
+          "agents",
+          "maintainer",
+          "size: L",
+          "proof: sufficient",
           "P1",
-          "rating: 🦪 silver shellfish",
+          "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
           "merge-risk: 🚨 auth-provider",
-          "status: 📣 needs proof"
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/plugins/providers.setup-trust.test.ts",
-            "additions": 178,
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-provider-auth.test.ts",
+            "additions": 215,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/plugins/providers.test.ts",
-            "additions": 21,
-            "deletions": 5,
+            "path": "src/agents/model-provider-auth.ts",
+            "additions": 113,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/plugins/providers.ts",
-            "additions": 2,
-            "deletions": 2,
+            "path": "src/auto-reply/reply/commands-models.test.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/models-auth-status.test.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/models-auth-status.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-reload-handlers.test.ts",
+            "additions": 92,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-reload-handlers.ts",
+            "additions": 16,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.reload.test.ts",
+            "additions": 12,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-81069",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-81069.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84816",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84816.md",
         "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
         "review_decision": "",
         "checks": {
-          "total": 102,
+          "total": 10,
           "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 72,
-            "SKIPPED": 28,
+            "SUCCESS": 6,
+            "SKIPPED": 3,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
+          "terminalBlockers": []
         }
-      }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84816:4505189810:2026-05-21T05:52:52Z:re_review",
+      "comment_id": "4505189810",
+      "comment_version_key": "4505189810:2026-05-21T05:52:52Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84816#issuecomment-4505189810",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84816,
+      "author": "sjf",
+      "author_id": 153992,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-21T05:52:52Z",
+      "comment_updated_at": "2026-05-21T05:52:52Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84816:4505117492:2026-05-21T05:38:19Z:re_review",
+      "comment_id": "4505117492",
+      "comment_version_key": "4505117492:2026-05-21T05:38:19Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84816#issuecomment-4505117492",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84816,
+      "author": "sjf",
+      "author_id": 153992,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-21T05:38:19Z",
+      "comment_updated_at": "2026-05-21T05:38:19Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "write",
+      "target": {
+        "kind": "pull_request",
+        "title": "perf(models): /models 20s → 5ms via pre-warmed provider auth state",
+        "body": "Listing models went from **~55 s cold / ~20 s every subsequent call** to **~5 ms (pre-warmed)** — a ~4,100× speedup on the hot path. Every `/models` call (Discord/Telegram pickers, CLI, status commands) now short-circuits through a prepared provider-auth map built once at gateway startup instead of rediscovering every provider's auth state from scratch on every invocation.\n\nThis also fixes the \"This interaction failed\" error in Discord's `/models` picker. Discord requires bots to ack or defer an interaction within 3 seconds. With the gateway's event loop blocked on a ~20 s auth-discovery sweep, the immediate `interaction.acknowledge()` in the picker handler couldn't actually run inside Discord's 3 s window — Discord invalidated the interaction token and the picker rendered the failure state. Cutting the hot-path work to ~5 ms keeps the gateway responsive so the ack happens immediately.\n\n## Summary\n\n`buildModelsProviderData` was spending ~20 s in `resolveVisibleModelCatalog`'s auth-filter loop — 30+ unique providers × ~600 ms each of plugin-runtime / external-CLI / auth-profile-store discovery, redone fresh on every call. The catalog itself was already cached via `modelCatalogPromise`; the per-provider auth check was the duplicate-lookup-branch the user-facing pickers were eating on every interaction.\n\nThis moves the canonical fact earlier: compute a `Map<provider, boolean>` once at gateway startup via `warmCurrentProviderAuthState`, hold it module-level, and have `hasAuthForModelProvider` consult it first. If a provider's answer is in the prepared map the function returns immediately; otherwise it falls through to the existing compute path. Invalidated on config reload alongside `resetModelCatalogCache` so the next read after a relevant config change rewarms.\n\nPer CLAUDE.md \"move the canonical fact earlier; reuse prepared runtime objects; delete duplicate lookup branches\" — no new caches scattered through request-time code, no per-channel plumbing, no new SDK surface. One module-level prepared object with an explicit set / clear lifecycle modeled on `PluginMetadataSnapshot`.\n\n## Verification\n\nBenchmarked on local dev gateway (`./run.sh openclaw gateway run`), catalog of 955 entries / 40 unique providers / 167 visible after auth, single machine same config, captured back-to-back. Trigger was `/models` via Discord (`@sjf_claw`) — same code path every other model-listing call hits.\n\nBehavior addressed: `buildModelsProviderData` (the chokepoint behind `/models` / model pickers) recomputes the per-provider auth state on every call.\nReal environment tested: macOS local openclaw dev, catalog with bundled + external plugins, Discord channel live.\nExact steps or command run after this patch: SIGINT the gateway to rebuild on this branch; let warmer complete after `[gateway] gateway ready`; trigger `/models` 12 times in Discord; grep `sjfsjfsjf buildModelsProviderData done` from `/tmp/openclaw/openclaw-*.log` (instrumentation since stripped before commit).\nEvidence after fix: see Timings table below. Raw samples preserved in `PICKER-PERF-TIMINGS.md` in the dev workspace.\nObserved result after fix: per-call `buildModelsProviderData` dropped from ~20.5 s (n=8) to ~5 ms (n=12). Discord no longer shows \"This interaction failed\" on the picker.\nWhat was not tested: Telegram + CLI `/models` paths (same code path, expected to benefit identically); Crabbox; multi-agent gateways where multiple `agentId` values flow through the picker (the prepared map is cfg-keyed, not agent-keyed — both before this PR and after, `hasAuthForModelProvider` is agent-agnostic).\n\n### Timings\n\nBEFORE (HEAD without this patch), n=8 subsequent + 1 cold:\n\n| Metric | ms |\n|---|---|\n| First call (cold catalog) | 54,812 |\n| Subsequent calls min | 20,403 |\n| Subsequent calls median | ~20,570 |\n| Subsequent calls max | 20,766 |\n| Subsequent calls mean | ~20,569 |\n\nAFTER (this PR), n=12 post-warm + warmer:\n\n| Metric | ms |\n|---|---|\n| Hot-path call min | 1 |\n| Hot-path call median | ~5 |\n| Hot-path call max | 6 |\n| Hot-path call mean | ~4.3 |\n| One-time gateway-startup warm (40 providers) | 49,203 |\n\nHeadline:\n\n| Scenario | BEFORE | AFTER | Speedup |\n|---|---|---|---|\n| First `/models` after restart | 54,812 ms | ~5 ms (post-warm) | ~10,000× |\n| Every subsequent `/models` | ~20,569 ms | ~5 ms | ~4,100× |\n| One-time startup warm cost | n/a | 49,203 ms | — |\n\nThe 49 s warm cost is not a regression: it's the same auth-discovery sweep the BEFORE workload was paying on every call, plus the cold-catalog `loadModelCatalog` (~26 s) which BEFORE also pays on its first call. AFTER pays both once at startup. On a reload that clears only the auth state (catalog already cached), warm is the ~23 s auth portion only.\n",
+        "branch": "perf/models-provider-data-snapshot",
+        "head_sha": "f875661460b4f2a06a5f04368726458434564641",
+        "author": "sjf",
+        "labels": [
+          "gateway",
+          "agents",
+          "maintainer",
+          "size: L",
+          "proof: sufficient",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-provider-auth.test.ts",
+            "additions": 215,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/model-provider-auth.ts",
+            "additions": 113,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/commands-models.test.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/models-auth-status.test.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/models-auth-status.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-reload-handlers.test.ts",
+            "additions": 92,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-reload-handlers.ts",
+            "additions": 16,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.reload.test.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84816",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84816.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "",
+        "checks": {
+          "total": 10,
+          "counts": {
+            "SUCCESS": 6,
+            "SKIPPED": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 8496,
+    "total_ms": 2623,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2750
+        "ms": 365
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2606
+        "ms": 1094
       },
       {
         "name": "classify_commands",
@@ -161,11 +485,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3112
+        "ms": 1148
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
