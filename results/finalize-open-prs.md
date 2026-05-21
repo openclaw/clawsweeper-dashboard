@@ -1,6 +1,6 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-05-21T05:15:05.553Z
+Generated: 2026-05-21T05:16:40.466Z
 
 ## Summary
 
@@ -14,7 +14,7 @@ Generated: 2026-05-21T05:15:05.553Z
 | needs_checks | 7 |
 | needs_review | 0 |
 | needs_merge_preflight | 8 |
-| needs_result_backfill | 2 |
+| needs_result_backfill | 1 |
 
 ## Dispatch
 
@@ -30,8 +30,8 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#84815](https://github.com/openclaw/openclaw/pull/84815) | [Fix] Keep node systemd tokens out of unit files | automerge-openclaw-openclaw-84408 | MERGEABLE | UNSTABLE | CANCELLED:19 SKIPPED:99 SUCCESS:60 IN_PROGRESS:16 NEUTRAL:1; blockers:25 | needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight, needs_result_backfill | repair failing checks or document unrelated main flake with touched-surface proof |
-| [#84814](https://github.com/openclaw/openclaw/pull/84814) | fix(agents): classify embedded provider business denials for fallback | automerge-openclaw-openclaw-83042 | MERGEABLE | UNSTABLE | CANCELLED:12 IN_PROGRESS:9 SKIPPED:84 SUCCESS:67 NEUTRAL:1; blockers:13 | needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
+| [#84815](https://github.com/openclaw/openclaw/pull/84815) | [Fix] Keep node systemd tokens out of unit files | automerge-openclaw-openclaw-84408 | MERGEABLE | UNSTABLE | CANCELLED:19 SKIPPED:99 SUCCESS:73 IN_PROGRESS:3 NEUTRAL:1; blockers:12 | needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
+| [#84814](https://github.com/openclaw/openclaw/pull/84814) | fix(agents): classify embedded provider business denials for fallback | automerge-openclaw-openclaw-83042 | MERGEABLE | UNSTABLE | CANCELLED:12 IN_PROGRESS:2 SKIPPED:84 SUCCESS:74 NEUTRAL:1; blockers:6 | needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
 | [#84798](https://github.com/openclaw/openclaw/pull/84798) | fix(agents): disable pi-coding-agent auto-retry to prevent tool call replay loops | automerge-openclaw-openclaw-74434 | CONFLICTING | DIRTY | SUCCESS:73 SKIPPED:24 NEUTRAL:1 | needs_rebase:CONFLICTING, needs_merge_state:DIRTY, needs_merge_preflight | resume branch, rebase onto current main, repair conflicts, run changed checks, rerun review |
 | [#84797](https://github.com/openclaw/openclaw/pull/84797) | fix(trajectory): tolerate partial skill snapshot entries in support capture | automerge-openclaw-openclaw-71185 | CONFLICTING | DIRTY | CANCELLED:11 SKIPPED:85 SUCCESS:79 NEUTRAL:1; blockers:7 | needs_rebase:CONFLICTING, needs_merge_state:DIRTY, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | resume branch, rebase onto current main, repair conflicts, run changed checks, rerun review |
 | [#84764](https://github.com/openclaw/openclaw/pull/84764) | fix(minimax): stream music generation responses | automerge-openclaw-openclaw-84561 | CONFLICTING | DIRTY | CANCELLED:19 SKIPPED:110 SUCCESS:72 NEUTRAL:1; blockers:11 | needs_rebase:CONFLICTING, needs_merge_state:DIRTY, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | resume branch, rebase onto current main, repair conflicts, run changed checks, rerun review |
