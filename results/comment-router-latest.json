@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-21T17:47:18.561Z",
-  "repo": "openclaw/clawhub",
+  "generated_at": "2026-05-21T17:47:23.159Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-21T14:47:18.240Z",
+  "since": "2026-05-21T14:47:21.088Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    2363
+    84966
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4510971240
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,18 +31,102 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84966:4510971240:2026-05-21T17:45:27Z:maintainer_approve_automerge",
+      "comment_id": "4510971240",
+      "comment_version_key": "4510971240:2026-05-21T17:45:27Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84966#issuecomment-4510971240",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84966,
+      "author": "Takhoffman",
+      "author_id": 781889,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-21T17:45:27Z",
+      "comment_updated_at": "2026-05-21T17:45:27Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "merge",
+      "intent": "maintainer_approve_automerge",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "write",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents/harness): route CLI backend aliases through PI for in-process compaction [AI-assisted]",
+        "body": "## Summary\n\n`selectAgentHarnessDecision` in `src/agents/harness/selection.ts` treated `agentRuntime.id` strictly as a plugin harness id. CLI backend aliases (`claude-cli`, `google-gemini-cli`) are documented-valid runtime ids per the schema (see `runtime-schema.ts`: *\"a registered plugin harness id such as 'codex', or a supported CLI backend alias such as 'claude-cli'\"*), but they are not plugin harnesses — they are CLI backends dispatched at the request layer by `runCliAgent` in `attempt-execution.ts` and `agent-runner.runtime.ts`.\n\nNormal turns never hit the harness selector for these runtimes because the request layer short-circuits on `isCliProvider` first. But **in-process consumers that call `selectAgentHarness` directly** — most importantly `maybeCompactAgentHarnessSession`, used by both `/compact` and the preflight memory-flush path in `runPreflightCompactionIfNeeded` — would throw `MissingAgentHarnessError(\"claude-cli\")` for any agent whose model-scoped or provider-scoped `agentRuntime.id` was a CLI backend alias.\n\nOnce a session crosses the preflight compaction threshold, that throw fires on **every inbound turn across every channel** (Telegram, webchat, SMS, `/compact`), because `runPreflightCompactionIfNeeded` runs before every dispatch. The agent becomes unusable until compacted — and `/compact` itself can't compact, so recovery requires a config swap or surgical patch.\n\n## Fix\n\nAdd a `cli_backend_routed_via_pi` branch to `selectAgentHarnessDecision` right next to the existing `implicit_plugin_unavailable_pi` (codex) fallback. When the runtime is a CLI backend alias, return the PI harness with `runtime: \"pi\"` stamped on the policy. The new branch is gated by `isCliRuntimeAlias()` from `model-runtime-aliases.ts`, so any future CLI backend added to `LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES` is covered automatically.\n\nThis routes only the **in-process step** through PI:\n- For compaction: PI does the transcript summarization. Auth still flows through the user's existing CLI OAuth via `resolveClaudeCliSyntheticAuth`.\n- For normal turns: unaffected. They never reach this code path because `runAgentAttempt` in `attempt-execution.ts` and `agent-runner.runtime.ts` branch to `runCliAgent` on `isCliProvider` first.\n\nThe branch mirrors the existing codex-implicit fallback shape exactly: same `buildSelectionDecision`, same `runtime: \"pi\"` policy override, same candidate list. No new architecture.\n\n## Why not a CLI-native compaction path?\n\nThe CLI backend declares `reseedFromRawTranscriptWhenUncompacted: true` for the claude-cli case (see `cli-backend.ts`), which is the binary's own internal context management — not something the harness layer can call as \"summarize this transcript please.\" Building a CLI-native compaction backend would be a much larger architectural change. PI fallback is the smallest fix consistent with how this function already handles \"this runtime can't compact in-process\" cases (codex implicit).\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: With model-scoped `agentRuntime.id = \"claude-cli\"`, `selectAgentHarnessDecision` threw `MissingAgentHarnessError(\"claude-cli\")` for every call. This blocked `maybeCompactAgentHarnessSession`, so once a session crossed the preflight-compaction threshold, every inbound turn on every channel (Telegram, webchat, SMS, `/compact`) failed before reaching the request-layer CLI dispatch. User-visible symptom: an unresponsive bot, with `Requested agent harness \"claude-cli\" is not registered.` repeating in the gateway log.\n\n- **Real environment tested**: macOS, Apple Silicon, OpenClaw 2026.5.19 installed fresh 2 days ago. Single agent (`main`) with `anthropic/claude-sonnet-4-6` as primary model and model-scoped `agentRuntime: { id: \"claude-cli\" }`. Claude CLI binary at `~/.local/bin/claude`, authenticated via the `anthropic:claude-cli` OAuth profile. Telegram bot channel active. Session at 151% of context (1.6m / 1.0m) when the bug surfaced — preflight compaction firing on every inbound turn.\n\n- **Exact steps or command run after this patch**:\n  1. Applied the semantic equivalent of this PR's patch to the locally installed bundled selector (`/opt/homebrew/lib/node_modules/openclaw/dist/selection-*.js`). The two-string-literal version of the source change in this PR — added the `cli_backend_routed_via_pi` branch in `selectAgentHarnessDecision`.\n  2. `openclaw gateway restart` — new gateway PID came up, listening on configured port.\n  3. Sent a regular message via Telegram to my running bot.\n  4. Issued `/compact` in the same Telegram thread.\n  5. Tailed `/tmp/openclaw/openclaw-$(date +%Y-%m-%d).log` filtered for `MissingAgentHarnessError`, `agent/cli-backend`, and `provider=claude-cli` lines during steps 3–4.\n\n- **Evidence after fix**:\n  - **Telegram screenshot** (cropped, redacted) showing the bot's normal reply + `/compact` completing on the same channel that was throwing on every turn before the patch: https://github.com/user-attachments/assets/8a97397e-22e3-47b9-93e4-4b4d2e353727 (re-attached in my proof comment below for in-thread display).\n  - **Before/after gateway log excerpt** (sensitive identifiers redacted, timestamps stripped): https://github.com/user-attachments/files/28105459/proof-logs.txt — attached in my proof comment.\n  - Inline excerpt from the before-fix log (sensitive fields scrubbed; 5 of 24 occurrences across `lane=main` and `lane=session:agent:main:telegram:direct:<redacted>`):\n\n    ```\n    lane task error: lane=main durationMs=<redacted> error=\"MissingAgentHarnessError: Requested agent harness \\\"claude-cli\\\" is not registered.\"\n    lane task error: lane=session:agent:main:telegram:direct:<redacted> durationMs=<redacted> error=\"MissingAgentHarnessError: Requested agent harness \\\"claude-cli\\\" is not registered.\"\n    ```\n\n  - Inline excerpt from the after-fix tail (same scrubbing; representative — every post-restart Telegram turn shows the same `agent/cli-backend` activity):\n\n    ```\n    cli exec: provider=claude-cli model=sonnet promptChars=<redacted> trigger=user useResume=true session=present resumeSession=<redacted> reuse=reusable historyPrompt=present\n    claude live session reuse: provider=claude-cli model=claude-sonnet-4-6\n    claude live session turn: provider=claude-cli model=claude-sonnet-4-6 durationMs=<redacted> rawLines=<redacted>\n    ```\n\n- **Observed result after fix**:\n  - Telegram normal turn replied successfully (the bot answered the prompt I gave it instead of failing the lane).\n  - `/compact` returned `Compacted • Context 37k/1.0m (3%)` as a Telegram system message — context dropped from 151% to 3%.\n  - Zero `MissingAgentHarnessError` lines in the post-restart filtered tail.\n  - Every post-restart Telegram turn logged `provider=claude-cli` from the `agent/cli-backend` subsystem and emitted `claude live session reuse` / `claude live session turn` events. This confirms the request-layer CLI dispatch (`runCliAgent` → `claude` binary subprocess) is unchanged — normal turns still flow through the user's `claude` binary, not the PI fallback added by this patch. The PI fallback is only reached by `maybeCompactAgentHarnessSession`, which is the intended scope.\n\n- **What was not tested**: `google-gemini-cli` runtime end-to-end (no Gemini CLI installation available); covered by unit test in this PR only. Full `pnpm test` matrix beyond the targeted `selection.test.ts` file — happy to run on request. The bundled-JS hot-patch on my local install is semantically equivalent to this PR's source change (uses hardcoded `claude-cli`/`google-gemini-cli` literals because importing into bundled output is impractical; the source PR uses `isCliRuntimeAlias()`).\n\n## Tests added\n\n- `routes CLI backend aliases to the PI harness so in-process compaction works` — verifies `selectAgentHarness` returns the PI harness for both `claude-cli` and `google-gemini-cli` runtimes.\n- `lets maybeCompactAgentHarnessSession proceed for claude-cli model runs via PI` — direct regression test for the user-facing bug: the compaction entrypoint resolves without throwing `MissingAgentHarnessError` for a `claude-cli`-aliased anthropic model.\n\n## Related\n\n- Same-shape-of-bug PR: #72499 (helper paths bypassing CLI dispatch — compaction was missed there)\n- Issue with the same error message but different root cause (auth migration gap): #84604\n- Issue that pointed me at this area: #57326\n\n## AI-assisted disclosure\n\nThis patch was authored end-to-end via Claude Code (claude-opus-4-7). The PR author (me) ran the test suite and repo check personally, validated the bundled-JS equivalent of the patch on the live install that originally exhibited the bug (log evidence above), and read every line before pushing. The original bug surfaced on my own machine — the agent's job was to localize the throw site, design the minimum-viable fix consistent with existing patterns (mirroring the codex-implicit fallback), and write the regression tests.\n",
+        "branch": "fix/compact-cli-runtime-harness-fallback",
+        "head_sha": "af9281a3db33525bae066440893437f400b9bbaa",
+        "author": "orihakimi",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/harness/selection.test.ts",
+            "additions": 39,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/harness/selection.ts",
+            "additions": 25,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84966",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84966.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 15,
+          "counts": {
+            "SUCCESS": 6,
+            "SKIPPED": 9
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 551,
+    "total_ms": 2405,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 308
+        "ms": 614
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 1444
       },
       {
         "name": "classify_commands",
@@ -48,7 +134,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 231
+        "ms": 324
       },
       {
         "name": "append_ledger",
