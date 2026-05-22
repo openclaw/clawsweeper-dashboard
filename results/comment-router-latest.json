@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-22T21:41:00.832Z",
+  "generated_at": "2026-05-22T21:42:20.624Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-22T18:40:58.298Z",
+  "since": "2026-05-22T18:42:19.976Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     85163
   ],
   "comment_ids": [
     4522874127
   ],
-  "status_comment_id": 4522874352,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
+  "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,10 +44,10 @@
       "author_association": "MEMBER",
       "comment_created_at": "2026-05-22T21:39:50Z",
       "comment_updated_at": "2026-05-22T21:39:50Z",
-      "status_comment_id": 4522874352,
+      "status_comment_id": null,
       "trigger": "mention",
-      "command": "automerge",
-      "intent": "automerge",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "trusted_bot": false,
@@ -57,230 +57,36 @@
       "review_summary": null,
       "review_followup": null,
       "freeform_prompt": null,
-      "expected_head_sha": "b9e59600850f496942fec07870d4a011f3dff407",
+      "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-22T21:41:01.681Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 85163
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-22T21:41:03.221Z",
-          "response_comment_id": "4522874352",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "write",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(auth): auto-migrate keychain-only legacy Codex OAuth profiles on first interactive CLI run",
-        "body": "## Summary\n\nCloses the remaining bucket from #85083: macOS users whose legacy `oauthRef` sidecar seed lives only in the Keychain still had to know to run `openclaw doctor --fix` after upgrade, because the embedded-runtime self-heal that landed in #85074 intentionally runs with `allowKeychainPrompt: false`.\n\nThe fix adds a tiny pre-command trigger in `runCli` (`src/cli/auto-migrate-legacy-oauth-sidecar.ts`) that, on darwin + TTY only, reuses the existing `maybeRepairLegacyOAuthSidecarProfiles` doctor flow when a sidecar dir is present. Fast bail-outs make the cost a single `readdirSync` for users without legacy sidecars. Declining writes a 24h cool-off marker in the state dir (`OPENCLAW_STATE_DIR/legacy-oauth-sidecar-migration-declined`) so we never pester the user every command. `OPENCLAW_AUTO_MIGRATE_LEGACY_OAUTH_SIDECAR=0` is an explicit opt-out for power users.\n\nHeadless paths (cron, systemd, Telegram polling, embedded sub-agent dispatch) still skip the prompt — but the legacy sidecar loader now emits a one-shot `log.warn` that names `openclaw doctor --fix` and macOS Keychain, instead of letting the credential silently fall through to a downstream `No API key found for provider \"openai-codex\"`.\n\nAlso drops the user-confusing `sidecar-backed` phrasing from the doctor prompt/notes/changes; existing internal identifier names are left intact.\n\n## Approach\n\nApproach **B** from the issue (auto-trigger doctor migration on first interactive `openclaw <anything>` invocation). Architecturally cleaner than threading TTY-awareness into the embedded runtime: the trigger reuses doctor's existing migrate function as-is, and \"when is it safe to prompt for Keychain access?\" stays one decision, one place.\n\nSkip rules in order: `process.platform !== \"darwin\"` → `!isInteractiveTty` → `CI=true || OPENCLAW_NON_INTERACTIVE=1 || OPENCLAW_AUTO_MIGRATE_LEGACY_OAUTH_SIDECAR=0` → `OPENCLAW_AUTH_STORE_READONLY=1` → `--help/--version` → primary is `doctor`/`update`/`help`/`completion`/`version` → sidecar dir empty → fresh decline marker.\n\n## Headless one-shot warning\n\nAdded in `legacy-oauth-sidecar.ts`. Fires when `loadLegacyOAuthSidecarMaterial` returns null on darwin with `allowKeychainPrompt: false` (i.e., env/file seeds were tried and Keychain was blocked). Rate-limited to one warn per process so embedded turns log it once per gateway lifetime, not per attempt. Guarded by the same VITEST env signals as the keychain read so unrelated test runs don't surface it.\n\n## Regression tests\n\n- `src/cli/auto-migrate-legacy-oauth-sidecar.test.ts` — table-driven preflight skip checks for each rule, plus end-to-end migrate / decline / cool-off using `createOpenClawTestState`.\n- `src/agents/auth-profiles/legacy-oauth-sidecar.test.ts` — exercises the new headless warn path: emit once when blocked on darwin with no env/file seeds; never emit on non-darwin.\n\n## Verification\n\n- `node scripts/run-vitest.mjs src/cli/auto-migrate-legacy-oauth-sidecar.test.ts src/agents/auth-profiles/legacy-oauth-sidecar.test.ts src/commands/doctor-auth-oauth-sidecar.test.ts src/commands/doctor/repair-sequencing.test.ts src/agents/auth-profiles/persisted-boundary.test.ts src/commands/agents.add.test.ts src/commands/doctor/shared/stale-oauth-profile-shadows.test.ts` — 61/61 green.\n- `node scripts/run-oxlint.mjs` clean on all touched files; `oxfmt --check` clean.\n- Wider `src/agents/auth-profiles` shard has the same 5 file / 26 test pre-existing flakes vs `origin/main` (`--isolate=false` cross-file mock leakage in unrelated OAuth tests). My new tests do not contribute to those failures; if anything, isolating mine reduces the count.\n\n## Scope notes\n\n- Did not touch `agents.add.test.ts` / `stale-oauth-profile-shadows.test.ts` test descriptions that still contain `sidecar-backed`; those are dev-facing and reference implementation, not UI copy.\n- Did not externalize `OPENCLAW_AUTO_MIGRATE_LEGACY_OAUTH_SIDECAR` to docs anywhere except `docs/gateway/doctor.md` accordion 5 since it is an escape hatch, not a normal-user knob.\n- No changes to `maybeRepairLegacyOAuthSidecarProfiles` itself beyond the wording rename — the migration semantics are intentionally identical between the doctor-driven and CLI-startup-driven paths.\n\n## Out of scope\n\n- Removing the legacy sidecar code paths entirely. Tracked separately and should wait for the long tail to migrate.\n- Changes to `openclaw doctor --fix` behavior itself; the migration path it runs is already correct.\n\n## Related\n\n- Closes #85083\n- Companion to #85074 (file/env-seed bucket) and #85028 (fail-fast on missing refresh token)\n- Original surface: #84893 / #84752 / #83312",
-        "branch": "codex-oauth-keychain-migration",
-        "head_sha": "ae5b363e0d9c8b430a2df9675bd60c2ad592b900",
-        "author": "romneyda",
-        "labels": [
-          "docs",
-          "gateway",
-          "cli",
-          "commands",
-          "agents",
-          "maintainer",
-          "size: L",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/gateway/doctor.md",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/auth-profiles/legacy-oauth-sidecar.test.ts",
-            "additions": 144,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/auth-profiles/legacy-oauth-sidecar.ts",
-            "additions": 30,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/auto-migrate-legacy-oauth-sidecar.test.ts",
-            "additions": 387,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/cli/auto-migrate-legacy-oauth-sidecar.ts",
-            "additions": 140,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/cli/run-main.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor-auth-oauth-sidecar.test.ts",
-            "additions": 4,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor-auth-oauth-sidecar.ts",
-            "additions": 16,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor/repair-sequencing.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85163",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85163.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 101,
-          "counts": {
-            "SUCCESS": 46,
-            "IN_PROGRESS": 35,
-            "SKIPPED": 19,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (core-auth-secrets):IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-runtime-infra-state:IN_PROGRESS",
-            "checks-node-core-runtime-infra-process:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS",
-            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "checks-windows-node-test:IN_PROGRESS",
-            "macos-node:IN_PROGRESS",
-            "macos-swift:IN_PROGRESS",
-            "android-test-third-party:IN_PROGRESS",
-            "android-build-play:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (core-auth-secrets):IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-runtime-infra-state:IN_PROGRESS",
-            "checks-node-core-runtime-infra-process:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS",
-            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "checks-windows-node-test:IN_PROGRESS",
-            "macos-node:IN_PROGRESS",
-            "macos-swift:IN_PROGRESS",
-            "android-test-third-party:IN_PROGRESS",
-            "android-build-play:IN_PROGRESS"
-          ],
-          "terminalBlockers": []
-        }
-      }
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5521,
+    "total_ms": 2128,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 584
+        "ms": 631
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1932
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 2972
+        "ms": 1480
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
