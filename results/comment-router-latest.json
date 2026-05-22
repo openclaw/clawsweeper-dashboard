@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-22T02:52:24.146Z",
+  "generated_at": "2026-05-22T02:53:51.612Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-21T23:52:19.826Z",
+  "since": "2026-05-21T23:53:48.972Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -13,6 +13,9 @@
   ],
   "comment_ids": [
     4469539303
+  ],
+  "comment_ids": [
+    4514130533
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -64,11 +67,11 @@
       "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix(install): validate downloaded scripts before execution",
-        "body": "## Problem\n\n`run_remote_bash` in `scripts/install.sh` (line 69) downloads a script via `download_file` and executes it with `/bin/bash \"$tmp\"` without any validation. While HTTPS/TLS1.2 protects the transport, truncated downloads, HTML error pages (e.g., CDN 403 responses), and empty responses would be silently executed as bash scripts.\n\nThe only call site downloads the Homebrew installer from `raw.githubusercontent.com`. Contrast with `bootstrap_gum_temp` (lines 187-197) which verifies downloaded content with SHA256 checksums.\n\n## Fix\n\nAdd structural validation before execution:\n1. Reject empty files (`[[ ! -s \"$tmp\" ]]`)\n2. Reject files that don't start with a shebang (`#!`)\n3. Sanitize the first-line diagnostic before logging: strip control characters (bytes 0x00-0x1F and 0x7F) via `LC_ALL=C tr -d '\\000-\\037\\177'` so untrusted downloaded content cannot inject terminal escape sequences through `ui_error`'s `echo -e` path.\n\nA full SHA256 checksum pin is impractical because the Homebrew installer updates frequently and a pinned hash would break the installer on every Homebrew release.\n\n**Sanitization detail:** The `ui_error` function uses `echo -e` in the non-gum fallback path, which interprets backslash sequences (`\\033[...` ANSI escapes, `\\n` newlines, etc.). A malicious server returning crafted error content could manipulate terminal output during the install failure message. The `tr -d` sanitization strips all control bytes before the untrusted content reaches `echo -e`, rendering any terminal-injection payload inert. Verified by testing with `\\033[31mHACKED\\033[0m` payload: the ESC byte is stripped, output shows harmless `[31mHACKED[0m`.\n\n## Real behavior proof\n\nBehavior addressed: `run_remote_bash()` executed downloaded content with `/bin/bash` unconditionally. Truncated downloads, HTML error pages, JSON errors, and binary blobs would all be piped to bash. Additionally, the first-line diagnostic in the rejection message passed untrusted content through `ui_error`'s `echo -e` path, which interprets backslash escape sequences (terminal injection).\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2, bash 5.x). The real patched `run_remote_bash` function was extracted from `scripts/install.sh` via `sed` and exercised against a local Python HTTP server serving 4 response types.\n\nExact steps or command run after this patch:\n```bash\n# 1. Start a local HTTP server serving test responses\npython3 -c '<HTTP server serving /html-error, /empty, /valid-script, /escape-attack>'\n\n# 2. Extract the REAL run_remote_bash from the patched install.sh and call it\neval \"$(sed -n '/^run_remote_bash()/,/^}/p' scripts/install.sh)\"\nrun_remote_bash \"http://127.0.0.1:19877/html-error\"\nrun_remote_bash \"http://127.0.0.1:19877/empty\"\nrun_remote_bash \"http://127.0.0.1:19877/valid-script\"\nrun_remote_bash \"http://127.0.0.1:19877/escape-attack\"\n```\n\nEvidence after fix: terminal output copied below.\n\n### Live proof: real `run_remote_bash` against HTTP server\n\nThe actual `run_remote_bash` function from the patched `install.sh` was extracted via `sed -n '/^run_remote_bash()/,/^}/p'` and called against a local Python HTTP server. This exercises the real patched code path, not a test harness copy.\n\n```console\n=== REAL run_remote_bash from patched install.sh ===\n\n--- Test 1: HTML error page ---\n✗ Downloaded file does not look like a shell script (no shebang): http://127.0.0.1:19877/html-error\n✗ First line: <html><body>404 Not Found</body></html>\nExit code: 1\n\n--- Test 2: Empty response ---\n✗ Downloaded script is empty: http://127.0.0.1:19877/empty\nExit code: 1\n\n--- Test 3: Valid #!/bin/bash script ---\nhello-from-valid-script\nExit code: 0\n\n--- Test 4: Terminal escape attack ---\n✗ Downloaded file does not look like a shell script (no shebang): http://127.0.0.1:19877/escape-attack\n✗ First line: \\033[31mHACKED\\033[0m terminal injection\nExit code: 1\n```\n\n**Test 1 (HTML):** Server returns `<html><body>404 Not Found</body></html>`. Rejected because no `#!` shebang. First line shown in diagnostic.\n\n**Test 2 (empty):** Server returns empty body. Rejected by the `[[ ! -s \"$tmp\" ]]` check.\n\n**Test 3 (valid script):** Server returns `#!/bin/bash\\necho hello-from-valid-script`. Accepted, executed by `/bin/bash`, printed `hello-from-valid-script`.\n\n**Test 4 (escape attack):** Server returns literal text `\\033[31mHACKED\\033[0m terminal injection` (ASCII backslash-zero-three-three, NOT actual ESC bytes). Rejected (no shebang). The first-line diagnostic shows `\\033[31mHACKED\\033[0m` as **literal text**, NOT as red-colored terminal output. Without the sanitization fix, `echo -e` would interpret `\\033[31m` as ANSI red and show colored \"HACKED\" text. The double sanitization (control byte stripping via `tr -d` + backslash escaping via `${safe_line//\\\\/\\\\\\\\}`) prevents both attack vectors.\n\n### Sanitization detail\n\nTwo layers protect the first-line diagnostic from terminal injection:\n\n1. **Control byte stripping** (`LC_ALL=C tr -d '\\000-\\037\\177'`): Removes actual ESC (0x1B), NUL, and other control bytes from the downloaded content.\n2. **Backslash escaping** (`${safe_line//\\\\/\\\\\\\\}`): Doubles all backslashes so `echo -e` treats `\\033` as literal text instead of interpreting it as an ESC byte.\n\nVerification with a crafted payload:\n```console\n# Literal \\033[31m text (7 ASCII chars, no real ESC byte)\n$ echo -e \"First line: \\033[31mHACKED\\033[0m\"\nFirst line: HACKED    # <-- RED colored text (dangerous!)\n\n$ safe_line='\\033[31mHACKED\\033[0m'; safe_line=\"${safe_line//\\\\/\\\\\\\\}\"\n$ echo -e \"First line: ${safe_line}\"\nFirst line: \\033[31mHACKED\\033[0m    # <-- plain text (safe!)\n```\n\n### Supplemental: validation harness (10/10 pass)\n\n```console\n$ bash scripts/test-install-validation.sh\n── GREEN: validation rejects bad downloads ──\n  ✓ PASS  empty file  → rejected\n  ✓ PASS  HTML error   → rejected\n  ✓ PASS  JSON error   → rejected\n  ✓ PASS  binary blob  → rejected\n  ✓ PASS  valid script (#!bash)     → accepted\n  ✓ PASS  valid script (#!env bash) → accepted\n\n── RED: no validation lets bad downloads through ──\n  ✓ PASS  empty file  → accepted (DANGEROUS without validation)\n  ✓ PASS  HTML error   → accepted (DANGEROUS without validation)\n  ✓ PASS  JSON error   → accepted (DANGEROUS without validation)\n  ✓ PASS  binary blob  → accepted (DANGEROUS without validation)\n\nResults: 10 passed, 0 failed\n```\n\nObserved result after fix: The real patched `run_remote_bash` function rejects HTML errors, empty responses, and escape-attack payloads while accepting valid `#!/bin/bash` scripts. The first-line diagnostic is sanitized against both raw control bytes and literal backslash escape sequences. All 10 validation harness tests pass.\n\n### Live HTTPS proof: unmodified `download_file` over TLS\n\nProof using the **real unmodified `download_file` function** from `install.sh` (not a test stub). The function uses `curl --proto '=https' --tlsv1.2 --retry 3` -- the identical flags used in production for the Homebrew installer download from `raw.githubusercontent.com`.\n\nThe server is a local Python `ssl.SSLContext` HTTPS server with a self-signed certificate (SAN: `IP:127.0.0.1`). `CURL_CA_BUNDLE` is set to trust the self-signed cert, so curl's TLS verification passes. No `--insecure` flag is used.\n\n```console\n=== REAL download_file + run_remote_bash over HTTPS ===\ndownload_file: curl --proto =https --tlsv1.2 (unmodified from install.sh)\nCURL_CA_BUNDLE=/tmp/test-cert.pem (trust self-signed cert for 127.0.0.1)\n\n--- Test 1: HTTPS HTML error (real download_file) ---\nx Downloaded file does not look like a shell script (no shebang): https://127.0.0.1:19879/html-error\nx First line: <html><body>403 Forbidden</body></html>\nExit code: 1\n\n--- Test 2: HTTPS empty (real download_file) ---\nx Downloaded script is empty: https://127.0.0.1:19879/empty\nExit code: 1\n\n--- Test 3: HTTPS valid script (real download_file) ---\nhello-from-REAL-download-file-HTTPS\nExit code: 0\n```\n\nAll three tests use the **unmodified `download_file` function** extracted via `sed` from `install.sh`. The function calls `curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 1 --retry-connrefused` -- the identical command line used in production. No `--insecure` flag. `CURL_CA_BUNDLE` trusts the self-signed cert so TLS verification passes normally.\n\nWhat was not tested: Live download from `raw.githubusercontent.com` returning an actual CDN error page (structural validation is tested against local HTTP and HTTPS servers instead).\n\n\n",
-        "branch": "fix/install-validate-remote-script",
-        "head_sha": "a5c71d66b8510cff097e900ab9fd931019443b0c",
-        "author": "sebtardif",
+        "title": "fix(slack): keep approvals in app conversation threads",
+        "body": "## Summary\n\n- preserve Slack app-conversation `D...` turn-source targets as concrete `channel:D...` native approval destinations for Slack native approvals (`exec` and `plugin`)\n- require exact Slack thread timestamp matches before treating app-thread `channel:D...` and stored `user:U...` routes as compatible\n- make plugin forwarding fallback suppression target-aware so explicit Slack plugin targets are not hidden by native origin handling\n- clarify Slack docs around native approval-client delivery for exec and plugin approvals\n\n## Context\n\nSlack app DMs/app conversations do not behave like regular Slack channels for threading: the app conversation path does not give us a normal channel-thread target that we can reconstruct later from the user-scoped session route. Before this change, an approval that started in the app DM could be reinterpreted as a stored `user:U...` route or a fallback target, so the native approval prompt could land in a different Slack surface instead of staying with the request.\n\nThis PR treats the live Slack app-conversation `D...` target as the authoritative native approval destination and only considers the stored `user:U...` session route compatible when the exact Slack thread timestamp matches. That keeps approvals attached to the app conversation where the user made the request, while preserving plugin forwarding fallback only for cases that native Slack delivery did not already handle.\n\n## Verification\n\n- `node scripts/run-vitest.mjs extensions/slack/src/approval-native.test.ts extensions/slack/src/approval-handler.runtime.test.ts -- --reporter=verbose`\n- `node scripts/run-vitest.mjs extensions/slack/src/threading-tool-context.test.ts extensions/slack/src/send.blocks.test.ts extensions/slack/src/monitor/provider.allowlist.test.ts extensions/codex/src/app-server/approval-bridge.test.ts extensions/codex/src/app-server/elicitation-bridge.test.ts -- --reporter=verbose`\n- `pnpm format:check docs/channels/slack.md docs/gateway/config-channels.md docs/tools/exec-approvals-advanced.md extensions/slack/src/approval-handler.runtime.ts extensions/slack/src/approval-native-gates.ts extensions/slack/src/approval-native.ts extensions/slack/src/approval-native.test.ts`\n- `pnpm format:docs:check docs/channels/slack.md docs/gateway/config-channels.md docs/tools/exec-approvals-advanced.md`\n- `node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions/slack/src/approval-handler.runtime.ts extensions/slack/src/approval-native-gates.ts extensions/slack/src/approval-native.ts extensions/slack/src/approval-native.test.ts`\n- `git diff --check`\n- `uvx showboat verify /Users/kevinlin/code/openclaw/.mem/main/proofs/demo-20-dev-slack-app-plugin-approval-routing/raw/showboat-summary.md`\n\n## Real behavior proof\n\nBehavior addressed: Slack native approvals that originate from a Slack app conversation now target the originating app-conversation thread instead of falling back to a separate Slack surface. The app-conversation target fix is in the shared Slack native approval origin-resolution path used by both exec and plugin approvals; the forwarding fallback suppression change is plugin-specific because only plugin approvals use `approvals.plugin` forwarding fallback.\n\nReal environment tested: local dev Slack profile with the gateway restarted from `codex/slack-app-conversation-plugin-approval-routing-main`.\n\nExact steps or command run after this patch:\n\n- Called `plugin.approval.request` through the dev gateway with Slack app-conversation source facts (`turnSourceTo = D0AEMJ2SM55`, `turnSourceThreadId = 1779399056.858309`), queried Slack `conversations.replies`, called `plugin.approval.resolve` with `deny`, and queried the same thread again.\n- Restarted the dev gateway with `pnpm openclaw --dev gateway --port 60085 --bind loopback run`, sent `use computer use to open up 1password` in the Slack app DM, clicked `Allow Once` on the native plugin approval card, and observed the completed reply in the same app conversation.\n\nEvidence after fix:\n\n- Slack API found exactly one matching approval message at `1779412291.148939` in thread `1779399056.858309` with Block Kit actions `Allow Once` and `Deny`; after resolution the same message remained in the same thread with no actions block.\n- Slack desktop showed the native approval card and completed response in the originating app DM thread:\n\n![Slack native approval proof](https://ik.imagekit.io/fpjzhqpv1/openclaw/pr-85153/openclaw-pr-85153-slack-dm-approval-proof-20260521_IDLtUpbh6.png)\n\nObserved result after fix: the live native Slack approval runtime posted and resolved the approval in the original Slack app-conversation thread; the desktop path also confirmed the native button flow completed and 1Password was opened/frontmost after approval.\n\nWhat was not tested: a separate live exec-approval request from a Slack app conversation. The app-conversation target resolution is shared for exec and plugin approvals, and the focused regression coverage exercises the shared Slack target/thread matching behavior.\n",
+        "branch": "codex/slack-app-conversation-plugin-approval-routing-main",
+        "head_sha": "8e215ff29de8a0586f3811161d99988b08ebd915",
+        "author": "kevinslin",
         "labels": [
           "scripts",
           "size: M",
@@ -100,14 +103,14 @@
         "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82955.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
           "total": 84,
           "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 67,
-            "SKIPPED": 16
+            "SUCCESS": 69,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
           },
           "blockers": [
             "Real behavior proof:FAILURE"
@@ -123,15 +126,15 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 4639,
+    "total_ms": 2983,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1717
+        "ms": 592
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2588
+        "ms": 2036
       },
       {
         "name": "classify_commands",
@@ -139,11 +142,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 320
+        "ms": 342
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
