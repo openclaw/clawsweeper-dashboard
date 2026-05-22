@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-22T23:01:07.900Z",
+  "generated_at": "2026-05-22T23:01:08.739Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-22T20:01:05.147Z",
+  "since": "2026-05-22T20:01:05.495Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    78303
+    77894
   ],
   "comment_ids": [
-    4385451970
+    4380565578
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,17 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:78303:4385451970:2026-05-22T22:59:51Z:automerge",
-      "comment_id": "4385451970",
-      "comment_version_key": "4385451970:2026-05-22T22:59:51Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/78303#issuecomment-4385451970",
+      "idempotency_key": "comment-router:openclaw/openclaw:77894:4380565578:2026-05-22T22:59:34Z:automerge",
+      "comment_id": "4380565578",
+      "comment_version_key": "4380565578:2026-05-22T22:59:34Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/77894#issuecomment-4380565578",
       "repo": "openclaw/openclaw",
-      "issue_number": 78303,
+      "issue_number": 77894,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-06T05:46:46Z",
-      "comment_updated_at": "2026-05-22T22:59:51Z",
+      "comment_created_at": "2026-05-05T15:09:41Z",
+      "comment_updated_at": "2026-05-22T22:59:34Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "automerge",
@@ -54,8 +54,8 @@
       "trusted_bot_author": null,
       "automation_source": null,
       "repair_reason": null,
-      "review_summary": "This PR adds a bundle-MCP consent envelope that routes opted-in MCP tool calls through plugin approvals, adds `mcp.approvals` config/docs, plumbs agent/session routing, updates `/approve` handling, and covers the flow with focused tests.\n\nReproducibility: yes. Current main is source-reproducible because bundle-MCP tool results are returned directly to the agent, and the PR discussion includes live baseline proof of the consent `action_id` reaching chat; this is feature/security hardening rather than a documented bug fix.",
-      "review_followup": "A narrow automated repair can fix the remaining attribution bug; maintainer review is still needed for the default-on compatibility and security-boundary decision before landing.",
+      "review_summary": "This PR changes memory-core phase-signal reads to rethrow operational read failures, adds stale short-term temp cleanup/reporting in repair paths, syncs the SDK facade result type, and adds tests plus a changelog entry.\n\nReproducibility: yes. source inspection gives a high-confidence reproduction path: current main catches every phase-signal read error and returns an empty store, and the PR body supplies real filesystem proof for the after-fix path. I did not execute tests because this was a read-only review.",
+      "review_followup": "A narrow PR-branch repair can address the audit reachability bug and lint failure without changing the main storage fix direction.",
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
@@ -64,25 +64,22 @@
       "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "feat(mcp): channel-mediated approval for MCP tool calls (consent envelope)",
-        "body": "Closes #78308\n\n## Summary\n\nToday, when a bundle-MCP tool returns to the agent, OpenClaw passes the result straight through to the model — there's no approval gate analogous to the one [`exec-approvals`](../tools/exec-approvals.md) provides for shell commands. For act-tier MCP tools (send email, create vault entry, set HA state, etc.), the only thing standing between the user and the action is *the model deciding to call it*.\n\nThis PR adds a small, additive contract — the **MCP consent envelope** — that lets MCP servers opt into the existing `/approve <id> allow-once|allow-always|deny` pipeline that already backs shell-exec approvals. **Servers that don't opt in are unaffected.**\n\n## The contract\n\nWhen a server wants user approval for a call, it returns:\n\n```json\n{\n  \"ok\": false,\n  \"requires_confirmation\": true,\n  \"action_id\": \"<server-side single-use token>\",\n  \"summary\": \"<one-line description of the action>\",\n  \"expires_in_seconds\": 60\n}\n```\n\n…in either `structuredContent` or as JSON inside `content[0].text`. OpenClaw recognises the envelope, suppresses the result, and:\n\n1. Issues a `plugin.approval.request` to the local gateway (reuses everything: `channel-approval-auth`, ID-prefix routing, the magic-word reply parser).\n2. Blocks until the user replies on the trusted channel.\n3. On `allow-once` / `allow-always`: re-calls the tool with `confirmation_token = action_id` set on the input. Returns that second result to the agent.\n4. On `deny` / expiry / error: returns a synthetic `{ok:false, approved:false, reason}` result. The model never sees `action_id`.\n\n## Why the trust boundary actually moves\n\nThe model never sees `action_id` and **`confirmation_token` is stripped from any model-supplied input** on the first call. Even if a malicious or careless agent fabricates a token, the MCP server's redemption check rejects it (the server is responsible for one-shot/TTL enforcement of `action_id`).\n\nThis is the same pattern OpenClaw already enforces for shell exec via `exec-approvals` — *agent asks, user authorises, runtime executes*. The PR just generalises that pattern to MCP tools that opt into the contract.\n\n## What changed\n\n| File | Change |\n|---|---|\n| `src/agents/pi-bundle-mcp-consent.ts` | **New.** Envelope detection, the default approval requester (calls `plugin.approval.request` + `waitDecision`), `confirmation_token` scrubber, denied-result builder, **`sanitiseToolEmittedApprovalText`** (review-comment defence — neutralises `/approve` in MCP-emitted text). ~270 lines. |\n| `src/agents/pi-bundle-mcp-materialize.ts` | Wraps every tool's `execute()` in a new `callMcpToolWithConsent` orchestrator. Plumbs `requestApproval`, `consentEnabled`, **`agentId`, and `sessionKey`** through `materializeBundleMcpToolsForRun` and `createBundleMcpToolRuntime`. |\n| `src/agents/pi-embedded-runner/run/attempt.ts`, `compact.ts` | Pass the agent harness's existing `agentId` + `sessionKey` into the materialize layer so the gateway forwarder can resolve the user's actual delivery channel (WhatsApp / Telegram / Slack / web UI). |\n| `src/auto-reply/reply/commands-approve.ts` | Accept bare `/approve allow-once` (no id) when there's exactly one pending approval — typing a uuid on a phone is unrealistic UX. On ambiguity (>1 pending), refuses with a hint including the explicit form. |\n| `src/infra/plugin-approvals.ts` | Cleaner reply prompt: shows all three decisions (`allow-once \\| allow-always \\| deny`) inline, copy-paste-ready, with the id on its own line for the explicit fallback. |\n| `src/config/types.mcp.ts` | Adds `mcp.approvals.enabled?: boolean` (default true). |\n| `src/agents/pi-bundle-mcp-consent.test.ts` | **New.** 21 unit tests including a live-caught `decision: null` regression and a `agentId/sessionKey` propagation regression. |\n| `docs/tools/mcp-consent-envelope.md` | **New.** Server-author contract, configuration, trust-boundary explanation. |\n| `CHANGELOG.md` | Entry under `Unreleased`. |\n\nNo new approval kind is introduced — the implementation **reuses the existing `\"plugin\"` ApprovalKind**.\n\n## Test plan\n\n- ✅ `pnpm install`\n- ✅ `pnpm lint` — 8234 files, 213 rules, 0 warnings, 0 errors.\n- ✅ Full agents-core suite: **272 files passed (272), 3515 tests passed | 4 skipped**.\n- ✅ `pi-bundle-mcp-consent.test.ts` — 21/21 green.\n- ✅ `commands-approve.test.ts` — 18/18 green (existing tests still pass after the implicit-id parser change).\n\n## Real behavior proof\n\n**Behavior addressed:** Without channel-mediated approval, the model is the trust gate for MCP tool calls that want user approval. Captured live on **vanilla `OpenClaw 2026.4.24`** with HomeBrain's MCP servers: when the agent fired `homebrain-nextcloud__nc-files_share`, the consent envelope (with `action_id`) passed straight to the model, which **leaked the token verbatim into chat**, **offered to self-confirm**, and **hallucinated a second action_id off-by-one** when it lost track of the first. Full screenshot + analysis: [#78308 comment](https://github.com/openclaw/openclaw/issues/78308#issuecomment-4391533882). This PR replaces that prompt-level honour-system with runtime-enforced channel approval.\n\n**Environment tested:** `homebrain@192.168.178.58`. x86_64 Ubuntu 24.04. AMD Radeon RX 9060 XT (16 GB VRAM). llama.cpp + Qwen3.6-35B-A3B (Q5_K_XL). HomeBrain reference MCP servers from [oalterg/HomeBrain](https://github.com/oalterg/HomeBrain). **OpenClaw built directly from this PR branch and installed live** in place of the npm-shipped 2026.4.24 binary for the runtime-side tests.\n\n**Steps run after the patch:**\n\n```bash\n// Local: build + pack the PR branch\npnpm build && npm pack\n// Deploy the .tgz to the target box\nscp openclaw-2026.5.6.tgz homebrain@192.168.178.58:/tmp/\nssh homebrain@192.168.178.58 'echo admin | sudo -S bash -c \"\n  cd /usr/lib/node_modules\n  rm -rf openclaw && mkdir openclaw && cd openclaw\n  tar xzf /tmp/openclaw-2026.5.6.tgz --strip-components=1\n  npm install --omit=dev --no-audit --no-fund --silent\"'\n// Set the missing approvals.plugin config (the forwarder needs it to deliver)\nssh homebrain@192.168.178.58 'sudo -u homebrain jq \".approvals = {plugin:{enabled:true,mode:\\\"session\\\"}}\" \\\n  ~/.openclaw/openclaw.json > /tmp/c && sudo -u homebrain cp /tmp/c ~/.openclaw/openclaw.json'\nssh homebrain@192.168.178.58 'sudo -u homebrain systemctl --user restart openclaw-gateway'\n\n// User sends on WhatsApp:\n//   \"Create a public share link to /uploads in Nextcloud, expires in 7 days.\"\n// OpenClaw routes through the agent harness, which fires nc.files_share.\n// My code intercepts the consent envelope, calls plugin.approval.request.\n// The forwarder delivers the prompt to the user's WhatsApp + web UI.\n// User taps Allow once on the web UI (or replies /approve allow-once on WhatsApp).\n// Runtime re-calls the tool with confirmation_token. Real share URL returns.\n```\n\n**Evidence after fix:**\n\nThe web UI's native plugin-approval modal renders my PR's `plugin.approval.request` exactly right — title `MCP tool approval`, description `homebrain-nextcloud.nc.files_share — Nextcloud: create public share link for /uploads (expires in 7 days)`, severity `warning`, plugin `mcp:homebrain-nextcloud`, three buttons `Allow once / Always allow / Deny`, expiry countdown. The user pressed `Allow once`. Screenshot captured (not committed; happy to attach for maintainer review). Same approval was offered on the user's WhatsApp simultaneously via the routing-fix commit.\n\n```text\n$ openclaw --version  # the deployed PR build\nOpenClaw 2026.5.6 (a2cd999)\n\n// Gateway log (verbatim) at the moment the user tapped Allow once:\n2026-05-06T20:01:22 ⇄ res ✓ plugin.approval.waitDecision 59412ms\n                    conn=6f5914ca…dfe2 id=0c6f887a…7e6d\n\n// /var/log/homebrain/mcp-nextcloud-audit.log — the result of the consent loop:\n2026-05-06T20:01:22 {\"server\":\"nextcloud\",\"action\":\"share\",\n                     \"path\":\"/uploads\",\"expire_days\":7}\n\n// Nextcloud confirms the actual share resource exists on disk:\n$ curl -u admin:<app-pass> -H 'OCS-APIRequest: true' \\\n  http://127.0.0.1:8080/ocs/v2.php/apps/files_sharing/api/v1/shares\n{\"id\":\"2\",\"share_type\":3,\"path\":\"/uploads\",\"stime\":1778097682,\n \"url\":\"http://127.0.0.1:8080/s/iiaRr54CKLnZ7sC\", ...}\n```\n\n**Observed result after the fix:**\n\n- **Vanilla baseline (without PR):** the model leaks `action_id` to chat, offers to self-confirm, hallucinates a second action_id off-by-one. Trust boundary is the model's behavior — soft gate. [Screenshot + analysis in #78308 comment](https://github.com/openclaw/openclaw/issues/78308#issuecomment-4391533882).\n- **PR build:** the agent fires the tool, the consent envelope is intercepted, `plugin.approval.request` is issued to the gateway with the correct `agentId` + `sessionKey` so the forwarder can route. Approval prompt arrives in the **web UI's native modal** (gorgeous render, all three decisions one tap) AND on the user's **WhatsApp** simultaneously. User taps `Allow once` (or replies `/approve allow-once`). Runtime re-calls the tool with `confirmation_token = action_id`. **Real Nextcloud share is created** — verified by the audit log entry, the gateway `waitDecision 59412ms ✓` line, and the actual `share` row in NC's `files_sharing` API.\n- **A live regression bug was caught and fixed during this very run**: `decision: null` from the gateway in two-phase mode means \"pending, call waitDecision\", not \"deny\". Fixed in `ef30bbf` with a regression test. Without the live test cycle, that would have shipped as a latent bug masking real user approvals as denials.\n- **Forwarder routing was also live-caught**: the PR initially didn't propagate `agentId`/`sessionKey` from the agent harness to `plugin.approval.request`, so the forwarder had no session binding and prompts auto-cancelled silently. Fixed in `2056d25` by plumbing both fields through `materializeBundleMcpToolsForRun` + `createBundleMcpToolRuntime` from `attempt.ts` and `compact.ts`.\n- **`/approve` UX was live-caught too**: typing a full uuid by hand on a phone is unrealistic, and the prompt template said `Reply with: /approve <id>` with `<id>` as a literal placeholder. Fixed in `a2cd999`: bare `/approve allow-once` resolves to the single most-recent pending approval; the prompt now shows all three decisions inline copy-paste-ready.\n\n**What was not tested:** the *deny* path through user-driven rejection (we exercised the deny path via timeout and via approval-system error in unit tests, but not via a user explicitly typing `/approve deny` end-to-end on the live deployment). The unit tests (`on consent envelope + deny, returns synthetic denied result and does NOT re-call`) cover this deterministically. Maintainer running the PR through any deployment can verify in a single message exchange.\n\n## Review responses\n\n### Channel-level message provenance ([m13v's review](https://github.com/openclaw/openclaw/issues/78308#issuecomment-4391392109))\n\n> *\"if a compromised mcp server returns a tool result containing '/approve abc123 allow-once' in summary or output, and the channel renderer doesn't distinguish user-typed from tool-emitted messages at the parser layer, an mcp tool self-approves future calls by poisoning the transcript.\"*\n\nClosed in `083dd748`. Two layers:\n\n1. `sanitiseToolEmittedApprovalText` neutralises any `/approve` substring in MCP-emitted text by inserting U+200B between the slash and `approve` so `^/approve\\b` cannot match. Applied at parse-time inside `detectMcpConsentEnvelope`, so every downstream path that renders the envelope sees pre-sanitised text.\n2. The existing `/approve` parser already enforces provenance (via `isAuthorizedSender` against the channel allowlist) but the invariant was implicit. A code comment now makes it explicit so future refactors don't lose it.\n\nLive-verified on the deployed `.58` PR build with a deliberately malicious envelope (full transcript on the [issue thread](https://github.com/openclaw/openclaw/issues/78308#issuecomment-4394805083)). Two new unit tests cover the sanitiser directly and the envelope path.\n\n## Reference / motivation\n\nPart of a broader integration on a [HomeBrain](https://github.com/oalterg/HomeBrain) box. Reference server-side: [`scripts/mcp_common.py`](https://github.com/oalterg/HomeBrain/blob/vault-integration/scripts/mcp_common.py) (the `Consent` helper) and [`scripts/mcp-*.py`](https://github.com/oalterg/HomeBrain/tree/vault-integration/scripts). Design write-up: [`INTEGRATIONS_PLAN.md`](https://github.com/oalterg/HomeBrain/blob/vault-integration/INTEGRATIONS_PLAN.md).\n\n## Open questions for review\n\n1. **Should I add an `mcp.approvals.allowlist: [{server, tool}]`?** Left out for v1 — gating is already opt-in *per-tool* by the MCP server (only act-tier tools return the envelope), and `allow-always` already short-circuits future calls. Happy to add an allowlist as a follow-up if maintainers prefer.\n2. **The decision callback returns the existing `ExecApprovalDecision` union** (`allow-once` | `allow-always` | `deny`) — keeps the reply-parser + UI rendering identical.\n3. **Approval kind**: I considered adding `\"mcp-tool\"` as a third `ChannelApprovalKind`. Decided against it (~10 files for a presentation distinction) — the existing plugin renderer already shows `pluginId: mcp:<server>`, `toolName: <tool>`, `description: <summary>`. Open to redoing as a separate kind if maintainers prefer.\n4. **Should `approvals.plugin.enabled = true, mode = \"session\"` be the default?** Currently the gateway's plugin-approval forwarder is fully gated on this config block being explicitly set. Without it set, requests are accepted but never delivered — the boundary becomes a permanent deny gate (caught live during this PR's testing). Sensible default seems to be on-with-session-routing, especially now that the contract is broadly useful for MCP tool calls. Happy to add that as a separate PR if maintainers agree.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n\n\n",
-        "branch": "feat/mcp-tool-call-approvals",
-        "head_sha": "1b333d561a1a9bf8dc0969f44e66d228f7470fff",
-        "author": "oalterg",
+        "title": "fix(memory): preserve phase signal store on read errors",
+        "body": "## Summary\n\n- Problem: `readPhaseSignalStore` treated non-ENOENT read failures as an empty store, so the next dreaming phase write could erase accumulated phase-signal history.\n- Why it matters: Light/REM reinforcement counts are durable ranking signals in `memory/.dreams/phase-signals.json`; losing them silently weakens deep promotion behavior after transient filesystem failures.\n- What changed: non-ENOENT/non-SyntaxError phase-signal read errors now throw, atomic recall/phase-signal writes clean up their current temp file if rename fails, and repair removes stale recall/phase-signal temp files older than one hour.\n- What did NOT change (scope boundary): missing phase-signal files and corrupt phase-signal JSON still recover to an empty store.\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor required for the fix\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all touched areas)\n\n- [ ] Gateway / orchestration\n- [ ] Skills / tool execution\n- [ ] Auth / tokens\n- [x] Memory / storage\n- [ ] Integrations\n- [ ] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- Closes #77881\n- Closes #77888\n- [x] This PR fixes a bug or regression\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: phase-signal store I/O failures no longer get converted into an empty store, and stale short-term recall/phase-signal temp files are cleaned during repair.\n- Real environment tested: local macOS OpenClaw checkout on 2026-05-05, Node via `pnpm exec tsx`, real filesystem-backed temporary memory workspace with `memory/.dreams` stores.\n- Exact steps or command run after this patch: `pnpm exec tsx` ran production memory-core APIs: `recordShortTermRecalls -> recordDreamingPhaseSignals(read error) -> repairShortTermPromotionArtifacts`.\n- Evidence after fix: terminal output from the real OpenClaw memory storage path:\n\n```text\nREAL_OPENCLAW_MEMORY_PROOF {\"workspaceBasename\":\"openclaw-real-memory-proof-x2rsNY\",\"command\":\"recordShortTermRecalls -> recordDreamingPhaseSignals(read error) -> repairShortTermPromotionArtifacts\",\"readErrorCode\":\"EACCES\",\"phaseStorePreservedAfterReadError\":true,\"repairChanged\":true,\"removedTempFiles\":2,\"staleRecallTmpRemoved\":true,\"stalePhaseTmpRemoved\":true,\"finalPhaseSignalKeys\":[\"memory:memory/2026-05-05.md:3:3\"]}\n```\n\n- Observed result after fix: the EACCES read failure surfaced without overwriting `phase-signals.json`; repair removed both stale short-term tmp files and left the live phase-signal key intact.\n- What was not tested: a long-running Gateway scheduled dreaming sweep and external model/provider calls; this proof exercised the same production storage helpers used by dreaming.\n- Before evidence: source inspection matched the issues: non-ENOENT phase-signal read errors previously fell back to `emptyPhaseSignalStore(nowIso)`, and repair had no stale temp-file cleanup path.\n\n## Root Cause (if applicable)\n\n- Root cause: `readPhaseSignalStore` used the same empty-store fallback for operational read failures as it used for first-run missing files and corrupt JSON recovery.\n- Missing detection / guardrail: there was no regression test for non-ENOENT phase-signal read failures, and repair only normalized the main recall store plus stale locks.\n- Contributing context (if known): recall and phase-signal stores used duplicate write-then-rename code without a shared cleanup path for failed renames.\n\n## Regression Test Plan (if applicable)\n\n- Coverage level that should have caught this:\n  - [x] Unit test\n  - [x] Seam / integration test\n  - [ ] End-to-end test\n  - [ ] Existing coverage already sufficient\n- Target test or file: `extensions/memory-core/src/short-term-promotion.test.ts`\n- Scenario the test should lock in: non-ENOENT phase-signal reads reject without overwriting the existing store; repair removes stale short-term store temp files only.\n- Why this is the smallest reliable guardrail: it runs the exported memory-core storage APIs against real temp files without needing a full Gateway dreaming schedule.\n- Existing test that already covers this (if any): none for these failure paths.\n- If no new test is added, why not: N/A\n\n## User-visible / Behavior Changes\n\nDreaming repair can now remove stale short-term recall/phase-signal temp files and reports the count in the repair summary. Operational phase-signal read failures are surfaced to the existing caller error handling instead of silently truncating durable reinforcement state.\n\n## Diagram (if applicable)\n\n```text\nBefore:\nphase-signals read EACCES -> empty store -> write replacement -> old signals lost\nrepair -> ignores stale *.tmp files\n\nAfter:\nphase-signals read EACCES -> throw -> caller failure handling -> old signals preserved\nrepair -> remove stale recall/phase-signal *.tmp files -> report count\n```\n\n## Security Impact (required)\n\n- New permissions/capabilities? (`Yes/No`) No\n- Secrets/tokens handling changed? (`Yes/No`) No\n- New/changed network calls? (`Yes/No`) No\n- Command/tool execution surface changed? (`Yes/No`) No\n- Data access scope changed? (`Yes/No`) No\n- If any `Yes`, explain risk + mitigation: N/A\n\n## Repro + Verification\n\n### Environment\n\n- OS: macOS local checkout\n- Runtime/container: Node 22+/pnpm repo scripts\n- Model/provider: N/A\n- Integration/channel (if any): memory-core bundled plugin\n- Relevant config (redacted): N/A\n\n### Steps\n\n1. Seed short-term recall and phase-signal stores in a temporary workspace.\n2. Mock the phase-signal store read path to throw an EACCES-style error.\n3. Call `recordDreamingPhaseSignals` and verify the original phase-signal file contents remain unchanged.\n4. Seed stale and fresh `.tmp` files in `memory/.dreams/`, run `repairShortTermPromotionArtifacts`, and verify only stale recall/phase-signal temp files are removed.\n\n### Expected\n\n- Non-ENOENT phase-signal read errors are not treated as empty stores.\n- Repair removes stale short-term store temp files and preserves fresh/unrelated temp files.\n\n### Actual\n\n- Matches expected after this patch.\n\n## Evidence\n\n- [x] Failing test/log before + passing after\n- [ ] Trace/log snippets\n- [ ] Screenshot/recording\n- [ ] Perf numbers (if relevant)\n\nVerification run:\n\n```text\npnpm test extensions/memory-core/src/short-term-promotion.test.ts extensions/memory-core/src/cli.test.ts\nTest Files  2 passed (2)\nTests       97 passed (97)\n```\n\nAdditional checks:\n\n```text\npnpm exec oxfmt --check --threads=1 CHANGELOG.md extensions/memory-core/src/short-term-promotion.ts extensions/memory-core/src/short-term-promotion.test.ts extensions/memory-core/src/cli.runtime.ts\nAll matched files use the correct format.\n\ngit diff --check\npassed\n```\n\nKnown unrelated local typecheck blocker:\n\n```text\npnpm tsgo:extensions\npnpm tsgo:extensions:test\n```\n\nBoth currently stop on existing Feishu callback type errors and `web-tree-sitter` type export errors outside this PR's touched files.\n\n## Human Verification (required)\n\n- Verified scenarios: phase-signal EACCES-style read failure preserves existing store bytes; stale recall/phase-signal temp files are removed by repair; fresh and unrelated temp files are preserved; CLI repair tests still pass.\n- Edge cases checked: ENOENT remains recoverable by existing behavior; corrupt JSON remains recoverable by existing behavior; unrelated `.tmp` files are ignored.\n- What you did **not** verify: a live scheduled Gateway dreaming sweep.\n\n## Review Conversations\n\n- [x] I replied to or resolved every bot review conversation I addressed in this PR.\n- [x] I left unresolved only the conversations that still need reviewer or maintainer judgment.\n\n## Compatibility / Migration\n\n- Backward compatible? (`Yes/No`) Yes\n- Config/env changes? (`Yes/No`) No\n- Migration needed? (`Yes/No`) No\n- If yes, exact upgrade steps: N/A\n\n## Risks and Mitigations\n\n- Risk: surfacing operational phase-signal read errors may mark a dreaming workspace sweep as failed instead of continuing with reduced signals.\n  - Mitigation: that is intentional for non-ENOENT I/O failures; missing files and corrupt JSON still use the previous recovery behavior.\n\n",
+        "branch": "codex/fix-memory-phase-signal-store",
+        "head_sha": "5e70211e180b521c3de4764e80bed257204d9999",
+        "author": "yelog",
         "labels": [
-          "docs",
-          "gateway",
-          "agents",
-          "size: XL",
+          "extensions: memory-core",
+          "commands",
+          "size: M",
           "proof: supplied",
           "proof: sufficient",
           "mantis: telegram-visible-proof",
           "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 security-boundary",
-          "status: 👀 ready for maintainer look",
-          "feature: ✨ showcase"
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
@@ -92,33 +89,51 @@
             "changeType": "MODIFIED"
           },
           {
-            "path": "docs/gateway/configuration-reference.md",
-            "additions": 13,
+            "path": "extensions/memory-core/src/cli.runtime.ts",
+            "additions": 3,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "docs/tools/mcp-consent-envelope.md",
-            "additions": 151,
+            "path": "extensions/memory-core/src/dreaming.test.ts",
+            "additions": 41,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/pi-bundle-mcp-consent.test.ts",
-            "additions": 623,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "extensions/memory-core/src/dreaming.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/pi-bundle-mcp-consent.ts",
-            "additions": 345,
+            "path": "extensions/memory-core/src/short-term-promotion.test.ts",
+            "additions": 111,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/pi-bundle-mcp-materialize.ts",
-            "additions": 205,
-            "deletions": 2,
+            "path": "extensions/memory-core/src/short-term-promotion.ts",
+            "additions": 65,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-memory-search.test.ts",
+            "additions": 40,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-memory-search.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/memory-core-engine-runtime.ts",
+            "additions": 1,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
@@ -185,25 +200,30 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-78303",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-78303.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-77894",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-77894.md",
         "mode": "autonomous",
         "mergeable": "CONFLICTING",
         "merge_state_status": "DIRTY",
         "review_decision": "",
         "checks": {
-          "total": 102,
+          "total": 101,
           "counts": {
-            "SKIPPED": 26,
-            "SUCCESS": 75,
+            "FAILURE": 3,
+            "SUCCESS": 72,
+            "SKIPPED": 25,
             "NEUTRAL": 1
           },
           "blockers": [
-            "check-docs:FAILURE"
+            "Scan changed paths (precise):FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "check-docs:FAILURE"
+            "Scan changed paths (precise):FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
           ]
         }
       },
@@ -212,15 +232,15 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3058,
+    "total_ms": 3595,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 751
+        "ms": 705
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1991
+        "ms": 2526
       },
       {
         "name": "classify_commands",
@@ -228,7 +248,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 305
+        "ms": 351
       },
       {
         "name": "append_ledger",
