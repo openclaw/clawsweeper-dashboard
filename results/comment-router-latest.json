@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-22T11:27:05.325Z",
+  "generated_at": "2026-05-22T11:27:04.854Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-22T08:27:03.047Z",
+  "since": "2026-05-22T08:27:01.299Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     85190
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4518220032
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 2,
@@ -36,135 +38,55 @@
       "comment_version_key": "4514646726:2026-05-22T11:26:58Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/85190#issuecomment-4514646726",
       "repo": "openclaw/openclaw",
-      "issue_number": 85190,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-22T03:06:37Z",
-      "comment_updated_at": "2026-05-22T11:26:58Z",
+      "issue_number": 85112,
+      "author": "paulmeier",
+      "author_id": 25063092,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-22T11:24:09Z",
+      "comment_updated_at": "2026-05-22T11:24:09Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "This active external PR has no narrow automated repair target; the remaining action is maintainer review, exact-head validation, and accepting the bounded cleanup latency.; Cleared: The diff touches gateway TypeScript, focused tests, and changelog only, with no new dependency, workflow, secret-handling, package, or download/execute surface. (sha=5c4b3b35d90e0a6f5e4b20ea199764376b7875b0)",
-      "review_summary": "The PR adds gateway reset/delete cleanup that finds direct ACP child sessions across combined agent stores, closes their ACP runtimes concurrently, and adds reset/delete regression coverage plus a changelog entry.\n\nReproducibility: yes. source-reproducible: current main closes only the parent ACP runtime during reset/delete, while current session contracts record children through `spawnedBy` and `parentSessionKey`. I did not run the live multi-hour memory-growth scenario.",
-      "review_followup": "This active external PR has no narrow automated repair target; the remaining action is maintainer review, exact-head validation, and accepting the bounded cleanup latency.",
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
       "freeform_prompt": null,
-      "expected_head_sha": "5c4b3b35d90e0a6f5e4b20ea199764376b7875b0",
+      "expected_head_sha": null,
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): close child ACP sessions on parent reset/delete (#68916)",
-        "body": "### Summary\n\n- **Problem**: ACP sessions spawned from a parent session via `sessions_spawn` (e.g. `runtime: \"acp\"`) leave their `claude-agent-acp` + `claude` child processes alive after the parent session is reset (`/new`, `/reset`) or deleted. The gateway session-mutation cleanup in `src/gateway/session-reset-service.ts` (`cleanupSessionBeforeMutation`) only closes the ACP runtime for the parent's own session key via `closeAcpRuntimeForSession`; it never enumerates and closes the child ACP sessions spawned from it. The orphaned pairs accumulate and exhaust memory (~3.5 GB from 11 orphaned pairs within 2 hours on a 16 GB host).\n- **Root Cause**: Child ACP sessions are persisted as their own session-store entries that record their requester's canonical session key. ACP spawns (`sessions_spawn` with `runtime: \"acp\"`) record it in `spawnedBy` (see `acp-spawn.ts` → `sessions.patch({ spawnedBy })`), while subagent spawns use `parentSessionKey`. Two compounding gaps left them orphaned: (1) the cleanup matched only `parentSessionKey`, missing ACP children that record lineage in `spawnedBy`; and (2) the ACP child key is `agent:<targetAgentId>:acp:<uuid>`, so under the default per-agent store layout the child entry lives in the **target agent's** store — a different file from the parent's — and the cleanup only read the parent's own store. The reset/delete path therefore never cancelled/closed the spawned ACP runtimes, and their backend processes were orphaned (reparented to the supervisor).\n- **Fix**: Add a bounded child-cleanup step to `cleanupSessionBeforeMutation`. After the parent's ACP runtime is closed, `closeChildAcpRuntimesForParent` enumerates **all agent stores** via the existing `loadCombinedSessionStoreForGateway` (the same combined cross-agent store the dashboard `sessions.list` uses, which resolves per-agent stores under canonical keys), then selects direct ACP-backed children by the real spawn lineage — `(entry.spawnedBy === parentKey || entry.parentSessionKey === parentKey) && entry.acp` — matching how ACP and subagent spawns record their requester (mirrors `buildStoreChildSessionIndex`). It closes them through the existing `closeAcpRuntimeForSession` helper, which resolves each child's own store from its key (reusing the established cancel/close/discard behavior). Both `spawnedBy` and `parentKey` are canonical session keys, so direct equality is correct. Children are closed **concurrently** via `Promise.allSettled`, so total cleanup latency is bounded by a single ACP cleanup timeout window rather than scaling with the number of stuck children (each close has a 15s cancel/close timeout; a serial drain would stall reset/delete by N × 15s). Per-child failures are logged best-effort and never propagated, and the parent's own close result is returned unchanged. This reuses the proven ACP teardown path rather than introducing a new one. Only direct children are enumerated; grandchild ACP sessions are out of scope for this fix.\n- **What changed**:\n  - `src/gateway/session-reset-service.ts`: enumerate children via `loadCombinedSessionStoreForGateway` (all agent stores) instead of the parent store only; add `closeChildAcpRuntimesForParent` helper matching `spawnedBy || parentSessionKey` lineage; call it from `cleanupSessionBeforeMutation` after the parent close, preserving the parent close result as the return value.\n  - `src/gateway/server.sessions.reset-cleanup.test.ts`: regression tests that `sessions.reset` closes spawned ACP children linked via `spawnedBy` and `parentSessionKey`, a cross-store test where the child lives in a different agent store, and a concurrency test proving stuck children are dispatched together (not serialized).\n  - `src/gateway/server.sessions.delete-lifecycle.test.ts`: a parallel test that `sessions.delete` closes a `spawnedBy`-linked ACP child of the deleted parent.\n  - `CHANGELOG.md`: single-line `### Fixes` entry.\n- **What did NOT change (scope boundary)**:\n  - `closeAcpRuntimeForSession`, `cancelSession`, `closeSession`, and the parent close result/return contract are unchanged — children reuse the identical close path.\n  - No PID-level fallback kill and no global/startup orphan reaping were added; per the issue triage those remain separate follow-ups. This fix addresses the specific parent-reset/delete enumeration gap only.\n  - No new config keys, no change to `sessions_spawn`, ACP runtime backends, or the session-store schema.\n  - Non-ACP child sessions and unrelated sessions are untouched (filtered out by `entry.acp` and the lineage match).\n\n### Reproduction\n\n1. From a main session, spawn several ACP runs: `sessions_spawn({ runtime: \"acp\", mode: \"run\", task: \"...\" })`.\n2. Reset the parent session via `/new` or `/reset` (or delete it).\n3. Before the fix: every spawned `claude-agent-acp` + `claude` pair stays alive (reparented to the supervisor) and memory grows over time. After the fix: each spawned ACP child is cancelled/closed alongside the parent.\n\n### Real behavior proof\n\n- **Behavior addressed**: on parent session reset/delete, spawned child ACP sessions were never enumerated, so their ACP runtimes (and backend processes) were orphaned; only the parent's own ACP runtime was closed.\n- **Real environment tested**: Linux, Node.js 22, real on-disk **per-agent** session stores (`agents/<id>/sessions/sessions.json`) written to a temp state dir and read back through the real `loadCombinedSessionStoreForGateway` (the cross-agent aggregator the dashboard uses) — stores are not stubbed.\n- **Exact steps or command run after this patch**: (A)+(B) wrote a parent ACP session to the `main` agent store and, in a **different** agent store (`codex`), two ACP children linked via `spawnedBy` (the field `sessions_spawn`'s ACP path writes), one subagent-style child linked via `parentSessionKey`, one non-ACP child, and one unrelated ACP session; then compared the old path (read parent store + `parentSessionKey` only) against the fix (combined cross-agent store + `spawnedBy || parentSessionKey`) to count which ACP children the reset/delete path closes; (C) measured close latency by simulating three stuck child closes (200ms each) under a serial `await` loop (old) versus `Promise.allSettled` (fix).\n- **Evidence after fix**: console output from the run:\n  ```\n  (A)+(B) cross-store discovery + lineage (parent=agent:main:main, children in codex store)\n    OLD (parent store + parentSessionKey only): closes 0 child -> 3 ACP children ORPHANED\n    FIX (combined store + spawnedBy|parent)    : closes 3 children -> 0 orphaned\n    matched: agent:codex:acp:c1, agent:codex:acp:c2, agent:codex:sub:c3\n  (C) latency for N=3 stuck children @ 200ms each\n    serial await                   : ~603ms (~N × window)\n    Promise.allSettled (fix)       : ~201ms (~one window)\n  ```\n- **Observed result after fix**: (A)+(B) the old path reads only the parent's store and matches only `parentSessionKey`, so it closes **none** of the three ACP children that live in the `codex` store — all orphaned; the fix enumerates the combined cross-agent store and matches `spawnedBy || parentSessionKey`, closing all three while excluding the non-ACP child and the unrelated ACP session. (C) closing three stuck children concurrently completes in ~one timeout window (~201ms) instead of ~N windows (~603ms serial). Gateway tests independently confirm `sessions.reset` closes a child in a **different agent store**, `sessions.reset`/`sessions.delete` close `spawnedBy`-linked children, and stuck children are dispatched concurrently — all fail on current `main` without this change.\n- **What was not tested**: a live multi-hour gateway run reproducing the full ~3.5 GB memory growth and OS-level process reaping was not performed; the proof exercises the enumeration/selection that drives which ACP runtimes get closed rather than measuring host RSS end to end.\n\n### Risk / Mitigation\n\n- **Risk**: a child cancel/close failure could stall or block the parent mutation, or the enumeration could close the wrong sessions.\n- **Mitigation**: children are closed **concurrently** (`Promise.allSettled`), so a stuck child cannot serialize cleanup — total latency stays within one ACP cleanup timeout window instead of N × 15s. Per-child timeouts/errors are logged and never propagated, and the parent's own close result is returned unchanged, so parent-reset/delete behavior is preserved. Selection is strictly `entry.parentSessionKey === parentKey && entry.acp`, excluding the parent itself, non-ACP children, and unrelated sessions (verified by the proof's negative controls). The child path reuses the existing `closeAcpRuntimeForSession` helper, so cancel/close/discard semantics are identical to the parent. Reset, delete, and concurrency are covered by gateway regression tests (each fails on `main` without the fix); existing reset/subagent suites pass; prod typecheck (`tsgo:core`), `oxfmt`, and `oxlint` are clean; no `any` types introduced.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Gateway\n- [x] ACP subsystem\n- [x] Tests\n\n### Linked Issue/PR\n\nFixes #68916\n",
-        "branch": "fix/acp-reset-cleanup-child-sessions-68916",
-        "head_sha": "5c4b3b35d90e0a6f5e4b20ea199764376b7875b0",
-        "author": "openperf",
-        "labels": [
-          "gateway",
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 availability",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.sessions.delete-lifecycle.test.ts",
-            "additions": 41,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.sessions.reset-cleanup.test.ts",
-            "additions": 229,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-child-sessions.test.ts",
-            "additions": 49,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/session-child-sessions.ts",
-            "additions": 40,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/session-reset-service.ts",
-            "additions": 54,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85190",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85190.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "SUCCESS": 73,
-            "SKIPPED": 28,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
-        }
-      },
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2549,
+    "total_ms": 4957,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 357
+        "ms": 3544
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1908
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 261
+        "ms": 1402
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
