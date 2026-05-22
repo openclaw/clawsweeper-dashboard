@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-22T18:30:22.711Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-05-22T18:30:28.895Z",
+  "repo": "openclaw/clickclack",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-22T15:30:20.158Z",
+  "since": "2026-05-22T15:30:27.061Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    72984
+    15
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
+  "scanned_comments": 2,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:72984:4333009957:2026-05-22T18:29:58Z:automerge",
-      "comment_id": "4333009957",
-      "comment_version_key": "4333009957:2026-05-22T18:29:58Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/72984#issuecomment-4333009957",
-      "repo": "openclaw/openclaw",
-      "issue_number": 72984,
+      "idempotency_key": "comment-router:openclaw/clickclack:15:4521692158:2026-05-22T18:30:21Z:automerge",
+      "comment_id": "4521692158",
+      "comment_version_key": "4521692158:2026-05-22T18:30:21Z",
+      "comment_url": "https://github.com/openclaw/clickclack/pull/15#issuecomment-4521692158",
+      "repo": "openclaw/clickclack",
+      "issue_number": 15,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-28T06:54:09Z",
-      "comment_updated_at": "2026-05-22T18:29:58Z",
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-22T18:25:24Z",
+      "comment_updated_at": "2026-05-22T18:30:21Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "automerge",
@@ -52,8 +52,8 @@
       "trusted_bot_author": null,
       "automation_source": null,
       "repair_reason": null,
-      "review_summary": "The branch changes subagent model resolution across gateway session fallback, reply runtime defaults, stored model override inheritance, cron runtime exports, tests, and changelog text.\n\nReproducibility: yes. at source level. Current main resolves reply defaults before session state and allows parent stored overrides to apply to spawned subagent children, while the docs define `agents.defaults.subagents.model` as the default when configured.",
-      "review_followup": "A focused repair can update the effective defaults bundle and add the missing alias-resolution regression tests without a product decision.",
+      "review_summary": "This PR adds repo-local Crabbox skill/configuration, a self-hosted hydrate workflow, actionlint/CODEOWNERS coverage, and package scripts for Crabbox commands.\n\nReproducibility: yes. for the review findings: source inspection of the PR workflow shows mutable action refs and no persist-credentials override on checkout. A live Crabbox lease is still needed to prove the setup behavior itself.",
+      "review_followup": "There are narrow mechanical security hardening edits before merge; broader runner rollout policy can remain with maintainers after those are fixed.",
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
@@ -62,165 +62,52 @@
       "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix(subagent): resolve runtime model from subagent default instead of parent primary",
-        "body": "## Summary\n\nTwo-part fix for subagent model resolution:\n\n- **Commit 1 — read-side fallback (defense in depth, fbbd3c2d5f):** `resolveSessionModelRef` had no subagent awareness. When `entry.model` was empty (race between the spawn-side write and the gateway-side read at run-start), it fell through to `resolveDefaultModelForAgent`, returning the parent agent's primary model instead of the configured subagent default. Also reorders the `??` chain in `resolveSubagentConfiguredModelSelection` so global `agents.defaults.subagents.model` takes precedence over the spawning agent's own `model` field.\n- **Commit 2 — Pi-harness write-side fix (production path, this commit):** `getReplyFromConfig` resolved the run model via `resolveDefaultModel` (which goes through `resolveDefaultModelForAgent` and is not subagent-aware), and post-run persistence in `updateSessionStoreAfterAgentRun` then wrote that model back to `entry.model`, silently flipping every subagent run onto the parent agent's primary. The new `resolveSubagentSessionDefaultModel` helper performs a one-time override after `sessionEntry` is loaded so the Pi runtime boots on the configured subagent default and the post-run write preserves it.\n\n## Failure mode (before)\n\nConfig:\n```\nagents.list[main].model.primary = anthropic/claude-opus-4-7\nagents.defaults.subagents.model.primary = openai-codex/gpt-5.5\nagents.list[main].subagents.model.primary = openai-codex/gpt-5.5\n```\n\nSpawn flow:\n1. Parent calls `sessions_spawn(task=..., agentId=main)` with no explicit `model:`.\n2. Spawn-side computes the right ref (`gpt-5.5`) and writes `entry.model` / `entry.modelProvider` via `persistInitialChildSessionRuntimeModel`.\n3. The Pi runtime starts the run via `getReplyFromConfig`, which resolves `defaultProvider/defaultModel` via `resolveDefaultModelForAgent` — returning Opus (parent primary) — and uses that as the run's `provider/model`.\n4. Subagent runs on Opus instead of gpt-5.5.\n5. Post-run, `updateSessionStoreAfterAgentRun → setSessionRuntimeModel` writes Opus back to `entry.model`, clobbering the spawn-time gpt-5.5.\n\nResult on disk: `~/.openclaw/agents/<agent>/sessions/sessions.json` shows `model: \"claude-opus-4-7\"` for entries with `subagentRole: \"orchestrator\", spawnDepth: 1`, even though `~/.openclaw/subagents/runs.json` correctly recorded `gpt-5.5`. The read-side fallback in commit 1 only kicks in while `entry.model` is empty — once the post-run write fires, `entry.model` is non-empty and the fallback is skipped.\n\n## Fix\n\n- **Commit 1 — `resolveSessionModelRef`:** when `entry.spawnDepth >= 1` or `entry.subagentRole` is set, fall back to the configured subagent default for this agent before falling through to the agent's primary.\n- **Commit 1 — `resolveSubagentConfiguredModelSelection`:** reorder `??` chain to `agentConfig.subagents.model` → `agents.defaults.subagents.model` → `agentConfig.model`.\n- **Commit 2 — `resolveSubagentSessionDefaultModel`:** new helper in `directive-handling.defaults.ts` that, given the loaded `sessionEntry`, checks the same subagent shape (`subagentRole` set or `spawnDepth >= 1`) and resolves the configured subagent default. `getReplyFromConfig` invokes it once after `sessionEntry` is loaded and overrides `defaultProvider/defaultModel/provider/model` so the Pi runtime boots and post-run-persists on the right model.\n\n## Tests\n\n- Read-side fallback tests in `src/gateway/session-utils.test.ts` cover the runtime subagent fallback (with and without `entry.spawnDepth`).\n- Spawn-side chain-order tests cover the case where `agentConfig.subagents.model` is unset, `agents.defaults.subagents.model` is set, and `agentConfig.model` is set — we now return the global default instead of the agent's own primary.\n- New tests in `src/auto-reply/reply/directive-handling.defaults.subagent.test.ts` cover the Pi-harness write-side helper: subagent sessions resolve to the configured subagent default; non-subagent sessions return null so the parent's primary is preserved.\n- Existing get-reply test mocks updated to expose the new export.\n\n## Scope\n\nCommit 1: `src/gateway/session-utils.ts`, `src/agents/model-selection.ts`, and their tests.\nCommit 2: `src/auto-reply/reply/directive-handling.defaults.ts`, `src/auto-reply/reply/get-reply.ts`, and one new test plus two existing test-mock updates.\nNo drive-by changes.\n\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Spawned subagent runs persisted the parent agent's primary model (e.g. `anthropic/claude-opus-4-7`) into `~/.openclaw/agents/<agent>/sessions/sessions.json` even though the configured subagent default was `openai-codex/gpt-5.5` and the spawn-side resolver had already written the correct ref. Subsequent turns then ran on the wrong model.\n- **Real environment tested**: Local OpenClaw install on macOS, Node 22, single-agent config with `agents.list[main].model.primary = anthropic/claude-opus-4-7`, `agents.defaults.subagents.model.primary = openai-codex/gpt-5.5`, and `agents.list[main].subagents.model.primary = openai-codex/gpt-5.5`. Subagent spawned via `sessions_spawn(task=..., agentId=main)` from a parent Telegram chat with no explicit `model:` argument.\n- **Exact steps or command run after this patch**:\n  1. `pnpm openclaw doctor` to confirm config parses cleanly.\n  2. Start gateway: `pnpm openclaw gateway start`.\n  3. From the active chat, ask the agent to spawn a subagent with no model override.\n  4. While the subagent is running and again after it completes, inspect `~/.openclaw/agents/main/sessions/sessions.json` and `~/.openclaw/subagents/runs.json`.\n- **Evidence after fix**: Inspected `~/.openclaw/agents/main/sessions/sessions.json` directly with `jq` — entries with `subagentRole: \"orchestrator\"` and `spawnDepth: 1` now persist `model: \"gpt-5.5\"` and `modelProvider: \"openai-codex\"` instead of `claude-opus-4-7`. `~/.openclaw/subagents/runs.json` continues to record `gpt-5.5` as before, and the gateway run trace prints the `openai-codex/gpt-5.5` provider/model pair when the run starts. Before the fix the same inspection printed `model: \"claude-opus-4-7\"` for those subagent entries even though the runs file recorded `gpt-5.5`.\n- **Observed result after fix**: Subagent runs boot on `openai-codex/gpt-5.5` (visible in CLI run output and provider request logs), and the post-run write preserves that model in `sessions.json`, so subsequent turns of the same subagent session keep using `gpt-5.5`. Parent (non-subagent) sessions still resolve to `anthropic/claude-opus-4-7` as expected.\n- **What was not tested**: Cross-agent configurations where the agent has no `subagents.model` and only `agents.defaults.subagents.model` is set were exercised only via the new unit tests, not on a live install. None of the alias-resolution paths were exercised against a real OpenRouter alias index live.\n\n### Post-rebase verification (2026-05-12)\n\nRebase merged `upstream/main` (`e7e3e903bf`) into the branch and addressed the clawsweeper P2 finding on `src/auto-reply/reply/get-reply.ts:404-416`. Specifically: a spawned subagent child entry with no own `providerOverride`/`modelOverride` could still inherit the parent session's persisted `/model` override via `resolveStoredModelOverride` (parent-inheritance branch), silently flipping the run back to the parent's model. `resolveStoredModelOverride` now skips the parent-inheritance branch when the child entry is a subagent session (`subagentRole` set or `spawnDepth >= 1`). Direct child overrides and non-subagent (topic/thread) child sessions are unaffected. New regression coverage in `src/auto-reply/reply/stored-model-override.test.ts`.\n\nCommands run:\n\n- `pnpm tsgo` (core typecheck) -> exit 0, no diagnostics\n- `pnpm test src/auto-reply/reply/stored-model-override.test.ts src/auto-reply/reply/directive-handling.defaults.subagent.test.ts src/agents/model-selection.test.ts src/gateway/session-utils.test.ts src/cron/isolated-agent.model-formatting.test.ts` -> 4 vitest shards passed (236 tests)\n- `pnpm test src/auto-reply/reply.block-streaming.test.ts` -> passed (1 test)\n- `pnpm format:check` on touched files -> all clean after one auto-fix on `stored-model-override.ts`\n- `node scripts/run-oxlint.mjs` on touched files -> 0 warnings, 0 errors\n\n",
-        "branch": "fix/subagent-model-resolution",
-        "head_sha": "6ba357400cf1f16e52da1324e1d3b6303bfc4a05",
-        "author": "joeykrug",
+        "title": "chore: add constrained Crabbox setup",
+        "body": "## Summary\n\n- Adds the exact Crabbox skill copied from `openclaw/openclaw`.\n- Adds a constrained Crabbox config and hydrate workflow with repo-specific self-hosted runner labels.\n- Adds actionlint label config, CODEOWNERS coverage for the new automation surfaces, and package scripts for the copied skill command surface.\n\nThis is the narrowed replacement shape for the earlier broad setup baseline. It intentionally does not add CodeQL, stale automation, licensing changes, Dependabot, or other policy-heavy defaults.\n\n## Verification\n\n- `git diff --check`\n- Ruby YAML parse for `.crabbox.yaml`, `.github/actionlint.yaml`, and `.github/workflows/crabbox-hydrate.yml`\n- `actionlint -config-file .github/actionlint.yaml .github/workflows/crabbox-hydrate.yml`\n- Crabbox skill SHA-256 matched `openclaw/openclaw`: `ed512c0b0385fae7f6c5c14a7e9e6236ab68936506687a99ca976873492bdc43`\n- Package script presence check for `check:changed`, `test:changed`, and `crabbox:*`\n- Private-path scan for new public files\n\n## Notes\n\n`pnpm run fmt:check` was attempted but pnpm aborted before running checks because the Codex worktree dependency status wanted to purge/reconcile `node_modules` without a TTY. I did not force an install in the worktree. No live Crabbox lease was started for this setup-only patch.\n",
+        "branch": "chore/setup-baseline-safe-20260523",
+        "head_sha": "9c3e03866c0ab0d609c7d3c069de288623870e32",
+        "author": "vincentkoc",
         "labels": [
-          "app: web-ui",
-          "gateway",
-          "cli",
-          "agents",
-          "size: L",
-          "extensions: qa-lab",
-          "extensions: memory-wiki",
-          "proof: supplied",
-          "proof: sufficient",
-          "extensions: google",
+          "rating: 🧂 unranked krab",
+          "status: ⏳ waiting on author",
           "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 session-state",
-          "status: ⏳ waiting on author"
+          "merge-risk: 🚨 security-boundary",
+          "merge-risk: 🚨 automation"
         ],
         "files": [
           {
-            "path": "CHANGELOG.md",
-            "additions": 1,
+            "path": ".agents/skills/crabbox/SKILL.md",
+            "additions": 711,
             "deletions": 0,
-            "changeType": "MODIFIED"
+            "changeType": "ADDED"
           },
           {
-            "path": "extensions/browser/src/browser/chrome-mcp.test.ts",
-            "additions": 3,
-            "deletions": 1,
-            "changeType": "MODIFIED"
+            "path": ".crabbox.yaml",
+            "additions": 49,
+            "deletions": 0,
+            "changeType": "ADDED"
           },
           {
-            "path": "extensions/google/transport-stream.ts",
-            "additions": 2,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-wiki/src/tool.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/tool-coverage-report.test.ts",
-            "additions": 1,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/tool-coverage-report.ts",
-            "additions": 1,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/model-selection-resolve.ts",
+            "path": ".github/CODEOWNERS",
             "additions": 14,
             "deletions": 0,
-            "changeType": "MODIFIED"
+            "changeType": "ADDED"
           },
           {
-            "path": "src/agents/model-selection.test.ts",
-            "additions": 31,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/model-selection.ts",
-            "additions": 2,
-            "deletions": 13,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/runs.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply.block-streaming.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/directive-handling.defaults.subagent.test.ts",
-            "additions": 134,
+            "path": ".github/actionlint.yaml",
+            "additions": 5,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/auto-reply/reply/directive-handling.defaults.ts",
-            "additions": 47,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/get-reply.test-mocks.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/get-reply.ts",
-            "additions": 26,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/stored-model-override.test.ts",
-            "additions": 108,
+            "path": ".github/workflows/crabbox-hydrate.yml",
+            "additions": 125,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/auto-reply/reply/stored-model-override.ts",
-            "additions": 16,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/program/preaction.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run-model-selection.runtime.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/flows/doctor-lint-flow.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-utils.test.ts",
-            "additions": 135,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-utils.ts",
-            "additions": 48,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/ui/navigation.browser.test.ts",
-            "additions": 3,
+            "path": "package.json",
+            "additions": 7,
             "deletions": 1,
             "changeType": "MODIFIED"
           }
@@ -228,38 +115,36 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-72984",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-72984.md",
+        "automerge_cluster_id": "automerge-openclaw-clickclack-15",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-clickclack-15.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 102,
+          "total": 6,
           "counts": {
-            "SUCCESS": 74,
-            "SKIPPED": 27,
-            "NEUTRAL": 1
+            "SUCCESS": 6
           },
           "blockers": [],
           "pending": [],
           "terminalBlockers": []
         }
       },
-      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
+      "reason": "author association NONE and repository permission none are not allowed"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2840,
+    "total_ms": 2186,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 407
+        "ms": 472
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2132
+        "ms": 1351
       },
       {
         "name": "classify_commands",
@@ -267,7 +152,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 288
+        "ms": 352
       },
       {
         "name": "append_ledger",
