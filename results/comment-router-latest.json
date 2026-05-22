@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-22T08:30:17.981Z",
+  "generated_at": "2026-05-22T08:30:28.198Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-22T05:30:15.507Z",
+  "since": "2026-05-22T05:30:27.732Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    85264
+    85281
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,135 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:85264:4516156402:2026-05-22T08:30:11Z:clawsweeper_needs_human",
-      "comment_id": "4516156402",
-      "comment_version_key": "4516156402:2026-05-22T08:30:11Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/85264#issuecomment-4516156402",
-      "repo": "openclaw/openclaw",
-      "issue_number": 85264,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-22T07:07:35Z",
-      "comment_updated_at": "2026-05-22T08:30:11Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "Human review and contributor action are needed because the remaining blockers are security-sensitive cache semantics plus Windows proof from the contributor's setup.; Needs attention: the diff weakens path-boundary freshness by adding process-global realpath and ancestor caches without runtime invalidation.; Review finding: [P1] Keep realpath checks tied to the live filesystem — src/infra/path-safety.ts:6 - [P1] Do... (sha=dd1631be0618f8789bc6f8d0641a6d6dbf5cb748)",
-      "review_summary": "This PR adds global realpath and existing-ancestor caches in infra path helpers, reroutes path-guard exports through them, and adds cache-invalidation tests.\n\nReproducibility: yes. for the PR-introduced defect: source inspection shows process-wide caches returning before fresh fs-safe checks, while current runtime callers do not call the invalidators. The original Windows slowdown was not independently reproduced from an inspectable profile artifact.",
-      "review_followup": "Human review and contributor action are needed because the remaining blockers are security-sensitive cache semantics plus Windows proof from the contributor's setup.",
-      "freeform_prompt": null,
-      "expected_head_sha": "dd1631be0618f8789bc6f8d0641a6d6dbf5cb748",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(infra): add global realpath cache to eliminate redundant lstat on Windows",
-        "body": "## Summary\n\nWindows `lstat` is ~45x slower than Mac (49µs vs 1.1µs per call). `safeRealpathSync` / `isPathInsideWithRealpath` are called ~48,000 times (~976,000 `lstat` calls) without cross-call caching, causing **47.8s of lstat in a 81s non-idle CPU profile (59%)** — making OpenClaw **2-3x slower on Windows** than Mac.\n\n## Changes (3 files)\n\n- **`src/infra/path-safety.ts`**: Wrap `safeRealpathSync` with dual-layer cache (global `Map<string, string>` + caller-local). Rewrite `isPathInsideWithRealpath` to use the cached version.\n- **`src/infra/path-guards.ts`**: Import from `path-safety.js` instead of directly from `@openclaw/fs-safe/path`, so all 25 importing files share the global cache.\n- **`src/infra/boundary-path.ts`**: Add input→output result cache for `resolvePathViaExistingAncestorSync`, with `invalidateAncestorPathCache()` export for testability.\n\n## Real behavior proof\n\n### behavior\n\nEliminates redundant `lstat` system calls on Windows by adding a global realpath cache. Before this fix, OpenClaw on Windows spends 59% of CPU time in lstat due to ~976,000 uncached calls. After the fix, lstat drops by 83%.\n\n### environment\n\n- OS: Windows 10 Pro\n- Node: v24.15\n- OpenClaw: v5.18 (installed via npm)\n\n### steps\n\n1. Install OpenClaw 5.18 on Windows\n2. Run `node profile-gateway-internal.mjs` (120s CPU profile covering startup → webchat → conversation flow)\n3. Compare `.cpuprofile` output before and after the fix\n\n### evidence\n\n| | Profile file | lstat (ms) | safeRealpathSync direct lstat (ms) | resolvePathViaExistingAncestorSync (ms) | chat.send → lane enqueue |\n|---|---|---|---|---|---|\n| **Before** | `gateway-1779357547869.cpuprofile` | 47,834 | ~14,000 | 4,300 | 17-20s |\n| **After** | `gateway-1779369214265.cpuprofile` | 8,135 (**-83%**) | 743 (**-95%**) | 61 (**-99%**) | 5.4s (**-70%**) |\n\n### observedResult\n\n- lstat total time: 47,834ms → 8,135ms (-83%)\n- safeRealpathSync direct lstat: ~14,000ms → 743ms (-95%)\n- resolvePathViaExistingAncestorSync: 4,300ms → 61ms (-99%)\n- chat.send → lane enqueue latency: 17-20s → 5.4s (-70%)\n- Overall non-idle CPU time reduced from ~81s to ~35s\n\n### notTested\n\n- Mac/Linux performance impact not profiled (expected neutral — lstat is already fast at 1.1µs per call, cache overhead is negligible)\n- Cache memory growth under very long-running sessions (bounded by unique path count)\n- Symlink changes after cache population (addressed by `invalidateAncestorPathCache()` for callers that need it)\n\nCloses #85262",
-        "branch": "fix/windows-lstat-global-cache",
-        "head_sha": "dd1631be0618f8789bc6f8d0641a6d6dbf5cb748",
-        "author": "211-lee",
-        "labels": [
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 security-boundary",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/infra/boundary-path.test.ts",
-            "additions": 53,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/boundary-path.ts",
-            "additions": 20,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/path-guards.ts",
-            "additions": 1,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/path-safety.test.ts",
-            "additions": 87,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/path-safety.ts",
-            "additions": 52,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85264",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85264.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 72,
-            "SKIPPED": 22,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
-        }
-      },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2713,
+    "total_ms": 853,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 394
+        "ms": 456
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2066
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 228
+        "ms": 388
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
