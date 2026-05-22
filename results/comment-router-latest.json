@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-22T00:50:15.102Z",
+  "generated_at": "2026-05-22T00:50:41.411Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-21T21:50:12.591Z",
+  "since": "2026-05-21T21:50:41.077Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    85130
+    85143
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 0,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,111 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:85130:4513744840:2026-05-22T00:50:09Z:clawsweeper_needs_human",
-      "comment_id": "4513744840",
-      "comment_version_key": "4513744840:2026-05-22T00:50:09Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/85130#issuecomment-4513744840",
-      "repo": "openclaw/openclaw",
-      "issue_number": 85130,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-21T23:56:41Z",
-      "comment_updated_at": "2026-05-22T00:50:09Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "No narrow automated repair is indicated; the PR appears correct and needs maintainer merge judgment for an availability-sensitive runtime change.; Cleared: The diff only changes local skills watcher runtime code and tests, with no new dependency, workflow, secret, network, package, or supply-chain surface. (sha=72e66150ab0cacb1d0f751074af656cb39fbb48f)",
-      "review_summary": "The PR changes skills refresh to key Chokidar watchers by normalized watch path with workspace subscribers, and updates tests for shared-directory dedupe and fan-out.\n\nReproducibility: yes. at source level: current main resolves shared skills roots for every workspace and opens one Chokidar watcher per workspace, while https://github.com/openclaw/openclaw/issues/84968 provides concrete EMFILE logs from a 28-agent Linux deployment. I did not run a live 25-plus-agent gateway reproduction in this read-only review.",
-      "review_followup": "No narrow automated repair is indicated; the PR appears correct and needs maintainer merge judgment for an availability-sensitive runtime change.",
-      "freeform_prompt": null,
-      "expected_head_sha": "72e66150ab0cacb1d0f751074af656cb39fbb48f",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(skills): dedupe shared-directory watchers across agent workspaces (#84968)",
-        "body": "### Summary\n\n- **Problem**: On multi-agent gateways, `ensureSkillsWatcher` in `src/agents/skills/refresh.ts` keeps its active watchers in a map keyed by `workspaceDir` and creates one `chokidar` watcher per workspace. Every workspace's watch-target list also includes the shared skill roots (the global `CONFIG_DIR/skills` directory, the home `~/.agents/skills` directory, configured `skills.load.extraDirs`, and plugin skill dirs). As a result the same shared directory is watched once per agent. At ~28 agents the redundant recursive watchers exhaust file descriptors, `EMFILE` cascades through the gateway, `bundle-mcp` child processes are disposed mid-session, and agent sessions are left stuck in `status=running` until a full gateway restart.\n- **Root Cause**: Watcher ownership is per-workspace, but the watched directories are largely shared across workspaces. Because `resolveWatchTargets` returns the shared roots for every workspace and watchers are keyed by `workspaceDir`, the shared roots are watched `N` times for `N` agents. File-descriptor usage therefore scales with agent count instead of with the number of distinct directories, which is the linear-scaling wall the report describes. Raising `LimitNOFILE` only delays the wall; disabling `skills.load.watch` removes the feature. Neither addresses the redundant-watcher mechanism.\n- **Fix**: Make watcher ownership per-directory instead of per-workspace. Watchers are now keyed by the normalized watch-target path, and each watcher carries a set of subscriber workspaces. When a workspace is ensured, its target set is reconciled against its previous subscriptions: new targets subscribe to (or create) the shared watcher, dropped targets unsubscribe, and a watcher is torn down only when its last subscriber leaves. A filesystem event fans the snapshot bump out to every subscribed workspace, preserving the existing per-workspace refresh semantics. This removes the per-agent multiplication so descriptors scale with distinct directories, while keeping all previously notified workspaces notified. The runtime resolver, traversal depth, debounce, ignore rules, and `watch-targets` change semantics are unchanged.\n- **What changed**:\n  - `src/agents/skills/refresh.ts`: replaced the `workspaceDir`-keyed `watchers` map with a path-keyed `pathWatchers` registry plus a `workspaceWatchTargets` reverse index; added `subscribeWorkspaceToPath` / `unsubscribeWorkspaceFromPath` reconciliation, `createSkillsPathWatcher` / `teardownSkillsPathWatcher` lifecycle helpers, and `resolveWatchDebounceMs` / `sameWatchTargets` helpers; the debounced handler now fans the snapshot bump out to all subscribers; `resetSkillsRefreshForTest` closes the path-keyed watchers.\n  - `src/agents/skills/refresh.test.ts`: updated existing assertions for the per-directory watcher shape (single-path `chokidar.watch` calls; dropped-extra-dir teardown by path) and added regression tests that a shared directory is watched exactly once across two workspaces and that a shared-directory change fans out to every subscribed workspace.\n- **What did NOT change (scope boundary)**:\n  - `resolveWatchPaths` / `resolveWatchTargets` (which directories are watched) are unchanged — only how watchers are owned and shared.\n  - Traversal `depth: 2`, `awaitWriteFinish` debounce, `shouldIgnoreSkillsWatchPath` ignore rules, and `DEFAULT_SKILLS_WATCH_IGNORED` are unchanged.\n  - The `watch-targets` snapshot-bump behaviour and the `bumpSkillsSnapshotVersion` contract from `refresh-state.ts` are unchanged.\n  - `skills.load.watch === false` still tears down the workspace's subscriptions; no config keys, defaults, or public surfaces were added.\n  - No change to `LimitNOFILE` guidance or any runtime/auth/provider path.\n\n### Reproduction\n\n1. Run a multi-agent gateway with `agents.list[]` containing ~25+ entries.\n2. Have each agent's skills allowlist include a shared directory under `CONFIG_DIR/skills/` (e.g. a shared `master-mcp` skill bundle).\n3. Watch gateway logs: `gateway/skills` reports `EMFILE: too many open files, watch '<shared dir>'`, `bundle-mcp` reports `Connection closed`, and sessions stall with `status=running`.\n\nBefore the fix, the shared directory is watched once per agent, so descriptors scale with agent count and EMFILE cascades. After the fix, the shared directory is watched once total and changes still refresh every agent that uses it.\n\n### Real behavior proof\n\n- **Behavior addressed**: On a multi-agent gateway every agent workspace opened its own `chokidar` watcher over the shared skills directory, so open file descriptors grew once per agent until `EMFILE` cascaded and disposed `bundle-mcp` sessions.\n- **Real environment tested**: Linux, Node.js 22, real `chokidar` 5.0.0 and the real patched `ensureSkillsWatcher` from `src/agents/skills/refresh.ts` driving real on-disk shared and per-workspace skill directories (the watcher layer is not stubbed).\n- **Exact steps or command run after this patch**: Ran a `node` (tsx) script that wrapped the real `chokidar.watch` with a pass-through counter, created one shared directory plus N real workspace directories all configured with the shared directory as `skills.load.extraDirs`, then invoked the patched `ensureSkillsWatcher` once per workspace and counted the real `FSWatcher` instances opened on the shared directory for 5, 20, and 50 agents.\n- **Evidence after fix**: console output from the run:\n  ```\n  agents | shared-dir FSWatcher instances (after fix) | before fix\n  ----------------------------------------------------------------------\n       5 |                                          1 |         5\n      20 |                                          1 |        20\n      50 |                                          1 |        50\n  ```\n- **Observed result after fix**: the shared directory keeps exactly one live `FSWatcher` for 5, 20, and 50 agents instead of one per agent. Open descriptors now scale with distinct directories rather than agent count, so the `EMFILE` wall no longer forms, and every subscribed workspace is still notified when the shared directory changes.\n- **What was not tested**: a full 28+ agent production gateway under sustained live load was not run; the run exercises the real watcher-ownership path that determines the descriptor count rather than reproducing a live `EMFILE` outage end to end.\n\n### Risk / Mitigation\n\n- **Risk**: A shared watcher is closed while a workspace still needs it, or a shared-directory change stops refreshing some subscribed workspaces.\n- **Mitigation**: A watcher is torn down only when its subscriber set becomes empty (reference-counted by workspace), and the debounced handler iterates the live subscriber set at fire time, so every subscribed workspace is refreshed. Existing `refresh.test.ts` cases (root coverage, grouped-depth traversal, per-event refresh, watch-targets change) still pass, and new tests assert single-watcher dedupe and multi-workspace fan-out. `src/auto-reply/reply/session-updates.test.ts` (the caller) passes. Prod typecheck (`tsgo:core`), `oxfmt`, and `oxlint` are clean. No `any` types were introduced.\n\n### Follow-up (out of scope here)\n\nThis change collapses redundant watchers on shared roots, so descriptor usage scales with distinct watched directories instead of agent count — the floor for one-watcher-per-directory. A deployment with a very large number of genuinely distinct skill directories would still open one watcher per directory. Pushing past that floor (e.g. a single shared inotify instance with many cheap watches, or an opt-in polling strategy) is a separate watcher-subsystem effort and intentionally not bundled into this fix; `skills.load.watch: false` and a raised descriptor limit remain valid mitigations for that distinct case.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Gateway\n- [x] Agents / skills runtime\n- [x] Tests\n\n### Linked Issue/PR\n\nFixes #84968\n",
-        "branch": "fix/skills-watcher-shared-dir-dedupe-84968",
-        "head_sha": "72e66150ab0cacb1d0f751074af656cb39fbb48f",
-        "author": "openperf",
-        "labels": [
-          "agents",
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/agents/skills/refresh.test.ts",
-            "additions": 66,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/skills/refresh.ts",
-            "additions": 129,
-            "deletions": 48,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85130",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85130.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 101,
-          "counts": {
-            "SUCCESS": 71,
-            "SKIPPED": 29,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2720,
+    "total_ms": 593,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 312
+        "ms": 326
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2185
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 198
+        "ms": 259
       },
       {
         "name": "append_ledger",
