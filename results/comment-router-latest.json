@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-22T16:24:10.850Z",
+  "generated_at": "2026-05-22T16:24:24.774Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-22T13:24:06.763Z",
+  "since": "2026-05-22T13:24:22.231Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    85404
+    83019
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 8,
+  "commands_seen": 4,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:85404:4519653278:2026-05-22T16:23:58Z:clawsweeper_needs_human",
-      "comment_id": "4519653278",
-      "comment_version_key": "4519653278:2026-05-22T16:23:58Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/85404#issuecomment-4519653278",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:83019:4470030214:2026-05-22T16:24:16Z:clawsweeper_needs_human",
+      "comment_id": "4470030214",
+      "comment_version_key": "4470030214:2026-05-22T16:24:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83019#issuecomment-4470030214",
       "repo": "openclaw/openclaw",
-      "issue_number": 85404,
+      "issue_number": 83019,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-22T14:37:36Z",
-      "comment_updated_at": "2026-05-22T16:23:58Z",
+      "comment_created_at": "2026-05-17T09:00:27Z",
+      "comment_updated_at": "2026-05-22T16:24:16Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -51,99 +51,468 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "No ClawSweeper repair is needed; maintainers should review the session-state reservation behavior and gate merge on focused tests and CI.; Cleared: The diff adds no dependencies, workflow changes, credential handling, or external code execution path; no concrete security or supply-chain concern was found. (sha=3d890409b6ee8c90b5f58472fd9e11510007733b)",
-      "review_summary": "The PR adds an async per-session-key reservation helper, switches agent-command session preparation to use it, and adds regression coverage for same-key concurrent session resolution.\n\nReproducibility: yes. at source level: current main can mint two fresh ids for the same missing session-key entry before either request persists the mapping, and the PR's regression test captures that fork. I did not run tests because this review was read-only.",
-      "review_followup": "No ClawSweeper repair is needed; maintainers should review the session-state reservation behavior and gate merge on focused tests and CI.",
+      "repair_reason": "Needs contributor or maintainer real behavior proof plus normal maintainer review of the auth/security diagnostic surface; there is no narrow ClawSweeper repair to make from this review.; Cleared: No concrete secret leak or supply-chain regression was found in the diff; the remaining security concern is proof that the sanitized timeline behaves that way in a real run. (sha=fb734ca6560e139367d3fcbe09cf6bd73d147012)",
+      "review_summary": "The branch adds sanitized `secrets.prepare` diagnostics timeline spans around Gateway secret preparation, omits error messages from secret-related startup spans, updates focused tests, and adds a changelog entry.\n\nReproducibility: not applicable. as a bug reproduction: this is a feature PR adding a new diagnostics signal. The relevant verification is a real Gateway startup run with timeline diagnostics enabled, and the PR body says that proof has not been completed for the latest head.",
+      "review_followup": "Needs contributor or maintainer real behavior proof plus normal maintainer review of the auth/security diagnostic surface; there is no narrow ClawSweeper repair to make from this review.",
       "freeform_prompt": null,
-      "expected_head_sha": "3d890409b6ee8c90b5f58472fd9e11510007733b",
+      "expected_head_sha": "fb734ca6560e139367d3fcbe09cf6bd73d147012",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): serialize new-session resolution per session key",
-        "body": "### Summary\n\n- **Problem**: Two requests carrying the **same `x-openclaw-session-key`** at the OpenAI-compatible endpoints (`/v1/chat/completions`, `/v1/responses`) can run in **separate sessions** when the second arrives while the first is still in flight (e.g. a follow-up message sent before the first turn finishes). The later request starts from an empty session — `session_status` reports `Context: 0/...` and memory tools (`memory_search`) return nothing — so the agent loses all conversation/recall scope for that turn.\n- **Root Cause**: Session identity is resolved by `resolveSession` (`src/agents/command/session.ts`) **before** the per-session execution lane is entered. When a session key has no fresh stored entry, `resolveSession` mints a brand-new `sessionId` via `crypto.randomUUID()`. Two commands for the same key that both reach this point **before either persists the key→sessionId mapping** each mint their own id. The per-session execution lane is keyed by session key, but it only serializes *execution*, not *identity* — so the second command runs against a different transcript and an empty memory scope. The WebChat `chat.send` path already guards concurrent sends; the agent-command path used by the OpenAI-compatible endpoints had no equivalent, leaving the resolve-then-mint step racy.\n- **Fix**: Add `resolveSessionWithReservation` (`src/agents/command/session-resolution-reservation.ts`) and call it from the agent-command pipeline (`src/agents/agent-command.ts`) in place of `resolveSession`. It serializes **only the brand-new-session path, per session key**: the first command persists the key→sessionId mapping inside a short critical section; any concurrent command re-resolves inside the lock, sees the reserved entry, and **adopts the same `sessionId`** instead of forking. This enforces the invariant \"same session key ⇒ one session id\" at the layer that owns session identity (so all ingress surfaces benefit, not just one endpoint). It avoids side effects because: established sessions and explicit-`sessionId` runs **skip the lock entirely** (no added latency on the steady-state hot path); the critical section is independent of the execution lane and completes before execution, so it **cannot deadlock** with it; and the reserved entry is the same minimal mapping the command already persists moments later, so it introduces **no new orphaning behavior**.\n- **What changed**:\n  - `src/agents/command/session-resolution-reservation.ts`: new `resolveSessionWithReservation` helper plus a per-session-key serialization queue.\n  - `src/agents/agent-command.ts`: resolve the session through `resolveSessionWithReservation` instead of `resolveSession`.\n  - `src/agents/command/session-resolution-reservation.test.ts`: regression coverage (see below).\n- **What did NOT change (scope boundary)**:\n  - `resolveSession` semantics, the per-session execution lane, and the session-store schema are untouched.\n  - The explicit-`sessionId` path and ordinary single requests are untouched (they bypass the reservation lock).\n  - No config keys, no gateway protocol change, no change to streaming or delivery behavior.\n  - Established (already-persisted, fresh) sessions are unaffected; they never enter the lock.\n\n### Reproduction\n\n1. Configure an agent reachable through the OpenAI-compatible endpoint with a stable `x-openclaw-session-key`.\n2. Send a long, multi-tool request for that session key.\n3. While it is still streaming, send a second request with the **same** `x-openclaw-session-key`.\n- Before: the second turn runs in an isolated session (`session_status` shows `Context: 0/...`); it has no recall of the in-flight conversation.\n- After: both turns share one session; the second adopts the first request's `sessionId` and retains conversation/recall scope.\n\n### Real behavior proof\n\n- **Behavior addressed**: concurrent requests carrying the same session key forking isolated, memory-less sessions because session identity is resolved before the per-session lane is entered.\n- **Real environment tested**: Linux, Node 22.22, a running OpenClaw Gateway (`openclaw gateway run`) from this branch serving `POST /v1/chat/completions`, routed to a local OpenAI-compatible model endpoint, writing to an isolated on-disk session store.\n- **Exact steps or command run after this patch**: launched the Gateway, then fired two concurrent `curl` requests to `/v1/chat/completions` carrying an identical `x-openclaw-session-key: final-1779465436`, then inspected the on-disk session store and the per-session transcript files.\n- **Evidence after fix**: both concurrent `curl` requests returned successfully with distinct run ids `chatcmpl_189760ea-7315-4873-a704-bd3bc6b51fa7` and `chatcmpl_9408b3a5-f114-45ba-aa49-f8d5e8ff3940`; the on-disk session store recorded a single entry `agent:main:final-1779465436 -> sessionId bc472c1b-9cbb-4a8e-b337-51a53d3e2aef`; the sessions directory held exactly one session transcript `bc472c1b-9cbb-4a8e-b337-51a53d3e2aef.jsonl`. The live store also showed the reservation-shaped entry `{ sessionId, updatedAt, sessionStartedAt }` written by `resolveSessionWithReservation`. Captured live console output:\n\n```text\ntwo concurrent requests, identical x-openclaw-session-key=final-1779465436 (23:57:16 start -> 23:57:32 done)\n$ curl .../v1/chat/completions -H 'x-openclaw-session-key: final-1779465436' -d '{\"model\":\"openclaw\",\"messages\":[{\"role\":\"user\",\"content\":\"first turn\"}]}' &\n$ curl .../v1/chat/completions -H 'x-openclaw-session-key: final-1779465436' -d '{\"model\":\"openclaw\",\"messages\":[{\"role\":\"user\",\"content\":\"second turn concurrent\"}]}' &\nA: {\"id\":\"chatcmpl_189760ea-7315-4873-a704-bd3bc6b51fa7\", ... \"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\nB: {\"id\":\"chatcmpl_9408b3a5-f114-45ba-aa49-f8d5e8ff3940\", ... \"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\nresolved session for that key (single store entry, single id):\nagent:main:final-1779465436 -> sessionId bc472c1b-9cbb-4a8e-b337-51a53d3e2aef\n\nsession transcripts for that id (exactly one, so no fork):\nbc472c1b-9cbb-4a8e-b337-51a53d3e2aef.jsonl\n```\n- **Observed result after fix**: two distinct concurrent runs against one session key converged on one `sessionId` and one transcript — the second request joined the in-flight session instead of forking an isolated, memory-less one.\n- **What was not tested**: a multi-hour production deployment and a third-party hosted model provider were not exercised; the run used a local OpenAI-compatible model endpoint and an isolated session store.\n\n### Risk / Mitigation\n\n- **Risk**: per-key serialization could add latency or deadlock, or an early-reserved entry could orphan if the run aborts.\n- **Mitigation**: only the brand-new-session path takes the lock — established sessions and explicit-`sessionId` runs are untouched, so the steady-state hot path is unchanged. The critical section is a single resolve plus one store write and is independent of the execution lane, so it cannot deadlock with it. The reserved entry is the same minimal `sessionId` mapping the command already persists immediately afterward, so no new orphaning is introduced. Unit tests assert concurrent same-key resolutions converge on one `sessionId` (they diverge on the pre-fix path) and that the explicit-`sessionId` path is unchanged.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Gateway\n- [x] Agents / agent-command\n- [x] Sessions\n- [x] Tests\n\n### Linked Issue/PR\n\nFixes #84575\n",
-        "branch": "fix/openai-compat-session-key-serialization-84575",
-        "head_sha": "3d890409b6ee8c90b5f58472fd9e11510007733b",
-        "author": "openperf",
+        "title": "feat(diagnostics): trace secret preparation timing",
+        "body": "## Summary\n- rewrites the broad secrets diagnostics PR into a narrow startup diagnostics slice\n- emits sanitized `secrets.prepare` diagnostics timeline spans with only low-cardinality activation/reason/auth-surface metadata\n- suppresses startup secret error messages on enclosing diagnostics timeline spans so secret-provider failures do not leak sensitive text into exported diagnostics\n- adds focused tests and an unreleased changelog entry crediting @samzong\n\n## Verification\n- `git diff --check origin/main...HEAD`\n- `AUTOREVIEW_AUTO_TESTS=0 AUTOREVIEW_OPENCLAW_MAINTAINER_VALIDATION=1 .agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main`\n- remote proof attempted but blocked before test execution: `node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --shell -- \"pnpm test:serial src/gateway/server-startup-config.secrets.test.ts src/infra/diagnostics-timeline.test.ts\"` failed because Blacksmith is not authenticated\n- direct AWS Crabbox fallback attempted but blocked before test execution: `../crabbox/bin/crabbox run --provider aws --shell -- \"pnpm test:serial src/gateway/server-startup-config.secrets.test.ts src/infra/diagnostics-timeline.test.ts\"` failed because AWS credentials/IMDS role are unavailable\n\nBehavior addressed: Gateway startup can spend meaningful time preparing runtime secrets, but operators lacked a sanitized timing signal that distinguished this path without exposing secret material or provider-specific values.\nReal environment tested: not completed; both permitted remote runners are blocked before command execution in this environment.\nExact steps or command run after this patch: `git diff --check origin/main...HEAD`; autoreview command listed above; remote Crabbox/Testbox commands listed above.\nEvidence after fix: focused regression coverage is included in `src/gateway/server-startup-config.secrets.test.ts` and `src/infra/diagnostics-timeline.test.ts`; autoreview is clean.\nObserved result after fix: static diff check and autoreview pass; remote runtime proof is blocked by runner auth/credentials.\nWhat was not tested: the focused Vitest files and `pnpm check:changed` were not run because local testing is disallowed for this task and remote runners are unavailable.\n",
+        "branch": "feat/gateway-secrets-observability",
+        "head_sha": "fb734ca6560e139367d3fcbe09cf6bd73d147012",
+        "author": "samzong",
         "labels": [
-          "agents",
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
+          "gateway",
+          "size: M",
+          "triage: needs-real-behavior-proof",
           "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/agent-command.ts",
-            "additions": 2,
-            "deletions": 2,
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/command/session-resolution-reservation.test.ts",
-            "additions": 77,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "src/gateway/server-startup-config.secrets.test.ts",
+            "additions": 126,
+            "deletions": 1,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/command/session-resolution-reservation.ts",
-            "additions": 72,
+            "path": "src/gateway/server-startup-config.ts",
+            "additions": 50,
+            "deletions": 17,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.impl.ts",
+            "additions": 19,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/diagnostics-timeline.test.ts",
+            "additions": 24,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/diagnostics-timeline.ts",
+            "additions": 7,
+            "deletions": 2,
+            "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85404",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85404.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83019",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83019.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 102,
+          "total": 104,
           "counts": {
+            "CANCELLED": 2,
             "SUCCESS": 72,
             "SKIPPED": 28,
             "FAILURE": 1,
             "NEUTRAL": 1
           },
           "blockers": [
+            "Real behavior proof:CANCELLED",
             "check-guards:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
             "check-guards:FAILURE"
           ]
         }
       },
       "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83019:4494741420:2026-05-20T05:16:06Z:re_review",
+      "comment_id": "4494741420",
+      "comment_version_key": "4494741420:2026-05-20T05:16:06Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83019#issuecomment-4494741420",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83019,
+      "author": "samzong",
+      "author_id": 13782141,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-20T05:16:06Z",
+      "comment_updated_at": "2026-05-20T05:16:06Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(diagnostics): trace secret preparation timing",
+        "body": "## Summary\n- rewrites the broad secrets diagnostics PR into a narrow startup diagnostics slice\n- emits sanitized `secrets.prepare` diagnostics timeline spans with only low-cardinality activation/reason/auth-surface metadata\n- suppresses startup secret error messages on enclosing diagnostics timeline spans so secret-provider failures do not leak sensitive text into exported diagnostics\n- adds focused tests and an unreleased changelog entry crediting @samzong\n\n## Verification\n- `git diff --check origin/main...HEAD`\n- `AUTOREVIEW_AUTO_TESTS=0 AUTOREVIEW_OPENCLAW_MAINTAINER_VALIDATION=1 .agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main`\n- remote proof attempted but blocked before test execution: `node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --shell -- \"pnpm test:serial src/gateway/server-startup-config.secrets.test.ts src/infra/diagnostics-timeline.test.ts\"` failed because Blacksmith is not authenticated\n- direct AWS Crabbox fallback attempted but blocked before test execution: `../crabbox/bin/crabbox run --provider aws --shell -- \"pnpm test:serial src/gateway/server-startup-config.secrets.test.ts src/infra/diagnostics-timeline.test.ts\"` failed because AWS credentials/IMDS role are unavailable\n\nBehavior addressed: Gateway startup can spend meaningful time preparing runtime secrets, but operators lacked a sanitized timing signal that distinguished this path without exposing secret material or provider-specific values.\nReal environment tested: not completed; both permitted remote runners are blocked before command execution in this environment.\nExact steps or command run after this patch: `git diff --check origin/main...HEAD`; autoreview command listed above; remote Crabbox/Testbox commands listed above.\nEvidence after fix: focused regression coverage is included in `src/gateway/server-startup-config.secrets.test.ts` and `src/infra/diagnostics-timeline.test.ts`; autoreview is clean.\nObserved result after fix: static diff check and autoreview pass; remote runtime proof is blocked by runner auth/credentials.\nWhat was not tested: the focused Vitest files and `pnpm check:changed` were not run because local testing is disallowed for this task and remote runners are unavailable.\n",
+        "branch": "feat/gateway-secrets-observability",
+        "head_sha": "fb734ca6560e139367d3fcbe09cf6bd73d147012",
+        "author": "samzong",
+        "labels": [
+          "gateway",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-config.secrets.test.ts",
+            "additions": 126,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-config.ts",
+            "additions": 50,
+            "deletions": 17,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.impl.ts",
+            "additions": 19,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/diagnostics-timeline.test.ts",
+            "additions": 24,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/diagnostics-timeline.ts",
+            "additions": 7,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83019",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83019.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 104,
+          "counts": {
+            "CANCELLED": 2,
+            "SUCCESS": 72,
+            "SKIPPED": 28,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "check-guards:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "check-guards:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83019:4471761278:2026-05-17T17:25:39Z:re_review",
+      "comment_id": "4471761278",
+      "comment_version_key": "4471761278:2026-05-17T17:25:39Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83019#issuecomment-4471761278",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83019,
+      "author": "samzong",
+      "author_id": 13782141,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-17T17:25:39Z",
+      "comment_updated_at": "2026-05-17T17:25:39Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(diagnostics): trace secret preparation timing",
+        "body": "## Summary\n- rewrites the broad secrets diagnostics PR into a narrow startup diagnostics slice\n- emits sanitized `secrets.prepare` diagnostics timeline spans with only low-cardinality activation/reason/auth-surface metadata\n- suppresses startup secret error messages on enclosing diagnostics timeline spans so secret-provider failures do not leak sensitive text into exported diagnostics\n- adds focused tests and an unreleased changelog entry crediting @samzong\n\n## Verification\n- `git diff --check origin/main...HEAD`\n- `AUTOREVIEW_AUTO_TESTS=0 AUTOREVIEW_OPENCLAW_MAINTAINER_VALIDATION=1 .agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main`\n- remote proof attempted but blocked before test execution: `node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --shell -- \"pnpm test:serial src/gateway/server-startup-config.secrets.test.ts src/infra/diagnostics-timeline.test.ts\"` failed because Blacksmith is not authenticated\n- direct AWS Crabbox fallback attempted but blocked before test execution: `../crabbox/bin/crabbox run --provider aws --shell -- \"pnpm test:serial src/gateway/server-startup-config.secrets.test.ts src/infra/diagnostics-timeline.test.ts\"` failed because AWS credentials/IMDS role are unavailable\n\nBehavior addressed: Gateway startup can spend meaningful time preparing runtime secrets, but operators lacked a sanitized timing signal that distinguished this path without exposing secret material or provider-specific values.\nReal environment tested: not completed; both permitted remote runners are blocked before command execution in this environment.\nExact steps or command run after this patch: `git diff --check origin/main...HEAD`; autoreview command listed above; remote Crabbox/Testbox commands listed above.\nEvidence after fix: focused regression coverage is included in `src/gateway/server-startup-config.secrets.test.ts` and `src/infra/diagnostics-timeline.test.ts`; autoreview is clean.\nObserved result after fix: static diff check and autoreview pass; remote runtime proof is blocked by runner auth/credentials.\nWhat was not tested: the focused Vitest files and `pnpm check:changed` were not run because local testing is disallowed for this task and remote runners are unavailable.\n",
+        "branch": "feat/gateway-secrets-observability",
+        "head_sha": "fb734ca6560e139367d3fcbe09cf6bd73d147012",
+        "author": "samzong",
+        "labels": [
+          "gateway",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-config.secrets.test.ts",
+            "additions": 126,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-config.ts",
+            "additions": 50,
+            "deletions": 17,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.impl.ts",
+            "additions": 19,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/diagnostics-timeline.test.ts",
+            "additions": 24,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/diagnostics-timeline.ts",
+            "additions": 7,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83019",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83019.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 104,
+          "counts": {
+            "CANCELLED": 2,
+            "SUCCESS": 72,
+            "SKIPPED": 28,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "check-guards:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "check-guards:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83019:4471686325:2026-05-17T17:16:04Z:re_review",
+      "comment_id": "4471686325",
+      "comment_version_key": "4471686325:2026-05-17T17:16:04Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83019#issuecomment-4471686325",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83019,
+      "author": "samzong",
+      "author_id": 13782141,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-17T17:16:04Z",
+      "comment_updated_at": "2026-05-17T17:16:04Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(diagnostics): trace secret preparation timing",
+        "body": "## Summary\n- rewrites the broad secrets diagnostics PR into a narrow startup diagnostics slice\n- emits sanitized `secrets.prepare` diagnostics timeline spans with only low-cardinality activation/reason/auth-surface metadata\n- suppresses startup secret error messages on enclosing diagnostics timeline spans so secret-provider failures do not leak sensitive text into exported diagnostics\n- adds focused tests and an unreleased changelog entry crediting @samzong\n\n## Verification\n- `git diff --check origin/main...HEAD`\n- `AUTOREVIEW_AUTO_TESTS=0 AUTOREVIEW_OPENCLAW_MAINTAINER_VALIDATION=1 .agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main`\n- remote proof attempted but blocked before test execution: `node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --shell -- \"pnpm test:serial src/gateway/server-startup-config.secrets.test.ts src/infra/diagnostics-timeline.test.ts\"` failed because Blacksmith is not authenticated\n- direct AWS Crabbox fallback attempted but blocked before test execution: `../crabbox/bin/crabbox run --provider aws --shell -- \"pnpm test:serial src/gateway/server-startup-config.secrets.test.ts src/infra/diagnostics-timeline.test.ts\"` failed because AWS credentials/IMDS role are unavailable\n\nBehavior addressed: Gateway startup can spend meaningful time preparing runtime secrets, but operators lacked a sanitized timing signal that distinguished this path without exposing secret material or provider-specific values.\nReal environment tested: not completed; both permitted remote runners are blocked before command execution in this environment.\nExact steps or command run after this patch: `git diff --check origin/main...HEAD`; autoreview command listed above; remote Crabbox/Testbox commands listed above.\nEvidence after fix: focused regression coverage is included in `src/gateway/server-startup-config.secrets.test.ts` and `src/infra/diagnostics-timeline.test.ts`; autoreview is clean.\nObserved result after fix: static diff check and autoreview pass; remote runtime proof is blocked by runner auth/credentials.\nWhat was not tested: the focused Vitest files and `pnpm check:changed` were not run because local testing is disallowed for this task and remote runners are unavailable.\n",
+        "branch": "feat/gateway-secrets-observability",
+        "head_sha": "fb734ca6560e139367d3fcbe09cf6bd73d147012",
+        "author": "samzong",
+        "labels": [
+          "gateway",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-config.secrets.test.ts",
+            "additions": 126,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-config.ts",
+            "additions": 50,
+            "deletions": 17,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.impl.ts",
+            "additions": 19,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/diagnostics-timeline.test.ts",
+            "additions": 24,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/diagnostics-timeline.ts",
+            "additions": 7,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83019",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83019.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 104,
+          "counts": {
+            "CANCELLED": 2,
+            "SUCCESS": 72,
+            "SKIPPED": 28,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "check-guards:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "check-guards:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4441,
+    "total_ms": 2805,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 442
+        "ms": 377
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 3630
+        "ms": 2149
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 4
       },
       {
         "name": "execute_commands",
-        "ms": 341
+        "ms": 251
       },
       {
         "name": "append_ledger",
