@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-22T17:01:21.364Z",
+  "generated_at": "2026-05-22T17:02:01.098Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-22T14:01:20.862Z",
+  "since": "2026-05-22T14:01:59.082Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    85457
+    85413
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 2,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,233 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:85413:4519816406:2026-05-22T17:01:53Z:clawsweeper_auto_repair",
+      "comment_id": "4519816406",
+      "comment_version_key": "4519816406:2026-05-22T17:01:53Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85413#issuecomment-4519816406",
+      "repo": "openclaw/openclaw",
+      "issue_number": 85413,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T14:59:38Z",
+      "comment_updated_at": "2026-05-22T17:01:53Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=f0260149d3f655da7fb126c70ce350a04f990521)",
+      "review_summary": "The PR changes OpenAI/Codex compaction provider selection, persisted runtime context-window selection, hook scheduling, provider auth prewarm defaults, `/status` provider-usage loading, and related regression tests.\n\nReproducibility: yes. from source inspection, but not from a live oversized compaction run here. Current main routes the preflight gate through local context/reserve threshold math and does not consult the configured OpenAI Responses server-compaction threshold.",
+      "review_followup": "There is a narrow mechanical repair: wire the configured OpenAI Responses server-compaction threshold into `runPreflightCompactionIfNeeded` before this PR can be considered correct.",
+      "freeform_prompt": null,
+      "expected_head_sha": "f0260149d3f655da7fb126c70ce350a04f990521",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "Fix OpenAI compaction runtime routing",
+        "body": "## Summary\n- Route embedded OpenAI compaction through the selected runtime provider only when Codex auth is actually configured or explicitly selected.\n- Use the same selected/persisted harness runtime for compaction auth routing and context-window sizing.\n- Align local preflight compaction with configured OpenAI Responses server-compaction thresholds so replies do not stall on surprise local compaction below the server threshold.\n- Add regression coverage for Codex OAuth compaction routing, direct OpenAI API-key preservation, persisted runtime context windows, post-compaction token state, and server-threshold gating.\n\n## Root Cause\nOpenAI model refs such as `openai/gpt-5.5` can run through the Codex harness, but the direct embedded compaction path still mixed raw model provider, selected runtime provider, and context-budget provider decisions. That let budget preflight compaction fall back from stale/missing native Codex thread binding into the context engine, then resolve auth as direct OpenAI API-key mode instead of the selected Codex OAuth route.\n\nA second mismatch made the symptom much slower: local preflight compaction used `contextWindow - reserve - softThreshold` even when the model params configured OpenAI Responses server compaction at a higher threshold. In the observed local setup that caused preflight compaction around the mid-100k token range even though the configured server threshold was 200k, so Telegram ingress worked but replies appeared stuck before normal inference.\n\nRCA proof:\n- Before behavior: gateway logs showed Telegram ingress followed by native Codex compaction binding fallback, context-engine compaction, and previously `No_API_key_found_for_provider_openai` on the compaction path.\n- Code evidence: `src/agents/pi-embedded-runner/compact.ts` resolved compaction model/auth before consistently applying the selected OpenAI runtime provider, and its context-window lookup could use the current policy runtime instead of the persisted session runtime.\n- Code evidence: `src/auto-reply/reply/agent-runner-memory.ts` preflight gating ignored `responsesServerCompaction` / `responsesCompactThreshold` model params when deciding whether to run local compaction.\n- Regression chain: recent compaction changes made required preflight compaction failures visible and made stale/missing native bindings fall through to context-engine compaction, exposing both the auth-route mismatch and the over-eager local preflight gate.\n\n## Real behavior proof\nBehavior addressed: OpenAI GPT-5.5 compaction under Codex OAuth no longer asks for direct OpenAI API-key auth, direct OpenAI API-key configurations are preserved, and local preflight compaction waits for the configured server threshold instead of blocking replies early.\n\nReal environment tested: local OpenClaw checkout and managed gateway on Linux, Node 25.9.0, configured default model `openai/gpt-5.5` with Codex runtime/OAuth.\n\nExact steps or command run after this patch: `node scripts/run-vitest.mjs src/agents/openai-codex-routing.test.ts src/agents/pi-embedded-runner/compact.hooks.test.ts src/auto-reply/reply/agent-runner-memory.test.ts`; `pnpm build`; `oc-update --skip-codex`; `pnpm openclaw status --all`.\n\nEvidence after fix: focused Vitest reported `Test Files 4 passed (4)` and `Tests 131 passed (131)`; build completed successfully; `oc-update --skip-codex` rebuilt core/UI, reinstalled the daemon, and health check passed on retry; status reported Telegram `OK` and the gateway reachable.\n\nObserved result after fix: the compaction unit path routes configured Codex OAuth sessions through `openai-codex`, keeps API-key-only OpenAI sessions on `openai`, uses the persisted Codex runtime for context-window sizing, and skips local preflight compaction below the configured OpenAI Responses server threshold.\n\nWhat was not tested: no new live Telegram message was sent through the production topic after the patch; live status confirms Telegram/gateway readiness, while behavior proof is targeted unit coverage plus local build/update/status.\n\n## Verification\n- `node scripts/run-vitest.mjs src/agents/openai-codex-routing.test.ts src/agents/pi-embedded-runner/compact.hooks.test.ts src/auto-reply/reply/agent-runner-memory.test.ts`\n- `pnpm build`\n- `.agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main` found two accepted P2 issues; both were patched and covered by regression tests. Per user request, no further autoreview was run after the final API-key preservation patch.\n- `oc-update --skip-codex`\n- `pnpm openclaw status --all`",
+        "branch": "fix-openai-compaction-runtime-routing",
+        "head_sha": "f0260149d3f655da7fb126c70ce350a04f990521",
+        "author": "vacinc",
+        "labels": [
+          "gateway",
+          "agents",
+          "size: L",
+          "extensions: codex",
+          "triage: mock-only-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 auth-provider",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/codex/src/app-server/run-attempt.test.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/harness/hook-context.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/harness/lifecycle-hook-helpers.test.ts",
+            "additions": 21,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/harness/lifecycle-hook-helpers.ts",
+            "additions": 12,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-codex-routing.test.ts",
+            "additions": 35,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-codex-routing.ts",
+            "additions": 21,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/compact.hooks.harness.ts",
+            "additions": 9,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/compact.hooks.test.ts",
+            "additions": 80,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/compact.ts",
+            "additions": 28,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
+            "additions": 21,
+            "deletions": 25,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/runtime-plugins.registry-reuse.test.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/runtime-plugins.test.ts",
+            "additions": 34,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/runtime-plugins.ts",
+            "additions": 11,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-memory.test.ts",
+            "additions": 167,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/commands-core.test.ts",
+            "additions": 27,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/commands-reset-hooks.ts",
+            "additions": 22,
+            "deletions": 18,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/commands-status.test.ts",
+            "additions": 13,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/commands-status.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.impl.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/status/status-text.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/status/status-text.types.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85413",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85413.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 45,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 38,
+            "SUCCESS": 5
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 810,
+    "total_ms": 2254,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 491
+        "ms": 347
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2
+        "ms": 1655
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 308
+        "ms": 227
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
