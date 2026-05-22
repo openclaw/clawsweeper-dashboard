@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-22T04:13:18.425Z",
+  "generated_at": "2026-05-22T04:13:20.733Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-22T01:13:16.866Z",
+  "since": "2026-05-22T01:13:18.781Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    85190
+    85208
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,49 +31,52 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:85190:4514646726:2026-05-22T04:13:13Z:clawsweeper_auto_repair",
-      "comment_id": "4514646726",
-      "comment_version_key": "4514646726:2026-05-22T04:13:13Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/85190#issuecomment-4514646726",
+      "idempotency_key": "comment-router:openclaw/openclaw:85208:4514893588:2026-05-22T04:13:12Z:automerge",
+      "comment_id": "4514893588",
+      "comment_version_key": "4514893588:2026-05-22T04:13:12Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85208#issuecomment-4514893588",
       "repo": "openclaw/openclaw",
-      "issue_number": 85190,
+      "issue_number": 85208,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-22T03:06:37Z",
-      "comment_updated_at": "2026-05-22T04:13:13Z",
+      "comment_created_at": "2026-05-22T04:07:29Z",
+      "comment_updated_at": "2026-05-22T04:13:12Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
       "intent": "clawsweeper_auto_repair",
       "autoclose_message": null,
       "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=a0fc4a8806fad3facd1ccf40d9b089f044d432ce)",
-      "review_summary": "The PR adds gateway reset/delete cleanup that enumerates child ACP session entries by `parentSessionKey`, closes them concurrently, and adds reset/delete/concurrency tests plus a changelog entry.\n\nReproducibility: yes. source-reproducible: current main closes only the reset/delete target ACP entry, and actual ACP spawn writes child rows with `spawnedBy` in the target agent store. I did not run the multi-hour live process leak in this read-only review.",
-      "review_followup": "The PR needs author-side code changes and refreshed real-path proof; automation should not repair while the external proof gate remains insufficient.",
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": "The PR adds a persistent Telegram message-dispatch replay guard, threads dispatch dedupe keys through Telegram buffering/debounce paths, adds an inbound-debounce cancellation callback, and covers the behavior with focused tests and a changelog entry.\n\nReproducibility: yes. for source-level reproduction: current main has only update-level Telegram dedupe before dispatch, and the linked issue identifies an at-least-once replay path. I did not run a new local/live repro because this review was read-only.",
+      "review_followup": "A concrete automated repair can move persistence to the dispatch-start boundary and add the missing pending-dispatch replay regression; maintainer review is still needed before merge because the PR has a protected label.",
       "freeform_prompt": null,
       "expected_head_sha": "a0fc4a8806fad3facd1ccf40d9b089f044d432ce",
       "finding_id": null,
-      "status": "skipped",
+      "status": "ignored",
       "actions": [],
+      "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix(gateway): close child ACP sessions on parent reset/delete (#68916)",
-        "body": "### Summary\n\n- **Problem**: ACP sessions spawned from a parent session via `sessions_spawn` (e.g. `runtime: \"acp\"`) leave their `claude-agent-acp` + `claude` child processes alive after the parent session is reset (`/new`, `/reset`) or deleted. The gateway session-mutation cleanup in `src/gateway/session-reset-service.ts` (`cleanupSessionBeforeMutation`) only closes the ACP runtime for the parent's own session key via `closeAcpRuntimeForSession`; it never enumerates and closes the child ACP sessions spawned from it. The orphaned pairs accumulate and exhaust memory (~3.5 GB from 11 orphaned pairs within 2 hours on a 16 GB host).\n- **Root Cause**: Child ACP sessions are persisted as their own session-store entries that carry `parentSessionKey` pointing at the parent's canonical key, but the reset/delete cleanup path acts only on the single parent key. There is no step that walks the session store for entries whose `parentSessionKey` matches the session being mutated, so their ACP runtimes are never cancelled/closed and their backend processes are left orphaned (reparented to the supervisor).\n- **Fix**: Add a bounded child-cleanup step to `cleanupSessionBeforeMutation`. After the parent's ACP runtime is closed, `closeChildAcpRuntimesForParent` enumerates the session store with the existing `listSessionEntries` API, selects direct ACP-backed children (`entry.parentSessionKey === parentKey && entry.acp`), and closes them through the existing `closeAcpRuntimeForSession` helper (reusing the established cancel/close/discard behavior). Children are closed **concurrently** via `Promise.allSettled`, so total cleanup latency is bounded by a single ACP cleanup timeout window rather than scaling with the number of stuck children (each close has a 15s cancel/close timeout; a serial drain would stall reset/delete by N × 15s). Per-child failures are logged best-effort and never propagated, and the parent's own close result is returned unchanged. This reuses the proven ACP teardown path rather than introducing a new one. Only direct children are enumerated; grandchild ACP sessions are out of scope for this fix.\n- **What changed**:\n  - `src/gateway/session-reset-service.ts`: import `listSessionEntries`; add `closeChildAcpRuntimesForParent` helper; call it from `cleanupSessionBeforeMutation` after the parent close, preserving the parent close result as the return value.\n  - `src/gateway/server.sessions.reset-cleanup.test.ts`: add a regression test that `sessions.reset` closes both the parent and a spawned ACP child, plus a concurrency test proving three stuck children are dispatched together (not serialized) so cleanup latency stays within one timeout window.\n  - `src/gateway/server.sessions.delete-lifecycle.test.ts`: add a parallel test that `sessions.delete` closes a spawned ACP child of the deleted parent.\n  - `CHANGELOG.md`: single-line `### Fixes` entry.\n- **What did NOT change (scope boundary)**:\n  - `closeAcpRuntimeForSession`, `cancelSession`, `closeSession`, and the parent close result/return contract are unchanged — children reuse the identical close path.\n  - No PID-level fallback kill and no global/startup orphan reaping were added; per the issue triage those remain separate follow-ups. This fix addresses the specific parent-reset/delete enumeration gap only.\n  - No new config keys, no change to `sessions_spawn`, ACP runtime backends, or the session-store schema.\n  - Non-ACP child sessions and unrelated sessions are untouched (filtered out by `entry.acp` and `parentSessionKey`).\n\n### Reproduction\n\n1. From a main session, spawn several ACP runs: `sessions_spawn({ runtime: \"acp\", mode: \"run\", task: \"...\" })`.\n2. Reset the parent session via `/new` or `/reset` (or delete it).\n3. Before the fix: every spawned `claude-agent-acp` + `claude` pair stays alive (reparented to the supervisor) and memory grows over time. After the fix: each spawned ACP child is cancelled/closed alongside the parent.\n\n### Real behavior proof\n\n- **Behavior addressed**: on parent session reset/delete, spawned child ACP sessions were never enumerated, so their ACP runtimes (and backend processes) were orphaned; only the parent's own ACP runtime was closed.\n- **Real environment tested**: Linux, Node.js 22, real on-disk session store written to a temp dir and read back through the real `listSessionEntries` API from `src/config/sessions/store.ts` (the watcher/store layer is not stubbed).\n- **Exact steps or command run after this patch**: (A) wrote a session store containing a parent ACP session, three spawned ACP children (each with `parentSessionKey` set to the parent), one non-ACP child, and one unrelated ACP session, then applied the exact selection the fix uses (`parentSessionKey === parent && entry.acp`) over the real `listSessionEntries` output to count which ACP runtimes the reset/delete path closes before vs after; (B) measured the close pattern's latency by simulating three stuck child closes (200ms each) under a serial `await` loop (old behavior) versus `Promise.allSettled` (the fix).\n- **Evidence after fix**: console output from the run:\n  ```\n  (A) enumeration\n    sessions in store              : 6\n    ACP children of parent         : 3 (agent:main:acp-child-1, agent:main:acp-child-2, agent:main:acp-child-3)\n    BEFORE fix — ACP closed        : 1 (agent:main:main)\n    AFTER fix  — ACP closed        : 4 (agent:main:main, agent:main:acp-child-1, agent:main:acp-child-2, agent:main:acp-child-3)\n    orphaned children BEFORE/AFTER : 3 / 0\n  (B) latency for N=3 stuck children @ 200ms each\n    BEFORE fix — serial await      : ~603ms (~N × window)\n    AFTER fix  — Promise.allSettled: ~201ms (~one window)\n  ```\n- **Observed result after fix**: (A) the three spawned ACP children that would orphan before the fix are closed alongside the parent (4 ACP runtimes closed total); the non-ACP child and the unrelated ACP session are correctly excluded. (B) closing the three stuck children concurrently completes in ~one timeout window (~201ms) instead of ~N windows (~603ms serial) — i.e. reset/delete latency no longer scales with stuck-child count. Gateway tests independently confirm both `sessions.reset` and `sessions.delete` invoke the ACP close path for the parent and child keys, and that three stuck children are dispatched concurrently rather than serialized — all fail on current `main` without this change.\n- **What was not tested**: a live multi-hour gateway run reproducing the full ~3.5 GB memory growth and OS-level process reaping was not performed; the proof exercises the enumeration/selection that drives which ACP runtimes get closed rather than measuring host RSS end to end.\n\n### Risk / Mitigation\n\n- **Risk**: a child cancel/close failure could stall or block the parent mutation, or the enumeration could close the wrong sessions.\n- **Mitigation**: children are closed **concurrently** (`Promise.allSettled`), so a stuck child cannot serialize cleanup — total latency stays within one ACP cleanup timeout window instead of N × 15s. Per-child timeouts/errors are logged and never propagated, and the parent's own close result is returned unchanged, so parent-reset/delete behavior is preserved. Selection is strictly `entry.parentSessionKey === parentKey && entry.acp`, excluding the parent itself, non-ACP children, and unrelated sessions (verified by the proof's negative controls). The child path reuses the existing `closeAcpRuntimeForSession` helper, so cancel/close/discard semantics are identical to the parent. Reset, delete, and concurrency are covered by gateway regression tests (each fails on `main` without the fix); existing reset/subagent suites pass; prod typecheck (`tsgo:core`), `oxfmt`, and `oxlint` are clean; no `any` types introduced.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Gateway\n- [x] ACP subsystem\n- [x] Tests\n\n### Linked Issue/PR\n\nFixes #68916\n",
-        "branch": "fix/acp-reset-cleanup-child-sessions-68916",
-        "head_sha": "a0fc4a8806fad3facd1ccf40d9b089f044d432ce",
-        "author": "openperf",
+        "title": "fix(telegram): dedupe replayed message dispatches",
+        "body": "## Summary\n\n- Problem: Telegram isolated-ingress replays can deliver the same logical Telegram message under a different `update_id`, bypassing update-level dedupe and dispatching the message again.\n- Solution: Add account-scoped dispatch dedupe keyed by Telegram `chat.id + message_id`, committed only after the message reaches the real dispatch boundary.\n- What changed: Telegram handler paths now claim, release, merge, and commit dispatch dedupe keys across direct messages, inbound debounce, text fragments, media groups, and canceled debounce buffers.\n- What did NOT change (scope boundary): Existing Telegram update dedupe remains in place; this does not alter Telegram auth, routing, or visible reply policy.\n\n## Motivation\n\n- Fixes duplicate Telegram dispatch/reply risk from replayed ingress updates after offset or restart edge cases.\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [x] Refactor required for the fix\n\n## Scope (select all touched areas)\n\n- [x] Integrations\n- [x] API / contracts\n\n## Linked Issue/PR\n\n- Closes #84886\n- [x] This PR fixes a bug or regression\n\n## Real behavior proof\n\nBehavior addressed: A replayed Telegram update for the same logical `chat.id/message_id` should not dispatch the message to the model a second time.\n\nReal environment tested: AWS Crabbox, provider `aws`, run `run_a54b4e62dacb`, lease `cbx_3c8f6e475d9e`, live Telegram `telegram` credential from Convex, isolated Telegram ingress spool, mock OpenAI backend.\n\nExact steps or command run after this patch: Built the patched checkout on AWS Crabbox, leased a Convex `telegram` credential, started OpenClaw gateway with Telegram isolated ingress and mock OpenAI, sent one real Telegram group message to the SUT bot, waited for one model dispatch, wrote the same Telegram message object back into the isolated ingress spool with a new synthetic `update_id`, then checked dispatch dedupe logs and mock model request count.\n\nEvidence after fix:\n\n```json\n{\n  \"status\": \"pass\",\n  \"groupId\": \"-5140433623\",\n  \"requestMessageId\": 11699,\n  \"replayUpdateId\": 1779422502749,\n  \"mockRequestsBeforeReplay\": 1,\n  \"mockRequestsAfterReplay\": 1,\n  \"skipLogSeen\": true\n}\n```\n\nObserved result after fix: The original live Telegram message dispatched once. The replayed spool update logged the dispatch-dedupe skip and did not create a second mock model request.\n\nWhat was not tested: A visible second Telegram reply was not required as the pass condition; the proof targeted the dispatch boundary directly by counting model requests.\n\nBefore evidence: On current main, the same replay shape was observed to reach the dispatch boundary twice for the same Telegram `chat.id/message_id` under different update deliveries.\n\n## Root Cause\n\n- Root cause: Telegram update-level dedupe uses `update_id` when available, but `update_id` is a delivery cursor rather than stable message identity. Replays of the same logical Telegram message can arrive with different update IDs.\n- Missing detection / guardrail: There was no durable message-level dispatch claim keyed by Telegram `chat.id/message_id`.\n- Contributing context: Isolated ingress spool replay and offset persistence/restart behavior can make update-level dedupe insufficient.\n\n## Regression Test Plan\n\n- Coverage level that should have caught this:\n  - [x] Unit test\n  - [x] Seam / integration test\n  - [x] End-to-end test\n- Target test or file:\n  - `extensions/telegram/src/message-dispatch-dedupe.test.ts`\n  - `extensions/telegram/src/bot.create-telegram-bot.test.ts`\n  - `src/auto-reply/inbound.test.ts`\n- Scenario the test should lock in: Same Telegram message identity replayed after handler recreation is skipped, while canceled debounce claims are released and can be processed later.\n- Why this is the smallest reliable guardrail: It covers the stable identity key, persistence behavior, handler recreation, and the cancellation path that can otherwise strand claims.\n- Existing test that already covers this (if any): Existing update-offset tests cover update cursor behavior, but not message-level replay dispatch dedupe.\n\n## User-visible / Behavior Changes\n\nReplayed Telegram messages with the same `chat.id/message_id` no longer trigger duplicate model dispatches/replies within the dispatch dedupe TTL.\n\n## Diagram\n\n```text\nBefore:\nTelegram replay -> new update_id -> update dedupe misses -> duplicate dispatch\n\nAfter:\nTelegram replay -> same chat.id/message_id -> dispatch dedupe skips -> no duplicate dispatch\n```\n\n## Security Impact (required)\n\n- New permissions/capabilities? No\n- Secrets/tokens handling changed? No\n- New/changed network calls? No\n- Command/tool execution surface changed? No\n- Data access scope changed? No\n- If any `Yes`, explain risk + mitigation: N/A\n\n## Repro + Verification\n\n### Environment\n\n- OS: Linux on AWS Crabbox\n- Runtime/container: Node 24.15.0 remote Crabbox checkout\n- Model/provider: mock OpenAI-compatible `/v1/responses`\n- Integration/channel: Telegram live bot credential from Convex `telegram` pool\n- Relevant config (redacted): Telegram group allowlist, isolated ingress enabled, mock OpenAI base URL on loopback\n\n### Steps\n\n1. Start OpenClaw gateway with Telegram isolated ingress and mock OpenAI.\n2. Send one real Telegram message to the SUT bot.\n3. Wait for the original message to reach dispatch and create one mock model request.\n4. Write the same Telegram message into the isolated ingress spool with a new `update_id`.\n5. Assert the gateway logs dispatch dedupe skip and mock model request count remains unchanged.\n\n### Expected\n\n- First message dispatches once.\n- Replayed same `chat.id/message_id` is skipped before model dispatch.\n\n### Actual\n\n- First message produced one mock model request.\n- Replay left model request count unchanged at one and logged the dispatch dedupe skip.\n\n## Evidence\n\n- [x] Failing test/log before + passing after\n- [x] Trace/log snippets\n\n## Human Verification (required)\n\n- Verified scenarios:\n  - Focused Vitest coverage for dispatch dedupe, Telegram bot handler replay, message processor boundary, and inbound debounce cancellation.\n  - `pnpm check:changed`.\n  - `$autoreview` until clean.\n  - Live AWS Crabbox Telegram replay proof.\n- Edge cases checked:\n  - Account isolation.\n  - Invalid message IDs.\n  - Durable persistence across guard recreation.\n  - Releasing claims when debounce cancellation drops buffered messages.\n  - Releasing claims on pre-dispatch drops/errors.\n- What you did **not** verify:\n  - Replay behavior after the configured dispatch dedupe TTL expires.\n\n## Review Conversations\n\n- [x] I replied to or resolved every bot review conversation I addressed in this PR.\n- [x] I left unresolved only the conversations that still need reviewer or maintainer judgment.\n\n## Compatibility / Migration\n\n- Backward compatible? Yes\n- Config/env changes? No\n- Migration needed? No\n- If yes, exact upgrade steps: N/A\n\n## Risks and Mitigations\n\n- Risk: A legitimate re-delivery after the dedupe TTL can dispatch again.\n  - Mitigation: TTL keeps state bounded and covers the restart/offset replay window this bug involves.\n- Risk: A claim could be stranded if a buffered message is canceled before dispatch.\n  - Mitigation: Debouncer now reports canceled items and Telegram releases dispatch claims for canceled buffers.\n",
+        "branch": "fix/telegram-dispatch-dedupe-84886",
+        "head_sha": "8027a045d6c13e7fd64f174956cdaf684aa9325e",
+        "author": "joshavant",
         "labels": [
-          "gateway",
-          "size: M",
-          "proof: supplied",
+          "channel: telegram",
+          "maintainer",
+          "size: L",
+          "proof: sufficient",
           "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
@@ -83,38 +86,81 @@
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server.sessions.delete-lifecycle.test.ts",
-            "additions": 41,
-            "deletions": 0,
+            "path": "extensions/telegram/src/bot-handlers.runtime.ts",
+            "additions": 194,
+            "deletions": 51,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server.sessions.reset-cleanup.test.ts",
-            "additions": 145,
-            "deletions": 0,
+            "path": "extensions/telegram/src/bot-message.test.ts",
+            "additions": 8,
+            "deletions": 8,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/session-reset-service.ts",
-            "additions": 52,
+            "path": "extensions/telegram/src/bot-message.ts",
+            "additions": 2,
             "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/bot-native-commands.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/bot.create-telegram-bot.test-harness.ts",
+            "additions": 13,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/bot.create-telegram-bot.test.ts",
+            "additions": 54,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/message-dispatch-dedupe.test.ts",
+            "additions": 115,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/telegram/src/message-dispatch-dedupe.ts",
+            "additions": 106,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/inbound-debounce.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/inbound.test.ts",
+            "additions": 27,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85190",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85190.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85208",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85208.md",
         "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 96,
+          "total": 103,
           "counts": {
-            "SUCCESS": 74,
-            "SKIPPED": 21,
+            "CANCELLED": 1,
+            "SUCCESS": 73,
+            "SKIPPED": 28,
             "NEUTRAL": 1
           },
           "blockers": [],
@@ -122,20 +168,20 @@
           "terminalBlockers": []
         }
       },
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1788,
+    "total_ms": 2177,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 259
+        "ms": 305
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1287
+        "ms": 1633
       },
       {
         "name": "classify_commands",
@@ -143,7 +189,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 217
+        "ms": 225
       },
       {
         "name": "append_ledger",
