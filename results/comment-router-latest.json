@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-22T02:39:42.867Z",
+  "generated_at": "2026-05-22T02:40:50.352Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-21T23:39:39.586Z",
+  "since": "2026-05-21T23:40:48.569Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    83722
+    83106
   ],
-  "comment_ids": [
-    4514497467
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 9,
+  "commands_seen": 6,
   "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,21 +31,108 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:83722:4514497467:2026-05-22T02:37:48Z:freeform_assist",
-      "comment_id": "4514497467",
-      "comment_version_key": "4514497467:2026-05-22T02:37:48Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83722#issuecomment-4514497467",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:83106:4470832801:2026-05-22T02:40:45Z:clawsweeper_auto_repair",
+      "comment_id": "4470832801",
+      "comment_version_key": "4470832801:2026-05-22T02:40:45Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83106#issuecomment-4470832801",
       "repo": "openclaw/openclaw",
-      "issue_number": 83722,
-      "author": "Takhoffman",
-      "author_id": 781889,
+      "issue_number": 83106,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-22T02:37:48Z",
-      "comment_updated_at": "2026-05-22T02:37:48Z",
+      "comment_created_at": "2026-05-17T13:32:37Z",
+      "comment_updated_at": "2026-05-22T02:40:45Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=02621714d0aa66e8784d677f0fdc260b79971f63)",
+      "review_summary": "The branch adds a catch/log handler to the approval expiry timeout delivery IIFE and adds exec approval forwarder expiry tests.\n\nReproducibility: no. high-confidence live reproduction is shown. Source inspection confirms the expiry timeout IIFE has no outer catch on current main, but ordinary per-target delivery failures are already caught inside `deliverToTargets`.",
+      "review_followup": "Contributor action is needed for real behavior proof, and the small code/test adjustments should stay on this PR branch rather than a separate repair lane while proof remains the merge gate.",
+      "freeform_prompt": null,
+      "expected_head_sha": "02621714d0aa66e8784d677f0fdc260b79971f63",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(exec-approvals): add .catch() to expiry delivery fire-and-forget",
+        "body": "## Problem\n\nIn `createApprovalHandlers` (`src/infra/exec-approval-forwarder.ts:580`), the expiry delivery fires an async IIFE without `.catch()`:\n\n```typescript\n(async () => {\n  await deliverToTargets({ buildPayload, deliver });\n})();  // <-- no .catch()\n```\n\nIf `deliverToTargets` throws (target unavailable, serialization error, delivery timeout), the resulting promise rejection is unhandled. Node.js emits an `unhandledRejection` warning and, depending on the `--unhandled-rejections` flag, may terminate the process.\n\n## Fix\n\nAdd `.catch((err) => { log.error(...) })` to the fire-and-forget IIFE. This keeps the fire-and-forget semantics (the timeout callback does not await the delivery) while preventing unhandled rejections. The error is logged with `log.error` including the `requestId` for traceability.\n\nThe `pending.delete(requestId)` call stays **before** the async delivery (not after), so expired forwarder state is cleaned up immediately regardless of delivery success. This was a P1 finding from the initial review: moving `delete` after `await` would keep expired state alive during delivery.\n\nProduction diff is +5 lines changed in 1 file, plus 118 lines of test coverage.\n\n## Real behavior proof\n\nBehavior addressed: A fire-and-forget async IIFE in the exec-approval expiry handler lacked `.catch()`, causing unhandled promise rejections when the delivery target is unavailable or throws during expiry notification.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js v22.16.0, OpenClaw built from source (commit 1d5b5db) at `/tmp/fix-83106`.\n\nExact steps or command run after this patch:\n```bash\n# 1. Build OpenClaw from patched source\ncd /tmp/fix-83106\nCI=true pnpm install --frozen-lockfile\npnpm build\n\n# 2. Verify .catch() in compiled production code\ngrep -n -B3 \"failed to deliver expiry notification\" dist/server-aux-handlers-DTyXogW3.js\n\n# 3. Start the patched gateway\ntimeout 10 node openclaw.mjs gateway\n\n# 4. Run exec-approval forwarder test suite\nnode scripts/run-vitest.mjs src/infra/exec-approval-forwarder.test.ts\n```\n\nEvidence after fix: terminal output copied below.\n\n### Compiled production code verification\n\nThe `.catch()` handler with `log.error` is present in the compiled exec-approval handler bundle:\n\n```console\n$ grep -n -B3 \"failed to deliver expiry notification\" dist/server-aux-handlers-DTyXogW3.js\n318-deliver: params.deliver\n319-});\n320-})().catch((err) => {\n321:log.error(`exec approvals: failed to deliver expiry notification for ${requestId}: ${String(err)}`);\n```\n\nLine 320 shows the `.catch()` attached to the fire-and-forget IIFE. Line 321 logs the error with the `requestId` for traceability. Before this fix, line 319 ended with `})();` (no catch), leaving the rejection unhandled.\n\n### Live gateway startup proof\n\nThe patched gateway starts, loads the exec-approval forwarder with the .catch() handler, and runs cleanly:\n\n```console\n$ timeout 10 node openclaw.mjs gateway\n2026-05-21T12:48:25.927-07:00 [gateway] loading configuration…\n2026-05-21T12:48:25.981-07:00 [gateway] starting...\n2026-05-21T12:48:28.078-07:00 [health-monitor] started (interval: 300s, startup-grace: 60s, channel-connect-grace: 120s)\n2026-05-21T12:48:28.939-07:00 [gateway] agent model: openai/gpt-5.5 (thinking=medium, fast=off)\n2026-05-21T12:48:28.940-07:00 [gateway] http server listening (8 plugins: acpx, browser, canvas, device-pair, file-transfer, memory-core, phone-control, talk-voice; 3.0s)\n2026-05-21T12:48:29.304-07:00 [gateway] ready\n2026-05-21T12:48:49.394-07:00 [gateway] signal SIGTERM received\n2026-05-21T12:48:49.398-07:00 [gateway] received SIGTERM; shutting down\n2026-05-21T12:48:49.447-07:00 [shutdown] completed cleanly in 39ms\n```\n\n### Vitest test suite (22 tests, supplemental)\n\n```console\n$ node scripts/run-vitest.mjs src/infra/exec-approval-forwarder.test.ts\n ✓ |infra| ../../src/infra/exec-approval-forwarder.test.ts (22 tests) 62ms\n Test Files  1 passed (1)\n      Tests  22 passed (22)\n```\n\nThe test suite includes a focused regression test that verifies: when `deliverToTargets` rejects during expiry, the `.catch()` handler fires `log.error` with the error message, and no unhandled rejection escapes.\n\nObserved result after fix: The compiled production bundle contains the `.catch()` handler at line 320-321, attached to the fire-and-forget expiry delivery IIFE. The gateway starts cleanly with the patched exec-approval forwarder. Before the fix, the IIFE ended with `})()` (no catch). All 22 tests pass.\n\nWhat was not tested: Triggering an actual exec-approval expiry with a failing delivery target in a live gateway session. The `.catch()` is defensive hardening for delivery failures during the timeout-driven expiry path. The compiled code verification confirms the handler is wired into the active code path.\n",
+        "branch": "fix/exec-approval-expiry-ordering",
+        "head_sha": "02621714d0aa66e8784d677f0fdc260b79971f63",
+        "author": "sebtardif",
+        "labels": [
+          "size: S",
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/infra/exec-approval-forwarder.test.ts",
+            "additions": 118,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/exec-approval-forwarder.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83106",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83106.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "FAILURE": 2,
+            "SUCCESS": 71,
+            "SKIPPED": 28,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "check-dependencies:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "check-dependencies:FAILURE"
+          ]
+        }
+      },
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83106:4514069498:2026-05-22T01:10:02Z:re_review",
+      "comment_id": "4514069498",
+      "comment_version_key": "4514069498:2026-05-22T01:10:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83106#issuecomment-4514069498",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83106,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T01:10:02Z",
+      "comment_updated_at": "2026-05-22T01:10:02Z",
       "status_comment_id": null,
       "trigger": "mention",
-      "command": "ask technical mermaid showing before and after pseudo-code include risks",
-      "intent": "freeform_assist",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "trusted_bot": false,
@@ -56,96 +141,45 @@
       "repair_reason": null,
       "review_summary": null,
       "review_followup": null,
-      "freeform_prompt": "technical mermaid showing before and after pseudo-code include risks",
+      "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_assist",
-          "workflow": "assist.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-22T02:39:44.006Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 83722
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-22T02:39:45.134Z",
-          "response_comment_id": null,
-          "response_comment_mode": "created"
-        }
-      ],
-      "author_repository_permission": "write",
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "[AI-assisted] fix(reply): wait for block replies before tools",
-        "body": "## Summary\n\n- Problem: same-channel block replies could be queued but not delivered before tool execution continued.\n- Why it matters: a user can miss the assistant's pre-tool block reply even though the tool run starts.\n- What changed: successful same-channel block replies now wait for the dispatcher to drain before the block callback resolves.\n- What did NOT change (scope boundary): no provider API, channel plugin, config, routing, or tool execution behavior changes.\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor required for the fix\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [x] Skills / tool execution\n- [ ] Auth / tokens\n- [ ] Memory / storage\n- [ ] Integrations\n- [ ] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- Closes #32868\n- [x] This PR fixes a bug or regression\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: same-channel block replies must be delivered before the tool path continues.\n- Real environment tested: isolated Ubuntu OpenClaw source checkout on current `origin/main`, Node 22.22.2, no secrets, plus a local diagnostic-channel runtime adapter.\n- Exact steps or command run after this patch: ran a before/after diagnostic runtime proof through the real `dispatchReplyFromConfig -> onBlockReply -> createReplyDispatcher.deliver` path, then ran focused OpenClaw source tests.\n- Evidence after fix:\n\n```text\nDiagnostic runtime proof, before patch on origin/main:\nverdict: FAIL\neventOrder:\ndispatch_start\nassistant_text_end_block_callback_invoked\ndiagnostic_channel_send_start\nblock_callback_resolved\nnext_tool_start\ndiagnostic_channel_send_complete\ndispatch_done\n\nDiagnostic runtime proof, after this patch:\nverdict: PASS\neventOrder:\ndispatch_start\nassistant_text_end_block_callback_invoked\ndiagnostic_channel_send_start\ndiagnostic_channel_send_complete\nblock_callback_resolved\nnext_tool_start\ndispatch_done\n\nnode scripts/run-vitest.mjs src/auto-reply/reply/dispatch-from-config.test.ts src/auto-reply/reply/reply-flow.test.ts src/auto-reply/reply/dispatch-acp-delivery.test.ts src/auto-reply/reply/block-reply-pipeline.test.ts\nTest Files  4 passed (4)\nTests       182 passed (182)\n\nnode scripts/run-vitest.mjs src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.calls-onblockreplyflush-before-tool-execution-start-preserve.test.ts src/agents/pi-embedded-subscribe.handlers.tools.test.ts\nTest Files  4 passed (4)\nTests       78 passed (78)\n```\n\n- Observed result after fix: the diagnostic channel send completed before the block callback resolved and before the next tool started.\n- What was not tested: a live Telegram/WhatsApp/Discord run with real account credentials.\n- Before evidence: the same diagnostic proof on current main showed `next_tool_start` before `diagnostic_channel_send_complete`.\n\n## Root Cause (if applicable)\n\n- Root cause: `sendBlockReply(...)` returns only a boolean, so callers could treat \"queued\" as \"delivered\".\n- Missing detection / guardrail: there was no same-channel delivery barrier around block replies before continuing into tool execution.\n- Contributing context (if known): the existing pre-tool flush only covered the callback chain, not the dispatcher's async send chain.\n\n## Regression Test Plan (if applicable)\n\n- Coverage level that should have caught this:\n  - [x] Unit test\n  - [x] Seam / integration test\n  - [ ] End-to-end test\n  - [ ] Existing coverage already sufficient\n- Target test or file: `src/auto-reply/reply/dispatch-from-config.test.ts`, `src/auto-reply/reply/dispatch-acp-delivery.test.ts`, existing tool-start regression tests.\n- Scenario the test should lock in: block reply callbacks do not resolve while same-channel dispatcher delivery is still in flight, and abort can stop the wait.\n- Why this is the smallest reliable guardrail: it covers the exact boundary where a queued block reply becomes visible before tool execution.\n- Existing test that already covers this (if any): tool-start ordering tests existed, but they did not force the dispatcher delivery promise to stay pending.\n- If no new test is added, why not: N/A\n\n## User-visible / Behavior Changes\n\nUsers should see same-channel pre-tool block replies before the corresponding tool execution begins.\n\n## Diagram (if applicable)\n\n```text\nBefore:\nblock reply -> dispatcher queued -> callback resolved -> tool can start before delivery\n\nAfter:\nblock reply -> dispatcher queued -> wait for dispatcher delivery -> callback resolved -> tool starts\n```\n\n## Security Impact (required)\n\n- New permissions/capabilities? (`Yes/No`) No\n- Secrets/tokens handling changed? (`Yes/No`) No\n- New/changed network calls? (`Yes/No`) No\n- Command/tool execution surface changed? (`Yes/No`) No\n- Data access scope changed? (`Yes/No`) No\n- If any `Yes`, explain risk + mitigation: N/A\n\n## Repro + Verification\n\n### Environment\n\n- OS: isolated Ubuntu test server\n- Runtime/container: Node 22.22.2\n- Model/provider: N/A\n- Integration/channel (if any): same-channel reply dispatcher source path with a local diagnostic-channel delivery adapter\n- Relevant config (redacted): no secrets used\n\n### Steps\n\n1. Run the diagnostic proof on current `origin/main`.\n2. Observe the next tool start before diagnostic channel delivery completes.\n3. Apply this PR patch.\n4. Run the same diagnostic proof again.\n5. Observe diagnostic channel delivery complete before the block callback resolves and before the next tool starts.\n\n### Expected\n\n- Diagnostic channel delivery completes before the block callback resolves and before the next tool starts.\n\n### Actual\n\n- Before patch: `next_tool_start` came before `diagnostic_channel_send_complete`.\n- After patch: `diagnostic_channel_send_complete` came before `block_callback_resolved` and `next_tool_start`.\n\n## Evidence\n\n- [x] Failing test/log before + passing after\n- [x] Trace/log snippets\n- [ ] Screenshot/recording\n- [ ] Perf numbers (if relevant)\n\nFocused checks:\n\n```text\nnode --import tsx proof-block-reply-delivery.mjs\nBefore on origin/main: FAIL because next_tool_start occurred before diagnostic_channel_send_complete.\nAfter this patch: PASS because diagnostic_channel_send_complete occurred before block_callback_resolved and next_tool_start.\n\nnode scripts/run-vitest.mjs src/auto-reply/reply/dispatch-from-config.test.ts src/auto-reply/reply/reply-flow.test.ts src/auto-reply/reply/dispatch-acp-delivery.test.ts src/auto-reply/reply/block-reply-pipeline.test.ts\nTest Files  4 passed (4)\nTests       182 passed (182)\n\nnode scripts/run-vitest.mjs src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.calls-onblockreplyflush-before-tool-execution-start-preserve.test.ts src/agents/pi-embedded-subscribe.handlers.tools.test.ts\nTest Files  4 passed (4)\nTests       78 passed (78)\n\ncorepack pnpm exec oxfmt --check --threads=1 src/auto-reply/reply/reply-dispatcher.ts src/auto-reply/reply/dispatch-from-config.ts src/auto-reply/reply/dispatch-acp-delivery.ts src/auto-reply/reply/dispatch-from-config.test.ts src/auto-reply/reply/dispatch-acp-delivery.test.ts src/auto-reply/reply/reply-flow.test.ts\nAll matched files use the correct format.\n\ncorepack pnpm tsgo:core:test\npassed\n\ngit diff --check\nclean\n```\n\n## Human Verification (required)\n\n- Verified scenarios: before/after diagnostic-channel runtime proof; same-channel block reply waits for real dispatcher delivery; direct ACP block delivery waits for real dispatcher delivery; abort signal can stop the same-channel wait; existing tool-start regression tests still pass.\n- Edge cases checked: dispatcher boolean compatibility is unchanged.\n- What you did **not** verify: live external provider credentials or a real Telegram/WhatsApp/Discord message.\n\n## Review Conversations\n\n- [x] I replied to or resolved every bot review conversation I addressed in this PR.\n- [x] I left unresolved only the conversations that still need reviewer or maintainer judgment.\n\n## Compatibility / Migration\n\n- Backward compatible? (`Yes/No`) Yes\n- Config/env changes? (`Yes/No`) No\n- Migration needed? (`Yes/No`) No\n- If yes, exact upgrade steps: N/A\n\n## Risks and Mitigations\n\n- Risk: waiting for dispatcher delivery can keep the block callback pending longer when delivery is slow.\n  - Mitigation: the wait only applies after a successful same-channel block send, and the same-channel path is abort-aware.\n",
-        "branch": "fix/block-reply-delivery-barrier-32868",
-        "head_sha": "2f78d40498b37a799fa2328883719a4ce82213cc",
-        "author": "iwhatsskill",
+        "title": "fix(exec-approvals): add .catch() to expiry delivery fire-and-forget",
+        "body": "## Problem\n\nIn `createApprovalHandlers` (`src/infra/exec-approval-forwarder.ts:580`), the expiry delivery fires an async IIFE without `.catch()`:\n\n```typescript\n(async () => {\n  await deliverToTargets({ buildPayload, deliver });\n})();  // <-- no .catch()\n```\n\nIf `deliverToTargets` throws (target unavailable, serialization error, delivery timeout), the resulting promise rejection is unhandled. Node.js emits an `unhandledRejection` warning and, depending on the `--unhandled-rejections` flag, may terminate the process.\n\n## Fix\n\nAdd `.catch((err) => { log.error(...) })` to the fire-and-forget IIFE. This keeps the fire-and-forget semantics (the timeout callback does not await the delivery) while preventing unhandled rejections. The error is logged with `log.error` including the `requestId` for traceability.\n\nThe `pending.delete(requestId)` call stays **before** the async delivery (not after), so expired forwarder state is cleaned up immediately regardless of delivery success. This was a P1 finding from the initial review: moving `delete` after `await` would keep expired state alive during delivery.\n\nProduction diff is +5 lines changed in 1 file, plus 118 lines of test coverage.\n\n## Real behavior proof\n\nBehavior addressed: A fire-and-forget async IIFE in the exec-approval expiry handler lacked `.catch()`, causing unhandled promise rejections when the delivery target is unavailable or throws during expiry notification.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js v22.16.0, OpenClaw built from source (commit 1d5b5db) at `/tmp/fix-83106`.\n\nExact steps or command run after this patch:\n```bash\n# 1. Build OpenClaw from patched source\ncd /tmp/fix-83106\nCI=true pnpm install --frozen-lockfile\npnpm build\n\n# 2. Verify .catch() in compiled production code\ngrep -n -B3 \"failed to deliver expiry notification\" dist/server-aux-handlers-DTyXogW3.js\n\n# 3. Start the patched gateway\ntimeout 10 node openclaw.mjs gateway\n\n# 4. Run exec-approval forwarder test suite\nnode scripts/run-vitest.mjs src/infra/exec-approval-forwarder.test.ts\n```\n\nEvidence after fix: terminal output copied below.\n\n### Compiled production code verification\n\nThe `.catch()` handler with `log.error` is present in the compiled exec-approval handler bundle:\n\n```console\n$ grep -n -B3 \"failed to deliver expiry notification\" dist/server-aux-handlers-DTyXogW3.js\n318-deliver: params.deliver\n319-});\n320-})().catch((err) => {\n321:log.error(`exec approvals: failed to deliver expiry notification for ${requestId}: ${String(err)}`);\n```\n\nLine 320 shows the `.catch()` attached to the fire-and-forget IIFE. Line 321 logs the error with the `requestId` for traceability. Before this fix, line 319 ended with `})();` (no catch), leaving the rejection unhandled.\n\n### Live gateway startup proof\n\nThe patched gateway starts, loads the exec-approval forwarder with the .catch() handler, and runs cleanly:\n\n```console\n$ timeout 10 node openclaw.mjs gateway\n2026-05-21T12:48:25.927-07:00 [gateway] loading configuration…\n2026-05-21T12:48:25.981-07:00 [gateway] starting...\n2026-05-21T12:48:28.078-07:00 [health-monitor] started (interval: 300s, startup-grace: 60s, channel-connect-grace: 120s)\n2026-05-21T12:48:28.939-07:00 [gateway] agent model: openai/gpt-5.5 (thinking=medium, fast=off)\n2026-05-21T12:48:28.940-07:00 [gateway] http server listening (8 plugins: acpx, browser, canvas, device-pair, file-transfer, memory-core, phone-control, talk-voice; 3.0s)\n2026-05-21T12:48:29.304-07:00 [gateway] ready\n2026-05-21T12:48:49.394-07:00 [gateway] signal SIGTERM received\n2026-05-21T12:48:49.398-07:00 [gateway] received SIGTERM; shutting down\n2026-05-21T12:48:49.447-07:00 [shutdown] completed cleanly in 39ms\n```\n\n### Vitest test suite (22 tests, supplemental)\n\n```console\n$ node scripts/run-vitest.mjs src/infra/exec-approval-forwarder.test.ts\n ✓ |infra| ../../src/infra/exec-approval-forwarder.test.ts (22 tests) 62ms\n Test Files  1 passed (1)\n      Tests  22 passed (22)\n```\n\nThe test suite includes a focused regression test that verifies: when `deliverToTargets` rejects during expiry, the `.catch()` handler fires `log.error` with the error message, and no unhandled rejection escapes.\n\nObserved result after fix: The compiled production bundle contains the `.catch()` handler at line 320-321, attached to the fire-and-forget expiry delivery IIFE. The gateway starts cleanly with the patched exec-approval forwarder. Before the fix, the IIFE ended with `})()` (no catch). All 22 tests pass.\n\nWhat was not tested: Triggering an actual exec-approval expiry with a failing delivery target in a live gateway session. The `.catch()` is defensive hardening for delivery failures during the timeout-driven expiry path. The compiled code verification confirms the handler is wired into the active code path.\n",
+        "branch": "fix/exec-approval-expiry-ordering",
+        "head_sha": "02621714d0aa66e8784d677f0fdc260b79971f63",
+        "author": "sebtardif",
         "labels": [
           "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "mantis: telegram-visible-proof",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 message-delivery",
-          "merge-risk: 🚨 availability",
-          "status: 👀 ready for maintainer look"
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/auto-reply/reply/dispatch-acp-delivery.test.ts",
-            "additions": 46,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-acp-delivery.ts",
-            "additions": 4,
+            "path": "src/infra/exec-approval-forwarder.test.ts",
+            "additions": 118,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/dispatch-from-config.test.ts",
-            "additions": 51,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-from-config.ts",
+            "path": "src/infra/exec-approval-forwarder.ts",
             "additions": 5,
             "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-dispatcher.ts",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-flow.test.ts",
-            "additions": 27,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/channel-streaming.ts",
-            "additions": 23,
-            "deletions": 4,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83722",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83722.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83106",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83106.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
@@ -153,40 +187,298 @@
         "checks": {
           "total": 102,
           "counts": {
+            "FAILURE": 2,
+            "SUCCESS": 71,
             "SKIPPED": 28,
-            "SUCCESS": 73,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:CANCELLED"
+            "Real behavior proof:FAILURE",
+            "check-dependencies:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
+            "Real behavior proof:FAILURE",
+            "check-dependencies:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83106:4512556299:2026-05-21T20:36:31Z:re_review",
+      "comment_id": "4512556299",
+      "comment_version_key": "4512556299:2026-05-21T20:36:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83106#issuecomment-4512556299",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83106,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-21T20:36:31Z",
+      "comment_updated_at": "2026-05-21T20:36:31Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-05-22T02:40:52.471Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 83106
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-22T02:40:53.277Z",
+          "response_comment_id": "4511288255",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(exec-approvals): add .catch() to expiry delivery fire-and-forget",
+        "body": "## Problem\n\nIn `createApprovalHandlers` (`src/infra/exec-approval-forwarder.ts:580`), the expiry delivery fires an async IIFE without `.catch()`:\n\n```typescript\n(async () => {\n  await deliverToTargets({ buildPayload, deliver });\n})();  // <-- no .catch()\n```\n\nIf `deliverToTargets` throws (target unavailable, serialization error, delivery timeout), the resulting promise rejection is unhandled. Node.js emits an `unhandledRejection` warning and, depending on the `--unhandled-rejections` flag, may terminate the process.\n\n## Fix\n\nAdd `.catch((err) => { log.error(...) })` to the fire-and-forget IIFE. This keeps the fire-and-forget semantics (the timeout callback does not await the delivery) while preventing unhandled rejections. The error is logged with `log.error` including the `requestId` for traceability.\n\nThe `pending.delete(requestId)` call stays **before** the async delivery (not after), so expired forwarder state is cleaned up immediately regardless of delivery success. This was a P1 finding from the initial review: moving `delete` after `await` would keep expired state alive during delivery.\n\nProduction diff is +5 lines changed in 1 file, plus 118 lines of test coverage.\n\n## Real behavior proof\n\nBehavior addressed: A fire-and-forget async IIFE in the exec-approval expiry handler lacked `.catch()`, causing unhandled promise rejections when the delivery target is unavailable or throws during expiry notification.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js v22.16.0, OpenClaw built from source (commit 1d5b5db) at `/tmp/fix-83106`.\n\nExact steps or command run after this patch:\n```bash\n# 1. Build OpenClaw from patched source\ncd /tmp/fix-83106\nCI=true pnpm install --frozen-lockfile\npnpm build\n\n# 2. Verify .catch() in compiled production code\ngrep -n -B3 \"failed to deliver expiry notification\" dist/server-aux-handlers-DTyXogW3.js\n\n# 3. Start the patched gateway\ntimeout 10 node openclaw.mjs gateway\n\n# 4. Run exec-approval forwarder test suite\nnode scripts/run-vitest.mjs src/infra/exec-approval-forwarder.test.ts\n```\n\nEvidence after fix: terminal output copied below.\n\n### Compiled production code verification\n\nThe `.catch()` handler with `log.error` is present in the compiled exec-approval handler bundle:\n\n```console\n$ grep -n -B3 \"failed to deliver expiry notification\" dist/server-aux-handlers-DTyXogW3.js\n318-deliver: params.deliver\n319-});\n320-})().catch((err) => {\n321:log.error(`exec approvals: failed to deliver expiry notification for ${requestId}: ${String(err)}`);\n```\n\nLine 320 shows the `.catch()` attached to the fire-and-forget IIFE. Line 321 logs the error with the `requestId` for traceability. Before this fix, line 319 ended with `})();` (no catch), leaving the rejection unhandled.\n\n### Live gateway startup proof\n\nThe patched gateway starts, loads the exec-approval forwarder with the .catch() handler, and runs cleanly:\n\n```console\n$ timeout 10 node openclaw.mjs gateway\n2026-05-21T12:48:25.927-07:00 [gateway] loading configuration…\n2026-05-21T12:48:25.981-07:00 [gateway] starting...\n2026-05-21T12:48:28.078-07:00 [health-monitor] started (interval: 300s, startup-grace: 60s, channel-connect-grace: 120s)\n2026-05-21T12:48:28.939-07:00 [gateway] agent model: openai/gpt-5.5 (thinking=medium, fast=off)\n2026-05-21T12:48:28.940-07:00 [gateway] http server listening (8 plugins: acpx, browser, canvas, device-pair, file-transfer, memory-core, phone-control, talk-voice; 3.0s)\n2026-05-21T12:48:29.304-07:00 [gateway] ready\n2026-05-21T12:48:49.394-07:00 [gateway] signal SIGTERM received\n2026-05-21T12:48:49.398-07:00 [gateway] received SIGTERM; shutting down\n2026-05-21T12:48:49.447-07:00 [shutdown] completed cleanly in 39ms\n```\n\n### Vitest test suite (22 tests, supplemental)\n\n```console\n$ node scripts/run-vitest.mjs src/infra/exec-approval-forwarder.test.ts\n ✓ |infra| ../../src/infra/exec-approval-forwarder.test.ts (22 tests) 62ms\n Test Files  1 passed (1)\n      Tests  22 passed (22)\n```\n\nThe test suite includes a focused regression test that verifies: when `deliverToTargets` rejects during expiry, the `.catch()` handler fires `log.error` with the error message, and no unhandled rejection escapes.\n\nObserved result after fix: The compiled production bundle contains the `.catch()` handler at line 320-321, attached to the fire-and-forget expiry delivery IIFE. The gateway starts cleanly with the patched exec-approval forwarder. Before the fix, the IIFE ended with `})()` (no catch). All 22 tests pass.\n\nWhat was not tested: Triggering an actual exec-approval expiry with a failing delivery target in a live gateway session. The `.catch()` is defensive hardening for delivery failures during the timeout-driven expiry path. The compiled code verification confirms the handler is wired into the active code path.\n",
+        "branch": "fix/exec-approval-expiry-ordering",
+        "head_sha": "02621714d0aa66e8784d677f0fdc260b79971f63",
+        "author": "sebtardif",
+        "labels": [
+          "size: S",
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/infra/exec-approval-forwarder.test.ts",
+            "additions": 118,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/exec-approval-forwarder.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83106",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83106.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "FAILURE": 2,
+            "SUCCESS": 71,
+            "SKIPPED": 28,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "check-dependencies:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "check-dependencies:FAILURE"
           ]
         }
       }
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83106:4512228635:2026-05-21T19:50:16Z:re_review",
+      "comment_id": "4512228635",
+      "comment_version_key": "4512228635:2026-05-21T19:50:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83106#issuecomment-4512228635",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83106,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-21T19:50:16Z",
+      "comment_updated_at": "2026-05-21T19:50:16Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83106:4511261817:2026-05-21T18:12:13Z:re_review",
+      "comment_id": "4511261817",
+      "comment_version_key": "4511261817:2026-05-21T18:12:13Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83106#issuecomment-4511261817",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83106,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-21T18:12:13Z",
+      "comment_updated_at": "2026-05-21T18:12:13Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83106:4510082493:2026-05-21T15:57:36Z:re_review",
+      "comment_id": "4510082493",
+      "comment_version_key": "4510082493:2026-05-21T15:57:36Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83106#issuecomment-4510082493",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83106,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-21T15:57:36Z",
+      "comment_updated_at": "2026-05-21T15:57:36Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(exec-approvals): add .catch() to expiry delivery fire-and-forget",
+        "body": "## Problem\n\nIn `createApprovalHandlers` (`src/infra/exec-approval-forwarder.ts:580`), the expiry delivery fires an async IIFE without `.catch()`:\n\n```typescript\n(async () => {\n  await deliverToTargets({ buildPayload, deliver });\n})();  // <-- no .catch()\n```\n\nIf `deliverToTargets` throws (target unavailable, serialization error, delivery timeout), the resulting promise rejection is unhandled. Node.js emits an `unhandledRejection` warning and, depending on the `--unhandled-rejections` flag, may terminate the process.\n\n## Fix\n\nAdd `.catch((err) => { log.error(...) })` to the fire-and-forget IIFE. This keeps the fire-and-forget semantics (the timeout callback does not await the delivery) while preventing unhandled rejections. The error is logged with `log.error` including the `requestId` for traceability.\n\nThe `pending.delete(requestId)` call stays **before** the async delivery (not after), so expired forwarder state is cleaned up immediately regardless of delivery success. This was a P1 finding from the initial review: moving `delete` after `await` would keep expired state alive during delivery.\n\nProduction diff is +5 lines changed in 1 file, plus 118 lines of test coverage.\n\n## Real behavior proof\n\nBehavior addressed: A fire-and-forget async IIFE in the exec-approval expiry handler lacked `.catch()`, causing unhandled promise rejections when the delivery target is unavailable or throws during expiry notification.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js v22.16.0, OpenClaw built from source (commit 1d5b5db) at `/tmp/fix-83106`.\n\nExact steps or command run after this patch:\n```bash\n# 1. Build OpenClaw from patched source\ncd /tmp/fix-83106\nCI=true pnpm install --frozen-lockfile\npnpm build\n\n# 2. Verify .catch() in compiled production code\ngrep -n -B3 \"failed to deliver expiry notification\" dist/server-aux-handlers-DTyXogW3.js\n\n# 3. Start the patched gateway\ntimeout 10 node openclaw.mjs gateway\n\n# 4. Run exec-approval forwarder test suite\nnode scripts/run-vitest.mjs src/infra/exec-approval-forwarder.test.ts\n```\n\nEvidence after fix: terminal output copied below.\n\n### Compiled production code verification\n\nThe `.catch()` handler with `log.error` is present in the compiled exec-approval handler bundle:\n\n```console\n$ grep -n -B3 \"failed to deliver expiry notification\" dist/server-aux-handlers-DTyXogW3.js\n318-deliver: params.deliver\n319-});\n320-})().catch((err) => {\n321:log.error(`exec approvals: failed to deliver expiry notification for ${requestId}: ${String(err)}`);\n```\n\nLine 320 shows the `.catch()` attached to the fire-and-forget IIFE. Line 321 logs the error with the `requestId` for traceability. Before this fix, line 319 ended with `})();` (no catch), leaving the rejection unhandled.\n\n### Live gateway startup proof\n\nThe patched gateway starts, loads the exec-approval forwarder with the .catch() handler, and runs cleanly:\n\n```console\n$ timeout 10 node openclaw.mjs gateway\n2026-05-21T12:48:25.927-07:00 [gateway] loading configuration…\n2026-05-21T12:48:25.981-07:00 [gateway] starting...\n2026-05-21T12:48:28.078-07:00 [health-monitor] started (interval: 300s, startup-grace: 60s, channel-connect-grace: 120s)\n2026-05-21T12:48:28.939-07:00 [gateway] agent model: openai/gpt-5.5 (thinking=medium, fast=off)\n2026-05-21T12:48:28.940-07:00 [gateway] http server listening (8 plugins: acpx, browser, canvas, device-pair, file-transfer, memory-core, phone-control, talk-voice; 3.0s)\n2026-05-21T12:48:29.304-07:00 [gateway] ready\n2026-05-21T12:48:49.394-07:00 [gateway] signal SIGTERM received\n2026-05-21T12:48:49.398-07:00 [gateway] received SIGTERM; shutting down\n2026-05-21T12:48:49.447-07:00 [shutdown] completed cleanly in 39ms\n```\n\n### Vitest test suite (22 tests, supplemental)\n\n```console\n$ node scripts/run-vitest.mjs src/infra/exec-approval-forwarder.test.ts\n ✓ |infra| ../../src/infra/exec-approval-forwarder.test.ts (22 tests) 62ms\n Test Files  1 passed (1)\n      Tests  22 passed (22)\n```\n\nThe test suite includes a focused regression test that verifies: when `deliverToTargets` rejects during expiry, the `.catch()` handler fires `log.error` with the error message, and no unhandled rejection escapes.\n\nObserved result after fix: The compiled production bundle contains the `.catch()` handler at line 320-321, attached to the fire-and-forget expiry delivery IIFE. The gateway starts cleanly with the patched exec-approval forwarder. Before the fix, the IIFE ended with `})()` (no catch). All 22 tests pass.\n\nWhat was not tested: Triggering an actual exec-approval expiry with a failing delivery target in a live gateway session. The `.catch()` is defensive hardening for delivery failures during the timeout-driven expiry path. The compiled code verification confirms the handler is wired into the active code path.\n",
+        "branch": "fix/exec-approval-expiry-ordering",
+        "head_sha": "02621714d0aa66e8784d677f0fdc260b79971f63",
+        "author": "sebtardif",
+        "labels": [
+          "size: S",
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/infra/exec-approval-forwarder.test.ts",
+            "additions": 118,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/exec-approval-forwarder.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83106",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83106.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "FAILURE": 2,
+            "SUCCESS": 71,
+            "SKIPPED": 28,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "check-dependencies:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "check-dependencies:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 6295,
+    "total_ms": 5134,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 629
+        "ms": 243
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2638
+        "ms": 1523
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 4
       },
       {
         "name": "execute_commands",
-        "ms": 3001
+        "ms": 3339
       },
       {
         "name": "append_ledger",
