@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-22T14:01:03.141Z",
+  "generated_at": "2026-05-22T14:01:00.152Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-22T11:01:00.061Z",
+  "since": "2026-05-22T11:00:56.627Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    82918
+    82926
   ],
   "comment_ids": [
-    4519348231
+    4519348478
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,17 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:82918:4519348231:2026-05-22T13:58:10Z:re_review",
-      "comment_id": "4519348231",
-      "comment_version_key": "4519348231:2026-05-22T13:58:10Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82918#issuecomment-4519348231",
+      "idempotency_key": "comment-router:openclaw/openclaw:82926:4519348478:2026-05-22T13:58:11Z:re_review",
+      "comment_id": "4519348478",
+      "comment_version_key": "4519348478:2026-05-22T13:58:11Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82926#issuecomment-4519348478",
       "repo": "openclaw/openclaw",
-      "issue_number": 82918,
+      "issue_number": 82926,
       "author": "SebTardif",
       "author_id": 1413412,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-22T13:58:10Z",
-      "comment_updated_at": "2026-05-22T13:58:10Z",
+      "comment_created_at": "2026-05-22T13:58:11Z",
+      "comment_updated_at": "2026-05-22T13:58:11Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "automerge",
@@ -64,559 +64,53 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(install): add pipe guard to prevent stdin stealing in curl | bash",
-        "body": "## Problem\n\nWhen invoked via `curl -fsSL https://openclaw.ai/install.sh | bash`, bash reads the script incrementally from stdin. Interactive prompts (gum, read) and child processes that also read stdin steal bytes from the script stream, causing:\n\n1. Truncated function names: `warn_shell_path_missing_di` instead of `warn_shell_path_missing_dir`\n2. \"command not found\" errors for the truncated names\n3. Indefinite hangs (the script stream is corrupted, bash blocks waiting for more input)\n\nReported on WSL2 Ubuntu 24.04 with 3/3 reproduction rate.\n\n## Fix\n\nAdd a pipe guard at the top of `install.sh` that detects piped execution via empty `BASH_SOURCE[0]` (piped scripts have no source file), buffers the remaining stdin to a temp file using `cat`, and re-executes from the file via `exec`. This frees stdin for interactive prompts and child processes.\n\nThe guard:\n- **Does not fire** for direct execution (`bash install.sh`) or process substitution (`bash <(curl ...)`) because `BASH_SOURCE` is set\n- **Does not fire** for CI/Docker with non-tty stdin when running from a file\n- **Cleans up** the temp file immediately after re-execution starts\n- Uses `_OPENCLAW_PIPE_BUFFERED` env var to prevent infinite re-execution loops\n\nFixes #73814\n\n## Real behavior proof\nBehavior addressed: the installer now buffers itself to a temp file when piped via curl, preventing child processes from consuming stdin bytes that corrupt the script stream.\nReal environment tested: Linux x86_64, OpenClaw 2026.5.12 installed, Node v26.0.0, bash 5.2. Tested both piped execution (`cat install.sh | bash -s -- --install-method npm`) and direct execution (`bash install.sh --install-method npm < /dev/null`).\nExact steps or command run after this patch: (1) verified pipe guard pattern with a minimal test script that includes a deliberate stdin steal (`head -c 50 < /dev/stdin`); (2) ran full installer in piped mode; (3) ran full installer in direct mode with non-tty stdin; (4) confirmed both complete successfully without truncation.\nEvidence after fix: terminal output copied below.\n\nPipe guard pattern verification (minimal test script with deliberate stdin steal):\n```\n$ cat /tmp/pipe-test-steal.sh | bash\nBefore stdin steal\nAfter stdin steal\nFunction executed correctly\nScript completed\n```\nWithout the guard, the `head -c 50` would consume 50 bytes of the script stream, truncating the function definition. With the guard, the script runs from a temp file so stdin stealing has no effect.\n\nFull installer in piped mode (script runs from temp file):\n```\n$ cat scripts/install.sh | bash -s -- --install-method npm 2>&1 | tail -10\n✓ OpenClaw installed\n\n[3/3] Finalizing setup\n· Running doctor to migrate settings\n· Running doctor\n✓ Doctor complete\n\n🦞 OpenClaw installed successfully (2026.5.12)!\n```\nNote: error source shows `/tmp/tmp.uuj4JcpyzQ: line 2988` confirming the guard buffered to temp file.\n\nFull installer in direct mode (BASH_SOURCE is set, guard does not fire):\n```\n$ bash scripts/install.sh --install-method npm < /dev/null 2>&1 | tail -10\n✓ Doctor complete\n\n🦞 OpenClaw installed successfully (2026.5.12)!\n```\nNote: error source shows `scripts/install.sh: line 3000` confirming guard did not fire.\n\nObserved result after fix: piped execution completes successfully without truncated function names or hangs. Direct execution is unaffected. The pipe guard adds negligible overhead (one mktemp + cat + exec).\nWhat was not tested: macOS bash 3.2 (BASH_SOURCE behavior may differ in very old bash versions). WSL2 Ubuntu 24.04 (the reporter's environment) was not tested directly, but the fix is bash-level and platform-independent.\n",
-        "branch": "fix/install-pipe-guard",
-        "head_sha": "a7d00f6e51b261c8613470793b036491617e6ed2",
+        "title": "fix(install): verify node binary after auto-install and suppress ioctl errors",
+        "body": "## Problem\n\nThe Node.js auto-installer reports \"Node.js v22 installed\" without verifying the binary is actually available on PATH. On WSL2 Ubuntu 24.04, the NodeSource setup script produces ioctl errors (interactive terminal prompts in a non-interactive context), apt may fail silently, but the installer prints a success message and then immediately crashes with \"Node.js v22+ is required.\"\n\nTwo root causes:\n1. The NodeSource setup script (`bash \"$tmp\"`) runs without `DEBIAN_FRONTEND=noninteractive`, so it attempts interactive terminal operations that produce ioctl errors on WSL2\n2. The installer prints `ui_success \"Node.js v24 installed\"` unconditionally after the apt call, without verifying `node` is on PATH\n\n## Fix\n\n1. Pass `DEBIAN_FRONTEND=noninteractive` to the NodeSource setup script execution (both root and sudo paths)\n2. Run `activate_supported_node_on_path` and verify the active node meets the minimum version requirement (`node_is_at_least_required`) before printing the success message. If node is missing or too old, report the actual failure and exit instead of falsely reporting success.\n\nFixes #73837\n\n## Real behavior proof\nBehavior addressed: the Node.js auto-installer now verifies the node binary is actually on PATH and meets the minimum version after package installation before reporting success, and passes DEBIAN_FRONTEND=noninteractive to the NodeSource setup script to suppress ioctl errors on WSL2.\nReal environment tested: local source checkout of openclaw/openclaw at commit aaadf721e3 (current upstream/main) on Linux x86_64, Node v26.0.0, bash 5.2.37.\nExact steps or command run after this patch: extracted the `node_is_at_least_required`, `parse_node_version_components`, and `parse_node_version_components_for_binary` functions from the patched `scripts/install.sh` and exercised the post-install verification logic under three conditions: (1) node present and meets minimum, (2) node binary missing (empty PATH), (3) post-install guard sequence from `install_node()`.\nEvidence after fix: terminal output copied below.\n\n```console\n$ node -v\nv26.0.0\n\n$ bash -c '\nNODE_MIN_MAJOR=22; NODE_MIN_MINOR=14; NODE_MIN_VERSION=\"${NODE_MIN_MAJOR}.${NODE_MIN_MINOR}\"; NODE_DEFAULT_MAJOR=24\nparse_node_version_components_for_binary() {\n    local node_bin=\"${1:-node}\"\n    if ! command -v \"$node_bin\" &> /dev/null && [[ ! -x \"$node_bin\" ]]; then return 1; fi\n    local version major minor\n    version=\"$(\"$node_bin\" -v 2>/dev/null || true)\"\n    major=\"${version#v}\"; major=\"${major%%.*}\"\n    minor=\"${version#v}\"; minor=\"${minor#*.}\"; minor=\"${minor%%.*}\"\n    if [[ ! \"$major\" =~ ^[0-9]+$ ]]; then return 1; fi\n    echo \"$major $minor\"\n}\nparse_node_version_components() {\n    if ! command -v node &> /dev/null; then return 1; fi\n    parse_node_version_components_for_binary node\n}\nnode_is_at_least_required() {\n    local version_components major minor\n    version_components=\"$(parse_node_version_components || true)\"\n    read -r major minor <<< \"$version_components\"\n    if [[ ! \"$major\" =~ ^[0-9]+$ || ! \"$minor\" =~ ^[0-9]+$ ]]; then return 1; fi\n    if [[ \"$major\" -gt \"$NODE_MIN_MAJOR\" ]]; then return 0; fi\n    if [[ \"$major\" -eq \"$NODE_MIN_MAJOR\" && \"$minor\" -ge \"$NODE_MIN_MINOR\" ]]; then return 0; fi\n    return 1\n}\necho \"=== Test 1: Current node meets requirement ===\"\necho \"Node version: $(node -v)\"\necho \"Min required: v${NODE_MIN_VERSION}\"\nif node_is_at_least_required; then\n    echo \"PASS: node_is_at_least_required returned 0 (success)\"\nelse\n    echo \"FAIL: node_is_at_least_required returned 1\"\nfi\necho \"\"\necho \"=== Test 2: Simulate missing node binary (empty PATH) ===\"\nOLD_PATH=\"$PATH\"; PATH=\"/nonexistent\"\nif node_is_at_least_required; then\n    echo \"FAIL: should have returned 1 for missing node\"\nelse\n    active_version=\"$(node -v 2>/dev/null || echo \"not found\")\"\n    echo \"PASS: node_is_at_least_required returned 1 (node binary: ${active_version})\"\n    echo \"Would print: Node.js v${NODE_MIN_VERSION}+ required but found ${active_version} after install\"\nfi\nPATH=\"$OLD_PATH\"\necho \"\"\necho \"=== Test 3: Post-install guard logic (patched version) ===\"\necho \"Simulating install_node() post-install sequence...\"\nif node_is_at_least_required; then\n    echo \"Post-install check passed - would print: Node.js v${NODE_DEFAULT_MAJOR} installed\"\nelse\n    echo \"Post-install check FAILED - would exit 1 with error\"\nfi\n'\n=== Test 1: Current node meets requirement ===\nNode version: v26.0.0\nMin required: v22.14\nPASS: node_is_at_least_required returned 0 (success)\n\n=== Test 2: Simulate missing node binary (empty PATH) ===\nPASS: node_is_at_least_required returned 1 (node binary: not found)\nWould print: Node.js v22.14+ required but found not found after install\n\n=== Test 3: Post-install guard logic (patched version) ===\nSimulating install_node() post-install sequence...\nPost-install check passed - would print: Node.js v24 installed\n```\n\nDEBIAN_FRONTEND is now set in both NodeSource setup paths:\n```console\n$ grep -n \"DEBIAN_FRONTEND\" scripts/install.sh\n594:        env DEBIAN_FRONTEND=\"${DEBIAN_FRONTEND:-noninteractive}\" NEEDRESTART_MODE=\"${NEEDRESTART_MODE:-a}\" apt-get \"$@\"\n596:        sudo env DEBIAN_FRONTEND=\"${DEBIAN_FRONTEND:-noninteractive}\" NEEDRESTART_MODE=\"${NEEDRESTART_MODE:-a}\" apt-get \"$@\"\n1633:                run_quiet_step \"Configuring NodeSource repository\" env DEBIAN_FRONTEND=noninteractive bash \"$tmp\"\n1636:                run_quiet_step \"Configuring NodeSource repository\" sudo DEBIAN_FRONTEND=noninteractive bash \"$tmp\"\n2774:        export DEBIAN_FRONTEND=\"${DEBIAN_FRONTEND:-noninteractive}\"\n```\n\nLines 1633 and 1636 are the new additions. Lines 594 and 596 show the existing pattern in `apt_get()` that this fix follows.\n\nObserved result after fix: the post-install guard correctly detects a valid node (Test 1: v26.0.0 >= v22.14, returns 0), correctly catches a missing node binary (Test 2: PATH emptied, returns 1 with \"not found\"), and the install_node() guard sequence works end-to-end (Test 3: passes with current node). The success message is now gated behind `node_is_at_least_required`, and DEBIAN_FRONTEND=noninteractive is passed to the NodeSource setup script on both root and sudo paths.\nWhat was not tested: actual WSL2 Ubuntu 24.04 reproduction of the ioctl error (Node.js is already installed on this machine). Could not test a real failed install scenario where apt succeeds but the binary is not on PATH. The fix uses the same `node_is_at_least_required` helper and `DEBIAN_FRONTEND` pattern already used elsewhere in the script.\n",
+        "branch": "fix/install-node-verify",
+        "head_sha": "a621cf30ed3ba09d962465d5faf61f2b43e81821",
         "author": "sebtardif",
         "labels": [
           "scripts",
           "size: XS",
           "proof: supplied",
-          "proof: sufficient",
           "P2",
-          "merge-risk: 🚨 automation",
-          "proof: sufficient",
-          "rating: 🦐 gold shrimp",
-          "status: ⏳ waiting on author"
+          "impact:crash-loop"
         ],
         "files": [
           {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
             "path": "scripts/install.sh",
-            "additions": 16,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "profiles/rolling-upgrade.json",
-            "additions": 29,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scenarios/adversarial-input-openai-compatible.json",
-            "additions": 96,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scenarios/agent-provider-concurrent.json",
-            "additions": 13,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scenarios/agent-provider-protocol-failure.json",
-            "additions": 83,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scenarios/agent-provider-random-disconnect.json",
-            "additions": 87,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scenarios/cron-runtime.json",
-            "additions": 73,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scenarios/dirty-plugin-state.json",
-            "additions": 96,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scenarios/exec-tool-safety.json",
-            "additions": 79,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scenarios/mcp-tool-call.json",
-            "additions": 78,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scenarios/plugin-legacy-unsafe-memory.json",
-            "additions": 74,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scenarios/plugin-missing-runtime-deps.json",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scenarios/release-update-recovery.json",
-            "additions": 137,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scenarios/tool-failure-containment.json",
-            "additions": 73,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scenarios/upgrade-from-day-ago.json",
-            "additions": 117,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scenarios/upgrade-from-month-ago.json",
-            "additions": 117,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scenarios/upgrade-from-week-ago.json",
-            "additions": 117,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auth.mjs",
-            "additions": 12,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli.mjs",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/collectors/resources.mjs",
-            "additions": 12,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands.mjs",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/matrix-run.mjs",
-            "additions": 12,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/run.mjs",
-            "additions": 7,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/evaluation/violations.mjs",
-            "additions": 41,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/evaluator.mjs",
-            "additions": 627,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/evidence-ledger.mjs",
-            "additions": 39,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/evidence/agent-turns.mjs",
-            "additions": 46,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/evidence/shared.mjs",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/measurement-contract.mjs",
-            "additions": 3,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/network-frontage.mjs",
-            "additions": 403,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/registries/scenarios.mjs",
-            "additions": 12,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/registries/surfaces.mjs",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/reporting/report.mjs",
-            "additions": 51,
-            "deletions": 14,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/reporting/scenario-aggregate.mjs",
-            "additions": 18,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/run/command-executor.mjs",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/run/context.mjs",
-            "additions": 3,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/run/phase-plan.mjs",
-            "additions": 13,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/run/report-finalization.mjs",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/runner.mjs",
-            "additions": 36,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/safety.mjs",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/selfcheck.mjs",
-            "additions": 1231,
-            "deletions": 124,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "states/cron-user.json",
-            "additions": 26,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "states/dirty-plugin-disabled-broken.json",
-            "additions": 67,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "states/dirty-plugin-local-edits.json",
-            "additions": 65,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "states/dirty-plugin-manifest-drift.json",
-            "additions": 65,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "states/dirty-plugin-partial-install.json",
-            "additions": 65,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "states/dirty-plugin-stale-deps.json",
-            "additions": 65,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "states/dirty-plugin-symlink-dev.json",
-            "additions": 67,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "states/exec-tool-user.json",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "states/mcp-tool-user.json",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "states/update-recovery-plugin-user.json",
-            "additions": 67,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "support/assert-command-output.mjs",
-            "additions": 84,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "support/configure-openclaw-mock-auth.mjs",
             "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "support/dirty-plugin-state.mjs",
-            "additions": 490,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "support/mcp-tool-call-smoke.mjs",
-            "additions": 497,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "support/network-frontage-proxy.mjs",
-            "additions": 76,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "support/plugins/kova-basic/openclaw.plugin.json",
-            "additions": 16,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "support/plugins/kova-legacy-unsafe-memory/index.js",
-            "additions": 42,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "support/plugins/kova-legacy-unsafe-memory/openclaw.plugin.json",
-            "additions": 16,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "support/plugins/kova-legacy-unsafe-memory/package.json",
-            "additions": 26,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "support/plugins/kova-missing-runtime-dep/openclaw.plugin.json",
-            "additions": 16,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "support/prepare-large-memory-session-state.mjs",
-            "additions": 68,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "support/resolve-openclaw-release-age.mjs",
-            "additions": 130,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "support/restore-first-ocm-upgrade-snapshot.mjs",
-            "additions": 93,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "support/run-adversarial-inputs.mjs",
-            "additions": 227,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "support/run-cron-runtime-smoke.mjs",
-            "additions": 573,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "support/run-doctor-repair.mjs",
-            "additions": 110,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "support/run-exec-tool-safety.mjs",
-            "additions": 338,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "support/run-openclaw-release-age-upgrade.mjs",
-            "additions": 136,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "surfaces/adversarial-input.json",
-            "additions": 72,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "surfaces/agent-cli-local-turn.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "surfaces/browser-automation.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "surfaces/cron-runtime.json",
-            "additions": 71,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "surfaces/dirty-plugin-state.json",
-            "additions": 102,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "surfaces/exec-tool-safety.json",
-            "additions": 74,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "surfaces/fresh-install.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "surfaces/gateway-performance.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "surfaces/mcp-runtime.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "surfaces/mcp-tool-call.json",
-            "additions": 76,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "surfaces/media-understanding.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "surfaces/network-offline.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "surfaces/openai-compatible-turn.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "surfaces/plugin-legacy-unsafe-memory.json",
-            "additions": 65,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "surfaces/release-update-recovery.json",
-            "additions": 134,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "surfaces/soak.json",
-            "additions": 1,
-            "deletions": 0,
+            "deletions": 3,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-82918",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82918.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82926",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82926.md",
         "mode": "autonomous",
         "mergeable": "CONFLICTING",
         "merge_state_status": "DIRTY",
         "review_decision": "",
         "checks": {
-          "total": 9,
+          "total": 78,
           "counts": {
-            "SUCCESS": 6,
-            "SKIPPED": 2,
-            "NEUTRAL": 1
+            "SUCCESS": 67,
+            "SKIPPED": 9,
+            "FAILURE": 1,
+            "IN_PROGRESS": 1
           },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
+          "blockers": [
+            "build-artifacts:FAILURE",
+            "checks-node-agentic-commands-models:IN_PROGRESS"
+          ],
+          "pending": [
+            "checks-node-agentic-commands-models:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "build-artifacts:FAILURE"
+          ]
         }
       },
       "reason": "matching ClawSweeper response comment already exists"
@@ -624,27 +118,27 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3314,
+    "total_ms": 3865,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1015
+        "ms": 1131
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2051
+        "ms": 2381
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 234
+        "ms": 339
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
