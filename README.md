@@ -128,9 +128,11 @@ ClawSweeper may propose a close only when the item is clearly one of these:
 - incoherent enough that no action can be taken
 - stale issue older than 60 days with too little data to verify
 
-Maintainer-authored items are never auto-closed. Everything else stays open.
+Maintainer-authored items stay open unless ClawSweeper can verify that the
+request is already implemented on current `main`. Everything else stays open.
 Issues with an open PR that references them using GitHub closing syntax such as
-`Fixes #123` stay open until that PR merges or is closed.
+`Fixes #123` stay open until that PR merges, is closed, or ClawSweeper closes
+that high-confidence PR candidate earlier in the same apply run.
 Open issue/PR pairs from the same author stay open together unless the paired
 item is already resolved or a maintainer explicitly asks to close one side.
 
@@ -328,7 +330,9 @@ runs from one repo do not hide the state of another.
 There is still one deterministic apply path for writes. Review can propose and
 sync stale public review comments, but closing remains guarded by apply so a
 fresh GitHub snapshot, labels, maintainer-authorship, and unchanged item state
-are checked immediately before mutation.
+are checked immediately before mutation. Maintainer-authored or
+`maintainer`-labeled items can still close when the only protected state is
+maintainer ownership and the close reason is verified `implemented_on_main`.
 
 ### Repair Lane
 
@@ -397,10 +401,15 @@ without rediscovering a date bucket.
 
 ### Safety Model
 
-- Maintainer-authored items are excluded from automated closes.
+- Maintainer-authored items are excluded from automated closes unless the close
+  reason is verified `implemented_on_main`.
 - Protected labels block close proposals.
+- Apply rechecks older skipped fixed-close reports and archives skipped item
+  records when GitHub already shows the item closed.
+- Apply can retry older `kept_open` close reports and clear linked-PR issue
+  blockers after ClawSweeper closes the PR earlier in the same apply run.
 - Open PRs with GitHub closing references block issue closes until the PR is
-  resolved.
+  resolved or closed earlier in the same apply run.
 - Open same-author issue/PR pairs block one-sided closes.
 - Codex runs without GitHub write tokens.
 - Issue/PR event jobs create target write and report-push credentials only after
