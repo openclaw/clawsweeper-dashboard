@@ -1,19 +1,19 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-05-22T11:03:48.765Z
+Generated: 2026-05-22T12:27:27.902Z
 
 ## Summary
 
 | Metric | Count |
 | --- | ---: |
-| open_prs | 4 |
+| open_prs | 3 |
 | ready_candidates | 0 |
 | security_hold | 0 |
 | needs_rebase | 3 |
 | mergeability_unknown | 0 |
-| needs_checks | 4 |
+| needs_checks | 3 |
 | needs_review | 0 |
-| needs_merge_preflight | 4 |
+| needs_merge_preflight | 3 |
 | needs_result_backfill | 0 |
 
 ## Dispatch
@@ -30,7 +30,6 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#85300](https://github.com/openclaw/openclaw/pull/85300) | fix: preserve Google Gemini 3 cron thinking | automerge-openclaw-openclaw-85185 | MERGEABLE | CLEAN | CANCELLED:18 SKIPPED:114 SUCCESS:79 NEUTRAL:1; blockers:7 | needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
 | [#85200](https://github.com/openclaw/openclaw/pull/85200) | Show assistant commentary in Discord progress drafts | automerge-openclaw-openclaw-85164 | CONFLICTING | DIRTY | CANCELLED:15 SKIPPED:120 SUCCESS:82 NEUTRAL:1; blockers:10 | needs_rebase:CONFLICTING, needs_merge_state:DIRTY, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | resume branch, rebase onto current main, repair conflicts, run changed checks, rerun review |
 | [#85116](https://github.com/openclaw/openclaw/pull/85116) | Retry app-server bridge drops safely | automerge-openclaw-openclaw-84219 | CONFLICTING | DIRTY | CANCELLED:4 SKIPPED:45 SUCCESS:79 NEUTRAL:1; blockers:2 | needs_rebase:CONFLICTING, needs_merge_state:DIRTY, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | resume branch, rebase onto current main, repair conflicts, run changed checks, rerun review |
 | [#84814](https://github.com/openclaw/openclaw/pull/84814) | fix(agents): classify embedded provider business denials for fallback | automerge-openclaw-openclaw-83042 | CONFLICTING | DIRTY | CANCELLED:20 SKIPPED:114 SUCCESS:80 NEUTRAL:1; blockers:9 | needs_rebase:CONFLICTING, needs_merge_state:DIRTY, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | resume branch, rebase onto current main, repair conflicts, run changed checks, rerun review |
