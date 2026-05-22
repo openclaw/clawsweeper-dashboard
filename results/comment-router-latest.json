@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-22T04:32:50.291Z",
+  "generated_at": "2026-05-22T04:33:42.955Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-22T01:32:47.809Z",
+  "since": "2026-05-22T01:33:40.113Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    82947
+    70479
   ],
   "comment_ids": [
-    4514976672
+    4514979617
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,17 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:82947:4514976672:2026-05-22T04:31:02Z:re_review",
-      "comment_id": "4514976672",
-      "comment_version_key": "4514976672:2026-05-22T04:31:02Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82947#issuecomment-4514976672",
+      "idempotency_key": "comment-router:openclaw/openclaw:70479:4514979617:2026-05-22T04:31:48Z:re_review",
+      "comment_id": "4514979617",
+      "comment_version_key": "4514979617:2026-05-22T04:31:48Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/70479#issuecomment-4514979617",
       "repo": "openclaw/openclaw",
-      "issue_number": 82947,
-      "author": "SebTardif",
-      "author_id": 1413412,
+      "issue_number": 70479,
+      "author": "joshavant",
+      "author_id": 830519,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-22T04:31:02Z",
-      "comment_updated_at": "2026-05-22T04:31:02Z",
+      "comment_created_at": "2026-05-22T04:31:48Z",
+      "comment_updated_at": "2026-05-22T04:31:48Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -65,57 +65,79 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-05-22T04:32:51.443Z",
+          "dispatched_at": "2026-05-22T04:33:43.836Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 82947
+          "item_number": 70479
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-05-22T04:32:52.588Z",
-          "response_comment_id": "4512903726",
-          "response_comment_mode": "updated"
+          "commented_at": "2026-05-22T04:33:44.920Z",
+          "response_comment_id": null,
+          "response_comment_mode": "created"
         }
       ],
-      "author_repository_permission": "read",
+      "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "fix(hooks): clear Gmail watcher renewal interval on re-entry",
-        "body": "## Problem\n\n`startGmailWatcher()` in `src/hooks/gmail-watcher.ts` does not stop the existing watcher when called a second time (e.g., during a configuration reload). On re-entry:\n\n1. **Process leak**: The old `gog serve` child process keeps running because `watcherProcess` is overwritten without killing the old process.\n2. **Interval leak**: The old `setInterval` renewal timer keeps firing because `renewInterval` is overwritten without `clearInterval`.\n3. **Respawn timer leak**: When the process exits normally, `spawnGogServe` queues a 5-second `setTimeout` for respawn. This timer is not stored or cleared. If a re-entry happens during the 5-second window, the stale timer fires and spawns a duplicate process.\n\n## Fix\n\nAdd a comprehensive re-entry guard **before async setup work** (Tailscale, Gmail API watch start):\n\n1. Set `shuttingDown = true` so the old process's exit handler skips the respawn `setTimeout`.\n2. Cancel any pending respawn timeout (`clearTimeout(respawnTimeout)`).\n3. Clear the old renewal interval.\n4. Kill the old `gog serve` process with SIGTERM.\n5. Await its **exit event**. If it does not exit within 3 seconds, escalate to SIGKILL. The promise resolves **only on exit**, never on the SIGKILL send, ensuring `shuttingDown` stays `true` until the process is confirmed dead.\n6. Reset `shuttingDown = false` and spawn fresh.\n\n**Key design decisions:**\n- Guard runs **before** `startGmailWatch()` and Tailscale setup, not after, so the old process cannot exit and queue a respawn during async work.\n- `respawnTimeout` is a new module-level variable that stores the exit handler's 5-second `setTimeout` return value. The re-entry guard and `stopGmailWatcher` both clear it.\n- `resolve()` appears **only** in the `exit` handler, **not** in the SIGKILL timeout. No race between exit-handler cleanup and replacement spawn.\n- `shuttingDown` is always reset to `false` unconditionally before `spawnGogServe`, covering both the guard path and the no-guard path.\n\nProduction diff is +22 lines changed in `gmail-watcher.ts`, plus 128 lines of test coverage (7 tests total).\n\n## Real behavior proof\n\nBehavior addressed: Calling `startGmailWatcher()` twice without stopping leaked the old `gog serve` process, renewal interval, and respawn timeout. Three separate leak vectors: (1) old process kept running, (2) old renewal timer kept firing, (3) stale 5-second respawn timer spawned a duplicate after re-entry.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js v22.16.0, OpenClaw built from source (commit dc44fdf) at `/tmp/fix-82947`.\n\nExact steps or command run after this patch:\n```bash\n# 1. Build OpenClaw from patched source\ncd /tmp/fix-82947\nCI=true pnpm install --frozen-lockfile\npnpm build\n\n# 2. Verify respawnTimeout tracking in compiled production code\ngrep -n \"respawnTimeout\" dist/gmail-watcher-lvUqmZO6.js\n\n# 3. Verify the full re-entry guard\ngrep -n -B2 -A8 \"oldProcess.kill\" dist/gmail-watcher-lvUqmZO6.js\n\n# 4. Start the patched gateway\ntimeout 10 node openclaw.mjs gateway\n\n# 5. Run Gmail watcher test suite (7 tests)\nnode scripts/run-vitest.mjs src/hooks/gmail-watcher.test.ts\n```\n\nEvidence after fix: terminal output copied below.\n\n### Compiled production code verification\n\nThe `respawnTimeout` variable is tracked at all three lifecycle points:\n\n```console\n$ grep -n \"respawnTimeout\" dist/gmail-watcher-lvUqmZO6.js\n25:let respawnTimeout = null;\n94:respawnTimeout = setTimeout(() => {\n95:respawnTimeout = null;\n168:if (watcherProcess || renewInterval || respawnTimeout) {\n170:if (respawnTimeout) {\n171:clearTimeout(respawnTimeout);\n172:respawnTimeout = null;\n238:if (respawnTimeout) {\n239:clearTimeout(respawnTimeout);\n240:respawnTimeout = null;\n```\n\n- **Line 25**: Module-level declaration.\n- **Line 94**: Stored in exit handler (was previously a fire-and-forget `setTimeout`).\n- **Lines 168-172**: Cleared in re-entry guard (before async setup).\n- **Lines 238-240**: Cleared in `stopGmailWatcher`.\n\nThe SIGTERM + SIGKILL escalation with exit-only resolution:\n\n```console\n$ grep -n -B2 -A8 \"oldProcess.kill\" dist/gmail-watcher-lvUqmZO6.js\n183-watcherProcess = null;\n184:oldProcess.kill(\"SIGTERM\");\n185-await new Promise((resolve) => {\n186-const escalation = setTimeout(() => {\n187:oldProcess.kill(\"SIGKILL\");\n188-}, 3e3);\n189-oldProcess.on(\"exit\", () => {\n190-clearTimeout(escalation);\n191-resolve();\n192-});\n193-});\n```\n\n`resolve()` is at line 191 (exit handler only). The SIGKILL at line 187 escalates but does not resolve. `shuttingDown` stays `true` until exit is confirmed.\n\n### Live watcher lifecycle proof: mock gog process spawn, exit, respawn, and cleanup\n\nThe full gmail watcher lifecycle was exercised in a real running gateway by configuring gmail hooks and providing a mock `gog` binary that exits after 2 seconds. This triggers the respawn timer (the core of the fix) in production compiled code.\n\n**Setup:**\n```bash\n# 1. Create a mock gog binary that exits after 2s (triggers respawn)\ncat > /tmp/gog << 'EOF'\n#!/bin/bash\ncase \"$*\" in\n  *\"watch start\"*) echo \"watch registered\"; exit 0;;\n  *\"watch serve\"*)  echo \"mock gog serve starting\"; sleep 2; exit 1;;\n  *)                exit 0;;\nesac\nEOF\nchmod +x /tmp/gog\n\n# 2. Configure gmail hooks in openclaw.json (hooks.enabled + hooks.gmail.account/topic/pushToken)\n# 3. Start gateway with mock gog in PATH\ncd /tmp/fix-82947\nPATH=\"/tmp:$PATH\" timeout 20 node openclaw.mjs gateway\n```\n\n**Terminal output (full watcher lifecycle):**\n\n```console\n2026-05-21T21:25:01.868-07:00 [gateway] starting...\n2026-05-21T21:25:03.585-07:00 [gateway] ready\n2026-05-21T21:25:03.649-07:00 [gmail-watcher] watch started for test@gmail.com\n2026-05-21T21:25:03.650-07:00 [gmail-watcher] starting gog gmail watch serve --account test@gmail.com --bind 127.0.0.1 --port 18787 --path /gmail-pubsub --include-body --max-bytes 20000\n2026-05-21T21:25:03.654-07:00 [gmail-watcher] gmail watcher started for test@gmail.com (renew every 720m)\n2026-05-21T21:25:03.655-07:00 [hooks] gmail watcher started\n2026-05-21T21:25:03.659-07:00 [gmail-watcher] [gog] mock gog serve starting on port 8787\n2026-05-21T21:25:06.075-07:00 [gmail-watcher] [gog] mock gog serve exiting\n2026-05-21T21:25:06.076-07:00 [gmail-watcher] gog exited (code=1, signal=null); restarting in 5s\n2026-05-21T21:25:18.577-07:00 [gmail-watcher] starting gog gmail watch serve --account test@gmail.com --bind 127.0.0.1 --port 18787 --path /gmail-pubsub --include-body --max-bytes 20000\n2026-05-21T21:25:18.582-07:00 [gmail-watcher] [gog] mock gog serve starting on port 8787\n2026-05-21T21:25:20.583-07:00 [gmail-watcher] [gog] mock gog serve exiting\n2026-05-21T21:25:20.584-07:00 [gmail-watcher] gog exited (code=1, signal=null); restarting in 5s\n2026-05-21T21:25:22.266-07:00 [gateway] received SIGTERM; shutting down\n2026-05-21T21:25:22.309-07:00 [gmail-watcher] gmail watcher stopped\n2026-05-21T21:25:22.311-07:00 [shutdown] completed cleanly in 37ms\n```\n\n**Line-by-line analysis of the fix's behavior:**\n\n1. `[gmail-watcher] watch started for test@gmail.com`: `startGmailWatch` registered with Gmail API (mock gog exits 0).\n2. `[gmail-watcher] starting gog gmail watch serve ...`: `spawnGogServe` spawned the mock gog process.\n3. `[gmail-watcher] gmail watcher started for test@gmail.com (renew every 720m)`: Watcher fully initialized, `renewInterval` set.\n4. `[gmail-watcher] [gog] mock gog serve exiting`: Mock gog exits after 2 seconds.\n5. **`[gmail-watcher] gog exited (code=1, signal=null); restarting in 5s`**: The exit handler fires. **This is where `respawnTimeout` is stored** (line 94 in compiled code: `respawnTimeout = setTimeout(..., 5000)`). Before this fix, this `setTimeout` was fire-and-forget with no reference stored.\n6. `[gmail-watcher] starting gog gmail watch serve ...`: **The respawn timer fired**, spawning a new process. Proves `respawnTimeout` storage works.\n7. Second exit + second `restarting in 5s`: Cycle repeats.\n8. `[gateway] received SIGTERM; shutting down`: SIGTERM arrives during the 5-second respawn window.\n9. **`[gmail-watcher] gmail watcher stopped`**: `stopGmailWatcher` ran, which sets `shuttingDown = true` and calls `clearTimeout(respawnTimeout)` (lines 238-240 in compiled code). The pending respawn timer is cancelled, preventing a duplicate process from spawning after shutdown. Before this fix, this timeout would fire and spawn a process into a stopped gateway.\n\n**What this proves:**\n- The `respawnTimeout` variable correctly stores the `setTimeout` return value in the exit handler.\n- The respawn mechanism works: process exits, timer fires, new process spawns.\n- `stopGmailWatcher` correctly clears the pending respawn timer via `clearTimeout(respawnTimeout)`.\n- SIGTERM during a respawn window does not leak a duplicate process.\n\n### Vitest test suite (7 tests, supplemental)\n\n```console\n$ node scripts/run-vitest.mjs src/hooks/gmail-watcher.test.ts\n ✓ |hooks| ../../src/hooks/gmail-watcher.test.ts (7 tests) 127ms\n Test Files  1 passed (1)\n      Tests  7 passed (7)\n```\n\nThe 7 tests cover all re-entry scenarios:\n\n1. **Kills existing process on re-entry**: Verifies `.kill(\"SIGTERM\")` on the old child.\n2. **Clears interval on re-entry**: Verifies timer count stays stable.\n3. **Only one renewal per tick**: One renewal after double start.\n4. **Cancels stale respawn timeout on re-entry**: Process exits (queuing 5s respawn), then re-entry happens, then 6 seconds pass. Verifies exactly 2 spawns (no duplicate from stale timer).\n5. **Does not let a stale cancelled startup clear newer watcher config**: Concurrent start race.\n6. **Starts gmail watcher**: Happy path.\n7. **Starts gmail watcher (restarts serve with updated config)**: Config change path.\n\nObserved result after fix: The mock gog lifecycle proof shows the full respawn cycle working in production compiled code: process spawn, process exit, `respawnTimeout` stored, respawn fires, second cycle, SIGTERM during respawn window, `stopGmailWatcher` clears the pending timeout and shuts down cleanly. The compiled bundle tracks `respawnTimeout` at all three lifecycle points (storage in exit handler, clearing in re-entry guard, clearing in stop). All 7 tests pass.\n\nWhat was not tested: Triggering the re-entry guard specifically (calling `startGmailWatcher` twice during a live session). The re-entry guard's process kill + timer cleanup was proven via Vitest mock in test 1, 2, and 4. The mock gog proof covers the respawn and stop paths.\n\n",
-        "branch": "fix/gmail-watcher-interval-leak",
-        "head_sha": "dc44fdf65ccac466e91a92fd5eb5b8cdcfcdf81f",
-        "author": "sebtardif",
+        "title": "fix(auto-reply): preserve sessions after compaction failures",
+        "body": "## Summary\n- preserve the active session mapping when overflow recovery or compaction failure cannot recover a turn\n- keep the existing dynamic overflow guidance while adding explicit preserved-session guidance to retry, `/compact`, or `/new`\n- mark preserved-session failure replies for delivery despite source-reply suppression\n- add regression coverage for embedded overflow payloads and thrown compaction-failure errors\n- update the session compaction docs for the preserved-session failure path\n\nFixes #70472.\n\n## Real behavior proof\nBehavior addressed: auto-reply no longer rotates/orphans the active session mapping when compaction or overflow recovery fails; the user gets a delivered failure reply that keeps dynamic overflow hints.\n\nReal environment tested: local OpenClaw source checkout in an isolated PR worktree after rebasing onto current `upstream/main` `b8e9ab9385` (`fix(codex): surface native compaction failures (#85160)`); `pnpm openclaw --version` built and ran the pushed head `193d3c0`. No live WebChat/model run.\n\nExact steps or command run after this patch:\n- `git fetch upstream main && git fetch origin fix/preserve-session-on-compaction-failure`\n- `git rebase upstream/main` (clean rebase; no textual conflicts)\n- `git grep -n \"resetSessionAfterCompactionFailure\" upstream/main -- src/auto-reply/reply src/agents` confirmed current `upstream/main` still has the reset path, so this PR is still relevant after #85160.\n- `pnpm docs:list`\n- `pnpm openclaw --version`\n- `node --import tsx --input-type=module` production-helper probe importing `buildContextOverflowRecoveryText`, `markReplyPayloadForSourceSuppressionDelivery`, and `getReplyPayloadMetadata` from `src/auto-reply`.\n- `pnpm exec oxfmt --check --threads=1 src/auto-reply/reply/agent-runner-execution.ts src/auto-reply/reply/agent-runner.ts src/auto-reply/reply/agent-runner-execution.test.ts CHANGELOG.md docs/reference/session-management-compaction.md`\n- focused Vitest through `scripts/run-vitest.mjs` exports, because local Node 23 did not execute that script's `import.meta.main` branch: `node --input-type=module` with `spawnWatchedVitestProcess({ pnpmArgs: ['exec', 'node', ...resolveVitestNodeArgs(process.env), resolveVitestCliEntry(), 'run', 'src/auto-reply/reply/agent-runner-execution.test.ts', '--reporter=dot'] })`\n- compaction-adjacent Vitest selection through the same wrapper exports: `src/agents/command/cli-compaction.test.ts`, `src/agents/command/session-store.test.ts`, `extensions/codex/src/app-server/compact.test.ts`\n- `git diff --check upstream/main...HEAD`\n- autoreview branch pass with tests disabled, using the focused proof above: `--mode branch --base upstream/main`\n\nEvidence after fix: terminal output from the local OpenClaw source setup and production-helper probe after rebasing on #85160:\n\n```text\n$ pnpm openclaw --version\nOpenClaw 2026.5.21 (193d3c0)\n\n$ node --import tsx --input-type=module\nruntime probe after upstream compaction rebase\nactive session before: session\nactive session after: session\ndeliverDespiteSourceReplySuppression: true\ncontains preserved-session guidance: true\ncontains dynamic reserveTokensFloor hint: true\nreply preview: ⚠️ Auto-compaction could not recover this turn. I kept this conversation mapped to the current session. Please try again, use /compact, or use /new to start a fresh session.\n```\n\nSupplemental focused runtime coverage: `src/auto-reply/reply/agent-runner-execution.test.ts` passed `111` tests. The compaction-adjacent selection from #85160 passed `100` tests across `src/agents/command/cli-compaction.test.ts`, `src/agents/command/session-store.test.ts`, and `extensions/codex/src/app-server/compact.test.ts`. The new regression tests assert the preserved active session remains `session`, `replyOperation.updateSessionId` is not called, `updateSessionStore` is not called, the failure payload has `deliverDespiteSourceReplySuppression: true`, and the reply includes both the preserved-session guidance and the existing dynamic `reserveTokensFloor` hint.\n\nObserved result after fix: the pushed head is rebased on `b8e9ab9385`, the local OpenClaw source build reports `193d3c0`, the production-helper probe keeps the session id unchanged, marks the failure reply for suppressed-source delivery, and keeps the dynamic overflow hint. Autoreview reported no actionable regressions against the new `upstream/main`.\n\nWhat was not tested: live WebChat UI overflow with a real model; the compaction/overflow failure behavior was exercised with a local OpenClaw source runtime probe plus focused runtime-unit coverage.\n\n## Notes\n- This remains separate from #70473. That PR improves overflow-budget extraction; this PR fixes the later auto-reply session remap/orphaning behavior after compaction recovery still fails.",
+        "branch": "fix/preserve-session-on-compaction-failure",
+        "head_sha": "193d3c0fdd5a42cc5291f4f279e80f872fdd1051",
+        "author": "fuller-stack-dev",
         "labels": [
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "P2",
+          "docs",
+          "size: M",
+          "clawsweeper:automerge",
+          "clawsweeper:human-review",
+          "proof: supplied",
+          "P1",
           "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 🚀 automerge armed"
         ],
         "files": [
           {
-            "path": "src/hooks/gmail-watcher.test.ts",
-            "additions": 112,
+            "path": "CHANGELOG.md",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/reference/session-management-compaction.md",
+            "additions": 5,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/hooks/gmail-watcher.ts",
-            "additions": 38,
-            "deletions": 3,
+            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
+            "additions": 122,
+            "deletions": 64,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.ts",
+            "additions": 18,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner.ts",
+            "additions": 0,
+            "deletions": 7,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-82947",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82947.md",
+        "cluster_id": "automerge-openclaw-openclaw-70479",
+        "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-70479.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-70479",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-70479.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
           "total": 102,
@@ -142,23 +164,23 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5473,
+    "total_ms": 5517,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 581
+        "ms": 547
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1886
+        "ms": 2280
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 2982
+        "ms": 2664
       },
       {
         "name": "append_ledger",
