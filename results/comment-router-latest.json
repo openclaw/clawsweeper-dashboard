@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-22T12:45:14.454Z",
+  "generated_at": "2026-05-22T12:45:40.546Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-22T09:45:12.138Z",
+  "since": "2026-05-22T09:45:36.079Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    84890
+    81402
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
+  "scanned_comments": 6,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:84890:4506351479:2026-05-21T12:04:38Z:clawsweeper_needs_human",
-      "comment_id": "4506351479",
-      "comment_version_key": "4506351479:2026-05-21T12:04:38Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84890#issuecomment-4506351479",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:81402:4441056401:2026-05-22T12:45:32Z:clawsweeper_needs_human",
+      "comment_id": "4441056401",
+      "comment_version_key": "4441056401:2026-05-22T12:45:32Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/81402#issuecomment-4441056401",
       "repo": "openclaw/openclaw",
-      "issue_number": 84890,
+      "issue_number": 81402,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-21T08:42:01Z",
-      "comment_updated_at": "2026-05-21T12:04:38Z",
+      "comment_created_at": "2026-05-13T12:39:40Z",
+      "comment_updated_at": "2026-05-22T12:45:32Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -51,87 +51,815 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "Maintainers need to accept the gateway startup fail-fast availability tradeoff and finish normal merge validation; there is no narrow automated repair to queue.; Cleared: The diff only changes gateway signal-handling TypeScript and does not introduce a concrete security or supply-chain concern. (sha=b74fce25ff6fadfcf1d4ce9d090f7ff943bd5d49)",
-      "review_summary": "The PR eagerly loads the gateway lifecycle runtime at run-loop startup and catches SIGUSR1 handler rejections so restart tokens can be marked handled after listener failures.\n\nReproducibility: yes. at source level: current main lazily imports the lifecycle runtime inside the SIGUSR1 handler after the restart token is emitted, and restart scheduling coalesces while that token is unconsumed. I did not run the package-swap repro locally, but the PR body includes production logs plus a patched live SIGUSR1 proof path.",
-      "review_followup": "Maintainers need to accept the gateway startup fail-fast availability tradeoff and finish normal merge validation; there is no narrow automated repair to queue.",
+      "repair_reason": "Protected storage/security work needs human owner review, CI/security disposition, and real upgrade proof rather than an automated cleanup close or narrow repair lane.; Needs attention: Needs attention because credential/auth migration paths can delete or mis-scope sensitive state, and the provided PR context still includes GHAS and dependency-security alerts.; Review finding: [P1] Pass the doctor env into transcrip... (sha=e54eb4da65953e0b0a6291e21e4506edd427ea24)",
+      "review_summary": "This PR moves OpenClaw runtime state from file-backed JSON/JSONL/sidecar stores into global and per-agent SQLite databases, with generated schemas, doctor migration paths, app/plugin updates, and package/export surface changes.\n\nReproducibility: yes. the blocking issues are source-reproducible: the PR head drops scoped env in doctor migration calls and deletes legacy files after unsafe parse/coercion paths. I did not run tests because this was a read-only review.",
+      "review_followup": "Protected storage/security work needs human owner review, CI/security disposition, and real upgrade proof rather than an automated cleanup close or narrow repair lane.",
       "freeform_prompt": null,
-      "expected_head_sha": "b74fce25ff6fadfcf1d4ce9d090f7ff943bd5d49",
+      "expected_head_sha": "e54eb4da65953e0b0a6291e21e4506edd427ea24",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(gateway): eager-load lifecycle runtime to survive in-place upgrades",
-        "body": "# Gateway never restarts after in-place upgrade due to SIGUSR1 listener dynamic-import deadlock\n\n## Problem\n\nAfter `update.run` performs a successful package swap (`npm install -g openclaw@<newer>`), the gateway claims `status=ok` but the running process is never replaced. From that moment on:\n\n- The control UI shows the update completed.\n- The gateway keeps serving requests as the **old** process against the **new** `dist/`.\n- Endpoints that exercise lazy chunks (`task-registry.maintenance`, `status.link-channel`, `hooks`, etc.) throw `ERR_MODULE_NOT_FOUND` indefinitely.\n- Every subsequent restart request (UI, scheduled, or signal-based) is silently coalesced.\n\nThe only way out is a manual `launchctl kickstart -k gui/$(id -u)/ai.openclaw.gateway`.\n\n## Reproduction\n\nObserved on `2026.5.18 → 2026.5.19`, but the root cause is structural and applies to every package-swap upgrade.\n\n1. Start the gateway under launchd and let it run long enough that some lazy chunks have not yet been imported (most agent / status / hooks paths qualify).\n2. From the control UI, click **Update** to trigger `update.run`.\n3. `update.run` returns `status=ok`, `restart: { coalesced: true, delayMs: 0 }`.\n4. Wait. The gateway process keeps its old PID and accumulates `ERR_MODULE_NOT_FOUND` errors.\n\nReal production log slice from the reporting machine (PID 30106, uptime > 36h at this point):\n\n```\n13:35:15  request handler failed: ERR_MODULE_NOT_FOUND\n          task-registry.maintenance-B-jsfe-3.js\n          imported from status.summary-CZND_jzu.js\n13:36:55  ERR_MODULE_NOT_FOUND  status.link-channel-BK3OG460.js\n14:16:52  ERR_MODULE_NOT_FOUND  task-registry.maintenance-B-jsfe-3.js\n14:16:54  [restart] request coalesced (already in-flight) reason=update.run\n14:16:54  [gateway] update.run completed ... restartReason=update.run status=ok\n14:31:31  ERR_MODULE_NOT_FOUND  hooks-DBKknpfW.js\n```\n\n`gateway-restart.log` last entry on the same machine: `2026-05-15` — six days before the failing update. The launchd kickstart handoff never fires.\n\n## Root cause\n\nA chicken-and-egg deadlock between the SIGUSR1 listener and the very lazy chunks the restart is supposed to refresh.\n\n**1. The SIGUSR1 listener uses dynamic import** (`src/cli/gateway-cli/run-loop.ts:711-748` before this patch):\n\n```ts\nconst onSigusr1 = () => {\n  gatewayLog.info(\"signal SIGUSR1 received\");\n  void (async () => {\n    const {\n      ...,\n      markGatewaySigusr1RestartHandled,\n      ...\n    } = await loadGatewayLifecycleRuntimeModule();   // dynamic import\n    ...\n    request(\"restart\", \"SIGUSR1\", restartReason);\n    markGatewaySigusr1RestartHandled();              // never reached on failure\n  })();\n};\n```\n\n**2. After `npm install -g openclaw@…`, the chunk hashes on disk have rotated.** The Node process was started against the *old* `dist/` layout, so the lazy `loadGatewayLifecycleRuntimeModule()` call resolves to a chunk path that no longer exists on disk → `ERR_MODULE_NOT_FOUND`. The async IIFE rejects silently — there is no `.catch()` — and `markGatewaySigusr1RestartHandled()` is never called.\n\n**3. The token in `src/infra/restart.ts` stays stuck:**\n\n```ts\nfunction hasUnconsumedRestartSignal(): boolean {\n  return emittedRestartToken > consumedRestartToken;\n}\n\nexport function scheduleGatewaySigusr1Restart(opts?) {\n  ...\n  if (hasUnconsumedRestartSignal()) {\n    restartLog.warn(`restart request coalesced (already in-flight) ...`);\n    return { coalesced: true, ... };   // swallow; do not schedule\n  }\n  ...\n}\n```\n\nBecause the first SIGUSR1 advanced `emittedRestartToken` but its listener died before calling `markGatewaySigusr1RestartHandled()`, every subsequent restart request — including the one `update.run` itself schedules at `src/gateway/server-methods/update.ts` — hits the coalesce branch and returns `coalesced: true` without ever scheduling anything.\n\n**4. The launchd kickstart escape hatch is never reached.** The launchd handoff path is gated behind `update.run`'s in-process restart dispatch. With the in-process restart \"in flight\" from the broken SIGUSR1, the handoff is short-circuited.\n\nIn short: **the SIGUSR1 listener is itself a victim of the very chunk swap it is supposed to recover from.** Recovery requires loading new chunks, but the recovery path requires loading chunks to succeed.\n\n## Fix\n\n`src/cli/gateway-cli/lifecycle.runtime.ts` is a 36-line re-export hub. Loading it once forces ESM to resolve and evaluate the entire restart / process-respawn / queue / sentinel / handoff / logging chain into memory. After that, every existing `await loadGatewayLifecycleRuntimeModule()` call in `run-loop.ts` resolves from the cached promise without touching disk, making the gateway immune to post-startup chunk rotation.\n\nTwo minimal changes to `src/cli/gateway-cli/run-loop.ts`:\n\n1. **Primary fix — eager-load at startup.** Add `const eagerLifecycleRuntime = await loadGatewayLifecycleRuntimeModule();` as the first statement of `runGatewayLoop`, before `acquireGatewayLock`. If the module is missing (e.g. broken install), this fails fast with a loud error before any signal listener is installed, which lets the supervisor (launchd / restart wrapper) recover cleanly instead of leaving a half-broken gateway running.\n\n2. **Defense in depth — catch the SIGUSR1 IIFE rejection.** Attach `.catch()` to the listener IIFE that logs the failure and calls `eagerLifecycleRuntime.markGatewaySigusr1RestartHandled()` (using the eagerly captured reference, which is guaranteed to exist by the time the listener runs). This unsticks the token so a subsequent restart attempt can proceed, instead of every future request being silently coalesced into a dead in-flight signal.\n\nTotal diff is **+28 / −1** in one file:\n\n```\n src/cli/gateway-cli/run-loop.ts | 29 ++++++++++++++++++++++++++++-\n 1 file changed, 28 insertions(+), 1 deletion(-)\n```\n\n### Alternatives considered\n\n- **Replace SIGUSR1 with `process.exit(0)` on package-swap**: more aggressive (drops in-process drain), and orthogonal — could still be done on top of this fix.\n- **Have `update.run` always schedule a launchd kickstart unconditionally**: would mask, not fix, the underlying coalesce-after-rejected-listener problem. Other code paths (config watcher, manual SIGUSR1) would still suffer.\n- **Wrap the dynamic import in `try`/`catch` inside the listener**: doesn't address the same problem in the other ~10 lifecycle dynamic-import callsites in `run-loop.ts` (restart iteration hook, draining, stability bundle, etc.). Eager-loading the hub fixes all of them at once for free.\n\n## Real behavior proof\n\n**Behavior or issue addressed:** SIGUSR1 listener's dynamic-import of the lifecycle runtime fails with `ERR_MODULE_NOT_FOUND` after a package-swap upgrade, silently rejects without calling `markGatewaySigusr1RestartHandled()`, and leaves `restart-coordinator`'s `emittedRestartToken` permanently greater than `consumedRestartToken`. From that point every subsequent restart request — including the one `update.run` itself schedules — short-circuits via the coalesce branch and returns `coalesced: true` without scheduling anything. The gateway never restarts until manually kickstarted.\n\nPre-patch evidence from the reporting machine (production log slice, PID 30106, uptime > 36h, after `update.run` reported `status=ok`):\n\n```\nPID 30106  STARTED Wed02AM  ELAPSED 1-11:35:35\n/usr/local/opt/node/bin/node /usr/local/lib/node_modules/openclaw/dist/index.js gateway --port 18789\n\n13:35:15  request handler failed: ERR_MODULE_NOT_FOUND\n          task-registry.maintenance-B-jsfe-3.js\n          imported from status.summary-CZND_jzu.js\n13:36:55  ERR_MODULE_NOT_FOUND  status.link-channel-BK3OG460.js\n14:16:52  ERR_MODULE_NOT_FOUND  task-registry.maintenance-B-jsfe-3.js\n14:16:54  [restart] request coalesced (already in-flight) reason=update.run\n14:16:54  [gateway] update.run completed ... restartReason=update.run status=ok\n14:31:31  ERR_MODULE_NOT_FOUND  hooks-DBKknpfW.js\n```\n\n`gateway-restart.log` last entry on the same machine: `2026-05-15` — six days before the failing update. The launchd kickstart handoff never fired.\n\n**Real environment tested:** macOS 14, Node v25.9.0, openclaw under launchd at `gui/$(id -u)/ai.openclaw.gateway`. Patched build of this PR branch (`fix/gateway-restart-eager-lifecycle-load`) at commit `b74fce25ff`, produced with `pnpm build`. The patched gateway was started against a free port (`--port 18800`) so the existing global launchd-managed gateway on `:18789` was left undisturbed.\n\n**Exact steps or command run after this patch:**\n\n1. Build the patched openclaw locally: `pnpm build` against the PR head.\n2. Confirm the eager-load is sequenced before any signal listener install in the bundled output:\n   ```\n   $ grep -n \"eagerLifecycleRuntime\\|process.on(\\\"SIG\" dist/run-s5YmlgX9.js\n   176:   const eagerLifecycleRuntime = await loadGatewayLifecycleRuntimeModule();\n   606:               eagerLifecycleRuntime.markGatewaySigusr1RestartHandled();\n   610:   process.on(\"SIGTERM\", onSigterm);\n   611:   process.on(\"SIGINT\", onSigint);\n   612:   process.on(\"SIGUSR1\", onSigusr1);\n   ```\n3. Spawn the patched gateway against a free port and capture stdout: `node dist/index.js gateway --port 18800 > /tmp/pr-gw-test.log 2>&1 &`.\n4. Wait for the gateway to finish loading, confirm it is listening: `lsof -iTCP:18800 -sTCP:LISTEN -P -t`.\n5. Send `kill -USR1 <pid>` to trigger the listener that previously deadlocked on the dynamic import.\n6. Inspect `/tmp/pr-gw-test.log` for the listener path through the eagerly-loaded lifecycle runtime, and verify it reaches the clean shutdown / restart-mode line rather than silently rejecting.\n7. Tear down the local test gateway with `kill -TERM <pid>`.\n\n**After-fix evidence:** Redacted terminal capture from the patched local gateway on port 18800. The invocation is a live `node dist/index.js gateway` process — not a unit-test or mocked harness. SIGUSR1 was delivered at `19:52:27`; the listener completed end-to-end through the eagerly-loaded `lifecycle.runtime` module, drove the shutdown sequence, and surfaced the restart mode line that would have been unreachable pre-patch:\n\n```\n$ node dist/index.js gateway --port 18800 > /tmp/pr-gw-test.log 2>&1 &\nspawned pid=47154\n$ lsof -iTCP:18800 -sTCP:LISTEN -P -t\n47154\n$ kill -USR1 47154\n$ tail -n 8 /tmp/pr-gw-test.log\n2026-05-21T19:52:27.296+08:00 [gateway] signal SIGUSR1 received\n2026-05-21T19:52:27.309+08:00 [gateway] signal SIGUSR1 received\n2026-05-21T19:52:27.310+08:00 [gateway] received SIGUSR1; restarting\n2026-05-21T19:52:27.335+08:00 [shutdown] started: gateway restarting\n2026-05-21T19:52:28.274+08:00 [gmail-watcher] gmail watcher stopped\n2026-05-21T19:52:28.279+08:00 [shutdown] completed cleanly in 943ms\n2026-05-21T19:52:28.285+08:00 [gateway] restart mode: in-process restart (unmanaged: use in-process restart to keep custom supervisor PID tracking stable)\n```\n\nFor comparison, the same SIGUSR1 path on `main` without the patch silently rejects inside the listener's async IIFE: `signal SIGUSR1 received` appears once, no `received SIGUSR1; restarting` line follows, `restart-coordinator` reports `emittedRestartToken > consumedRestartToken`, and every subsequent `kill -USR1` returns `coalesced: true` — exactly the deadlock recorded in the production slice above.\n\nSupplemental (does not replace the runtime evidence above): the targeted vitest suites exercising the changed code path also pass cleanly at the same head.\n\n```\n$ pnpm exec vitest run src/cli/gateway-cli/run-loop.test.ts \\\n    src/infra/restart.test.ts src/infra/restart-coordinator.test.ts \\\n    src/gateway/server-methods/update.test.ts \\\n    src/cli/gateway-cli/run.supervised-lock.test.ts\n\n Test Files  5 passed (5)\n      Tests  56 passed (56)\n```\n\n**Observed result after fix:** The patched gateway starts cleanly with the lifecycle runtime eagerly resolved — no `ERR_MODULE_NOT_FOUND` at startup, and the new fail-fast contract is observable as a normal startup when the module is present. After `kill -USR1`, the SIGUSR1 listener now reaches `received SIGUSR1; restarting`, drives the full shutdown sequence to `[shutdown] completed cleanly in 943ms`, and emits `restart mode: in-process restart`, instead of the pre-patch silent rejection that left `emittedRestartToken` stuck and every later restart request coalesced. This is the exact runtime path that was deadlocked in the production failure cited above, now observably reaching its terminal state on the patched build.\n\n**What was not tested:** The full end-to-end launchd kickstart handoff after a real `npm install -g openclaw@<newer>` package swap was not exercised on the patched build, because reproducing it requires publishing a new openclaw build to the local node_modules root and triggering a launchd-managed swap mid-flight. The structural deadlock that this PR fixes lives entirely in the SIGUSR1 listener path, which is exercised by the live `kill -USR1` evidence above; the launchd handoff downstream of that path is unchanged by this PR.\n\n## Notes\n\n- I did not add a vitest regression test for the eager-load behavior. I prototyped one using `vi.doMock(\"./lifecycle.runtime.js\", () => { throw … })`, but vitest reports the throw as a mock-factory error rather than propagating it as the dynamic-import rejection, and the doMock state interacted with later tests in the file that capture signal listeners with timing assumptions. Happy to revisit with maintainer guidance on the preferred way to assert \"the lifecycle module is loaded before signal listeners are installed\" in this test scaffold.\n- The fix is intentionally limited to `run-loop.ts`. The restart token machinery in `infra/restart.ts` is left untouched — the token model is correct; it just needs the SIGUSR1 listener to actually reach `markGatewaySigusr1RestartHandled()`, which this change guarantees in the normal case and rescues in the defense-in-depth case.\n",
-        "branch": "fix/gateway-restart-eager-lifecycle-load",
-        "head_sha": "641acc7f8e5e9093df0c61429515f5f9df70a390",
-        "author": "myps6415",
+        "title": "refactor: move runtime state to SQLite",
+        "body": "## Summary\n\nThis PR reopens the database-first runtime-state refactor after the accidental direct landing in #78595 was reverted from `main`. It moves active OpenClaw runtime state away from scattered JSON, JSONL, lock files, cache files, and sidecar stores into a typed SQLite layout, while keeping user configuration file-backed.\n\nThe main contract is intentionally simple:\n\n- Global control-plane state lives in `~/.openclaw/state/openclaw.sqlite`.\n- Per-agent data-plane state lives in `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`.\n- `openclaw.json`, plugin manifests, external provider credential files, and user workspaces do not move into SQLite.\n- Legacy JSON, JSONL, lock, and sidecar files are doctor migration inputs only. Runtime startup and hot paths should not dual-read or bridge old file state.\n- Session/transcript identity is relational: `{ agentId, sessionId }` plus explicit conversation/session metadata. Runtime code must not pass transcript file paths or pseudo-locators such as `sqlite-transcript://...`.\n\n## What changed\n\n- Adds the shared global state database opener, schema, generated Kysely types, transaction helpers, WAL maintenance, permissions handling, and state-lock helpers.\n- Adds the per-agent database opener, schema, generated Kysely types, agent database registry rows, and typed session/transcript/VFS/artifact stores.\n- Replaces active session, transcript, cron, task, subagent, plugin-state, pairing, diagnostic, media, backup, commitment, delivery queue, and capture stores with SQLite-backed implementations.\n- Moves legacy file import/cleanup into `openclaw doctor --fix` style migration surfaces instead of runtime startup compatibility paths.\n- Adds database-first guardrails: generated schema checks, Kysely linting, legacy-store scanners, and docs describing the new storage boundary.\n- Updates bundled plugins and native apps to use the new state boundaries instead of private file paths where they need durable runtime state.\n- Keeps dependency/package-manager/engine/lockfile policy unchanged from `main` for this cleanup PR.\n\n## Architecture\n\nGlobal database: `state/openclaw.sqlite`\n\n- Owns shared gateway/control-plane state.\n- Tracks registered agent databases and global schema metadata.\n- Stores auth profile runtime state, pairing/device/node state, plugin state/blob data, scheduler state, task/flow ledgers, delivery queues, backup/migration records, sandbox registry, restart handoff state, diagnostic rows, media blobs, and shared app/plugin runtime state.\n- Provides the shared `state_leases` table used by SQLite-backed lock helpers.\n\nAgent database: `agents/<agentId>/agent/openclaw-agent.sqlite`\n\n- Owns agent-local data-plane state.\n- Stores sessions, conversation identity, session routing, transcript events, transcript event identities, transcript snapshots, VFS entries, tool/run artifacts, ACP parent stream events, trajectory runtime rows, memory index rows, embedding cache, and generic agent cache entries.\n- Lets large per-agent state move out of the shared gateway write lane while still preserving a global registry in `agent_databases`.\n\nProxy capture database: `src/proxy-capture/schema.sql`\n\n- Keeps the focused capture-store schema for sessions/events/blobs.\n- The same capture tables are also present in the global schema for managed state paths that need to live under `openclaw.sqlite`.\n\n## Schema files\n\n- `src/state/openclaw-state-schema.sql`: global control-plane schema, 62 tables.\n- `src/state/openclaw-state-schema.generated.ts`: generated SQL module for the global schema.\n- `src/state/openclaw-state-db.generated.d.ts`: generated Kysely types for the global schema.\n- `src/state/openclaw-agent-schema.sql`: per-agent data-plane schema, 19 tables.\n- `src/state/openclaw-agent-schema.generated.ts`: generated SQL module for the per-agent schema.\n- `src/state/openclaw-agent-db.generated.d.ts`: generated Kysely types for the per-agent schema.\n- `src/proxy-capture/schema.sql`: standalone proxy capture schema, 3 tables.\n- `src/proxy-capture/schema.generated.ts` and `src/proxy-capture/db.generated.d.ts`: generated SQL/types for proxy capture.\n\nAcross these schema files there are 84 tables and 110 explicit indexes/unique indexes.\n\n## Global database schema\n\nCore metadata and locking:\n\n- `schema_meta`: database role, schema version, app version, timestamps.\n- `agent_databases`: registry of per-agent database paths, schema versions, last-seen timestamps, and size hints.\n- `state_leases`: scoped durable lease/lock rows with owner, heartbeat, expiry, and payload.\n\nAuth, diagnostics, and approvals:\n\n- `auth_profile_stores`, `auth_profile_state`: runtime auth profile store/state JSON by store key.\n- `diagnostic_events`, `diagnostic_stability_bundles`: scoped diagnostic payloads and generated stability bundles.\n- `exec_approvals_config`: persisted exec approval configuration and derived counts.\n- `config_health_entries`: last-known-good/promoted config health state.\n\nPairing, device, node, and native app state:\n\n- `device_pairing_pending`, `device_pairing_paired`: device pairing requests and approved devices.\n- `device_bootstrap_tokens`: bootstrap tokens plus issued/redeemed profile metadata.\n- `node_pairing_pending`, `node_pairing_paired`: node pairing requests and approved nodes.\n- `device_identities`, `device_auth_tokens`: device keypairs and role-scoped tokens.\n- `android_notification_recent_packages`: Android notification recent-package ordering.\n- `macos_port_guardian_records`: macOS port guardian records.\n- `workspace_setup_state`: workspace setup lifecycle state.\n- `native_hook_relay_bridges`: native hook relay bridge metadata and expiry.\n- `node_host_config`: node-host config state.\n\nModels, media, push, and voice wake:\n\n- `model_capability_cache`: provider/model capability and cost cache.\n- `agent_model_catalogs`: generated model catalogs per agent dir.\n- `managed_outgoing_image_records`: managed outgoing image attachment metadata.\n- `web_push_subscriptions`, `web_push_vapid_keys`: web push subscription and VAPID key state.\n- `apns_registrations`: APNS registration rows for native nodes.\n- `voicewake_triggers`, `voicewake_routing_config`, `voicewake_routing_routes`: voice wake trigger and routing state.\n\nPlugin and channel state:\n\n- `installed_plugin_index`: persisted installed-plugin index and diagnostics.\n- `plugin_state_entries`: JSON plugin state by plugin, namespace, and key.\n- `plugin_blob_entries`: binary plugin blobs by plugin, namespace, and key.\n- `channel_pairing_requests`, `channel_pairing_allow_entries`: channel pairing codes and allow entries.\n- `plugin_binding_approvals`: plugin/channel/account binding approvals.\n- `current_conversation_bindings`: current channel conversation bindings to target agent/session rows.\n\nGateway, replay, delivery, and runtime queues:\n\n- `gateway_restart_sentinel`, `gateway_restart_intent`, `gateway_restart_handoff`: restart continuity and supervisor handoff state.\n- `acp_replay_sessions`, `acp_replay_events`: ACP replay session/event ledger.\n- `delivery_queue_entries`: durable delivery queue with retry, failure, session, channel, target, and recovery metadata.\n- `command_log_entries`: durable command log entries.\n- `tui_last_sessions`: last active session per TUI scope.\n\nTasks, flows, subagents, cron, and commitments:\n\n- `task_runs`: durable task run state.\n- `task_delivery_state`: notification state per task.\n- `flow_runs`: task-flow/controller state.\n- `subagent_runs`: child-agent lifecycle, archive, announcement, frozen-result, and final-delivery state.\n- `cron_jobs`: scheduler job definitions plus runtime state.\n- `cron_run_logs`: scheduler run history.\n- `commitments`: follow-up commitment records and delivery lifecycle.\n\nStorage, backup, migration, sandbox, and capture:\n\n- `media_blobs`: managed media blob storage.\n- `skill_uploads`: temporary skill upload archives with idempotency/expiry.\n- `sandbox_registry_entries`: sandbox/container registry state.\n- `migration_runs`, `migration_sources`: doctor migration run/source ledger.\n- `backup_runs`: backup archive manifest records.\n- `capture_sessions`, `capture_events`, `capture_blobs`: managed proxy-capture session/event/blob storage.\n- `update_check_state`: update notification/auto-install state.\n\n## Per-agent database schema\n\nSession and conversation identity:\n\n- `schema_meta`: agent database role, schema version, agent id, app version, timestamps.\n- `sessions`: canonical session metadata, status, channel/account/model metadata, parent/spawn identity, and primary conversation reference.\n- `session_routes`: maps stable session keys to canonical session ids.\n- `conversations`: typed channel/account/conversation identity with direct/group/channel kind and thread/native ids.\n- `session_conversations`: many-to-many session/conversation roles with one primary conversation per session.\n- `session_entries`: compatibility/display entry JSON keyed by session key, linked to canonical session id.\n\nTranscripts and trajectory:\n\n- `transcript_events`: append-only transcript event stream keyed by `(session_id, seq)`.\n- `transcript_event_identities`: event id, parent/idempotency identity, tail indexes, and event type metadata.\n- `transcript_snapshots`: explicit transcript snapshot records with reason/count/metadata.\n- `trajectory_runtime_events`: runtime trajectory rows linked to session/run identity.\n- `acp_parent_stream_events`: ACP parent stream event ledger by run id and sequence.\n\nAgent-local workspace, artifacts, memory, and cache:\n\n- `vfs_entries`: virtual filesystem namespace/path records with optional blob content and metadata.\n- `tool_artifacts`: tool output artifacts by run id and artifact id.\n- `run_artifacts`: run artifacts by run id and path.\n- `memory_index_meta`: memory index provider/model/config metadata.\n- `memory_index_sources`: indexed memory/session sources.\n- `memory_index_chunks`: indexed text chunks with embedding blobs and source/session references.\n- `memory_embedding_cache`: provider/model/provider-key/hash embedding cache.\n- `cache_entries`: generic agent-local cache rows with JSON/blob payloads and optional expiry.\n\n## Runtime contract changes reviewers should focus on\n\n- Runtime code should pass `{ agentId, sessionId }` or `{ agentId, sessionKey }`, not transcript file paths.\n- `sessions.session_scope`, `sessions.primary_conversation_id`, `conversations`, and `session_conversations` are the typed routing source of truth. `session_key` remains a routing/display key, not a parsing surface for hidden provider identity.\n- Active transcript read/write paths should use `transcript_events` and `transcript_event_identities`; JSONL transcript helpers should be limited to doctor import/export/debug materialization.\n- Legacy `sessions.json`, `.jsonl`, `.jsonl.lock`, pruning/truncation files, auth profile files, model catalog files, and old sidecar stores should appear only in doctor migration, backup/import, or explicit legacy tests.\n- SQLite schema changes must be reflected in generated SQL modules and Kysely database types.\n- Kysely is the expected typed query boundary. Raw SQLite use should stay in low-level openers, transaction helpers, generated-schema plumbing, or deliberately tiny runtime wrappers.\n\n## Important non-goals\n\n- This does not move `openclaw.json` into SQLite.\n- This does not move plugin manifests or user workspaces into SQLite.\n- This does not introduce runtime dual-read compatibility for old file state.\n- This does not add shipped database migrations for the new layout; schema version remains `1` because this layout has not shipped yet.\n- This does not change dependency/package-manager/engine policy from `main`.\n\n## Real behavior proof\n\n- Behavior addressed: database-first SQLite runtime refactor is back in a clean review PR after the accidental direct landing was reverted from `main`.\n- Real environment tested: local macOS checkout on Node/pnpm, using a fresh temporary `OPENCLAW_HOME` so runtime state is isolated from the maintainer profile.\n- Exact steps or command run after this patch: `OPENCLAW_HOME=$(mktemp -d) pnpm openclaw doctor`\n- Evidence after fix: terminal output from the real OpenClaw CLI run after this patch:\n\n```text\n$ OPENCLAW_HOME=<temp-openclaw-home> pnpm openclaw doctor\n$ node scripts/run-node.mjs doctor\n[openclaw] Building TypeScript (dist is stale: missing_build_stamp - build stamp missing).\nruntime-postbuild: plugin SDK root alias completed in 1ms\nruntime-postbuild: bundled plugin metadata completed in 137ms\nruntime-postbuild: official channel catalog completed in 5ms\nruntime-postbuild: bundled plugin runtime overlay completed in 221ms\nruntime-postbuild: static extension assets completed in 21ms\nruntime-postbuild: stable root runtime imports completed in 136ms\nruntime-postbuild: stable root runtime aliases completed in 25ms\nruntime-postbuild: legacy root runtime compat aliases completed in 5ms\nruntime-postbuild: legacy CLI exit compat chunks completed in 0ms\nOpenClaw doctor\nState integrity:\n- Active state dir: $OPENCLAW_HOME/.openclaw\nGateway connection:\n- Gateway target: ws://127.0.0.1:18789\n- Source: local loopback\n- Config: <temp-openclaw-home>/.openclaw/openclaw.json\nDoctor complete.\n```\n\n- Observed result after fix: the CLI built and completed the doctor path against the isolated temp state directory; no dependency install or package-manager mutation was needed.\n- What was not tested: no broad Docker/live gateway run in this cleanup PR pass.\n\n## Verification\n\n- `pnpm check:database-first-legacy-stores`\n- `pnpm db:kysely:check`\n- `pnpm lint:kysely`\n- `git diff --check && node scripts/check-no-conflict-markers.mjs`\n- Custom package-manifest proof: dependency/package-manager/engine fields unchanged across 13 changed package manifests.\n\n## Review notes\n\n- The diff is intentionally large because it is the reapply of the reverted database-first branch plus one cleanup commit.\n- Commit 1 reapplies the SQLite runtime-state refactor.\n- Commit 2 removes a duplicate Docker test script.\n- Main revert commit: 694ca50e97 (`Revert \"refactor: move runtime state to SQLite\"`).\n- Supersedes the merged/reverted PR #78595 with a clean reviewable PR.\n",
+        "branch": "refactor/sqlite-runtime-clean",
+        "head_sha": "e54eb4da65953e0b0a6291e21e4506edd427ea24",
+        "author": "steipete",
         "labels": [
+          "docs",
+          "channel: discord",
+          "channel: googlechat",
+          "channel: imessage",
+          "channel: line",
+          "channel: matrix",
+          "channel: mattermost",
+          "channel: msteams",
+          "channel: nextcloud-talk",
+          "channel: nostr",
+          "channel: signal",
+          "channel: slack",
+          "channel: telegram",
+          "channel: tlon",
+          "channel: voice-call",
+          "channel: whatsapp-web",
+          "channel: zalo",
+          "channel: zalouser",
+          "app: android",
+          "app: ios",
+          "app: macos",
+          "app: web-ui",
+          "gateway",
+          "extensions: diagnostics-otel",
+          "extensions: llm-task",
+          "extensions: memory-core",
+          "extensions: memory-lancedb",
           "cli",
-          "size: XS",
-          "proof: supplied",
+          "security",
+          "scripts",
+          "commands",
+          "docker",
+          "agents",
+          "maintainer",
+          "channel: feishu",
+          "channel: twitch",
+          "extensions: device-pair",
+          "extensions: phone-control",
+          "channel: irc",
+          "size: XL",
+          "extensions: acpx",
+          "extensions: anthropic",
+          "extensions: openai",
+          "extensions: minimax",
+          "extensions: cloudflare-ai-gateway",
+          "extensions: kimi-coding",
+          "extensions: kilocode",
+          "channel: qqbot",
+          "channel: qa-channel",
+          "extensions: qa-lab",
+          "extensions: memory-wiki",
+          "extensions: codex",
+          "extensions: lmstudio",
+          "plugin: bonjour",
+          "plugin: google-meet",
+          "extensions: tts-local-cli",
+          "plugin: azure-speech",
+          "plugin: migrate-hermes",
+          "channel: synology-chat",
+          "plugin: migrate-claude",
+          "plugin: file-transfer",
+          "extensions: oc-path",
+          "extensions: amazon-bedrock",
+          "extensions: anthropic-vertex",
+          "extensions: chutes",
+          "extensions: diffs",
+          "extensions: github-copilot",
+          "extensions: google",
+          "extensions: microsoft",
+          "extensions: ollama",
+          "extensions: opencode",
+          "extensions: openrouter",
+          "extensions: xai",
+          "extensions: vllm",
+          "extensions: zai",
+          "dependencies-changed",
           "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 availability",
-          "status: 👀 ready for maintainer look"
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "CHANGELOG.md",
+            "path": ".agents/skills/crabbox/SKILL.md",
+            "additions": 4,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": ".agents/skills/kysely-database-access/SKILL.md",
+            "additions": 202,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": ".github/workflows/ci.yml",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": ".github/workflows/docs-sync-publish.yml",
             "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": ".gitignore",
+            "additions": 6,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": ".oxlintrc.json",
+            "additions": 20,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "AGENTS.md",
+            "additions": 3,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cli/gateway-cli/run-loop.ts",
-            "additions": 28,
+            "path": "CHANGELOG.md",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
+            "additions": 1,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/android/app/src/main/java/ai/openclaw/app/SecurePrefs.kt",
+            "additions": 17,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/DeviceAuthStore.kt",
+            "additions": 220,
+            "deletions": 37,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/DeviceIdentityStore.kt",
+            "additions": 155,
+            "deletions": 37,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/OpenClawSQLiteStateStore.kt",
+            "additions": 310,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "apps/android/app/src/main/java/ai/openclaw/app/node/CameraHandler.kt",
+            "additions": 2,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/android/app/src/main/java/ai/openclaw/app/node/DebugHandler.kt",
+            "additions": 52,
+            "deletions": 25,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/android/app/src/main/java/ai/openclaw/app/node/DeviceNotificationListenerService.kt",
+            "additions": 41,
+            "deletions": 31,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/android/app/src/test/java/ai/openclaw/app/GatewayBootstrapAuthTest.kt",
+            "additions": 1,
             "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/android/app/src/test/java/ai/openclaw/app/gateway/DeviceAuthStoreTest.kt",
+            "additions": 188,
+            "deletions": 22,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/android/app/src/test/java/ai/openclaw/app/gateway/DeviceIdentityStoreTest.kt",
+            "additions": 169,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "apps/android/app/src/test/java/ai/openclaw/app/node/DebugHandlerTest.kt",
+            "additions": 21,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "apps/android/app/src/test/java/ai/openclaw/app/node/DeviceNotificationListenerServiceTest.kt",
+            "additions": 27,
+            "deletions": 35,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/android/app/src/test/java/ai/openclaw/app/node/InvokeDispatcherTest.kt",
+            "additions": 1,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/ios/Sources/Model/NodeAppModel.swift",
+            "additions": 18,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/Constants.swift",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/CronJobsStore.swift",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/CronSettings+Layout.swift",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/CronSettings+Testing.swift",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/DebugActions.swift",
+            "additions": 7,
+            "deletions": 18,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
+            "additions": 17,
+            "deletions": 69,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/DiagnosticsFileLog.swift",
+            "additions": 0,
+            "deletions": 133,
+            "changeType": "DELETED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/ExecApprovals.swift",
+            "additions": 64,
+            "deletions": 107,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/ExecApprovalsSQLiteStateStore.swift",
+            "additions": 62,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/GatewayConnection.swift",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/HealthStore.swift",
+            "additions": 29,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/Logging/OpenClawLogging.swift",
+            "additions": 1,
+            "deletions": 69,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift",
+            "additions": 2,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/MenuSessionsInjector.swift",
+            "additions": 2,
+            "deletions": 29,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/NodeMode/MacNodeRuntime.swift",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/OpenClawConfigFile.swift",
+            "additions": 25,
+            "deletions": 225,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/PortGuardian.swift",
+            "additions": 20,
+            "deletions": 17,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/RuntimeLocator.swift",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/SessionActions.swift",
+            "additions": 1,
+            "deletions": 32,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/SessionData.swift",
+            "additions": 33,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/VoiceWakeChime.swift",
+            "additions": 0,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/VoiceWakeForwarder.swift",
+            "additions": 0,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/VoiceWakeRuntime.swift",
+            "additions": 1,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Tests/OpenClawIPCTests/CommandResolverTests.swift",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Tests/OpenClawIPCTests/ExecApprovalsStoreRefactorTests.swift",
+            "additions": 69,
+            "deletions": 16,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Tests/OpenClawIPCTests/HealthDecodeTests.swift",
+            "additions": 19,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Tests/OpenClawIPCTests/HealthStoreStateTests.swift",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Tests/OpenClawIPCTests/MenuSessionsInjectorTests.swift",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Tests/OpenClawIPCTests/OpenClawConfigFileTests.swift",
+            "additions": 98,
+            "deletions": 74,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Tests/OpenClawIPCTests/RuntimeLocatorTests.swift",
+            "additions": 7,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Tests/OpenClawIPCTests/SettingsViewSmokeTests.swift",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Tests/OpenClawIPCTests/VoiceWakeForwarderTests.swift",
+            "additions": 0,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessions.swift",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/DeviceAuthStore.swift",
+            "additions": 111,
+            "deletions": 28,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/DeviceIdentity.swift",
+            "additions": 185,
+            "deletions": 70,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/OpenClawSQLiteStateStore.swift",
+            "additions": 678,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+            "additions": 8,
+            "deletions": 42,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatViewModelTests.swift",
+            "additions": 20,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/shared/OpenClawKit/Tests/OpenClawKitTests/DeviceIdentityStoreTests.swift",
+            "additions": 351,
+            "deletions": 57,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "config/knip.config.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/.generated/config-baseline.sha256",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/.i18n/glossary.zh-CN.json",
+            "additions": 16,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/auth-credential-semantics.md",
+            "additions": 7,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/automation/cron-jobs.md",
+            "additions": 9,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/automation/hooks.md",
+            "additions": 6,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/automation/taskflow.md",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/automation/tasks.md",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/channels/channel-routing.md",
+            "additions": 10,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/channels/discord.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/channels/group-messages.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/channels/groups.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/channels/imessage-from-bluebubbles.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/channels/matrix-migration.md",
+            "additions": 19,
+            "deletions": 32,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/channels/matrix.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/channels/msteams.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/channels/pairing.md",
+            "additions": 10,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/channels/telegram.md",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/channels/whatsapp.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/agents.md",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/approvals.md",
+            "additions": 12,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/backup.md",
+            "additions": 14,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/commitments.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/completion.md",
+            "additions": 4,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/crestodian.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/cron.md",
+            "additions": 5,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/doctor.md",
+            "additions": 9,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/gateway.md",
+            "additions": 5,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/hooks.md",
+            "additions": 5,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/index.md",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/memory.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/migrate.md",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/models.md",
+            "additions": 5,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/node.md",
+            "additions": 2,
+            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84890",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84890.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-81402",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-81402.md",
         "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 96,
+          "total": 103,
           "counts": {
-            "SKIPPED": 22,
-            "SUCCESS": 73,
+            "SUCCESS": 64,
+            "SKIPPED": 8,
+            "FAILURE": 28,
+            "IN_PROGRESS": 2,
             "NEUTRAL": 1
           },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
+          "blockers": [
+            "build-artifacts:FAILURE",
+            "checks-fast-bundled-protocol:FAILURE",
+            "checks-node-core-fast:FAILURE",
+            "checks-node-core-src-security:FAILURE",
+            "checks-node-core-runtime-infra-state:FAILURE",
+            "checks-node-core-runtime-infra-process:FAILURE",
+            "checks-node-core-runtime-shared:FAILURE",
+            "checks-node-core-runtime-cron-isolated-agent:FAILURE",
+            "checks-node-core-runtime-cron-service:FAILURE",
+            "checks-node-agentic-control-plane-agent-chat:FAILURE",
+            "checks-node-agentic-control-plane-auth-node:FAILURE",
+            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-runtime:FAILURE",
+            "checks-node-agentic-cli:FAILURE",
+            "checks-node-agentic-commands-agent-channel:FAILURE",
+            "checks-node-agentic-commands-doctor:FAILURE",
+            "checks-node-agentic-commands-models:FAILURE",
+            "checks-node-agentic-commands-status-tools:FAILURE",
+            "checks-node-agentic-gateway-core:IN_PROGRESS",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "checks-node-auto-reply-reply-agent-runner:FAILURE",
+            "checks-node-auto-reply-reply-dispatch:FAILURE",
+            "checks-node-auto-reply-reply-session:FAILURE",
+            "checks-node-auto-reply-reply-state-routing:FAILURE",
+            "check-lint:FAILURE",
+            "check-dependencies:FAILURE",
+            "check-additional-boundaries-bcd:FAILURE",
+            "android-test-play:FAILURE",
+            "android-test-third-party:FAILURE",
+            "CodeQL:FAILURE"
+          ],
+          "pending": [
+            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
+            "checks-node-agentic-gateway-core:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "build-artifacts:FAILURE",
+            "checks-fast-bundled-protocol:FAILURE",
+            "checks-node-core-fast:FAILURE",
+            "checks-node-core-src-security:FAILURE",
+            "checks-node-core-runtime-infra-state:FAILURE",
+            "checks-node-core-runtime-infra-process:FAILURE",
+            "checks-node-core-runtime-shared:FAILURE",
+            "checks-node-core-runtime-cron-isolated-agent:FAILURE",
+            "checks-node-core-runtime-cron-service:FAILURE",
+            "checks-node-agentic-control-plane-agent-chat:FAILURE",
+            "checks-node-agentic-control-plane-auth-node:FAILURE",
+            "checks-node-agentic-control-plane-startup-runtime:FAILURE",
+            "checks-node-agentic-cli:FAILURE",
+            "checks-node-agentic-commands-agent-channel:FAILURE",
+            "checks-node-agentic-commands-doctor:FAILURE",
+            "checks-node-agentic-commands-models:FAILURE",
+            "checks-node-agentic-commands-status-tools:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "checks-node-auto-reply-reply-agent-runner:FAILURE",
+            "checks-node-auto-reply-reply-dispatch:FAILURE",
+            "checks-node-auto-reply-reply-session:FAILURE",
+            "checks-node-auto-reply-reply-state-routing:FAILURE",
+            "check-lint:FAILURE",
+            "check-dependencies:FAILURE",
+            "check-additional-boundaries-bcd:FAILURE",
+            "android-test-play:FAILURE",
+            "android-test-third-party:FAILURE",
+            "CodeQL:FAILURE"
+          ]
         }
       },
-      "reason": "target is not open"
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2681,
+    "total_ms": 4688,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 488
+        "ms": 359
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1816
+        "ms": 4092
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 354
+        "ms": 210
       },
       {
         "name": "append_ledger",
