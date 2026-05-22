@@ -1,22 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-22T18:28:37.749Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-05-22T18:28:48.129Z",
+  "repo": "openclaw/clawhub",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-22T15:28:35.539Z",
+  "since": "2026-05-22T15:28:46.545Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    46303
+    2138
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 10,
-  "commands_seen": 1,
-  "actionable": 0,
+  "scanned_comments": 9,
+  "commands_seen": 5,
+  "actionable": 2,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,322 +31,791 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:46303:4322676718:2026-05-22T18:28:29Z:clawsweeper_auto_repair",
-      "comment_id": "4322676718",
-      "comment_version_key": "4322676718:2026-05-22T18:28:29Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/46303#issuecomment-4322676718",
-      "repo": "openclaw/openclaw",
-      "issue_number": 46303,
+      "idempotency_key": "clawsweeper-repair:openclaw/clawhub:2138:4417448365:2026-05-22T18:28:40Z:clawsweeper_needs_human",
+      "comment_id": "4417448365",
+      "comment_version_key": "4417448365:2026-05-22T18:28:40Z",
+      "comment_url": "https://github.com/openclaw/clawhub/pull/2138#issuecomment-4417448365",
+      "repo": "openclaw/clawhub",
+      "issue_number": 2138,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-26T18:14:41Z",
-      "comment_updated_at": "2026-05-22T18:28:29Z",
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-11T03:44:29Z",
+      "comment_updated_at": "2026-05-22T18:28:40Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=77fb64999a0ff5eed6a6b400be0b1782e9b1c108)",
-      "review_summary": "The branch adds global inbound debouncer flushing, followup and channel run queue drain waiters, gateway restart integration, internal drain bypasses, and regression tests across core and channel queue paths.\n\nReproducibility: yes. at source level: current main keeps debounce buffers and followup queues in process memory and the restart path does not flush them before teardown. I did not run a live transport SIGUSR1/config.patch reproduction in this read-only review.",
-      "review_followup": "Human PR handling is needed because this external PR still needs contributor-supplied current-head real behavior proof plus maintainer-visible message-delivery fixes before merge.",
+      "repair_reason": "Manual maintainer review is needed because the main blocker is the new export API security/product contract plus missing contributor proof, not a narrow mechanical repair.; Needs attention: The diff introduces a privileged bulk export path with concrete visibility-boundary, failed-auth throttling, and resource-exhaustion concerns.; Review finding: [P1] Keep exports inside approved visibility rules — convex/skills.ts... (sha=cb616f30cfef87cfb0635231ed4926e3c3c74d6b)",
+      "review_summary": "The branch adds an admin-only `GET /api/v1/skills/export` route that pages skill digests by date and returns a merged ZIP with metadata, auth, rate limits, and route constants.\n\nReproducibility: yes. for the review blockers: source inspection of the PR diff shows auth-before-rate-limit ordering, raw created-date digest export, and unbounded blob materialization. I did not execute the PR branch.",
+      "review_followup": "Manual maintainer review is needed because the main blocker is the new export API security/product contract plus missing contributor proof, not a narrow mechanical repair.",
       "freeform_prompt": null,
-      "expected_head_sha": "77fb64999a0ff5eed6a6b400be0b1782e9b1c108",
+      "expected_head_sha": "cb616f30cfef87cfb0635231ed4926e3c3c74d6b",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix: drain inbound debounce buffer and followup queues before SIGUSR1 reload",
-        "body": "## Problem\n\nWhen `config.patch` triggers a SIGUSR1 restart, two in-memory message buffers are silently wiped, causing inbound messages to be permanently lost:\n\n1. **Inbound debounce buffers** — per-channel debounce timers (`createInboundDebouncer` closure-local `Map` + `setTimeout`) that batch messages over a ~2500ms window. On restart, the `setTimeout` callbacks never fire and buffered messages are garbage collected.\n\n2. **Followup queues** — the `FOLLOWUP_QUEUES` global `Map` that collects messages for sessions with active agent turns. Items enqueued but not yet drained are lost when the server reinitializes.\n\n### Reproduction\nSend a message on Signal → within 2.5s, trigger a config change (e.g. `config.patch`) → the message is silently dropped.\n\n## Fix\n\n### 1. Global debouncer registry (`src/auto-reply/inbound-debounce.ts`)\n- Each `createInboundDebouncer()` now auto-registers in a shared `Symbol.for('openclaw.inboundDebouncers')` global map\n- New `flushAll()` method on each debouncer instance that immediately processes all buffered items (clears timeouts, calls `onFlush` callbacks)\n- New exported `flushAllInboundDebouncers()` that iterates the registry, flushes all debouncers, and deregisters them\n\n### 2. Followup queue drain waiter (`src/auto-reply/reply/queue/drain-all.ts`)\n- New `waitForFollowupQueueDrain(timeoutMs)` that polls `FOLLOWUP_QUEUES` until all queues finish processing (or timeout)\n- Counts `draining: true` queues as having pending work even if `items.length` is momentarily 0\n\n### 3. SIGUSR1 restart integration (`src/cli/gateway-cli/run-loop.ts`)\nBefore `markGatewayDraining()`, the restart flow now:\n1. `await flushAllInboundDebouncers()` — pushes buffered messages into followup queues\n2. `await waitForFollowupQueueDrain(5000)` — gives the drain loops 5s to process newly flushed items\n3. Then proceeds with the existing `markGatewayDraining()` → task drain → server close flow\n\nThe ordering is critical: flush debouncers first (triggers `onFlush` callbacks that enqueue into followup queues), then wait for followup drain, then mark draining.\n\n## Tests\n\n- **`src/auto-reply/inbound.test.ts`**: `flushAllInboundDebouncers` flushes multiple registered debouncers, returns count, deregisters after flush; `createInboundDebouncer.flushAll` flushes all buffered keys\n- **`src/auto-reply/reply/queue/drain-all.test.ts`**: immediate return when empty, waits for drain completion, returns not-drained on timeout, counts actively draining queues as pending\n- **`src/cli/gateway-cli/run-loop.test.ts`**: SIGUSR1 restart calls flush before `markGatewayDraining`, skips followup wait when no debouncers had buffered messages, logs warning on followup drain timeout\n\nAll 118 tests pass across the 4 affected test files. No type errors introduced.\n\n## Files Changed\n- `src/auto-reply/inbound-debounce.ts` — global registry + `flushAll` + `flushAllInboundDebouncers()`\n- `src/auto-reply/reply/queue/drain-all.ts` — new `waitForFollowupQueueDrain()`\n- `src/auto-reply/reply/queue.ts` — barrel export\n- `src/cli/gateway-cli/run-loop.ts` — hook into restart flow\n- Test files for all of the above\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: When a SIGUSR1 restart fires within the inbound debounce window (~2.5s) or while a followup queue is mid-drain, buffered messages are silently dropped because the in-process `setTimeout` callbacks never fire and the closure-local `Map` is garbage collected. After this fix, `flushAllInboundDebouncers()` immediately flushes every registered debouncer into followup queues and `waitForFollowupQueueDrain()` blocks the SIGUSR1 path until those queues drain or a 5s ceiling is hit.\n- **Real environment tested**: Local OpenClaw checkout at HEAD `5d1e6592d02782361b871581c10a6b3c0329105f` of branch `fix/drain-queue-before-sigusr1`. Linux 6.12.67, Node v24.15.0, pnpm-driven monorepo. Patched modules loaded directly with `tsx` from the working tree (no rebuild step), and the built CLI (`pnpm openclaw --version`) reports `OpenClaw 2026.5.4 (5d1e659)` confirming the binary is built from the patched commit.\n- **Exact steps or command run after this patch**:\n  1. `pnpm openclaw --version` to confirm the live CLI is built from the patched HEAD.\n  2. `node_modules/.bin/tsx proof-pr46303.mts` — small driver that registers two `createInboundDebouncer` instances with a 2500ms debounce, enqueues five items across three keys, then calls `flushAllInboundDebouncers({ timeoutMs: 5000 })` and prints the timing and what each `onFlush` actually received.\n  3. `node_modules/.bin/tsx proof-pr46303-drain.mts` — driver that exercises `waitForFollowupQueueDrain` directly against the live `FOLLOWUP_QUEUES` `Map` for three cases: empty registry, busy queue that drains at ~120ms, and a queue that stays busy past the timeout.\n  4. `pnpm test src/auto-reply/inbound.test.ts src/auto-reply/reply/queue/drain-all.test.ts src/cli/gateway-cli/run-loop.test.ts` — full targeted suites for all three changed files.\n- **Evidence after fix**: Terminal capture from running the patched modules in this worktree.\n\n  Live CLI build proves the binary contains the patched code:\n\n  ```\n  $ pnpm openclaw --version\n  OpenClaw 2026.5.4 (5d1e659)\n  ```\n\n  `flushAllInboundDebouncers` console output — 5 enqueued items across 2 debouncers and 3 keys, flushed in 1ms instead of waiting 2500ms:\n\n  ```\n  [before flush] A delivered=0, B delivered=0 (still buffered)\n  [flushAllInboundDebouncers] flushedCount=3 elapsed=1ms (vs 2500ms debounce)\n  [after flush] A delivered groups=[[\"alice:hello\",\"alice:there\"],[\"bob:howdy\"]]\n  [after flush] B delivered groups=[[\"ping-1\",\"ping-2\"]]\n  ```\n\n  `waitForFollowupQueueDrain` console output — three live cases against the real `FOLLOWUP_QUEUES` map, including the timeout path that returns `drained:false` with the right `remaining` count:\n\n  ```\n  [empty]         {\"drained\":true,\"remaining\":0} elapsed=0ms\n  [busy->drained] {\"drained\":true,\"remaining\":0} elapsed=151ms\n  [timeout]       {\"drained\":false,\"remaining\":2} elapsed=200ms\n  ```\n\n  Real test runner output for the changed files (vitest reports the actual function counts; pnpm `test-projects.mjs` shards by project):\n\n  ```\n  [test] starting test/vitest/vitest.cli.config.ts\n   Test Files  1 passed (1)\n        Tests  24 passed (24)\n     Duration  2.21s\n  [test] starting test/vitest/vitest.auto-reply.config.ts\n   Test Files  2 passed (2)\n        Tests  71 passed (71)\n     Duration  4.05s\n  [test] passed 2 Vitest shards in 11.96s\n  ```\n\n- **Observed result after fix**: `flushAllInboundDebouncers` deterministically drains buffered Signal-style messages in 1 ms while the natural debounce window is 2500 ms, and reports the right buffer count (`flushedCount=3` for two keys in one debouncer plus one in another). `waitForFollowupQueueDrain` returns immediately when the registry is empty, observes the queue clearing in real time during the busy case (151 ms — one poll interval past the 120 ms cleanup), and correctly returns `drained:false` with `remaining=2` when the timeout fires before drain. The CLI banner reports `(5d1e659)` confirming the built binary contains the patched commit. With the SIGUSR1 hook in `src/cli/gateway-cli/run-loop.ts` calling these helpers in the right order before `markGatewayDraining()`, late inbound messages are pushed into followup queues and given up to 5 s to drain instead of being silently dropped.\n- **What was not tested**: An end-to-end real-Signal SIGUSR1 reproduction was not executed on this machine (no signal-cli account paired here); the production restart path is exercised through `src/cli/gateway-cli/run-loop.test.ts`, but a live Signal → `config.patch` → restart roundtrip on real `signal-cli` was not run. Behavior under simultaneous restart-while-flushing on a hung `onFlush` (the registered handle is intentionally retained on flush failure for a future sweep) was not exercised live; that path is covered only by the unit tests in `src/auto-reply/inbound.test.ts`.\n",
-        "branch": "fix/drain-queue-before-sigusr1",
-        "head_sha": "77fb64999a0ff5eed6a6b400be0b1782e9b1c108",
-        "author": "joeykrug",
+        "title": "Export skills function added by Mirror Site maintainer",
+        "body": "## Summary\r\n\r\nWe are the ClawHub China mirror site from bytedance. To keep our mirror in sync with the upstream skill registry, we need an efficient way to bulk-fetch skill data. Currently there is no batch export API — the only option is to download skills one by one, which triggers rate limits and takes hours for 62k+ skills.\r\n\r\nThis PR adds a new `GET /api/v1/skills/export` endpoint that returns a merged ZIP archive of up to 1000 skills per request, with cursor-based pagination for full-catalog traversal.\r\n\r\n### What's changed\r\n\r\n- **New endpoint**: `GET /api/v1/skills/export?startDate=<ms>&endDate=<ms>&limit=<n>&cursor=<token>`\r\n  - Returns a ZIP containing skill files organized in `<slug>/` subdirectories\r\n  - Includes `_manifest.json` (skill metadata array) and `_meta.json` per skill\r\n  - Supports cursor-based pagination via `X-Next-Cursor` / `X-Has-More` response headers\r\n\r\n- **Authentication & Authorization** (`convex/lib/apiTokenAuth.ts`)\r\n  - New `requireExportAuth()` — enforces Bearer token + admin-only role check\r\n  - No token → 401, valid token but non-admin → 403, admin → allowed\r\n  - Role whitelist configurable via `EXPORT_ALLOWED_ROLES` array\r\n\r\n- **Security hardening** (`convex/lib/skillZip.ts`)\r\n  - `validateSlug()` — prevents Zip Slip via malicious slug paths (`../../etc`)\r\n  - `validateFilePath()` — blocks absolute paths, `..` traversal, backslashes, empty segments\r\n  - `buildMergedExportZip()` — detects duplicate ZIP paths to prevent silent overwrites\r\n\r\n- **Error recording** (`convex/httpApiV1/skillsV1.ts`)\r\n  - Missing versions or blobs are logged to `_errors.json` inside the ZIP (not silently skipped)\r\n  - `X-Export-Errors` response header reports error count\r\n\r\n- **Rate limiting** (`convex/lib/httpRateLimit.ts`)\r\n  - New `export` tier: `{ ip: 10, key: 60, adminKey: 600 }` requests/min\r\n\r\n- **Query layer** (`convex/skills.ts`)\r\n  - `listByDateRange` internalQuery — range scan on `skillSearchDigest.by_active_created` index\r\n  - Chunked parallel blob reads (50 concurrent) to stay within Convex transaction limits\r\n\r\n### Files changed (16)\r\n\r\n| File | Change |\r\n|------|--------|\r\n| `packages/schema/src/routes.ts` | Add `skillsExport` route constant |\r\n| `convex/lib/apiTokenAuth.ts` | Add `requireExportAuth` (admin-only, enabled) |\r\n| `convex/lib/httpRateLimit.ts` | Add `export` rate limit tier |\r\n| `convex/lib/skillZip.ts` | Add `validateSlug`, `validateFilePath`, `buildMergedExportZip` |\r\n| `convex/skills.ts` | Add `listByDateRange` internalQuery |\r\n| `convex/httpApiV1/skillsV1.ts` | Add `exportSkillsV1Handler` with security checks |\r\n| `convex/httpApiV1.ts` | Wire up httpAction export |\r\n| `convex/http.ts` | Register GET route |\r\n| `convex/devSeedExport.ts` | Dev seed: 200 test skills for export testing |\r\n| `test_export_api.sh` | Integration test script (31 tests) |\r\n| `convex/lib/access.ts` | Minor type alignment |\r\n| `convex/_generated/api.d.ts` | Auto-generated |\r\n| `packages/schema/dist/*` | Built output |\r\n| `readme_mirror_sync.md` | Mirror sync documentation |\r\n\r\n## Testing\r\n\r\n> All checks below were **actually executed** against the local Convex dev server and verified.\r\n- ✅ **TypeScript**: `npx tsc --noEmit` — 0 errors\r\n- ✅ **Unit tests**: `bun run test` (vitest) — 180 test files, 1701 tests passed, 0 failed\r\n- ✅ **Integration tests**: `bash test_export_api.sh` — **31/31 passed**, covering:\r\n  - Auth (6 tests): no token→401, invalid→401, user→403, admin→200, case-insensitive bearer, empty bearer\r\n  - Param validation (4 tests): missing startDate/endDate→400, startDate>endDate→400\r\n  - Empty results (3 tests): future date range→empty ZIP, correct headers\r\n  - Export output (5 tests): valid ZIP, correct Content-Type/Disposition, error/date headers\r\n  - ZIP content (5 tests): _manifest.json valid, skill subdirs with _meta.json, no path traversal\r\n  - Pagination (2 tests): cursor + hasMore flow, second page fetch\r\n  - Rate limit (2 tests): X-RateLimit headers present\r\n  - Edge cases (4 tests): limit clamping, single-point date range\r\n\r\n## Notes\r\n\r\n### No breaking changes\r\n- All existing endpoints are unaffected\r\n- The new `export` rate limit tier is additive (existing `read`/`write`/`download` unchanged)\r\n- `skillZip.ts` additions are new exports; existing `buildDeterministicZip` unchanged\r\n\r\n### Reviewer attention points\r\n1. Memory usage: The handler loads up to 1000 skills × N files into memory before zipping. For the current average file size (~10KB/file, ~5 files/skill) this is ~50MB peak, within Convex Action limits. Consider adding a total-size guard if skill file sizes grow significantly.\r\n2. `adminKey: 600`: The admin rate limit for export is generous (600 req/min). This was intentional to allow fast full-catalog sync, but could be reduced to 60-120 if the team prefers a more conservative setting.\r\n3. `Uint8Array.from(zipSync(...))` in `buildMergedExportZip` creates a copy of the ZIP buffer. Could be optimized to return `zipSync()` directly if memory pressure is a concern.\r\n\r\n### Context\r\nWe are the **ClawHub China mirror site** operators. China mainland users experience high latency and intermittent connectivity when accessing clawhub.ai directly. This export API enables us to efficiently bulk-sync the full skill catalog to our mirror, keeping it up-to-date with hourly incremental exports using date-range queries + cursor pagination. Without this endpoint, syncing 62k+ skills requires individual downloads that take 10+ hours and frequently hit rate limits.\r\n",
+        "branch": "mirror_sync_v1",
+        "head_sha": "cb616f30cfef87cfb0635231ed4926e3c3c74d6b",
+        "author": "wuchengan734-a11y",
         "labels": [
-          "channel: bluebubbles",
-          "channel: discord",
-          "cli",
-          "scripts",
-          "commands",
-          "agents",
-          "channel: feishu",
-          "size: XL",
-          "extensions: kimi-coding",
           "triage: dirty-candidate",
-          "extensions: deepinfra",
-          "proof: supplied",
-          "mantis: telegram-visible-proof",
-          "extensions: openrouter",
-          "P1",
+          "P2",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
+          "merge-risk: 🚨 availability",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "extensions/deepinfra/speech-provider.test.ts",
-            "additions": 12,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/monitor/message-handler.ts",
-            "additions": 17,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/monitor/message-run-queue.ts",
-            "additions": 12,
+            "path": "convex/http.ts",
+            "additions": 7,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/feishu/src/monitor.reaction.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/test-support/lifecycle-test-support.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/kimi-coding/stream.test.ts",
-            "additions": 4,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openrouter/speech-provider.test.ts",
-            "additions": 12,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/lib/bundled-plugin-build-entries.mjs",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/lib/changed-extensions.mjs",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/lib/extension-test-plan.mjs",
+            "path": "convex/httpApiV1.ts",
             "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/httpApiV1/skillsV1.ts",
+            "additions": 243,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "scripts/test-built-status-message-runtime.mjs",
-            "additions": 8,
-            "deletions": 9,
+            "path": "convex/lib/access.ts",
+            "additions": 1,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/pi-embedded-runner/run.ts",
-            "additions": 9,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run/params.ts",
-            "additions": 2,
+            "path": "convex/lib/apiTokenAuth.ts",
+            "additions": 50,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/inbound-debounce.ts",
-            "additions": 202,
-            "deletions": 14,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/inbound.test.ts",
-            "additions": 476,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/abort.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/followup-runner.ts",
+            "path": "convex/lib/httpRateLimit.ts",
             "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/queue.ts",
-            "additions": 3,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue/drain-all.test.ts",
-            "additions": 96,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue/drain-all.ts",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue/drain.ts",
-            "additions": 44,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue/enqueue.ts",
-            "additions": 10,
+            "path": "convex/lib/skillZip.ts",
+            "additions": 66,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/queue/types.ts",
-            "additions": 2,
+            "path": "convex/skills.ts",
+            "additions": 59,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cli/cron-cli.test.ts",
+            "path": "packages/schema/dist/routes.d.ts",
             "additions": 1,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/lifecycle.runtime.ts",
-            "additions": 5,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cli/gateway-cli/run-loop.test.ts",
-            "additions": 128,
+            "path": "packages/schema/dist/routes.js",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cli/gateway-cli/run-loop.ts",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor/shared/allowfrom-fallback-migration.ts",
-            "additions": 3,
+            "path": "packages/schema/dist/routes.js.map",
+            "additions": 1,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/plugin-sdk/channel-lifecycle.core.ts",
-            "additions": 99,
-            "deletions": 15,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/channel-lifecycle.queue.test.ts",
-            "additions": 39,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/compat/registry.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/command-queue.test.ts",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/command-queue.ts",
-            "additions": 30,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/command-queue.types.ts",
+            "path": "packages/schema/src/routes.ts",
             "additions": 1,
             "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tts/directives.test.ts",
-            "additions": 11,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/test-live-codex-harness-docker.test.ts",
-            "additions": 6,
-            "deletions": 14,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-46303",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-46303.md",
+        "automerge_cluster_id": "automerge-openclaw-clawhub-2138",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-clawhub-2138.md",
         "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
         "review_decision": "",
         "checks": {
-          "total": 97,
+          "total": 5,
           "counts": {
-            "SUCCESS": 79,
-            "SKIPPED": 17,
-            "NEUTRAL": 1
+            "SUCCESS": 3,
+            "SKIPPED": 1,
+            "FAILURE": 1
           },
-          "blockers": [],
-          "pending": [],
+          "blockers": [
+            "Vercel – clawhub:FAILURE"
+          ],
+          "pending": [
+            "Vercel – clawhub:FAILURE"
+          ],
           "terminalBlockers": []
         }
       },
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/clawhub:2138:4514681042:2026-05-22T03:14:49Z:re_review",
+      "comment_id": "4514681042",
+      "comment_version_key": "4514681042:2026-05-22T03:14:49Z",
+      "comment_url": "https://github.com/openclaw/clawhub/pull/2138#issuecomment-4514681042",
+      "repo": "openclaw/clawhub",
+      "issue_number": 2138,
+      "author": "wuchengan734-a11y",
+      "author_id": 228645455,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-22T03:14:49Z",
+      "comment_updated_at": "2026-05-22T03:14:49Z",
+      "status_comment_id": null,
+      "trigger": "slash",
+      "command": "review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-05-22T18:28:49.236Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 2138
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-22T18:28:50.510Z",
+          "response_comment_id": "4514763009",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "Export skills function added by Mirror Site maintainer",
+        "body": "## Summary\r\n\r\nWe are the ClawHub China mirror site from bytedance. To keep our mirror in sync with the upstream skill registry, we need an efficient way to bulk-fetch skill data. Currently there is no batch export API — the only option is to download skills one by one, which triggers rate limits and takes hours for 62k+ skills.\r\n\r\nThis PR adds a new `GET /api/v1/skills/export` endpoint that returns a merged ZIP archive of up to 1000 skills per request, with cursor-based pagination for full-catalog traversal.\r\n\r\n### What's changed\r\n\r\n- **New endpoint**: `GET /api/v1/skills/export?startDate=<ms>&endDate=<ms>&limit=<n>&cursor=<token>`\r\n  - Returns a ZIP containing skill files organized in `<slug>/` subdirectories\r\n  - Includes `_manifest.json` (skill metadata array) and `_meta.json` per skill\r\n  - Supports cursor-based pagination via `X-Next-Cursor` / `X-Has-More` response headers\r\n\r\n- **Authentication & Authorization** (`convex/lib/apiTokenAuth.ts`)\r\n  - New `requireExportAuth()` — enforces Bearer token + admin-only role check\r\n  - No token → 401, valid token but non-admin → 403, admin → allowed\r\n  - Role whitelist configurable via `EXPORT_ALLOWED_ROLES` array\r\n\r\n- **Security hardening** (`convex/lib/skillZip.ts`)\r\n  - `validateSlug()` — prevents Zip Slip via malicious slug paths (`../../etc`)\r\n  - `validateFilePath()` — blocks absolute paths, `..` traversal, backslashes, empty segments\r\n  - `buildMergedExportZip()` — detects duplicate ZIP paths to prevent silent overwrites\r\n\r\n- **Error recording** (`convex/httpApiV1/skillsV1.ts`)\r\n  - Missing versions or blobs are logged to `_errors.json` inside the ZIP (not silently skipped)\r\n  - `X-Export-Errors` response header reports error count\r\n\r\n- **Rate limiting** (`convex/lib/httpRateLimit.ts`)\r\n  - New `export` tier: `{ ip: 10, key: 60, adminKey: 600 }` requests/min\r\n\r\n- **Query layer** (`convex/skills.ts`)\r\n  - `listByDateRange` internalQuery — range scan on `skillSearchDigest.by_active_created` index\r\n  - Chunked parallel blob reads (50 concurrent) to stay within Convex transaction limits\r\n\r\n### Files changed (16)\r\n\r\n| File | Change |\r\n|------|--------|\r\n| `packages/schema/src/routes.ts` | Add `skillsExport` route constant |\r\n| `convex/lib/apiTokenAuth.ts` | Add `requireExportAuth` (admin-only, enabled) |\r\n| `convex/lib/httpRateLimit.ts` | Add `export` rate limit tier |\r\n| `convex/lib/skillZip.ts` | Add `validateSlug`, `validateFilePath`, `buildMergedExportZip` |\r\n| `convex/skills.ts` | Add `listByDateRange` internalQuery |\r\n| `convex/httpApiV1/skillsV1.ts` | Add `exportSkillsV1Handler` with security checks |\r\n| `convex/httpApiV1.ts` | Wire up httpAction export |\r\n| `convex/http.ts` | Register GET route |\r\n| `convex/devSeedExport.ts` | Dev seed: 200 test skills for export testing |\r\n| `test_export_api.sh` | Integration test script (31 tests) |\r\n| `convex/lib/access.ts` | Minor type alignment |\r\n| `convex/_generated/api.d.ts` | Auto-generated |\r\n| `packages/schema/dist/*` | Built output |\r\n| `readme_mirror_sync.md` | Mirror sync documentation |\r\n\r\n## Testing\r\n\r\n> All checks below were **actually executed** against the local Convex dev server and verified.\r\n- ✅ **TypeScript**: `npx tsc --noEmit` — 0 errors\r\n- ✅ **Unit tests**: `bun run test` (vitest) — 180 test files, 1701 tests passed, 0 failed\r\n- ✅ **Integration tests**: `bash test_export_api.sh` — **31/31 passed**, covering:\r\n  - Auth (6 tests): no token→401, invalid→401, user→403, admin→200, case-insensitive bearer, empty bearer\r\n  - Param validation (4 tests): missing startDate/endDate→400, startDate>endDate→400\r\n  - Empty results (3 tests): future date range→empty ZIP, correct headers\r\n  - Export output (5 tests): valid ZIP, correct Content-Type/Disposition, error/date headers\r\n  - ZIP content (5 tests): _manifest.json valid, skill subdirs with _meta.json, no path traversal\r\n  - Pagination (2 tests): cursor + hasMore flow, second page fetch\r\n  - Rate limit (2 tests): X-RateLimit headers present\r\n  - Edge cases (4 tests): limit clamping, single-point date range\r\n\r\n## Notes\r\n\r\n### No breaking changes\r\n- All existing endpoints are unaffected\r\n- The new `export` rate limit tier is additive (existing `read`/`write`/`download` unchanged)\r\n- `skillZip.ts` additions are new exports; existing `buildDeterministicZip` unchanged\r\n\r\n### Reviewer attention points\r\n1. Memory usage: The handler loads up to 1000 skills × N files into memory before zipping. For the current average file size (~10KB/file, ~5 files/skill) this is ~50MB peak, within Convex Action limits. Consider adding a total-size guard if skill file sizes grow significantly.\r\n2. `adminKey: 600`: The admin rate limit for export is generous (600 req/min). This was intentional to allow fast full-catalog sync, but could be reduced to 60-120 if the team prefers a more conservative setting.\r\n3. `Uint8Array.from(zipSync(...))` in `buildMergedExportZip` creates a copy of the ZIP buffer. Could be optimized to return `zipSync()` directly if memory pressure is a concern.\r\n\r\n### Context\r\nWe are the **ClawHub China mirror site** operators. China mainland users experience high latency and intermittent connectivity when accessing clawhub.ai directly. This export API enables us to efficiently bulk-sync the full skill catalog to our mirror, keeping it up-to-date with hourly incremental exports using date-range queries + cursor pagination. Without this endpoint, syncing 62k+ skills requires individual downloads that take 10+ hours and frequently hit rate limits.\r\n",
+        "branch": "mirror_sync_v1",
+        "head_sha": "cb616f30cfef87cfb0635231ed4926e3c3c74d6b",
+        "author": "wuchengan734-a11y",
+        "labels": [
+          "triage: dirty-candidate",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "convex/http.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/httpApiV1.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/httpApiV1/skillsV1.ts",
+            "additions": 243,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/lib/access.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/lib/apiTokenAuth.ts",
+            "additions": 50,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/lib/httpRateLimit.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/lib/skillZip.ts",
+            "additions": 66,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/skills.ts",
+            "additions": 59,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/schema/dist/routes.d.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/schema/dist/routes.js",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/schema/dist/routes.js.map",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/schema/src/routes.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-clawhub-2138",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-clawhub-2138.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "",
+        "checks": {
+          "total": 5,
+          "counts": {
+            "SUCCESS": 3,
+            "SKIPPED": 1,
+            "FAILURE": 1
+          },
+          "blockers": [
+            "Vercel – clawhub:FAILURE"
+          ],
+          "pending": [
+            "Vercel – clawhub:FAILURE"
+          ],
+          "terminalBlockers": []
+        }
+      }
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/clawhub:2138:4417550908:2026-05-11T04:12:41Z:re_review",
+      "comment_id": "4417550908",
+      "comment_version_key": "4417550908:2026-05-11T04:12:41Z",
+      "comment_url": "https://github.com/openclaw/clawhub/pull/2138#issuecomment-4417550908",
+      "repo": "openclaw/clawhub",
+      "issue_number": 2138,
+      "author": "wuchengan734-a11y",
+      "author_id": 228645455,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-11T04:12:41Z",
+      "comment_updated_at": "2026-05-11T04:12:41Z",
+      "status_comment_id": null,
+      "trigger": "slash",
+      "command": "review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-05-22T18:28:52.124Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 2138
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-22T18:28:53.292Z",
+          "response_comment_id": "4514763009",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "Export skills function added by Mirror Site maintainer",
+        "body": "## Summary\r\n\r\nWe are the ClawHub China mirror site from bytedance. To keep our mirror in sync with the upstream skill registry, we need an efficient way to bulk-fetch skill data. Currently there is no batch export API — the only option is to download skills one by one, which triggers rate limits and takes hours for 62k+ skills.\r\n\r\nThis PR adds a new `GET /api/v1/skills/export` endpoint that returns a merged ZIP archive of up to 1000 skills per request, with cursor-based pagination for full-catalog traversal.\r\n\r\n### What's changed\r\n\r\n- **New endpoint**: `GET /api/v1/skills/export?startDate=<ms>&endDate=<ms>&limit=<n>&cursor=<token>`\r\n  - Returns a ZIP containing skill files organized in `<slug>/` subdirectories\r\n  - Includes `_manifest.json` (skill metadata array) and `_meta.json` per skill\r\n  - Supports cursor-based pagination via `X-Next-Cursor` / `X-Has-More` response headers\r\n\r\n- **Authentication & Authorization** (`convex/lib/apiTokenAuth.ts`)\r\n  - New `requireExportAuth()` — enforces Bearer token + admin-only role check\r\n  - No token → 401, valid token but non-admin → 403, admin → allowed\r\n  - Role whitelist configurable via `EXPORT_ALLOWED_ROLES` array\r\n\r\n- **Security hardening** (`convex/lib/skillZip.ts`)\r\n  - `validateSlug()` — prevents Zip Slip via malicious slug paths (`../../etc`)\r\n  - `validateFilePath()` — blocks absolute paths, `..` traversal, backslashes, empty segments\r\n  - `buildMergedExportZip()` — detects duplicate ZIP paths to prevent silent overwrites\r\n\r\n- **Error recording** (`convex/httpApiV1/skillsV1.ts`)\r\n  - Missing versions or blobs are logged to `_errors.json` inside the ZIP (not silently skipped)\r\n  - `X-Export-Errors` response header reports error count\r\n\r\n- **Rate limiting** (`convex/lib/httpRateLimit.ts`)\r\n  - New `export` tier: `{ ip: 10, key: 60, adminKey: 600 }` requests/min\r\n\r\n- **Query layer** (`convex/skills.ts`)\r\n  - `listByDateRange` internalQuery — range scan on `skillSearchDigest.by_active_created` index\r\n  - Chunked parallel blob reads (50 concurrent) to stay within Convex transaction limits\r\n\r\n### Files changed (16)\r\n\r\n| File | Change |\r\n|------|--------|\r\n| `packages/schema/src/routes.ts` | Add `skillsExport` route constant |\r\n| `convex/lib/apiTokenAuth.ts` | Add `requireExportAuth` (admin-only, enabled) |\r\n| `convex/lib/httpRateLimit.ts` | Add `export` rate limit tier |\r\n| `convex/lib/skillZip.ts` | Add `validateSlug`, `validateFilePath`, `buildMergedExportZip` |\r\n| `convex/skills.ts` | Add `listByDateRange` internalQuery |\r\n| `convex/httpApiV1/skillsV1.ts` | Add `exportSkillsV1Handler` with security checks |\r\n| `convex/httpApiV1.ts` | Wire up httpAction export |\r\n| `convex/http.ts` | Register GET route |\r\n| `convex/devSeedExport.ts` | Dev seed: 200 test skills for export testing |\r\n| `test_export_api.sh` | Integration test script (31 tests) |\r\n| `convex/lib/access.ts` | Minor type alignment |\r\n| `convex/_generated/api.d.ts` | Auto-generated |\r\n| `packages/schema/dist/*` | Built output |\r\n| `readme_mirror_sync.md` | Mirror sync documentation |\r\n\r\n## Testing\r\n\r\n> All checks below were **actually executed** against the local Convex dev server and verified.\r\n- ✅ **TypeScript**: `npx tsc --noEmit` — 0 errors\r\n- ✅ **Unit tests**: `bun run test` (vitest) — 180 test files, 1701 tests passed, 0 failed\r\n- ✅ **Integration tests**: `bash test_export_api.sh` — **31/31 passed**, covering:\r\n  - Auth (6 tests): no token→401, invalid→401, user→403, admin→200, case-insensitive bearer, empty bearer\r\n  - Param validation (4 tests): missing startDate/endDate→400, startDate>endDate→400\r\n  - Empty results (3 tests): future date range→empty ZIP, correct headers\r\n  - Export output (5 tests): valid ZIP, correct Content-Type/Disposition, error/date headers\r\n  - ZIP content (5 tests): _manifest.json valid, skill subdirs with _meta.json, no path traversal\r\n  - Pagination (2 tests): cursor + hasMore flow, second page fetch\r\n  - Rate limit (2 tests): X-RateLimit headers present\r\n  - Edge cases (4 tests): limit clamping, single-point date range\r\n\r\n## Notes\r\n\r\n### No breaking changes\r\n- All existing endpoints are unaffected\r\n- The new `export` rate limit tier is additive (existing `read`/`write`/`download` unchanged)\r\n- `skillZip.ts` additions are new exports; existing `buildDeterministicZip` unchanged\r\n\r\n### Reviewer attention points\r\n1. Memory usage: The handler loads up to 1000 skills × N files into memory before zipping. For the current average file size (~10KB/file, ~5 files/skill) this is ~50MB peak, within Convex Action limits. Consider adding a total-size guard if skill file sizes grow significantly.\r\n2. `adminKey: 600`: The admin rate limit for export is generous (600 req/min). This was intentional to allow fast full-catalog sync, but could be reduced to 60-120 if the team prefers a more conservative setting.\r\n3. `Uint8Array.from(zipSync(...))` in `buildMergedExportZip` creates a copy of the ZIP buffer. Could be optimized to return `zipSync()` directly if memory pressure is a concern.\r\n\r\n### Context\r\nWe are the **ClawHub China mirror site** operators. China mainland users experience high latency and intermittent connectivity when accessing clawhub.ai directly. This export API enables us to efficiently bulk-sync the full skill catalog to our mirror, keeping it up-to-date with hourly incremental exports using date-range queries + cursor pagination. Without this endpoint, syncing 62k+ skills requires individual downloads that take 10+ hours and frequently hit rate limits.\r\n",
+        "branch": "mirror_sync_v1",
+        "head_sha": "cb616f30cfef87cfb0635231ed4926e3c3c74d6b",
+        "author": "wuchengan734-a11y",
+        "labels": [
+          "triage: dirty-candidate",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "convex/http.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/httpApiV1.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/httpApiV1/skillsV1.ts",
+            "additions": 243,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/lib/access.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/lib/apiTokenAuth.ts",
+            "additions": 50,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/lib/httpRateLimit.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/lib/skillZip.ts",
+            "additions": 66,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/skills.ts",
+            "additions": 59,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/schema/dist/routes.d.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/schema/dist/routes.js",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/schema/dist/routes.js.map",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/schema/src/routes.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-clawhub-2138",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-clawhub-2138.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "",
+        "checks": {
+          "total": 5,
+          "counts": {
+            "SUCCESS": 3,
+            "SKIPPED": 1,
+            "FAILURE": 1
+          },
+          "blockers": [
+            "Vercel – clawhub:FAILURE"
+          ],
+          "pending": [
+            "Vercel – clawhub:FAILURE"
+          ],
+          "terminalBlockers": []
+        }
+      }
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/clawhub:2138:4417532530:2026-05-11T04:07:09Z:re_review",
+      "comment_id": "4417532530",
+      "comment_version_key": "4417532530:2026-05-11T04:07:09Z",
+      "comment_url": "https://github.com/openclaw/clawhub/pull/2138#issuecomment-4417532530",
+      "repo": "openclaw/clawhub",
+      "issue_number": 2138,
+      "author": "wuchengan734-a11y",
+      "author_id": 228645455,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-11T04:07:09Z",
+      "comment_updated_at": "2026-05-11T04:07:09Z",
+      "status_comment_id": null,
+      "trigger": "slash",
+      "command": "review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "Export skills function added by Mirror Site maintainer",
+        "body": "## Summary\r\n\r\nWe are the ClawHub China mirror site from bytedance. To keep our mirror in sync with the upstream skill registry, we need an efficient way to bulk-fetch skill data. Currently there is no batch export API — the only option is to download skills one by one, which triggers rate limits and takes hours for 62k+ skills.\r\n\r\nThis PR adds a new `GET /api/v1/skills/export` endpoint that returns a merged ZIP archive of up to 1000 skills per request, with cursor-based pagination for full-catalog traversal.\r\n\r\n### What's changed\r\n\r\n- **New endpoint**: `GET /api/v1/skills/export?startDate=<ms>&endDate=<ms>&limit=<n>&cursor=<token>`\r\n  - Returns a ZIP containing skill files organized in `<slug>/` subdirectories\r\n  - Includes `_manifest.json` (skill metadata array) and `_meta.json` per skill\r\n  - Supports cursor-based pagination via `X-Next-Cursor` / `X-Has-More` response headers\r\n\r\n- **Authentication & Authorization** (`convex/lib/apiTokenAuth.ts`)\r\n  - New `requireExportAuth()` — enforces Bearer token + admin-only role check\r\n  - No token → 401, valid token but non-admin → 403, admin → allowed\r\n  - Role whitelist configurable via `EXPORT_ALLOWED_ROLES` array\r\n\r\n- **Security hardening** (`convex/lib/skillZip.ts`)\r\n  - `validateSlug()` — prevents Zip Slip via malicious slug paths (`../../etc`)\r\n  - `validateFilePath()` — blocks absolute paths, `..` traversal, backslashes, empty segments\r\n  - `buildMergedExportZip()` — detects duplicate ZIP paths to prevent silent overwrites\r\n\r\n- **Error recording** (`convex/httpApiV1/skillsV1.ts`)\r\n  - Missing versions or blobs are logged to `_errors.json` inside the ZIP (not silently skipped)\r\n  - `X-Export-Errors` response header reports error count\r\n\r\n- **Rate limiting** (`convex/lib/httpRateLimit.ts`)\r\n  - New `export` tier: `{ ip: 10, key: 60, adminKey: 600 }` requests/min\r\n\r\n- **Query layer** (`convex/skills.ts`)\r\n  - `listByDateRange` internalQuery — range scan on `skillSearchDigest.by_active_created` index\r\n  - Chunked parallel blob reads (50 concurrent) to stay within Convex transaction limits\r\n\r\n### Files changed (16)\r\n\r\n| File | Change |\r\n|------|--------|\r\n| `packages/schema/src/routes.ts` | Add `skillsExport` route constant |\r\n| `convex/lib/apiTokenAuth.ts` | Add `requireExportAuth` (admin-only, enabled) |\r\n| `convex/lib/httpRateLimit.ts` | Add `export` rate limit tier |\r\n| `convex/lib/skillZip.ts` | Add `validateSlug`, `validateFilePath`, `buildMergedExportZip` |\r\n| `convex/skills.ts` | Add `listByDateRange` internalQuery |\r\n| `convex/httpApiV1/skillsV1.ts` | Add `exportSkillsV1Handler` with security checks |\r\n| `convex/httpApiV1.ts` | Wire up httpAction export |\r\n| `convex/http.ts` | Register GET route |\r\n| `convex/devSeedExport.ts` | Dev seed: 200 test skills for export testing |\r\n| `test_export_api.sh` | Integration test script (31 tests) |\r\n| `convex/lib/access.ts` | Minor type alignment |\r\n| `convex/_generated/api.d.ts` | Auto-generated |\r\n| `packages/schema/dist/*` | Built output |\r\n| `readme_mirror_sync.md` | Mirror sync documentation |\r\n\r\n## Testing\r\n\r\n> All checks below were **actually executed** against the local Convex dev server and verified.\r\n- ✅ **TypeScript**: `npx tsc --noEmit` — 0 errors\r\n- ✅ **Unit tests**: `bun run test` (vitest) — 180 test files, 1701 tests passed, 0 failed\r\n- ✅ **Integration tests**: `bash test_export_api.sh` — **31/31 passed**, covering:\r\n  - Auth (6 tests): no token→401, invalid→401, user→403, admin→200, case-insensitive bearer, empty bearer\r\n  - Param validation (4 tests): missing startDate/endDate→400, startDate>endDate→400\r\n  - Empty results (3 tests): future date range→empty ZIP, correct headers\r\n  - Export output (5 tests): valid ZIP, correct Content-Type/Disposition, error/date headers\r\n  - ZIP content (5 tests): _manifest.json valid, skill subdirs with _meta.json, no path traversal\r\n  - Pagination (2 tests): cursor + hasMore flow, second page fetch\r\n  - Rate limit (2 tests): X-RateLimit headers present\r\n  - Edge cases (4 tests): limit clamping, single-point date range\r\n\r\n## Notes\r\n\r\n### No breaking changes\r\n- All existing endpoints are unaffected\r\n- The new `export` rate limit tier is additive (existing `read`/`write`/`download` unchanged)\r\n- `skillZip.ts` additions are new exports; existing `buildDeterministicZip` unchanged\r\n\r\n### Reviewer attention points\r\n1. Memory usage: The handler loads up to 1000 skills × N files into memory before zipping. For the current average file size (~10KB/file, ~5 files/skill) this is ~50MB peak, within Convex Action limits. Consider adding a total-size guard if skill file sizes grow significantly.\r\n2. `adminKey: 600`: The admin rate limit for export is generous (600 req/min). This was intentional to allow fast full-catalog sync, but could be reduced to 60-120 if the team prefers a more conservative setting.\r\n3. `Uint8Array.from(zipSync(...))` in `buildMergedExportZip` creates a copy of the ZIP buffer. Could be optimized to return `zipSync()` directly if memory pressure is a concern.\r\n\r\n### Context\r\nWe are the **ClawHub China mirror site** operators. China mainland users experience high latency and intermittent connectivity when accessing clawhub.ai directly. This export API enables us to efficiently bulk-sync the full skill catalog to our mirror, keeping it up-to-date with hourly incremental exports using date-range queries + cursor pagination. Without this endpoint, syncing 62k+ skills requires individual downloads that take 10+ hours and frequently hit rate limits.\r\n",
+        "branch": "mirror_sync_v1",
+        "head_sha": "cb616f30cfef87cfb0635231ed4926e3c3c74d6b",
+        "author": "wuchengan734-a11y",
+        "labels": [
+          "triage: dirty-candidate",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "convex/http.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/httpApiV1.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/httpApiV1/skillsV1.ts",
+            "additions": 243,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/lib/access.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/lib/apiTokenAuth.ts",
+            "additions": 50,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/lib/httpRateLimit.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/lib/skillZip.ts",
+            "additions": 66,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/skills.ts",
+            "additions": 59,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/schema/dist/routes.d.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/schema/dist/routes.js",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/schema/dist/routes.js.map",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/schema/src/routes.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-clawhub-2138",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-clawhub-2138.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "",
+        "checks": {
+          "total": 5,
+          "counts": {
+            "SUCCESS": 3,
+            "SKIPPED": 1,
+            "FAILURE": 1
+          },
+          "blockers": [
+            "Vercel – clawhub:FAILURE"
+          ],
+          "pending": [
+            "Vercel – clawhub:FAILURE"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/clawhub:2138:4417353215:2026-05-11T03:30:00Z:re_review",
+      "comment_id": "4417353215",
+      "comment_version_key": "4417353215:2026-05-11T03:30:00Z",
+      "comment_url": "https://github.com/openclaw/clawhub/pull/2138#issuecomment-4417353215",
+      "repo": "openclaw/clawhub",
+      "issue_number": 2138,
+      "author": "wuchengan734-a11y",
+      "author_id": 228645455,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-11T03:30:00Z",
+      "comment_updated_at": "2026-05-11T03:30:00Z",
+      "status_comment_id": null,
+      "trigger": "slash",
+      "command": "review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "Export skills function added by Mirror Site maintainer",
+        "body": "## Summary\r\n\r\nWe are the ClawHub China mirror site from bytedance. To keep our mirror in sync with the upstream skill registry, we need an efficient way to bulk-fetch skill data. Currently there is no batch export API — the only option is to download skills one by one, which triggers rate limits and takes hours for 62k+ skills.\r\n\r\nThis PR adds a new `GET /api/v1/skills/export` endpoint that returns a merged ZIP archive of up to 1000 skills per request, with cursor-based pagination for full-catalog traversal.\r\n\r\n### What's changed\r\n\r\n- **New endpoint**: `GET /api/v1/skills/export?startDate=<ms>&endDate=<ms>&limit=<n>&cursor=<token>`\r\n  - Returns a ZIP containing skill files organized in `<slug>/` subdirectories\r\n  - Includes `_manifest.json` (skill metadata array) and `_meta.json` per skill\r\n  - Supports cursor-based pagination via `X-Next-Cursor` / `X-Has-More` response headers\r\n\r\n- **Authentication & Authorization** (`convex/lib/apiTokenAuth.ts`)\r\n  - New `requireExportAuth()` — enforces Bearer token + admin-only role check\r\n  - No token → 401, valid token but non-admin → 403, admin → allowed\r\n  - Role whitelist configurable via `EXPORT_ALLOWED_ROLES` array\r\n\r\n- **Security hardening** (`convex/lib/skillZip.ts`)\r\n  - `validateSlug()` — prevents Zip Slip via malicious slug paths (`../../etc`)\r\n  - `validateFilePath()` — blocks absolute paths, `..` traversal, backslashes, empty segments\r\n  - `buildMergedExportZip()` — detects duplicate ZIP paths to prevent silent overwrites\r\n\r\n- **Error recording** (`convex/httpApiV1/skillsV1.ts`)\r\n  - Missing versions or blobs are logged to `_errors.json` inside the ZIP (not silently skipped)\r\n  - `X-Export-Errors` response header reports error count\r\n\r\n- **Rate limiting** (`convex/lib/httpRateLimit.ts`)\r\n  - New `export` tier: `{ ip: 10, key: 60, adminKey: 600 }` requests/min\r\n\r\n- **Query layer** (`convex/skills.ts`)\r\n  - `listByDateRange` internalQuery — range scan on `skillSearchDigest.by_active_created` index\r\n  - Chunked parallel blob reads (50 concurrent) to stay within Convex transaction limits\r\n\r\n### Files changed (16)\r\n\r\n| File | Change |\r\n|------|--------|\r\n| `packages/schema/src/routes.ts` | Add `skillsExport` route constant |\r\n| `convex/lib/apiTokenAuth.ts` | Add `requireExportAuth` (admin-only, enabled) |\r\n| `convex/lib/httpRateLimit.ts` | Add `export` rate limit tier |\r\n| `convex/lib/skillZip.ts` | Add `validateSlug`, `validateFilePath`, `buildMergedExportZip` |\r\n| `convex/skills.ts` | Add `listByDateRange` internalQuery |\r\n| `convex/httpApiV1/skillsV1.ts` | Add `exportSkillsV1Handler` with security checks |\r\n| `convex/httpApiV1.ts` | Wire up httpAction export |\r\n| `convex/http.ts` | Register GET route |\r\n| `convex/devSeedExport.ts` | Dev seed: 200 test skills for export testing |\r\n| `test_export_api.sh` | Integration test script (31 tests) |\r\n| `convex/lib/access.ts` | Minor type alignment |\r\n| `convex/_generated/api.d.ts` | Auto-generated |\r\n| `packages/schema/dist/*` | Built output |\r\n| `readme_mirror_sync.md` | Mirror sync documentation |\r\n\r\n## Testing\r\n\r\n> All checks below were **actually executed** against the local Convex dev server and verified.\r\n- ✅ **TypeScript**: `npx tsc --noEmit` — 0 errors\r\n- ✅ **Unit tests**: `bun run test` (vitest) — 180 test files, 1701 tests passed, 0 failed\r\n- ✅ **Integration tests**: `bash test_export_api.sh` — **31/31 passed**, covering:\r\n  - Auth (6 tests): no token→401, invalid→401, user→403, admin→200, case-insensitive bearer, empty bearer\r\n  - Param validation (4 tests): missing startDate/endDate→400, startDate>endDate→400\r\n  - Empty results (3 tests): future date range→empty ZIP, correct headers\r\n  - Export output (5 tests): valid ZIP, correct Content-Type/Disposition, error/date headers\r\n  - ZIP content (5 tests): _manifest.json valid, skill subdirs with _meta.json, no path traversal\r\n  - Pagination (2 tests): cursor + hasMore flow, second page fetch\r\n  - Rate limit (2 tests): X-RateLimit headers present\r\n  - Edge cases (4 tests): limit clamping, single-point date range\r\n\r\n## Notes\r\n\r\n### No breaking changes\r\n- All existing endpoints are unaffected\r\n- The new `export` rate limit tier is additive (existing `read`/`write`/`download` unchanged)\r\n- `skillZip.ts` additions are new exports; existing `buildDeterministicZip` unchanged\r\n\r\n### Reviewer attention points\r\n1. Memory usage: The handler loads up to 1000 skills × N files into memory before zipping. For the current average file size (~10KB/file, ~5 files/skill) this is ~50MB peak, within Convex Action limits. Consider adding a total-size guard if skill file sizes grow significantly.\r\n2. `adminKey: 600`: The admin rate limit for export is generous (600 req/min). This was intentional to allow fast full-catalog sync, but could be reduced to 60-120 if the team prefers a more conservative setting.\r\n3. `Uint8Array.from(zipSync(...))` in `buildMergedExportZip` creates a copy of the ZIP buffer. Could be optimized to return `zipSync()` directly if memory pressure is a concern.\r\n\r\n### Context\r\nWe are the **ClawHub China mirror site** operators. China mainland users experience high latency and intermittent connectivity when accessing clawhub.ai directly. This export API enables us to efficiently bulk-sync the full skill catalog to our mirror, keeping it up-to-date with hourly incremental exports using date-range queries + cursor pagination. Without this endpoint, syncing 62k+ skills requires individual downloads that take 10+ hours and frequently hit rate limits.\r\n",
+        "branch": "mirror_sync_v1",
+        "head_sha": "cb616f30cfef87cfb0635231ed4926e3c3c74d6b",
+        "author": "wuchengan734-a11y",
+        "labels": [
+          "triage: dirty-candidate",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "convex/http.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/httpApiV1.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/httpApiV1/skillsV1.ts",
+            "additions": 243,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/lib/access.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/lib/apiTokenAuth.ts",
+            "additions": 50,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/lib/httpRateLimit.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/lib/skillZip.ts",
+            "additions": 66,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "convex/skills.ts",
+            "additions": 59,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/schema/dist/routes.d.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/schema/dist/routes.js",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/schema/dist/routes.js.map",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/schema/src/routes.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-clawhub-2138",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-clawhub-2138.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "",
+        "checks": {
+          "total": 5,
+          "counts": {
+            "SUCCESS": 3,
+            "SKIPPED": 1,
+            "FAILURE": 1
+          },
+          "blockers": [
+            "Vercel – clawhub:FAILURE"
+          ],
+          "pending": [
+            "Vercel – clawhub:FAILURE"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2515,
+    "total_ms": 7500,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 332
+        "ms": 462
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1755
+        "ms": 1103
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 293
+        "ms": 5901
       },
       {
         "name": "append_ledger",
