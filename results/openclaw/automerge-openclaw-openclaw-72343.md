@@ -2,19 +2,19 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-72343"
 mode: "autonomous"
-run_id: "26267613436"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26267613436"
-head_sha: "3f1affe587c6c11c2e3ca7040bc3e66aa80e0ec6"
+run_id: "26313160180"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26313160180"
+head_sha: "97885cf4e291213190fcd12ed35bc288d7de54cc"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-22T04:15:21.768Z"
+published_at: "2026-05-22T21:53:24.062Z"
 canonical: "#72343"
 canonical_issue: null
 canonical_pr: "#72343"
 actions_total: 1
 fix_executed: 0
 fix_failed: 0
-fix_blocked: 0
+fix_blocked: 1
 apply_executed: 0
 apply_blocked: 1
 apply_skipped: 0
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/26267613436](https://github.com/openclaw/clawsweeper/actions/runs/26267613436)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/26313160180](https://github.com/openclaw/clawsweeper/actions/runs/26313160180)
 
 Workflow conclusion: success
 
@@ -44,7 +44,7 @@ Make PR #72343 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 | Worker actions | 1 |
 | Fix executed | 0 |
 | Fix failed | 0 |
-| Fix blocked | 0 |
+| Fix blocked | 1 |
 | Applied executions | 0 |
 | Apply blocked | 1 |
 | Apply skipped | 0 |
@@ -54,13 +54,14 @@ Make PR #72343 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | pushed | https://github.com/openclaw/openclaw/pull/72343 |  |  |
+| repair_contributor_branch | blocked | https://github.com/openclaw/openclaw/pull/72343 |  | GitHub rejected the repair branch push because it updates workflow files and the ClawSweeper app token does not have workflows permission |
+| open_fix_pr | opened | https://github.com/openclaw/openclaw/pull/85519 | clawsweeper/automerge-openclaw-openclaw-72343 |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #72343 | merge_canonical | blocked | fix_pr | job does not allow merge |
+| #85519 | merge_canonical | blocked | fix_pr | job does not allow merge |
 
 ## Worker Action Matrix
 
