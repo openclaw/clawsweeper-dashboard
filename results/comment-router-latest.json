@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-23T11:56:40.021Z",
+  "generated_at": "2026-05-23T11:57:07.722Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-23T08:56:39.517Z",
+  "since": "2026-05-23T08:57:05.010Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    85691
+    55211
   ],
   "comment_ids": [
-    4525258033
+    4525262771
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4525262953,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:85691:4525258033:2026-05-23T11:54:43Z:re_review",
-      "comment_id": "4525258033",
-      "comment_version_key": "4525258033:2026-05-23T11:54:43Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/85691#issuecomment-4525258033",
+      "idempotency_key": "comment-router:openclaw/openclaw:55211:4525262771:2026-05-23T11:56:04Z:re_review",
+      "comment_id": "4525262771",
+      "comment_version_key": "4525262771:2026-05-23T11:56:04Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/55211#issuecomment-4525262771",
       "repo": "openclaw/openclaw",
-      "issue_number": 85691,
+      "issue_number": 55211,
       "author": "ggzeng",
       "author_id": 20488795,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-23T11:54:43Z",
-      "comment_updated_at": "2026-05-23T11:54:43Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-05-23T11:56:04Z",
+      "comment_updated_at": "2026-05-23T11:56:04Z",
+      "status_comment_id": 4525262953,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -59,22 +59,89 @@
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-05-23T11:57:08.785Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 55211
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-23T11:57:09.990Z",
+          "response_comment_id": "4525145739",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: prevent re-entrant loop in internal hook trigger",
+        "body": "## Summary\n\nFixes re-entrant infinite loop in `triggerInternalHook` when a handler calls `triggerInternalHook` again with the same `type:action:sessionKey` combination.\n\nFixes #55211\n\n## Problem\n\nBefore this fix, if a hook handler (e.g., `command:new`) triggered the same hook again internally, it would cause an infinite loop because there was no active-dispatch guard.\n\n## Solution\n\nAdded an `AsyncLocalStorage`-based re-entrancy guard:\n- Re-entrant calls within the same async call chain are blocked (handler → triggerInternalHook → same key → sees inherited store → dropped)\n- Independent concurrent calls from different async contexts are NOT blocked (preserves at-least-once delivery)\n- Delayed same-key hooks scheduled by handlers (e.g. via setTimeout fire-and-forget) are delivered after dispatch completes, because the guard key is cleared from the Set in a `finally` block\n\n## Changes\n- `src/hooks/internal-hooks.ts`: Added `AsyncLocalStorage` guard with `try/finally` guard-key cleanup around `triggerInternalHook`\n- `src/hooks/internal-hooks.test.ts`: Added 34 lines of tests covering recursive, sequential, concurrent, cross-session, and delayed redispatch behavior\n\n## Compatibility contract\n\nSame-chain same-key suppression is the intended internal hook contract. This prevents infinite re-entrant loops while preserving:\n- Independent concurrent dispatches (fireAndForgetHook pattern)\n- Delayed follow-up hooks scheduled from handlers\n- Cross-session and cross-event-type independence\n\nPlugins or hook packs that rely on nested same-key hook delivery within the same async chain will see those calls suppressed. This is the correct behavior to prevent infinite amplification.\n\n## Real behavior proof\n\n**Behavior or issue addressed:** Re-entrant `triggerInternalHook` infinite loop (same `type:action:sessionKey` triggered within its own handler chain). Additionally: guard key lifetime — the guard must be cleared after dispatch so delayed same-key hooks are not blocked.\n\n**Real environment tested:** Linux x64, Node v24.14.0. Standalone reproduction script (`repro-guard-lifetime.mjs`) mirroring the exact guard logic from this PR, run directly with `node` — no monorepo build or test runner required.\n\n**Exact steps or command run after this patch:**\n```bash\nnode repro-guard-lifetime.mjs\n```\n\n**Evidence after fix:** Standalone reproduction script output showing 5 scenarios:\n\n```\nReal Behavior Proof: AsyncLocalStorage Guard Lifetime\nDate: 2026-05-23T11:48:53.225Z\nNode: v24.14.0 | Platform: linux x64\n\nScenario 1: Re-entrant call during dispatch → BLOCKED\n  Handler called: 1 time(s)\n  PASS: re-entrant calls blocked during dispatch\n\nScenario 2: Sequential triggers after first completes → DELIVERED\n  Handler called: 3 time(s)\n  PASS: sequential triggers all delivered\n\nScenario 3: Concurrent independent triggers → BOTH DELIVERED\n  Handler called: 2 time(s)\n  PASS: concurrent independent triggers both delivered\n\nScenario 4: Delayed same-key hook AFTER dispatch completes → DELIVERED\n  After dispatch: handler called 1 time(s)\n  After 50ms wait: handler called 2 time(s)\n  Delayed trigger delivered: true\n  PASS: delayed same-key hook delivered after dispatch completes\n\nScenario 5: Different session keys → independent\n  Handler called: 2 time(s)\n  PASS: different session keys are independent\n\nSUMMARY\n  Re-entrant during dispatch  → blocked (1 call)      PASS\n  Sequential after complete   → all delivered (3)      PASS\n  Concurrent independent      → both delivered (2)     PASS\n  Delayed after complete      → delivered (2 calls)    PASS\n  Different session keys      → independent (2)        PASS\n\n  The guard key is cleared from the AsyncLocalStorage Set\n  after dispatch completes (via try/finally). Delayed\n  same-key hooks that fire after dispatch return are\n  correctly delivered, not blocked by the stale guard.\n```\n\n**Observed result after fix:** All 5 scenarios pass. Re-entrant calls are blocked during dispatch (Scenario 1). Sequential (Scenario 2), concurrent (Scenario 3), and delayed (Scenario 4) triggers are all delivered. Different session keys are independent (Scenario 5). The guard key cleanup in `finally` ensures delayed same-key hooks scheduled from handlers are not blocked after the original dispatch returns.\n\n**What was not tested:**\n- Multi-process concurrent triggers (single-process only)\n- Performance impact under extreme load (normal usage validated)\n- Windows path handling (not path-dependent)",
+        "branch": "fix/internal-hook-reentrant-guard",
+        "head_sha": "9dedf19708965733254fc06b6f962b4161eff8f7",
+        "author": "ggzeng",
+        "labels": [
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/hooks/internal-hooks.test.ts",
+            "additions": 158,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/internal-hooks.ts",
+            "additions": 63,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-55211",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-55211.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 106,
+          "counts": {
+            "SUCCESS": 81,
+            "SKIPPED": 24,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      }
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 1433,
+    "total_ms": 5698,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 492
+        "ms": 668
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2030
       },
       {
         "name": "classify_commands",
@@ -82,7 +149,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 929
+        "ms": 2974
       },
       {
         "name": "append_ledger",
