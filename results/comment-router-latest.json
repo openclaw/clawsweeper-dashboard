@@ -1,22 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-23T23:04:29.884Z",
+  "generated_at": "2026-05-23T23:04:32.746Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-23T20:04:25.524Z",
+  "since": "2026-05-23T20:04:30.378Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    84616
+    85856
   ],
-  "comment_ids": [
-    4499816274
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
+  "scanned_comments": 2,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -33,118 +31,312 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:84616:4499816274:2026-05-23T23:03:20Z:clawsweeper_auto_repair",
-      "comment_id": "4499816274",
-      "comment_version_key": "4499816274:2026-05-23T23:03:20Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84616#issuecomment-4499816274",
+      "idempotency_key": "comment-router:openclaw/openclaw:85856:4526726404:2026-05-23T23:04:26Z:automerge",
+      "comment_id": "4526726404",
+      "comment_version_key": "4526726404:2026-05-23T23:04:26Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85856#issuecomment-4526726404",
       "repo": "openclaw/openclaw",
-      "issue_number": 84616,
+      "issue_number": 85856,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T15:14:25Z",
-      "comment_updated_at": "2026-05-23T23:03:20Z",
+      "comment_created_at": "2026-05-23T22:46:01Z",
+      "comment_updated_at": "2026-05-23T23:04:26Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "trigger": "mention",
+      "command": "automerge",
+      "intent": "automerge",
       "autoclose_message": null,
       "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=9f8d6508181348f5643fa22a32db15331fce5d87)",
-      "review_summary": "The PR adds catch handlers and delayed retry/orphan cleanup recovery around three fire-and-forget subagent lifecycle completion paths in src/agents/subagent-registry.ts.\n\nReproducibility: yes. at source level: current main has two timer callbacks and the lifecycle listener IIFE that call completeSubagentRun without catch handling. I did not run an active subagent failure path because this review is read-only.",
-      "review_followup": "Contributor and human review action are needed because the patch has lifecycle/type blockers and the contributor must refresh real behavior proof on their current setup.",
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": "The branch refactors subagent run bookkeeping into execution, completion, and delivery state, adds private internal transcripts and backend-only session-effect controls, and updates restart recovery, delivery retry, gateway validation, cron fallback, and related tests.\n\nReproducibility: yes. Source inspection gives a high-confidence reproduction path for the review finding: run an ACP-ready session with `sessionEffects: \"internal\"`, and `AcpSessionManager.runTurn` still calls `setSessionState` into the visible session store.",
+      "review_followup": "There is one concrete session-state blocker that a focused repair worker can attempt, while final merge still needs maintainer review because of the protected label and live-proof gap.",
       "freeform_prompt": null,
-      "expected_head_sha": "9f8d6508181348f5643fa22a32db15331fce5d87",
+      "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
+      "status": "ignored",
       "actions": [],
+      "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): add .catch() to fire-and-forget subagent lifecycle promises",
-        "body": "## Problem\n\nThree fire-and-forget promises in `src/agents/subagent-registry.ts` can reject without a `.catch()` handler, causing unhandled promise rejections that may crash the process:\n\n1. **`schedulePendingLifecycleError`** (line 345): `void completeSubagentRun({...})` without `.catch()`.\n2. **`schedulePendingLifecycleTimeout`** (line 384): Same pattern for timeout-triggered completion.\n3. **`ensureListener` event handler** (line 1022): `completeSubagentRun({...})` inside an async IIFE without `.catch()`.\n\nIf `completeSubagentRun` throws after mutating the run entry (setting `endedAt`, `outcome`, persisting), the run is left in a partially-completed state: ended but with no cleanup flow started. The existing orphan reconciliation (`reconcileOrphanedRun`) handles this scenario during session resume, but there is no recovery path when the failure happens during normal operation.\n\n## Fix\n\n1. **Add `.catch()` to all three fire-and-forget paths** with `log.warn` for diagnostics.\n2. **Schedule two-path catch recovery** in each catch handler via `scheduleLifecycleCatchRecovery(runId)`. After a 1-second delay (to let any in-flight state settle), it checks the run state and takes the appropriate recovery action:\n\n   - **Path 1 (orphan):** If the child session is gone (`resolveSubagentRunOrphanReason` returns a reason), reconcile via `reconcileOrphanedRun` (same path as session resume).\n   - **Path 2 (non-orphan, cleanup incomplete):** If the run has `endedAt` set but `cleanupHandled` is false and `cleanupCompletedAt` is not set, drive `startSubagentAnnounceCleanupFlow` directly. This covers the case where `completeSubagentRun` threw after persisting the ended state but before triggering cleanup, and the child session still exists (so it is not an orphan).\n   - **No-op:** If the run was not ended (error happened before mutation) or cleanup already completed, the recovery does nothing.\n\nProduction diff is +46 lines in `subagent-registry.ts`, plus 163 lines of test coverage.\n\n## Real behavior proof\n\nBehavior addressed: Three fire-and-forget `completeSubagentRun` calls could reject without a handler, causing unhandled promise rejections. If the rejection happened after mutating run state, the run was left ended but without cleanup. The fix adds `.catch()` with orphan recovery to all three paths.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js v22.16.0, OpenClaw built from source (commit 2fe201d) at `/tmp/fix-84616`.\n\nExact steps or command run after this patch:\n```bash\nStep 1. Build OpenClaw from patched source\ncd /tmp/fix-84616\nCI=true pnpm install --frozen-lockfile\npnpm build\n\nStep 2. Verify scheduleOrphanReconciliation in compiled production code\ngrep -n \"scheduleOrphanReconciliation\" dist/subagent-registry-BTsJTw_b.js\n\nStep 3. Verify orphan recovery log message\ngrep -n \"recovered orphaned run\" dist/subagent-registry-BTsJTw_b.js\n\nStep 4. Start the patched gateway\ntimeout 10 node openclaw.mjs gateway\n\nStep 5. Run subagent registry test suite\nnode scripts/run-vitest.mjs src/agents/subagent-registry.test.ts\n```\n\nEvidence after fix: terminal output copied below.\n\n**Compiled production code verification**\n\nThe `scheduleLifecycleCatchRecovery` function and all three call sites are present in the compiled bundle:\n\n```console\n$ grep -n \"scheduleLifecycleCatchRecovery\" dist/subagent-registry-B-64ITBD.js\n1713:function scheduleLifecycleCatchRecovery(runId) {\n1763:scheduleLifecycleCatchRecovery(params.runId);\n1796:scheduleLifecycleCatchRecovery(params.runId);\n2238:scheduleLifecycleCatchRecovery(evt.runId);\n```\n\nBoth recovery paths are present in the compiled function:\n\n```console\nPath 1: orphan recovery\n$ grep -n \"recovered orphaned run\" dist/subagent-registry-B-64ITBD.js\n1728:log.info(\"recovered orphaned run after lifecycle completion failure\", { runId });\n\nPath 2: non-orphan cleanup resume\n$ grep -n \"resumed cleanup for ended\" dist/subagent-registry-B-64ITBD.js\n1733:if (startSubagentAnnounceCleanupFlow(runId, entry)) log.info(\"resumed cleanup for ended run after lifecycle completion failure\", { runId });\n\nPath 2 guard: only when cleanup not already handled\n$ grep -n \"cleanupHandled.*cleanupCompletedAt\" dist/subagent-registry-B-64ITBD.js | grep 1732\n1732:if (!entry.cleanupHandled && typeof entry.cleanupCompletedAt !== \"number\") {\n```\n\nPath 2 (line 1732-1733) handles the case ClawSweeper flagged: when `completeSubagentRun` rejects after setting `endedAt` but before cleanup, and the child session still exists (not an orphan). It calls `startSubagentAnnounceCleanupFlow` to resume the cleanup flow that was interrupted.\n\n**Live gateway startup proof**\n\n```console\n$ timeout 10 node openclaw.mjs gateway\n2026-05-21T14:52:15.351-07:00 [gateway] loading configuration…\n2026-05-21T14:52:15.405-07:00 [gateway] starting...\n2026-05-21T14:52:17.667-07:00 [health-monitor] started (interval: 300s, startup-grace: 60s, channel-connect-grace: 120s)\n2026-05-21T14:52:18.618-07:00 [gateway] agent model: openai/gpt-5.5 (thinking=medium, fast=off)\n2026-05-21T14:52:18.620-07:00 [gateway] http server listening (8 plugins; 3.2s)\n2026-05-21T14:52:19.121-07:00 [gateway] ready\n2026-05-21T14:52:24.916-07:00 [gateway] received SIGTERM; shutting down\n2026-05-21T14:52:24.969-07:00 [shutdown] completed cleanly in 45ms\n```\n\n**Vitest test suite (64 tests)**\n\n```console\n$ node scripts/run-vitest.mjs src/agents/subagent-registry.test.ts\n ✓ |agents-core| ../../src/agents/subagent-registry.test.ts (32 tests) 2729ms\n ✓ |agents-support| ../../src/agents/subagent-registry.test.ts (32 tests) 2544ms\n Test Files  2 passed (2)\n      Tests  64 passed (64)\n```\n\n**Fault injection proof: .catch() + scheduleLifecycleCatchRecovery fires in real gateway**\n\nThe `.catch()` handler was triggered in a **live running gateway** by injecting a conditional throw into `completeSubagentRun` in `dist/subagent-registry-B-64ITBD.js` (line 919) and a timed trigger that simulates a lifecycle completion failure. The injection calls the real `log.warn` and `scheduleLifecycleCatchRecovery` functions through the module's subsystem logger.\n\n**Steps:**\n```bash\nStep 1. Back up compiled module\ncp dist/subagent-registry-B-64ITBD.js dist/subagent-registry-B-64ITBD.js.bak\n\nStep 2. Inject conditional throw at start of completeSubagentRun (line 919)\nsed -i 's/const completeSubagentRun = async (completeParams) => {/const completeSubagentRun = async (completeParams) => { if (completeParams._injectedProof) throw new Error(\"INJECTED: subagent lifecycle completion failure\");/' dist/subagent-registry-B-64ITBD.js\n\nStep 3. Append timed trigger at end of module (fires 5s after load)\ncat >> dist/subagent-registry-B-64ITBD.js << 'EOF'\nsetTimeout(() => {\n  const fakeRunId = \"INJECTED-PROOF-RUN\";\n  completeSubagentRun({\n    _injectedProof: true, runId: fakeRunId, endedAt: Date.now(),\n    outcome: { status: \"error\", error: \"injected proof\" },\n    reason: \"error\", sendFarewell: false, triggerCleanup: true\n  }).catch((err) => {\n    log.warn(\"lifecycle error completion failed\", { err: err.message, runId: fakeRunId });\n    scheduleLifecycleCatchRecovery(fakeRunId);\n  });\n}, 5000);\nEOF\n\nStep 4. Start gateway with 25s timeout (enough for catch + 1s recovery delay)\ntimeout 25 node openclaw.mjs gateway\n\nStep 5. Restore\ncp dist/subagent-registry-B-64ITBD.js.bak dist/subagent-registry-B-64ITBD.js\n```\n\n**Terminal output:**\n\n```console\n2026-05-21T23:31:34.062-07:00 [gateway] starting...\n2026-05-21T23:31:37.001-07:00 [gateway] ready\n2026-05-21T23:31:39.737-07:00 [agents/subagent-registry] lifecycle error completion failed\n2026-05-21T23:31:53.492-07:00 [gateway] provider auth state pre-warmed in 16446ms\n2026-05-21T23:31:59.439-07:00 [gateway] received SIGTERM; shutting down\n2026-05-21T23:31:59.501-07:00 [shutdown] completed cleanly in 44ms\n```\n\n**Line-by-line analysis:**\n\n1. `[gateway] ready` at T+3s: Gateway fully started with all 8 plugins loaded.\n2. **`[agents/subagent-registry] lifecycle error completion failed`** at T+5.7s: The injected throw in `completeSubagentRun` was caught by the `.catch()` handler. The `log.warn` message uses the real `createSubsystemLogger(\"agents/subagent-registry\")` at compiled line 1585. Before this fix, this same error would be an **unhandled promise rejection** (no `.catch()` on the fire-and-forget `completeSubagentRun` call).\n3. `scheduleLifecycleCatchRecovery(\"INJECTED-PROOF-RUN\")` was called from the catch (compiled line 1763). The recovery function sets a 1-second delayed check using `resolveSubagentRunOrphanReason` + `reconcileOrphanedRun`.\n4. `[gateway] provider auth state pre-warmed` at T+19s: Gateway continued operating normally for **20 seconds** after the catch fired, proving the error was fully handled.\n5. `[shutdown] completed cleanly in 44ms`: Clean shutdown with no unhandled rejection warnings.\n\n**What the catch handler does (from compiled code):**\n```\n// Line 1759-1766 (schedulePendingLifecycleError catch):\n}).catch((err) => {\n  log.warn(\"lifecycle error completion failed\", { err, runId: params.runId });\n  scheduleLifecycleCatchRecovery(params.runId);\n});\n```\n\nThe same pattern is at lines 1792-1795 (`schedulePendingLifecycleTimeout`) and lines 2234-2237 (`ensureListener`). All three call `scheduleLifecycleCatchRecovery` which attempts orphan reconciliation or cleanup flow resumption after a 1-second delay.\n\nObserved result after fix: The `.catch()` handler fires correctly in production compiled code, logging the error with the `[agents/subagent-registry]` subsystem prefix and calling `scheduleLifecycleCatchRecovery`. The gateway continues running for 20+ seconds after the catch with no unhandled rejection warnings. Before the fix, the same error would produce an unhandled promise rejection. All 64 tests pass.\n\nWhat was not tested: The injection was triggered via a timed call rather than a real subagent lifecycle event (which requires an active subagent session to complete). The recovery function ran but found no matching run to recover (the injected run ID was not in the in-memory registry). A real lifecycle failure during an active subagent session would trigger the full orphan reconciliation or cleanup resumption path.\n\n\n",
-        "branch": "fix/subagent-lifecycle-catch",
-        "head_sha": "9f8d6508181348f5643fa22a32db15331fce5d87",
-        "author": "sebtardif",
+        "title": "refactor: split subagent delivery state",
+        "body": "## Summary\n- Split subagent run bookkeeping into nested `execution`, `completion`, and `delivery` state, with legacy flat persisted fields normalized into the new shape and removed from the live run type.\n- Separated interrupted child execution resume from completion delivery: restart recovery now resumes only interrupted runs internally, while terminal completion notification uses durable delivery state.\n- Added backend-gated internal session effects plus private run transcripts so recovery/delivery model turns do not mutate visible `/status` or history, while still preserving recovered output for delivery.\n\n## Verification\n- `pnpm tsgo:core`\n- `node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test.tsbuildinfo`\n- `git diff --check`\n- `node scripts/run-vitest.mjs src/gateway/call.test.ts src/agents/subagent-orphan-recovery.test.ts src/agents/subagent-delivery-state.test.ts src/agents/internal-session-effects.test.ts src/agents/agent-command.live-model-switch.test.ts src/cron/isolated-agent/subagent-followup.test.ts src/agents/subagent-announce-output.test.ts src/agents/subagent-registry.steer-restart.test.ts --reporter=dot` (16 files / 444 tests)\n- `OPENCLAW_TESTBOX=1 pnpm check:changed` via Blacksmith Testbox `tbx_01ksbaqrtywwkqb72p3hr5g3at`\n- `autoreview helper --engine claude --mode local --prompt-file /tmp/delivery-refactor.md --no-tools --no-web-search --prompt 'Only report accepted/actionable findings in files changed by this local diff. Do not report findings against unchanged neighboring files; mention them only as non-blocking context if needed.'` (clean)\n\n## Real behavior proof\nBehavior addressed: Subagent restart recovery no longer uses parent-visible recovery-progress announcements or scattered flat delivery fields; interrupted child execution is resumed internally, terminal completion delivery is retried through durable delivery state, and internal runs do not mutate user-visible `/status` or history.\nReal environment tested: Local focused Vitest and type gates, plus Blacksmith Testbox delegated changed gate before final small review fixes.\nExact steps or command run after this patch: `node scripts/run-vitest.mjs src/gateway/call.test.ts src/agents/subagent-orphan-recovery.test.ts src/agents/subagent-delivery-state.test.ts src/agents/internal-session-effects.test.ts src/agents/agent-command.live-model-switch.test.ts src/cron/isolated-agent/subagent-followup.test.ts src/agents/subagent-announce-output.test.ts src/agents/subagent-registry.steer-restart.test.ts --reporter=dot`\nEvidence after fix: Focused runtime proof passed 16 files / 444 tests; `pnpm tsgo:core`, core-test tsgo, and `git diff --check` passed after the final commit contents.\nObserved result after fix: Recovery, delivery, internal-session, cron fallback, gateway guard, and steer-restart regressions completed successfully.\nWhat was not tested: Live gateway restart with an in-flight real provider subagent; later Testbox reruns hit checkout/no-merge-base infra after prior green Testbox proof.\n",
+        "branch": "refactor/subagent-delivery-outbox",
+        "head_sha": "dfa40cb72f9a77a8862a3a8b914874827a779e78",
+        "author": "steipete",
         "labels": [
+          "app: web-ui",
+          "gateway",
           "agents",
-          "size: S",
-          "proof: supplied",
+          "maintainer",
+          "size: XL",
           "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 automation",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
           "merge-risk: 🚨 session-state",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/subagent-registry.ts",
-            "additions": 77,
+            "path": "src/agents/agent-command.live-model-switch.test.ts",
+            "additions": 53,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-command.ts",
+            "additions": 105,
+            "deletions": 27,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/command/types.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/internal-session-effects.test.ts",
+            "additions": 72,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/internal-session-effects.ts",
+            "additions": 50,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/subagent-announce-output.test.ts",
+            "additions": 63,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce-output.ts",
+            "additions": 41,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce.live.test.ts",
+            "additions": 16,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce.runtime.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-delivery-state.test.ts",
+            "additions": 120,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/subagent-delivery-state.ts",
+            "additions": 258,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/subagent-orphan-recovery.test.ts",
+            "additions": 10,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-orphan-recovery.ts",
+            "additions": 41,
+            "deletions": 114,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-cleanup.test.ts",
+            "additions": 8,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-cleanup.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-helpers.test.ts",
+            "additions": 9,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-helpers.ts",
+            "additions": 5,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-lifecycle.test.ts",
+            "additions": 43,
+            "deletions": 44,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-lifecycle.ts",
+            "additions": 152,
+            "deletions": 96,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-maintenance.ts",
+            "additions": 3,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-run-manager.ts",
+            "additions": 41,
+            "deletions": 32,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-steer-runtime.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.announce-loop-guard.test.ts",
+            "additions": 7,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.lifecycle-retry-grace.e2e.test.ts",
+            "additions": 10,
             "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.steer-restart.test.ts",
+            "additions": 75,
+            "deletions": 27,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.store.ts",
+            "additions": 15,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.test.ts",
+            "additions": 105,
+            "deletions": 94,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.ts",
+            "additions": 38,
+            "deletions": 36,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.types.ts",
+            "additions": 54,
+            "deletions": 30,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/subagent-followup.test.ts",
+            "additions": 52,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/subagent-followup.ts",
+            "additions": 14,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/call.test.ts",
+            "additions": 22,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/protocol/schema/agent.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/agent.test.ts",
+            "additions": 60,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/agent.ts",
+            "additions": 38,
+            "deletions": 7,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84616",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84616.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85856",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85856.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 96,
+          "total": 103,
           "counts": {
-            "CANCELLED": 1,
-            "SUCCESS": 64,
-            "SKIPPED": 22,
-            "FAILURE": 8,
+            "SUCCESS": 72,
+            "SKIPPED": 28,
+            "FAILURE": 2,
             "NEUTRAL": 1
           },
           "blockers": [
-            "build-artifacts:FAILURE",
-            "check-guards:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-channels:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
+            "checks-fast-bundled-protocol:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "build-artifacts:FAILURE",
-            "check-guards:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-channels:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
+            "checks-fast-bundled-protocol:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE"
           ]
         }
       },
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4673,
+    "total_ms": 2669,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2812
+        "ms": 428
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1533
+        "ms": 1926
       },
       {
         "name": "classify_commands",
-        "ms": 57
+        "ms": 2
       },
       {
         "name": "execute_commands",
@@ -152,7 +344,7 @@
       },
       {
         "name": "append_ledger",
-        "ms": 2
+        "ms": 0
       }
     ]
   }
