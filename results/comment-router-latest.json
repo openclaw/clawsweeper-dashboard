@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-23T09:56:16.360Z",
+  "generated_at": "2026-05-23T09:56:18.497Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-23T06:56:15.798Z",
+  "since": "2026-05-23T06:56:17.026Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    85472
+    85474
   ],
   "comment_ids": [
-    4524995696
+    4524995663
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,17 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:85472:4524995696:2026-05-23T09:54:11Z:re_review",
-      "comment_id": "4524995696",
-      "comment_version_key": "4524995696:2026-05-23T09:54:11Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/85472#issuecomment-4524995696",
+      "idempotency_key": "comment-router:openclaw/openclaw:85474:4524995663:2026-05-23T09:54:10Z:re_review",
+      "comment_id": "4524995663",
+      "comment_version_key": "4524995663:2026-05-23T09:54:10Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85474#issuecomment-4524995663",
       "repo": "openclaw/openclaw",
-      "issue_number": 85472,
+      "issue_number": 85474,
       "author": "orihakimi",
       "author_id": 280127788,
       "author_association": "NONE",
-      "comment_created_at": "2026-05-23T09:54:11Z",
-      "comment_updated_at": "2026-05-23T09:54:11Z",
+      "comment_created_at": "2026-05-23T09:54:10Z",
+      "comment_updated_at": "2026-05-23T09:54:10Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -61,28 +61,77 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agent): warn when silent ack follows a tool error",
+        "body": "## Summary\n\nIn `handleMessageEnd` (`src/agents/pi-embedded-subscribe.handlers.messages.ts`), the silent-ack detection added in the previous revision read `trimmedText`, which is the **post-fallback** result of `resolveSilentReplyFallbackText`. That helper mirrors the latest `messagingToolSentTexts` entry whenever the assistant's reply is exactly `NO_REPLY`. Concretely:\n\n```ts\nconst text = resolveSilentReplyFallbackText({\n  text: ctx.stripBlockTags(rawVisibleText, ...),\n  messagingToolSentTexts: ctx.state.messagingToolSentTexts,\n});\nconst trimmedText = text.trim();\n// silent-ack check was here — but `trimmedText` is the mirrored\n// prior tool-sent message, not `NO_REPLY`, in the very case we care about.\n```\n\nSo in the most common failure mode — the agent already sent text via a messaging tool earlier in the turn, then a later tool call errored, then the assistant terminated with raw `NO_REPLY` — the warning never fired. The trail still ended at the unchanged `lastToolError` set in `pi-embedded-subscribe.handlers.tools.ts`, but the silent-ack pattern was invisible. This is exactly the failure mode ClawSweeper flagged.\n\n## Fix\n\nMove the silent-ack decision **above** `resolveSilentReplyFallbackText` and run it on the raw stripped assistant text:\n\n```ts\nconst strippedAssistantText = ctx.stripBlockTags(\n  rawVisibleText, { thinking: false, final: false }, { final: true },\n);\nconst trimmedStrippedAssistantText = strippedAssistantText.trim();\nif (ctx.state.lastToolError) {\n  const ackToken = isSilentReplyText(trimmedStrippedAssistantText, SILENT_REPLY_TOKEN)\n    ? SILENT_REPLY_TOKEN\n    : trimmedStrippedAssistantText === REPLY_SKIP_TOKEN\n      ? REPLY_SKIP_TOKEN\n      : trimmedStrippedAssistantText === ANNOUNCE_SKIP_TOKEN\n        ? ANNOUNCE_SKIP_TOKEN\n        : null;\n  if (ackToken) {\n    ctx.log.warn(\n      `agent silently acked after tool error: tool=${ctx.state.lastToolError.toolName} ack=${ackToken}`,\n    );\n  }\n}\nconst text = resolveSilentReplyFallbackText({\n  text: strippedAssistantText,\n  messagingToolSentTexts: ctx.state.messagingToolSentTexts,\n});\n```\n\nThe `strippedAssistantText` value is reused by the fallback resolver — no extra work, no risk of divergence between what the silent-ack check sees and what later flow sees. `ackToken` is also now the literal token (`NO_REPLY`, `REPLY_SKIP`, or `ANNOUNCE_SKIP`) rather than a substring of mirrored prior text, so the log line is unambiguous when grepped.\n\nWarn-only, non-fatal. Harness behavior unchanged.\n\n## Scope\n\nDetection-only patch. Routing the signal to a failure handler or surfacing it to the UI is out of scope and left as a follow-up.\n\n## Real behavior proof\n\n- **Behavior addressed**: in a real agent turn where the agent emits a `tool_use` for a messaging tool (e.g. `chat-send`) which succeeds and pushes visible text into `messagingToolSentTexts`, then calls a second tool (e.g. `Bash`) which errors and sets `ctx.state.lastToolError = { toolName: \"Bash\", ... }`, then the model terminates the turn with raw `NO_REPLY` — before this revision the gateway log carried only the per-tool `tool error` line and the next request's silent close; no correlator from \"tool failed\" → \"agent gave up\". After this revision, the `agent silently acked after tool error: tool=Bash ack=NO_REPLY` warn line appears on the same turn in `gateway.log`, on the same line that an operator can grep for next to the `lastToolError.toolName`.\n\n- **Real environment tested**: macOS, Apple Silicon, OpenClaw monorepo at `fix/warn-silent-ack-after-tool-error` (HEAD `17bbb3ea50`), Vitest v4.1.7 via `scripts/run-vitest.mjs`, `@earendil-works/pi-agent-core` source-tree imports. Tests exercised the real exported `handleMessageEnd` against a context wired with the production state shape (`lastToolError`, `messagingToolSentTexts`, `messagingToolSentTextsNormalized`, `assistantTexts`, full `blockState`/`partialBlockState` records).\n\n- **Exact steps or command run after this patch**:\n  1. Applied the source change in `src/agents/pi-embedded-subscribe.handlers.messages.ts` (move the silent-ack decision above the fallback resolver, key off the raw stripped text).\n  2. Added three focused regression tests in `src/agents/pi-embedded-subscribe.handlers.messages.test.ts` directly exercising the production handler:\n     - prior `messagingToolSentTexts` + `lastToolError={toolName:\"Bash\"}` + raw `NO_REPLY` → expects exact warn line.\n     - `lastToolError` set + substantive assistant text → expects no silent-ack warn.\n     - no `lastToolError` + raw `NO_REPLY` + prior `messagingToolSentTexts` → expects no silent-ack warn (clean silent ack, no error to correlate with).\n  3. `node scripts/run-vitest.mjs src/agents/pi-embedded-subscribe.handlers.messages.test.ts` — 62/62 passed across 2 projects (`agents-core` + `agents-support`).\n  4. `git diff --check` clean. `pnpm format`-equivalent applied by `scripts/committer` pre-commit hook (no logic delta).\n\n- **Evidence after fix**:\n\n  - **Before-fix path** (with the original `trimmedText`-based check, against the rank-up scenario state):\n\n    ```\n    # ctx.state.messagingToolSentTexts = [\"I'll fetch the data and post it shortly.\"]\n    # ctx.state.lastToolError = { toolName: \"Bash\", errorCode: \"sandbox_denied\" }\n    # assistant message text = \"NO_REPLY\"\n    # resolveSilentReplyFallbackText -> \"I'll fetch the data and post it shortly.\"\n    # trimmedText -> \"I'll fetch the data and post it shortly.\"\n    # isSilentReplyText(trimmedText, SILENT_REPLY_TOKEN) -> false\n    # ↳ warn NOT emitted (silent failure invisible to operator)\n    ```\n\n  - **After-fix gateway log line** (asserted verbatim by the new regression test\n    `handleMessageEnd > warns when assistant emits raw NO_REPLY after a tool error\n    even with prior messaging-tool text`):\n\n    ```\n    [agents/pi-embedded] agent silently acked after tool error: tool=Bash ack=NO_REPLY\n    ```\n\n    `tool=` carries `ctx.state.lastToolError.toolName` directly; `ack=` carries the canonical token, not the mirrored prior text. Either of `REPLY_SKIP` or `ANNOUNCE_SKIP` produces the matching token literal in the same position.\n\n- **Observed result after fix**:\n  - All `pi-embedded-subscribe.handlers.messages.test.ts` tests pass (62/62 across two project lanes).\n  - The three new tests assert behavior end-to-end through the real `handleMessageEnd` export — they would have failed against the previous revision (the silent-ack scenario produced no warning before; the substantive-reply and no-tool-error scenarios continue to produce no warning as required).\n  - No change to public exports, no change to `EmbeddedPiSubscribeState`, no change to the fallback-resolver contract — `strippedAssistantText` is the same value previously passed inline into `resolveSilentReplyFallbackText`, just lifted to a named local.\n\n- **What was not tested**: a full live agent run through `pnpm gateway:watch` driving a sandbox-denied `Bash` tool followed by a model-emitted `NO_REPLY`. The unit tests cover the exact handler with production state shape, and the warn-line template is enforced by the inline-token branches above — there is no path by which the warning fires with a non-token `ack` value.\n\n## Tests added / updated\n\n- `src/agents/pi-embedded-subscribe.handlers.messages.test.ts` (within `describe(\"handleMessageEnd\", ...)`):\n  - `warns when assistant emits raw NO_REPLY after a tool error even with prior messaging-tool text` — the regression guard for the exact source-path issue ClawSweeper called out.\n  - `does not warn when assistant emits substantive text after a tool error` — confirms the warning is silent-ack-specific.\n  - `does not warn when assistant emits NO_REPLY but there was no tool error` — confirms the warning is gated on `lastToolError`.\n\n## Response to ClawSweeper review\n\nClawSweeper rated the previous revision 🧂 unranked krab with rank-up moves:\n\n> - Move the silent-ack decision to the raw stripped assistant text before the NO_REPLY fallback can mirror prior message-tool output.\n> - Add a focused test in `src/agents/pi-embedded-subscribe.handlers.messages.test.ts` for prior message-tool text, later tool error, and final `NO_REPLY`.\n> - Add redacted terminal or gateway log proof showing the warning in a real agent turn; update the PR body so ClawSweeper can re-review.\n\nAll three rank-up moves are now in place:\n\n1. **Decision moved**: the silent-ack check now reads `strippedAssistantText` — the value computed *before* `resolveSilentReplyFallbackText` can mirror prior `messagingToolSentTexts` over the `NO_REPLY` token.\n2. **Focused test added**: the new regression test constructs exactly the prior-message-tool-text + later-tool-error + final-`NO_REPLY` ctx state and asserts the exact warn line. The previous revision fails this test by construction; this revision passes it.\n3. **Log proof + body update**: this PR body now carries the exact gateway log line, the asserted ctx-state shape, and the before/after walk through `resolveSilentReplyFallbackText`.\n\n## AI-assisted disclosure\n\nThis revision was authored end-to-end via Claude Code (claude-opus-4-7). The PR author re-read every line, validated the diff against the production handler shape, and ran the targeted Vitest lane locally before pushing.\n",
+        "branch": "fix/warn-silent-ack-after-tool-error",
+        "head_sha": "656803609e2e1530975ab091b60fb19119e20191",
+        "author": "orihakimi",
+        "labels": [
+          "agents",
+          "size: XS",
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/pi-embedded-subscribe.handlers.messages.test.ts",
+            "additions": 89,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-subscribe.handlers.messages.ts",
+            "additions": 22,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85474",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85474.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 2,
+          "counts": {
+            "SUCCESS": 2
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 1504,
+    "total_ms": 1712,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 550
+        "ms": 491
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 967
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 942
+        "ms": 241
       },
       {
         "name": "append_ledger",
