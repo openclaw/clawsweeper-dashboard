@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-23T11:55:41.018Z",
+  "generated_at": "2026-05-23T11:56:40.021Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-23T08:55:38.742Z",
+  "since": "2026-05-23T08:56:39.517Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4525258033
   ],
-  "status_comment_id": 4525258235,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-05-23T11:54:43Z",
       "comment_updated_at": "2026-05-23T11:54:43Z",
-      "status_comment_id": 4525258235,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -59,163 +59,34 @@
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-23T11:55:41.719Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 85691
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-23T11:55:43.115Z",
-          "response_comment_id": "4525258235",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(doctor): auto-repair stale session snapshot paths on --fix",
-        "body": "## Summary\n\nAdd `shouldRepair` support to `noteSessionSnapshotHealth()` so that `openclaw doctor --fix` can rewrite stale session snapshot paths in `sessions.json` instead of only reporting them as warnings.\n\nFixes #85689\n\n## Problem\n\nAfter a pnpm update changes the runtime root (e.g. `openclaw@2026.5.20_@types+express@5.0.6` → `openclaw@2026.5.20`), sessions that cached `skillsSnapshot.prompt` paths referencing the old root become stale. `openclaw doctor` correctly detects this and reports findings with both `cachedPath` and `expectedPath`, but:\n\n1. `noteSessionSnapshotHealth()` has no `shouldRepair` parameter — it's always report-only\n2. The update flow runs `doctor --fix` post-update, but session snapshot paths are never repaired\n3. Users must manually edit `sessions.json` or reset affected sessions (losing history)\n\n## Fix\n\nThe scan logic (`scanSessionStoreForStaleRuntimeSnapshotPaths`) already computes both `cachedPath` and `expectedPath` for every finding. The repair replaces stale paths in the raw JSON text:\n\n1. Add `shouldRepair?: boolean` to `noteSessionSnapshotHealth()` params\n2. When `shouldRepair=true`: replace stale path prefixes with live bundled skills root\n3. Handle JSON-escaped paths (Windows backslashes, unicode) via `JSON.stringify().slice(1,-1)`\n4. For `baseDir` paths in `resolvedSkills`, also replace the directory prefix without `SKILL.md`\n5. Create `.bak` backup before writing (mode 0o600)\n6. Pass `ctx.prompter.shouldRepair` from `runSessionSnapshotsHealth()`\n\nThis follows the same pattern as other doctor repair functions (`noteSessionTranscriptHealth`, `maybeRepairLegacyCronStore`, `maybeScrubConfigAuditLog`).\n\n## Changes\n\n- `src/commands/doctor-session-snapshots.ts`: +60 lines (repair logic with JSON-escaped path handling)\n- `src/flows/doctor-health-contributions.ts`: +1 line (pass shouldRepair)\n- `repro-doctor-session-snapshot-repair.mjs`: standalone proof script\n\n## Real behavior proof\n\n**Behavior or issue addressed:** `openclaw doctor --fix` reports stale session snapshot paths but never repairs them. After a pnpm runtime root change, sessions.json caches paths that no longer exist. The scan already computes the correct target path, but the report-only note function discards it. The repair must handle JSON-escaped paths (Windows backslashes) and baseDir directory paths in resolvedSkills.\n\n**Real environment tested:** Linux x64, Node v24.14.0. Standalone reproduction script (`repro-doctor-session-snapshot-repair.mjs`) mirroring the exact repair logic from this PR, run directly with `node` — no monorepo build required.\n\n**Exact steps or command run after this patch:**\n```bash\nnode repro-doctor-session-snapshot-repair.mjs\n```\n\n**Evidence after fix:** Standalone reproduction script output showing 4 scenarios:\n\n```\nReal Behavior Proof: Doctor Session Snapshot Auto-Repair\nDate: 2026-05-23T11:54:06.994Z\nNode: v24.14.0 | Platform: linux x64\n\nScenario 1: WITHOUT repair — findings computed but not applied\n  Findings computed: 4 stale paths\n  Repair performed: NO (shouldRepair not enabled)\n  Stale paths remaining: 4\n  PASS: findings detected, no repair\n\nScenario 2: WITH repair — JSON-escaped paths handled correctly\n  Paths replaced: 4\n  Backup created: true\n  JSON valid: true\n  Sessions preserved: 2\n  Stale paths remaining: 0\n  PASS: repair applied, JSON valid, no stale paths\n\nScenario 3: Windows backslash paths — JSON-escaped in file\n  Input: Windows path with backslashes\n  JSON-escaped form: C:\\\\Users\\\\user\\\\.local\\\\share\\\\pnpm\\\\global\\\\5\\\\...\n  Repaired path contains live root: true\n  Repaired path contains stale root: false\n  PASS: Windows backslash paths repaired correctly\n\nScenario 4: Idempotent — second run finds nothing\n  Second scan findings: 0\n  PASS: no stale paths after repair\n\nSUMMARY\n  Without repair: findings computed, stale paths persist\n  With repair:    paths replaced, JSON valid, backup created\n  Windows paths:  JSON-escaped backslash paths handled correctly\n  Idempotent:     second scan finds nothing to repair\n\n  The repair uses JSON.stringify().slice(1,-1) to produce the\n  JSON-escaped form of each path, then replaces it in the raw\n  JSON text. This handles Windows backslashes, unicode escapes,\n  and special characters correctly.\n```\n\n**Observed result after fix:** All 4 scenarios pass. POSIX paths (Scenario 2), Windows backslash paths (Scenario 3), and baseDir directory paths are all repaired correctly. The repair is idempotent (Scenario 4). JSON validity is preserved after rewriting.\n\n**What was not tested:**\n- Live `openclaw doctor --fix` on a real affected instance (CI environment limitation)\n- Concurrent access to sessions.json during repair (single-threaded doctor execution)",
-        "branch": "fix/doctor-session-snapshot-autorepair",
-        "head_sha": "a2caeab67457a7e1be1e68cc3bf773bf97d2dfa0",
-        "author": "ggzeng",
-        "labels": [
-          "commands",
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "repro-doctor-session-snapshot-repair.mjs",
-            "additions": 258,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/commands/doctor-session-snapshots.ts",
-            "additions": 73,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/flows/doctor-health-contributions.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85691",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85691.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 100,
-          "counts": {
-            "SUCCESS": 47,
-            "SKIPPED": 27,
-            "IN_PROGRESS": 24,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Security High (actions):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-runtime-infra-state:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-cron-core:IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor:IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
-            "check-guards:FAILURE",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (actions):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-runtime-infra-state:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-cron-core:IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor:IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "check-guards:FAILURE"
-          ]
-        }
-      }
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4881,
+    "total_ms": 1433,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 499
+        "ms": 492
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1763
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2594
+        "ms": 929
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
