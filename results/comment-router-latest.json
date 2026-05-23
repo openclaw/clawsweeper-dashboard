@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-23T03:24:21.490Z",
+  "generated_at": "2026-05-23T03:25:11.327Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-23T00:24:19.019Z",
+  "since": "2026-05-23T00:25:09.313Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    84616
+    83648
   ],
   "comment_ids": [
-    4499816274
+    4478931582
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,17 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:84616:4499816274:2026-05-23T03:23:05Z:automerge",
-      "comment_id": "4499816274",
-      "comment_version_key": "4499816274:2026-05-23T03:23:05Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84616#issuecomment-4499816274",
+      "idempotency_key": "comment-router:openclaw/openclaw:83648:4478931582:2026-05-23T03:23:57Z:automerge",
+      "comment_id": "4478931582",
+      "comment_version_key": "4478931582:2026-05-23T03:23:57Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83648#issuecomment-4478931582",
       "repo": "openclaw/openclaw",
-      "issue_number": 84616,
+      "issue_number": 83648,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T15:14:25Z",
-      "comment_updated_at": "2026-05-23T03:23:05Z",
+      "comment_created_at": "2026-05-18T14:59:31Z",
+      "comment_updated_at": "2026-05-23T03:23:57Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "automerge",
@@ -54,8 +54,8 @@
       "trusted_bot_author": null,
       "automation_source": null,
       "repair_reason": null,
-      "review_summary": "The PR adds catch handlers and delayed recovery around three fire-and-forget subagent lifecycle completion promises, plus focused warning-log tests.\n\nReproducibility: yes. at source level: current main has three fire-and-forget lifecycle completion paths without catch handlers, and completeSubagentRun performs awaited work after mutating run state. I did not run a live current-main reproduction because this review is read-only.",
-      "review_followup": "A narrow repair can preserve the useful catch handlers while restoring current-main behavior and fixing cleanup recovery ordering.",
+      "review_summary": "The PR adds a cron local-provider preflight API-key resolver, sends a Bearer Authorization header on GET probes, and commits a before/after evidence screenshot.\n\nReproducibility: yes. at source level: current main sends the local OpenAI-compatible provider preflight GET without headers, and the PR body plus screenshot show LiteLLM 401 before and 200 after. I did not run a live LiteLLM instance in this read-only review.",
+      "review_followup": "The remaining blocker is a narrow, code-level auth-resolution repair with clear files and regression tests, not a product decision.",
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
@@ -64,73 +64,55 @@
       "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): add .catch() to fire-and-forget subagent lifecycle promises",
-        "body": "## Problem\n\nThree fire-and-forget promises in `src/agents/subagent-registry.ts` can reject without a `.catch()` handler, causing unhandled promise rejections that may crash the process:\n\n1. **`schedulePendingLifecycleError`** (line 345): `void completeSubagentRun({...})` without `.catch()`.\n2. **`schedulePendingLifecycleTimeout`** (line 384): Same pattern for timeout-triggered completion.\n3. **`ensureListener` event handler** (line 1022): `completeSubagentRun({...})` inside an async IIFE without `.catch()`.\n\nIf `completeSubagentRun` throws after mutating the run entry (setting `endedAt`, `outcome`, persisting), the run is left in a partially-completed state: ended but with no cleanup flow started. The existing orphan reconciliation (`reconcileOrphanedRun`) handles this scenario during session resume, but there is no recovery path when the failure happens during normal operation.\n\n## Fix\n\n1. **Add `.catch()` to all three fire-and-forget paths** with `log.warn` for diagnostics.\n2. **Schedule two-path catch recovery** in each catch handler via `scheduleLifecycleCatchRecovery(runId)`. After a 1-second delay (to let any in-flight state settle), it checks the run state and takes the appropriate recovery action:\n\n   - **Path 1 (orphan):** If the child session is gone (`resolveSubagentRunOrphanReason` returns a reason), reconcile via `reconcileOrphanedRun` (same path as session resume).\n   - **Path 2 (non-orphan, cleanup incomplete):** If the run has `endedAt` set but `cleanupHandled` is false and `cleanupCompletedAt` is not set, drive `startSubagentAnnounceCleanupFlow` directly. This covers the case where `completeSubagentRun` threw after persisting the ended state but before triggering cleanup, and the child session still exists (so it is not an orphan).\n   - **No-op:** If the run was not ended (error happened before mutation) or cleanup already completed, the recovery does nothing.\n\nProduction diff is +46 lines in `subagent-registry.ts`, plus 163 lines of test coverage.\n\n## Real behavior proof\n\nBehavior addressed: Three fire-and-forget `completeSubagentRun` calls could reject without a handler, causing unhandled promise rejections. If the rejection happened after mutating run state, the run was left ended but without cleanup. The fix adds `.catch()` with orphan recovery to all three paths.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js v22.16.0, OpenClaw built from source (commit 2fe201d) at `/tmp/fix-84616`.\n\nExact steps or command run after this patch:\n```bash\nStep 1. Build OpenClaw from patched source\ncd /tmp/fix-84616\nCI=true pnpm install --frozen-lockfile\npnpm build\n\nStep 2. Verify scheduleOrphanReconciliation in compiled production code\ngrep -n \"scheduleOrphanReconciliation\" dist/subagent-registry-BTsJTw_b.js\n\nStep 3. Verify orphan recovery log message\ngrep -n \"recovered orphaned run\" dist/subagent-registry-BTsJTw_b.js\n\nStep 4. Start the patched gateway\ntimeout 10 node openclaw.mjs gateway\n\nStep 5. Run subagent registry test suite\nnode scripts/run-vitest.mjs src/agents/subagent-registry.test.ts\n```\n\nEvidence after fix: terminal output copied below.\n\n**Compiled production code verification**\n\nThe `scheduleLifecycleCatchRecovery` function and all three call sites are present in the compiled bundle:\n\n```console\n$ grep -n \"scheduleLifecycleCatchRecovery\" dist/subagent-registry-B-64ITBD.js\n1713:function scheduleLifecycleCatchRecovery(runId) {\n1763:scheduleLifecycleCatchRecovery(params.runId);\n1796:scheduleLifecycleCatchRecovery(params.runId);\n2238:scheduleLifecycleCatchRecovery(evt.runId);\n```\n\nBoth recovery paths are present in the compiled function:\n\n```console\nPath 1: orphan recovery\n$ grep -n \"recovered orphaned run\" dist/subagent-registry-B-64ITBD.js\n1728:log.info(\"recovered orphaned run after lifecycle completion failure\", { runId });\n\nPath 2: non-orphan cleanup resume\n$ grep -n \"resumed cleanup for ended\" dist/subagent-registry-B-64ITBD.js\n1733:if (startSubagentAnnounceCleanupFlow(runId, entry)) log.info(\"resumed cleanup for ended run after lifecycle completion failure\", { runId });\n\nPath 2 guard: only when cleanup not already handled\n$ grep -n \"cleanupHandled.*cleanupCompletedAt\" dist/subagent-registry-B-64ITBD.js | grep 1732\n1732:if (!entry.cleanupHandled && typeof entry.cleanupCompletedAt !== \"number\") {\n```\n\nPath 2 (line 1732-1733) handles the case ClawSweeper flagged: when `completeSubagentRun` rejects after setting `endedAt` but before cleanup, and the child session still exists (not an orphan). It calls `startSubagentAnnounceCleanupFlow` to resume the cleanup flow that was interrupted.\n\n**Live gateway startup proof**\n\n```console\n$ timeout 10 node openclaw.mjs gateway\n2026-05-21T14:52:15.351-07:00 [gateway] loading configuration…\n2026-05-21T14:52:15.405-07:00 [gateway] starting...\n2026-05-21T14:52:17.667-07:00 [health-monitor] started (interval: 300s, startup-grace: 60s, channel-connect-grace: 120s)\n2026-05-21T14:52:18.618-07:00 [gateway] agent model: openai/gpt-5.5 (thinking=medium, fast=off)\n2026-05-21T14:52:18.620-07:00 [gateway] http server listening (8 plugins; 3.2s)\n2026-05-21T14:52:19.121-07:00 [gateway] ready\n2026-05-21T14:52:24.916-07:00 [gateway] received SIGTERM; shutting down\n2026-05-21T14:52:24.969-07:00 [shutdown] completed cleanly in 45ms\n```\n\n**Vitest test suite (64 tests)**\n\n```console\n$ node scripts/run-vitest.mjs src/agents/subagent-registry.test.ts\n ✓ |agents-core| ../../src/agents/subagent-registry.test.ts (32 tests) 2729ms\n ✓ |agents-support| ../../src/agents/subagent-registry.test.ts (32 tests) 2544ms\n Test Files  2 passed (2)\n      Tests  64 passed (64)\n```\n\n**Fault injection proof: .catch() + scheduleLifecycleCatchRecovery fires in real gateway**\n\nThe `.catch()` handler was triggered in a **live running gateway** by injecting a conditional throw into `completeSubagentRun` in `dist/subagent-registry-B-64ITBD.js` (line 919) and a timed trigger that simulates a lifecycle completion failure. The injection calls the real `log.warn` and `scheduleLifecycleCatchRecovery` functions through the module's subsystem logger.\n\n**Steps:**\n```bash\nStep 1. Back up compiled module\ncp dist/subagent-registry-B-64ITBD.js dist/subagent-registry-B-64ITBD.js.bak\n\nStep 2. Inject conditional throw at start of completeSubagentRun (line 919)\nsed -i 's/const completeSubagentRun = async (completeParams) => {/const completeSubagentRun = async (completeParams) => { if (completeParams._injectedProof) throw new Error(\"INJECTED: subagent lifecycle completion failure\");/' dist/subagent-registry-B-64ITBD.js\n\nStep 3. Append timed trigger at end of module (fires 5s after load)\ncat >> dist/subagent-registry-B-64ITBD.js << 'EOF'\nsetTimeout(() => {\n  const fakeRunId = \"INJECTED-PROOF-RUN\";\n  completeSubagentRun({\n    _injectedProof: true, runId: fakeRunId, endedAt: Date.now(),\n    outcome: { status: \"error\", error: \"injected proof\" },\n    reason: \"error\", sendFarewell: false, triggerCleanup: true\n  }).catch((err) => {\n    log.warn(\"lifecycle error completion failed\", { err: err.message, runId: fakeRunId });\n    scheduleLifecycleCatchRecovery(fakeRunId);\n  });\n}, 5000);\nEOF\n\nStep 4. Start gateway with 25s timeout (enough for catch + 1s recovery delay)\ntimeout 25 node openclaw.mjs gateway\n\nStep 5. Restore\ncp dist/subagent-registry-B-64ITBD.js.bak dist/subagent-registry-B-64ITBD.js\n```\n\n**Terminal output:**\n\n```console\n2026-05-21T23:31:34.062-07:00 [gateway] starting...\n2026-05-21T23:31:37.001-07:00 [gateway] ready\n2026-05-21T23:31:39.737-07:00 [agents/subagent-registry] lifecycle error completion failed\n2026-05-21T23:31:53.492-07:00 [gateway] provider auth state pre-warmed in 16446ms\n2026-05-21T23:31:59.439-07:00 [gateway] received SIGTERM; shutting down\n2026-05-21T23:31:59.501-07:00 [shutdown] completed cleanly in 44ms\n```\n\n**Line-by-line analysis:**\n\n1. `[gateway] ready` at T+3s: Gateway fully started with all 8 plugins loaded.\n2. **`[agents/subagent-registry] lifecycle error completion failed`** at T+5.7s: The injected throw in `completeSubagentRun` was caught by the `.catch()` handler. The `log.warn` message uses the real `createSubsystemLogger(\"agents/subagent-registry\")` at compiled line 1585. Before this fix, this same error would be an **unhandled promise rejection** (no `.catch()` on the fire-and-forget `completeSubagentRun` call).\n3. `scheduleLifecycleCatchRecovery(\"INJECTED-PROOF-RUN\")` was called from the catch (compiled line 1763). The recovery function sets a 1-second delayed check using `resolveSubagentRunOrphanReason` + `reconcileOrphanedRun`.\n4. `[gateway] provider auth state pre-warmed` at T+19s: Gateway continued operating normally for **20 seconds** after the catch fired, proving the error was fully handled.\n5. `[shutdown] completed cleanly in 44ms`: Clean shutdown with no unhandled rejection warnings.\n\n**What the catch handler does (from compiled code):**\n```\n// Line 1759-1766 (schedulePendingLifecycleError catch):\n}).catch((err) => {\n  log.warn(\"lifecycle error completion failed\", { err, runId: params.runId });\n  scheduleLifecycleCatchRecovery(params.runId);\n});\n```\n\nThe same pattern is at lines 1792-1795 (`schedulePendingLifecycleTimeout`) and lines 2234-2237 (`ensureListener`). All three call `scheduleLifecycleCatchRecovery` which attempts orphan reconciliation or cleanup flow resumption after a 1-second delay.\n\nObserved result after fix: The `.catch()` handler fires correctly in production compiled code, logging the error with the `[agents/subagent-registry]` subsystem prefix and calling `scheduleLifecycleCatchRecovery`. The gateway continues running for 20+ seconds after the catch with no unhandled rejection warnings. Before the fix, the same error would produce an unhandled promise rejection. All 64 tests pass.\n\nWhat was not tested: The injection was triggered via a timed call rather than a real subagent lifecycle event (which requires an active subagent session to complete). The recovery function ran but found no matching run to recover (the injected run ID was not in the in-memory registry). A real lifecycle failure during an active subagent session would trigger the full orphan reconciliation or cleanup resumption path.\n\n\n",
-        "branch": "fix/subagent-lifecycle-catch",
-        "head_sha": "92b0d682c521c667698789af4acd1ac8b6b67ac6",
-        "author": "sebtardif",
+        "title": "fix(cron): add Authorization header to provider preflight probe",
+        "body": "## Summary\n\nThe cron job preflight check sends `GET {baseUrl}/models` to verify local provider connectivity before running a job, but was doing so **without an Authorization header**. For providers behind auth middleware (LiteLLM, vLLM, etc.), this generates spurious 401 errors on every cron run.\n\n## Root Cause\n\n`model-preflight.runtime.ts` → `probeLocalProviderEndpoint()` called `fetchWithSsrFGuard` with `init: { method: \"GET\" }` — no auth header.\n\n## Fix\n\nAdded Authorization header from the provider's API key, resolved from the same sources as normal inference calls (config apiKey → auth-profiles.json → env var).\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Cron job preflight GET `/models` to local LiteLLM proxy returns 401 because no Authorization header is sent, causing \"No api key passed in\" errors on every cron run.\n\n- **Real environment tested:** OpenClaw 2026.5.18 (npm install, Oracle VPS, Ubuntu 24.04, Node.js v24.15.0). LiteLLM proxy at http://127.0.0.1:4000 configured in openclaw.json. Auth method: LITELLM_API_KEY environment variable.\n\n- **Exact steps or command run after this patch:** (1) Applied the patch to `dist/model-preflight.runtime-*.js` on the running OpenClaw installation. (2) Waited for the next scheduled cron job run to trigger the preflight probe. (3) Monitored LiteLLM proxy logs via `pm2 logs litellm-proxy`. (4) Monitored OpenClaw gateway logs for cron job execution.\n\n- **Evidence after fix:**\n\n  Screenshot of terminal comparison:\n\n  ![Before/after terminal screenshot](https://raw.githubusercontent.com/samson1357924/openclaw/fix/cron-preflight-clean/evidence-preflight-fix.jpg)\n\n  **Before (no auth header — cron preflight triggers 401):**\n\n  OpenClaw gateway logs (cron operations functional, just auth errors on probe):\n  ```\n  17:30:05+00:00 info gateway/ws ⇄ res ✓ cron.status 158ms\n  17:30:05+00:00 info gateway/ws ⇄ res ✓ channels.status 188ms\n  17:30:05+00:00 info gateway/ws ⇄ res ✓ cron.list 192ms\n  17:30:05+00:00 info gateway/ws ⇄ res ✓ cron.runs 207ms\n  ```\n\n  LiteLLM proxy log showing the failed preflight probe (full stack trace):\n  ```\n  1|litellm-proxy  | 17:30:05 - LiteLLM Proxy:ERROR: auth_exception_handler.py:95 - Exception occured - No api key passed in.\n  1|litellm-proxy  | Requester IP Address:127.0.0.1\n  1|litellm-proxy  | Traceback (most recent call last):\n  1|litellm-proxy  |   File \".../user_api_key_auth.py\", line 988, in _user_api_key_auth_builder\n  1|litellm-proxy  |     if valid_token.project_id is not None:\n  1|litellm-proxy  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  1|litellm-proxy  | Exception: No api key passed in.\n  1|litellm-proxy  | INFO:     127.0.0.1:58244 - \"GET /models HTTP/1.1\" 401 Unauthorized\n  1|litellm-proxy  | INFO:     127.0.0.1:50768 - \"POST /chat/completions HTTP/1.1\" 200 OK\n  1|litellm-proxy  | INFO:     127.0.0.1:39830 - \"POST /chat/completions HTTP/1.1\" 200 OK\n  1|litellm-proxy  | INFO:     127.0.0.1:58864 - \"POST /chat/completions HTTP/1.1\" 200 OK\n  1|litellm-proxy  | INFO:     127.0.0.1:36926 - \"POST /chat/completions HTTP/1.1\" 200 OK\n  1|litellm-proxy  | INFO:     127.0.0.1:37540 - \"POST /chat/completions HTTP/1.1\" 200 OK\n  1|litellm-proxy  | INFO:     127.0.0.1:54882 - \"POST /chat/completions HTTP/1.1\" 200 OK\n  ```\n\n  Normal inference calls (POST /chat/completions) succeed because they carry the Authorization header — only the preflight probe was missing it.\n\n  **After (with auth header — preflight succeeds):**\n\n  OpenClaw gateway logs showing healthy cron operations after the fix:\n  ```\n  17:52:47+00:00 info gateway/ws ⇄ res ✓ cron.status 242ms\n  17:52:47+00:00 info gateway/ws ⇄ res ✓ channels.status 274ms\n  17:52:47+00:00 info gateway/ws ⇄ res ✓ cron.list 277ms\n  17:52:47+00:00 info gateway/ws ⇄ res ✓ cron.runs 290ms\n  17:52:47+00:00 info gateway/ws ⇄ res ✓ cron.runs 294ms\n  17:52:54+00:00 info gateway/ws ⇄ res ✓ logs.tail 242ms\n  17:52:54+00:00 info gateway/ws ⇄ res ✓ logs.tail 181ms\n  ```\n\n  LiteLLM proxy log showing the successful preflight probe:\n  ```\n  1|litellm-proxy  | INFO:     127.0.0.1:45914 - \"GET /models HTTP/1.1\" 200 OK\n  1|litellm-proxy  | INFO:     127.0.0.1:49934 - \"POST /chat/completions HTTP/1.1\" 200 OK\n  1|litellm-proxy  | INFO:     127.0.0.1:49938 - \"POST /chat/completions HTTP/1.1\" 200 OK\n  1|litellm-proxy  | INFO:     127.0.0.1:37726 - \"POST /chat/completions HTTP/1.1\" 200 OK\n  1|litellm-proxy  | INFO:     127.0.0.1:37736 - \"POST /chat/completions HTTP/1.1\" 200 OK\n  ```\n\n- **Observed result after fix:** GET /models response changed from **401 Unauthorized** to **200 OK**. No more \"No api key passed in\" errors in LiteLLM proxy logs. Cron preflight cache populates correctly (previously every run retried because 401 was treated as \"unavailable\"). Normal inference calls (POST /chat/completions) continue to work as before — unchanged. No regressions observed in cron job execution.\n\n- **What was not tested:** Non-default cron agent directories (tested with default agent only). SecretRef-based auth (tested with direct env var LITELLM_API_KEY). Authless providers like Ollama (should be unaffected as they skip auth entirely). OAuth/request-header auth profiles (not applicable to LiteLLM setup).\n\n## Changes\n\n`src/cron/isolated-agent/model-preflight.runtime.ts`:\n- Added `resolveProbeApiKey()` that resolves API key from config apiKey, auth-profiles.json, or env var\n- `probeLocalProviderEndpoint` now receives and uses the resolved API key\n- If no key is found (authless servers like Ollama), probe proceeds without auth — same as before\n",
+        "branch": "fix/cron-preflight-clean",
+        "head_sha": "ee380797a57454c38d124ef9e6a90f90c4162030",
+        "author": "samson1357924",
         "labels": [
-          "agents",
-          "size: M",
+          "size: S",
           "proof: supplied",
+          "proof: sufficient",
           "P2",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 security-boundary",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/agents/subagent-registry.test.ts",
-            "additions": 163,
+            "path": "evidence-preflight-fix.jpg",
+            "additions": 0,
             "deletions": 0,
-            "changeType": "MODIFIED"
+            "changeType": "ADDED"
           },
           {
-            "path": "src/agents/subagent-registry.ts",
+            "path": "src/cron/isolated-agent/model-preflight.runtime.ts",
             "additions": 53,
-            "deletions": 1,
+            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84616",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84616.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83648",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83648.md",
         "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
         "review_decision": "",
         "checks": {
           "total": 102,
           "counts": {
-            "SUCCESS": 72,
             "SKIPPED": 29,
+            "SUCCESS": 72,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "build-artifacts:FAILURE",
-            "check-guards:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-channels:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "build-artifacts:FAILURE",
-            "check-guards:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-channels:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
-          ]
+          "terminalBlockers": []
         }
       },
       "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
@@ -138,15 +120,15 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2647,
+    "total_ms": 2189,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 563
+        "ms": 562
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1894
+        "ms": 1438
       },
       {
         "name": "classify_commands",
@@ -154,7 +136,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 176
+        "ms": 175
       },
       {
         "name": "append_ledger",
