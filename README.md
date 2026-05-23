@@ -124,6 +124,7 @@ ClawSweeper may propose a close only when the item is clearly one of these:
 - not reproducible on current `main`
 - better suited for ClawHub skill/plugin work than core
 - duplicate or superseded by a canonical issue/PR
+- low-signal pull request whose branch is mostly unrelated or unmergeable churn
 - concrete but not actionable in this source repo
 - incoherent enough that no action can be taken
 - stale issue older than 60 days with too little data to verify
@@ -317,7 +318,8 @@ another apply run with the same settings.
 Exact event runs skip the bulk planner, shard matrix, artifact upload, and
 separate publish job. They still use the same review and apply code paths, but
 only for the selected item number and only with immediate-safe reasons enabled
-by default: `implemented_on_main` and `duplicate_or_superseded`.
+by default: `implemented_on_main`, `duplicate_or_superseded`, and
+`low_signal_unmergeable_pr`.
 `stale_insufficient_info` issue reports and `mostly_implemented_on_main` PR
 reports are never applied to young items; apply requires those reports to be at
 least 60 days old unless a manual run explicitly changes the threshold.
