@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-23T15:50:30.360Z",
+  "generated_at": "2026-05-23T15:50:47.587Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-23T12:50:29.923Z",
+  "since": "2026-05-23T12:50:46.276Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    85759
+    85737
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 2,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,115 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:85737:4525668950:2026-05-23T15:50:42Z:clawsweeper_needs_human",
+      "comment_id": "4525668950",
+      "comment_version_key": "4525668950:2026-05-23T15:50:42Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85737#issuecomment-4525668950",
+      "repo": "openclaw/openclaw",
+      "issue_number": 85737,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-23T14:30:25Z",
+      "comment_updated_at": "2026-05-23T15:50:42Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "Needs contributor or maintainer revision for the deny-before-TTS ordering plus real Discord/Telegram proof, so this should not be routed to automated repair while contributor proof is missing.; Needs attention: The diff still allows TTS/media processing side effects before the sendPolicy: deny boundary is enforced.; Review finding: [P1] Check deny before media processing — src/auto-reply/reply/dispatch-from-config.t... (sha=e8de82109ed3433226e72e8dd21a37701d80b282)",
+      "review_summary": "Moves tool-result TTS/media processing ahead of message-tool-only suppression and lets media-bearing tool results deliver while text-only tool results remain suppressed.\n\nReproducibility: yes. source inspection shows current main suppresses tool-result handling before TTS/media processing, and the linked issue provides Discord and Telegram traces. I did not run a live reproduction in this read-only review.",
+      "review_followup": "Needs contributor or maintainer revision for the deny-before-TTS ordering plus real Discord/Telegram proof, so this should not be routed to automated repair while contributor proof is missing.",
+      "freeform_prompt": null,
+      "expected_head_sha": "e8de82109ed3433226e72e8dd21a37701d80b282",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(tts): deliver TTS media in message_tool_only contexts",
+        "body": "## Summary\n\n- Dynamic TTS tool calls in Discord/Telegram group chats succeed and stage audio in `media/outbound`, but the channel send is never invoked because `shouldSuppressProgressDelivery()` blocks all delivery when the mode is `message_tool_only`.\n- The tool result delivery path in `dispatch-from-config.ts` ran TTS processing (`maybeApplyTtsToReplyPayload`) AFTER the `shouldSuppressProgressDelivery()` early return, so TTS audio payloads were never created and never delivered.\n- Moved TTS payload processing before the suppression check and added a media exemption: when the processed payload contains outbound media (TTS audio), delivery proceeds even in `message_tool_only` mode; text-only tool results remain suppressed.\n- **sendPolicy: deny** is always checked first and blocks delivery even for media-bearing payloads. The media exemption only bypasses `message_tool_only` source suppression, never the deny policy.\n\n### What did NOT change\n\n- No changes to TTS synthesis, audio encoding, or the `maybeApplyTtsToReplyPayload` function.\n- No changes to `suppressAutomaticSourceDelivery` or the source reply visibility policy.\n- No changes to non-TTS tool result delivery behavior.\n- No changes to `sendPolicy: deny` behavior — deny always blocks all delivery.\n\n## Change Type\n\n- [x] Bug fix (non-breaking change which fixes an issue)\n\n## Scope\n\n- [x] Reply dispatch / TTS auto-delivery\n\n## Root Cause\n\nIn `dispatch-from-config.ts`, the `onToolResult` callback for the tool result delivery path had the following order:\n\n1. Check `shouldSuppressProgressDelivery()` → return early if true\n2. Process TTS payload via `maybeApplyTtsToReplyPayload`\n3. Deliver the processed payload\n\nIn `message_tool_only` mode, `suppressDelivery = true`, so `shouldSuppressProgressDelivery()` returned true, causing the early return at step 1. The TTS processing at step 2 never ran, and the audio was never delivered.\n\n## Real behavior proof\n\n**Behavior addressed:** TTS auto-delivery now proceeds in message_tool_only contexts when the tool result contains outbound media (TTS audio). sendPolicy: deny always blocks delivery regardless of media.\n\n**Real environment tested:** Node 22.x on Linux, production source via `node --import tsx`.\n\n**Exact steps or command run after this patch:**\n\n```bash\nnode --import tsx --no-warnings -e \"\nimport { resolveSourceReplyVisibilityPolicy } from './src/auto-reply/reply/source-reply-delivery-mode.js';\n\nconst cfg1 = { messages: { groupChat: { visibleReplies: 'message_tool' } } };\nconst policy1 = resolveSourceReplyVisibilityPolicy({\n  cfg: cfg1, ctx: { ChatType: 'group' }, sendPolicy: 'allow', messageToolAvailable: true,\n});\nconsole.log('Case 1 (message_tool_only, allow):');\nconsole.log('  suppressAutomaticSourceDelivery:', policy1.suppressAutomaticSourceDelivery);\nconsole.log('  sendPolicyDenied:', policy1.sendPolicyDenied);\nconsole.log('  suppressDelivery:', policy1.suppressDelivery);\n\nconst policy2 = resolveSourceReplyVisibilityPolicy({\n  cfg: cfg1, ctx: { ChatType: 'group' }, sendPolicy: 'deny', messageToolAvailable: true,\n});\nconsole.log('Case 2 (message_tool_only, deny):');\nconsole.log('  suppressAutomaticSourceDelivery:', policy2.suppressAutomaticSourceDelivery);\nconsole.log('  sendPolicyDenied:', policy2.sendPolicyDenied);\nconsole.log('  suppressDelivery:', policy2.suppressDelivery);\n\nconst policy3 = resolveSourceReplyVisibilityPolicy({\n  cfg: {}, ctx: { ChatType: 'private' }, sendPolicy: 'allow',\n});\nconsole.log('Case 3 (DM, allow):');\nconsole.log('  suppressAutomaticSourceDelivery:', policy3.suppressAutomaticSourceDelivery);\nconsole.log('  sendPolicyDenied:', policy3.sendPolicyDenied);\nconsole.log('  suppressDelivery:', policy3.suppressDelivery);\n\"\n```\n\n**Evidence after fix:** Terminal output from `node --import tsx` running the production `resolveSourceReplyVisibilityPolicy`:\n\n```\nCase 1 (message_tool_only, allow):\n  suppressAutomaticSourceDelivery: true\n  sendPolicyDenied: false\n  suppressDelivery: true\nCase 2 (message_tool_only, deny):\n  suppressAutomaticSourceDelivery: true\n  sendPolicyDenied: true\n  suppressDelivery: true\nCase 3 (DM, allow):\n  suppressAutomaticSourceDelivery: false\n  sendPolicyDenied: false\n  suppressDelivery: false\n```\n\n**Observed result after fix:** The production `resolveSourceReplyVisibilityPolicy` confirms that `sendPolicyDenied` and `suppressDelivery` are correctly separated. In the dispatch code, `sendPolicyDenied` is checked first (always blocks), then media-bearing payloads bypass `suppressDelivery` only in message_tool_only mode. All 142 dispatch tests pass, including existing tests that assert sendPolicy: deny suppresses all delivery.\n\n**What was not tested:** Live TTS synthesis with a real Discord/Telegram channel. The delivery policy logic is verified at the function level with the exact parameter combinations from the production dispatch path.\n\n## Regression Test Plan\n\n- [x] `node scripts/run-vitest.mjs src/auto-reply/reply/dispatch-from-config.test.ts` — 138/138 pass (includes sendPolicy: deny suppression tests)\n- [x] `node scripts/run-vitest.mjs src/auto-reply/reply/dispatch-from-config.reply-dispatch.test.ts` — 4/4 pass\n- [ ] Manual: configure Discord/Telegram group chat with TTS enabled, invoke tts tool, verify audio is delivered\n\n## User-visible Changes\n\nDiscord and Telegram group chat users will now receive TTS audio when the agent invokes the dynamic `tts` tool. Previously, the audio was synthesized but never sent to the channel.\n\n## Security Impact\n\nNo security boundary changes. The fix preserves `sendPolicy: deny` as an absolute delivery block — media-bearing payloads cannot bypass deny mode. The exemption only applies to `message_tool_only` source suppression, allowing TTS audio through while keeping text suppressed.\n\n## Diagram\n\n    Before:\n      shouldSuppressProgressDelivery() = sendPolicyDenied || suppressDelivery\n        -> returns early for ALL tool results in message_tool_only\n        -> TTS processing never runs, audio never delivered\n\n    After:\n      1. sendPolicyDenied? -> return (always blocks, even for media)\n      2. Process TTS payload -> check hasMedia\n      3. hasMedia? -> bypass suppressDelivery, deliver audio\n         noMedia && suppressDelivery? -> return (text still suppressed)\n\nCloses #83636\n",
+        "branch": "fix/83636-tts-auto-deliver-message-tool-only",
+        "head_sha": "e8de82109ed3433226e72e8dd21a37701d80b282",
+        "author": "mushuiyu886",
+        "labels": [
+          "size: XS",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/dispatch-from-config.ts",
+            "additions": 8,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85737",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85737.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 39,
+          "counts": {
+            "IN_PROGRESS": 2,
+            "SUCCESS": 20,
+            "SKIPPED": 16,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "preflight:IN_PROGRESS",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS"
+          ],
+          "pending": [
+            "preflight:IN_PROGRESS",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 767,
+    "total_ms": 1501,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 424
+        "ms": 214
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1082
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 331
+        "ms": 177
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
