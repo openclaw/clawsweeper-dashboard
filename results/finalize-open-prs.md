@@ -1,6 +1,6 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-05-23T23:25:14.869Z
+Generated: 2026-05-23T23:28:01.226Z
 
 ## Summary
 
@@ -30,4 +30,4 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#85862](https://github.com/openclaw/openclaw/pull/85862) | fix #84857: skip CLI runtime harness preflight during compaction | automerge-openclaw-openclaw-84878 | MERGEABLE | UNSTABLE | CANCELLED:10 IN_PROGRESS:4 SKIPPED:84 SUCCESS:68 FAILURE:2 NEUTRAL:1; blockers:12 | needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
+| [#85862](https://github.com/openclaw/openclaw/pull/85862) | fix #84857: skip CLI runtime harness preflight during compaction | automerge-openclaw-openclaw-84878 | MERGEABLE | UNSTABLE | CANCELLED:13 SKIPPED:85 SUCCESS:73 FAILURE:2 NEUTRAL:1; blockers:11 | needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
