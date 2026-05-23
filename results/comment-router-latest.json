@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-23T11:03:02.686Z",
+  "generated_at": "2026-05-23T11:04:07.967Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-23T08:03:00.397Z",
+  "since": "2026-05-23T08:04:06.213Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    85465
+    79691
   ],
-  "comment_ids": [
-    4525116891
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 10,
+  "commands_seen": 2,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,17 +31,163 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:85465:4525116891:2026-05-23T11:01:11Z:re_review",
-      "comment_id": "4525116891",
-      "comment_version_key": "4525116891:2026-05-23T11:01:11Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/85465#issuecomment-4525116891",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:79691:4411774534:2026-05-23T11:04:01Z:clawsweeper_needs_human",
+      "comment_id": "4411774534",
+      "comment_version_key": "4411774534:2026-05-23T11:04:01Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/79691#issuecomment-4411774534",
       "repo": "openclaw/openclaw",
-      "issue_number": 85465,
-      "author": "Yehonal",
-      "author_id": 147092,
+      "issue_number": 79691,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-09T06:50:54Z",
+      "comment_updated_at": "2026-05-23T11:04:01Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "Not a repair candidate because no mechanical code defect remains; the remaining action is maintainer acceptance of the sensitive diagnostic boundary plus exact-head validation.; Cleared: No concrete supply-chain or code-execution regression found; the intentional raw-content diagnostics boundary is tracked as merge risk. (sha=801b9520cd3de2bd0c28245cf5797214ea74ae51)",
+      "review_summary": "The PR gates model-call input/output content capture behind `diagnostics.otel.captureContent`, extracts request and response text into `model.call` diagnostic events, exposes the shared policy resolver through diagnostic runtime, and adds diagnostics/OTEL coverage plus rebase test fixes.\n\nReproducibility: yes. source-reproducible. Current main documents `captureContent.inputMessages/outputMessages` and the OTEL exporter reads those event fields, but the model-call wrapper emits only metadata and size/timing fields.",
+      "review_followup": "Not a repair candidate because no mechanical code defect remains; the remaining action is maintainer acceptance of the sensitive diagnostic boundary plus exact-head validation.",
+      "freeform_prompt": null,
+      "expected_head_sha": "801b9520cd3de2bd0c28245cf5797214ea74ae51",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(diagnostics): populate inputMessages/outputMessages on model.call events",
+        "body": "## Summary\n\nPopulates `inputMessages`/`outputMessages` on model-call diagnostic events so that the `diagnostics-otel` plugin can export raw model content to OTEL backends when `captureContent` is enabled.\n\nRelated to #77391 (model-call diagnostic content capture only; toolInputs/toolOutputs remain out of scope for this PR and should stay tracked separately).\n\n## Problem\n\nThe `DiagnosticModelCallBaseEvent` type documents `inputMessages` and `outputMessages` fields, and the OTEL plugin reads them via `assignOtelModelContentAttributes()`, but the core model-call wrapper never populated them. This meant `openclaw.content.input_messages` and `openclaw.content.output_messages` were always absent from exported OTEL spans regardless of `captureContent` configuration.\n\n## Changes\n\n### 1. Extract inputMessages from onPayload (not model argument)\nThe stream function's first argument is a provider descriptor, not the request payload. The actual messages array is only available in the `onPayload(payload, model)` callback after provider wrappers have mutated it. Input messages are now captured at this seam and stored in `ModelCallObservationState.inputMessages`.\n\n### 2. Handle normalized stream chunks in output extraction\nThe runtime normalizes all provider streams to `{ type: \"text_delta\", delta }` before they reach the diagnostic observer. `extractTextFromChunk()` now checks normalized formats (text_delta, text) **before** raw OpenAI wire formats, so most real model streams will capture output content.\n\n### 3. Gate content by captureContent policy before emission\nAdded `ContentCapturePolicy` to `ModelCallDiagnosticContext` with a `resolveContentCapturePolicy()` helper (mirrors the OTEL service's logic). `inputMessages`/`outputMessages` are only populated on diagnostic events when the corresponding policy flag is enabled. This prevents raw prompts from traveling the internal diagnostic bus when the operator has not opted in.\n\n### 4. Tests\n- All existing test fixtures updated with required `contentCapture` field.\n- New test cases:\n  - \"respects contentCapture policy - omits inputMessages when disabled\"\n  - \"respects contentCapture policy - omits outputMessages when disabled\"\n  - \"captures output from normalized text_delta chunks\"\n- 11/11 tests passing.\n\n## Real behavior proof\n\n**Behavior or issue addressed**: Diagnostic model-call events did not carry `inputMessages`/`outputMessages`, so the OTEL plugin could never export raw model content to backends like Langfuse even when `captureContent` was enabled.\n\n**Real environment tested**: Local OpenClaw gateway on macOS (Node 22), built from PR branch. OTEL exporter configured to send to Langfuse pre-production collector at `trace-pre.agent.kspmas.ksyun.com`.\n\n**Exact steps or command run after the patch**:\n1. Build PR branch: `pnpm build`\n2. Replace installed OpenClaw dist with PR build\n3. Restart gateway with OTEL exporter + `captureContent.enabled=true`\n4. Send a test message: `openclaw agent -m \"Say hello in one word\" --agent main`\n5. Query Langfuse API for the latest `openclaw.model.call` observation\n6. Set `captureContent.enabled=false`, restart, send another message\n7. Query Langfuse API again to verify content attributes are absent\n\n**Evidence after fix**:\n\nWith `captureContent` enabled, querying Langfuse API shows content present:\n```\n$ python3 -c \"...query Langfuse API...\"\n=== openclaw.model.call | trace:e5991835cfb229485ec26ce95816b4d5 | ts:2026-05-09T16:17:53.96 ===\n  input_messages present: True\n  input_messages (first 100): You are a personal assistant running inside OpenClaw.\n  output_messages present: True\n  output_messages: 哈喽！\n```\n\nWith `captureContent` disabled, content attributes are absent:\n```\n=== openclaw.model.call | trace:b6d8900f776750c4 | ts:2026-05-09T16:10:45.54 ===\n  openclaw.api = openai-completions\n  openclaw.model = glm-5.1\n  openclaw.model_call.request_bytes = 99725\n  openclaw.model_call.response_bytes = 1600\n  *** HAS CONTENT: False\n```\n\n**Observed result after fix**: The `openclaw.model.call` span now carries `openclaw.content.input_messages` and `openclaw.content.output_messages` attributes when `captureContent` is enabled, and omits them when disabled. The policy gate works end-to-end through the core wrapper, diagnostic event bus, and OTEL exporter.\n\n**What was not tested**: Swift/macOS app build (unrelated to this change); OTEL backends other than Langfuse.\n\n",
+        "branch": "fix/diagnostics-content-capture",
+        "head_sha": "801b9520cd3de2bd0c28245cf5797214ea74ae51",
+        "author": "agentarclab",
+        "labels": [
+          "docs",
+          "extensions: diagnostics-otel",
+          "cli",
+          "agents",
+          "size: L",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 security-boundary",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/diagnostics-otel/api.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/diagnostics-otel/src/service.test.ts",
+            "additions": 100,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/diagnostics-otel/src/service.ts",
+            "additions": 6,
+            "deletions": 51,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.model-diagnostic-events.test.ts",
+            "additions": 347,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.model-diagnostic-events.ts",
+            "additions": 287,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/capability-cli.test.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/diagnostic-content-capture.ts",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/diagnostic-events.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/diagnostic-runtime.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/security/windows-acl.test.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-79691",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-79691.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "SUCCESS": 78,
+            "SKIPPED": 23,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:79691:4496845058:2026-05-20T09:38:08Z:re_review",
+      "comment_id": "4496845058",
+      "comment_version_key": "4496845058:2026-05-20T09:38:08Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/79691#issuecomment-4496845058",
+      "repo": "openclaw/openclaw",
+      "issue_number": 79691,
+      "author": "AgentArcLab",
+      "author_id": 19233945,
       "author_association": "NONE",
-      "comment_created_at": "2026-05-23T11:01:11Z",
-      "comment_updated_at": "2026-05-23T11:01:11Z",
+      "comment_created_at": "2026-05-20T09:38:08Z",
+      "comment_updated_at": "2026-05-20T09:38:08Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -59,115 +203,150 @@
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-23T11:03:03.293Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 85465
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-23T11:03:04.097Z",
-          "response_comment_id": null,
-          "response_comment_mode": "created"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "Fix Discord progress final and status command output",
-        "body": "## Summary\n\n- omit `command-output` titles when channel progress is configured with `commandText: \"status\"`\n- keep raw/default behavior unchanged so command-output titles still render outside status mode\n- keep Discord `progress` previews temporary by clearing the live progress draft before sending the final reply normally\n- suppress late Discord error finals after a visible final reply has already been queued/delivered, so a trailing tool warning cannot replace or follow the real answer\n- add regression assertions for the shared formatter and Discord progress/final delivery behavior\n\n## Why\n\n`commandText: \"status\"` already suppresses command text for command/tool progress, but `command-output` lines still appended `input.title`. That can expose internal command titles in channel progress even when the channel is configured for status-only command display.\n\nA second Discord-specific failure remained after that formatter fix: in `progress` streaming mode the live tool-progress draft could be treated as the final reply container. If the turn hit failed tools, compaction, or fresh-thread pressure, Discord could leave the progress bubble visible as the last apparent assistant message instead of showing the final assistant reply. Progress previews should stay temporary; final replies should go through the normal message path.\n\nThere is also a late-event ordering issue: after the assistant has already queued/delivered a visible final reply, a subsequent tool-error final can still be queued as a second final. In Discord this can make the final visible event look like the tool failure instead of the answer. Once a non-error final reply is accepted, later error finals are suppressed; error finals still deliver when they are the only final outcome.\n\n## Real behavior proof\n\nBehavior or issue addressed: A `command-output` progress event with `commandText: \"status\"` should render the status/exit code without appending the command-output title. Discord `progress` drafts should be cleared before the final reply is delivered normally, and late tool-error finals should not appear after a visible final reply.\n\nReal environment tested: Local OpenClaw checkout on this PR branch, plus two redacted live Discord gateway smoke runs using the built Discord extension from this branch.\n\nExact steps or command run after this patch:\n\n1. Render a failed `command-output` event with default options and with `{ commandText: \"status\" }`.\n2. Run the Discord message-handler regression suite covering progress draft final delivery and late error-final suppression.\n3. Build/load the Discord extension from this PR into an isolated Discord gateway configured with `streaming.mode: \"progress\"`, `progress.toolProgress: true`, and `progress.commandText: \"raw\"`.\n4. Send a live Discord prompt that forces a tool command equivalent to `echo <redacted_marker>; exit 42`, then returns a normal final assistant message.\n5. Repeat the same failing-tool smoke against a primary Discord gateway using the same built Discord extension.\n\nEvidence after fix:\n\n```console\n$ node --import tsx - <<'EOF'\nimport { formatChannelProgressDraftLine } from './src/plugin-sdk/channel-streaming.ts';\nconst input = {\n  event: 'command-output',\n  name: 'exec',\n  exitCode: 1,\n  title: 'run internal config check failed',\n};\nconsole.log('default:', formatChannelProgressDraftLine(input));\nconsole.log('status:', formatChannelProgressDraftLine(input, { commandText: 'status' }));\nEOF\ndefault: 🛠️ exit 1; run internal config check failed\nstatus: 🛠️ exit 1\n```\n\n```console\n$ pnpm exec vitest run --config test/vitest/vitest.extension-discord.config.ts extensions/discord/src/monitor/message-handler.process.test.ts\nTest Files  1 passed (1)\nTests  75 passed (75)\n```\n\n```console\n$ pnpm exec vitest run --config test/vitest/vitest.plugin-sdk.config.ts src/plugin-sdk/channel-streaming.test.ts\nTest Files  1 passed (1)\nTests  22 passed (22)\n```\n\n```text\nLive Discord smoke, isolated gateway:\n- progress mode showed the failing tool command with the redacted marker\n- tool result had exitCode=42\n- the normal assistant final message was delivered as the visible final reply\n- the visible final was not replaced by an `exit 42` tool-error final\n```\n\n```text\nLive Discord smoke, primary gateway:\n- the same PR-built Discord extension was selected by explicit plugin config\n- progress mode was active with raw command text enabled\n- a failing `exit 42` tool command emitted the expected marker\n- a later normal assistant final reply remained deliverable after the failed tool\n```\n\nObserved result after fix: Default/raw behavior still includes the title. Status mode renders only `exit 1`, so the command-output title is suppressed. Discord progress-mode final replies no longer edit the progress draft in place; tests assert the progress draft is cleared, `deliverDiscordReply` sends the final separately, and later tool-warning finals are suppressed after a visible final. The live Discord smokes matched that behavior: failed tools no longer left the tool-error final as the visible final message after a normal assistant final existed.\n\nWhat was not tested: A Telegram transport smoke was not run for this PR. The shared formatter behavior is covered by plugin-sdk tests; the live transport proof above is Discord-specific.\n\n## Test\n\n- `pnpm exec vitest run --config test/vitest/vitest.plugin-sdk.config.ts src/plugin-sdk/channel-streaming.test.ts`\n- `pnpm exec vitest run --config test/vitest/vitest.extension-discord.config.ts extensions/discord/src/monitor/message-handler.process.test.ts`",
-        "branch": "fix-progress-status-command-output-title",
-        "head_sha": "8b7003c0729a34e8d78cf4b25abbbfa85a893a0b",
-        "author": "yehonal",
+        "title": "fix(diagnostics): populate inputMessages/outputMessages on model.call events",
+        "body": "## Summary\n\nPopulates `inputMessages`/`outputMessages` on model-call diagnostic events so that the `diagnostics-otel` plugin can export raw model content to OTEL backends when `captureContent` is enabled.\n\nRelated to #77391 (model-call diagnostic content capture only; toolInputs/toolOutputs remain out of scope for this PR and should stay tracked separately).\n\n## Problem\n\nThe `DiagnosticModelCallBaseEvent` type documents `inputMessages` and `outputMessages` fields, and the OTEL plugin reads them via `assignOtelModelContentAttributes()`, but the core model-call wrapper never populated them. This meant `openclaw.content.input_messages` and `openclaw.content.output_messages` were always absent from exported OTEL spans regardless of `captureContent` configuration.\n\n## Changes\n\n### 1. Extract inputMessages from onPayload (not model argument)\nThe stream function's first argument is a provider descriptor, not the request payload. The actual messages array is only available in the `onPayload(payload, model)` callback after provider wrappers have mutated it. Input messages are now captured at this seam and stored in `ModelCallObservationState.inputMessages`.\n\n### 2. Handle normalized stream chunks in output extraction\nThe runtime normalizes all provider streams to `{ type: \"text_delta\", delta }` before they reach the diagnostic observer. `extractTextFromChunk()` now checks normalized formats (text_delta, text) **before** raw OpenAI wire formats, so most real model streams will capture output content.\n\n### 3. Gate content by captureContent policy before emission\nAdded `ContentCapturePolicy` to `ModelCallDiagnosticContext` with a `resolveContentCapturePolicy()` helper (mirrors the OTEL service's logic). `inputMessages`/`outputMessages` are only populated on diagnostic events when the corresponding policy flag is enabled. This prevents raw prompts from traveling the internal diagnostic bus when the operator has not opted in.\n\n### 4. Tests\n- All existing test fixtures updated with required `contentCapture` field.\n- New test cases:\n  - \"respects contentCapture policy - omits inputMessages when disabled\"\n  - \"respects contentCapture policy - omits outputMessages when disabled\"\n  - \"captures output from normalized text_delta chunks\"\n- 11/11 tests passing.\n\n## Real behavior proof\n\n**Behavior or issue addressed**: Diagnostic model-call events did not carry `inputMessages`/`outputMessages`, so the OTEL plugin could never export raw model content to backends like Langfuse even when `captureContent` was enabled.\n\n**Real environment tested**: Local OpenClaw gateway on macOS (Node 22), built from PR branch. OTEL exporter configured to send to Langfuse pre-production collector at `trace-pre.agent.kspmas.ksyun.com`.\n\n**Exact steps or command run after the patch**:\n1. Build PR branch: `pnpm build`\n2. Replace installed OpenClaw dist with PR build\n3. Restart gateway with OTEL exporter + `captureContent.enabled=true`\n4. Send a test message: `openclaw agent -m \"Say hello in one word\" --agent main`\n5. Query Langfuse API for the latest `openclaw.model.call` observation\n6. Set `captureContent.enabled=false`, restart, send another message\n7. Query Langfuse API again to verify content attributes are absent\n\n**Evidence after fix**:\n\nWith `captureContent` enabled, querying Langfuse API shows content present:\n```\n$ python3 -c \"...query Langfuse API...\"\n=== openclaw.model.call | trace:e5991835cfb229485ec26ce95816b4d5 | ts:2026-05-09T16:17:53.96 ===\n  input_messages present: True\n  input_messages (first 100): You are a personal assistant running inside OpenClaw.\n  output_messages present: True\n  output_messages: 哈喽！\n```\n\nWith `captureContent` disabled, content attributes are absent:\n```\n=== openclaw.model.call | trace:b6d8900f776750c4 | ts:2026-05-09T16:10:45.54 ===\n  openclaw.api = openai-completions\n  openclaw.model = glm-5.1\n  openclaw.model_call.request_bytes = 99725\n  openclaw.model_call.response_bytes = 1600\n  *** HAS CONTENT: False\n```\n\n**Observed result after fix**: The `openclaw.model.call` span now carries `openclaw.content.input_messages` and `openclaw.content.output_messages` attributes when `captureContent` is enabled, and omits them when disabled. The policy gate works end-to-end through the core wrapper, diagnostic event bus, and OTEL exporter.\n\n**What was not tested**: Swift/macOS app build (unrelated to this change); OTEL backends other than Langfuse.\n\n",
+        "branch": "fix/diagnostics-content-capture",
+        "head_sha": "801b9520cd3de2bd0c28245cf5797214ea74ae51",
+        "author": "agentarclab",
         "labels": [
-          "channel: discord",
-          "size: S",
+          "docs",
+          "extensions: diagnostics-otel",
+          "cli",
+          "agents",
+          "size: L",
           "proof: supplied",
-          "mantis: telegram-visible-proof",
+          "proof: sufficient",
           "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 security-boundary",
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "extensions/discord/src/monitor/message-handler.process.test.ts",
-            "additions": 66,
-            "deletions": 23,
+            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
+            "additions": 2,
+            "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/discord/src/monitor/message-handler.process.ts",
-            "additions": 29,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/channel-streaming.test.ts",
-            "additions": 19,
+            "path": "extensions/diagnostics-otel/api.ts",
+            "additions": 2,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/plugin-sdk/channel-streaming.ts",
-            "additions": 1,
-            "deletions": 1,
+            "path": "extensions/diagnostics-otel/src/service.test.ts",
+            "additions": 100,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/diagnostics-otel/src/service.ts",
+            "additions": 6,
+            "deletions": 51,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.model-diagnostic-events.test.ts",
+            "additions": 347,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.model-diagnostic-events.ts",
+            "additions": 287,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/capability-cli.test.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/diagnostic-content-capture.ts",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/diagnostic-events.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/diagnostic-runtime.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/security/windows-acl.test.ts",
+            "additions": 6,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85465",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85465.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-79691",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-79691.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 97,
+          "total": 102,
           "counts": {
             "SUCCESS": 78,
-            "SKIPPED": 18,
+            "SKIPPED": 23,
             "NEUTRAL": 1
           },
           "blockers": [],
           "pending": [],
           "terminalBlockers": []
         }
-      }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4159,
+    "total_ms": 1957,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 571
+        "ms": 243
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1703
+        "ms": 1495
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 1859
+        "ms": 191
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
