@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-23T06:20:28.947Z",
+  "generated_at": "2026-05-23T06:20:49.892Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-23T03:20:26.703Z",
+  "since": "2026-05-23T03:20:47.814Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    85475
+    82918
   ],
-  "comment_ids": [
-    4524386961
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 12,
+  "commands_seen": 6,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,17 +31,100 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:85475:4524386961:2026-05-23T06:18:30Z:re_review",
-      "comment_id": "4524386961",
-      "comment_version_key": "4524386961:2026-05-23T06:18:30Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/85475#issuecomment-4524386961",
+      "idempotency_key": "comment-router:openclaw/openclaw:82918:4469429160:2026-05-23T06:20:43Z:automerge",
+      "comment_id": "4469429160",
+      "comment_version_key": "4469429160:2026-05-23T06:20:43Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82918#issuecomment-4469429160",
       "repo": "openclaw/openclaw",
-      "issue_number": 85475,
-      "author": "TurboTheTurtle",
-      "author_id": 35905412,
+      "issue_number": 82918,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-23T06:18:30Z",
-      "comment_updated_at": "2026-05-23T06:18:30Z",
+      "comment_created_at": "2026-05-17T05:16:41Z",
+      "comment_updated_at": "2026-05-23T06:20:43Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "automerge",
+      "intent": "automerge",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": "The PR adds a Bash pipe guard to `scripts/install.sh` so piped `curl | bash` execution buffers the script to a temporary file and re-execs Bash from that file.\n\nReproducibility: no. not as a fresh live WSL2 current-main reproduction of the original hang. The reporter logs, current documented pipe command, and current child-stdin source path make the bug source-reproducible, and the PR-introduced cleanup defect is source-verifiable from the diff.",
+      "review_followup": "A narrow automated repair can harden marker cleanup and add regression coverage without changing the installer strategy.",
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "ignored",
+      "actions": [],
+      "author_repository_permission": "none",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(install): add pipe guard to prevent stdin stealing in curl | bash",
+        "body": "## Problem\n\nWhen invoked via `curl -fsSL https://openclaw.ai/install.sh | bash`, bash reads the script incrementally from stdin. Interactive prompts (gum, read) and child processes that also read stdin steal bytes from the script stream, causing:\n\n1. Truncated function names: `warn_shell_path_missing_di` instead of `warn_shell_path_missing_dir`\n2. \"command not found\" errors for the truncated names\n3. Indefinite hangs (the script stream is corrupted, bash blocks waiting for more input)\n\nReported on WSL2 Ubuntu 24.04 with 3/3 reproduction rate.\n\n## Fix\n\nAdd a pipe guard at the top of `install.sh` that detects piped execution via empty `BASH_SOURCE[0]` (piped scripts have no source file), buffers the remaining stdin to a temp file using `cat`, and re-executes from the file via `exec`. This frees stdin for interactive prompts and child processes.\n\nThe guard:\n- **Does not fire** for direct execution (`bash install.sh`) or process substitution (`bash <(curl ...)`) because `BASH_SOURCE` is set\n- **Does not fire** for CI/Docker with non-tty stdin when running from a file\n- **Cleans up** the temp file immediately after re-execution starts\n- Uses `_OPENCLAW_PIPE_BUFFERED` env var to prevent infinite re-execution loops\n\nFixes #73814\n\n## Real behavior proof\nBehavior addressed: the installer now buffers itself to a temp file when piped via curl, preventing child processes from consuming stdin bytes that corrupt the script stream.\nReal environment tested: Linux x86_64, OpenClaw 2026.5.12 installed, Node v26.0.0, bash 5.2. Tested both piped execution (`cat install.sh | bash -s -- --install-method npm`) and direct execution (`bash install.sh --install-method npm < /dev/null`).\nExact steps or command run after this patch: (1) verified pipe guard pattern with a minimal test script that includes a deliberate stdin steal (`head -c 50 < /dev/stdin`); (2) ran full installer in piped mode; (3) ran full installer in direct mode with non-tty stdin; (4) confirmed both complete successfully without truncation.\nEvidence after fix: terminal output copied below.\n\nPipe guard pattern verification (minimal test script with deliberate stdin steal):\n```\n$ cat /tmp/pipe-test-steal.sh | bash\nBefore stdin steal\nAfter stdin steal\nFunction executed correctly\nScript completed\n```\nWithout the guard, the `head -c 50` would consume 50 bytes of the script stream, truncating the function definition. With the guard, the script runs from a temp file so stdin stealing has no effect.\n\nFull installer in piped mode (script runs from temp file):\n```\n$ cat scripts/install.sh | bash -s -- --install-method npm 2>&1 | tail -10\n✓ OpenClaw installed\n\n[3/3] Finalizing setup\n· Running doctor to migrate settings\n· Running doctor\n✓ Doctor complete\n\n🦞 OpenClaw installed successfully (2026.5.12)!\n```\nNote: error source shows `/tmp/tmp.uuj4JcpyzQ: line 2988` confirming the guard buffered to temp file.\n\nFull installer in direct mode (BASH_SOURCE is set, guard does not fire):\n```\n$ bash scripts/install.sh --install-method npm < /dev/null 2>&1 | tail -10\n✓ Doctor complete\n\n🦞 OpenClaw installed successfully (2026.5.12)!\n```\nNote: error source shows `scripts/install.sh: line 3000` confirming guard did not fire.\n\nObserved result after fix: piped execution completes successfully without truncated function names or hangs. Direct execution is unaffected. The pipe guard adds negligible overhead (one mktemp + cat + exec).\nWhat was not tested: macOS bash 3.2 (BASH_SOURCE behavior may differ in very old bash versions). WSL2 Ubuntu 24.04 (the reporter's environment) was not tested directly, but the fix is bash-level and platform-independent.\n",
+        "branch": "fix/install-pipe-guard",
+        "head_sha": "49663deaffb9a11cedfc0a09423e4cc3ce4e3ff9",
+        "author": "sebtardif",
+        "labels": [
+          "scripts",
+          "size: XS",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "scripts/install.sh",
+            "additions": 19,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82918",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82918.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 84,
+          "counts": {
+            "FAILURE": 1,
+            "SKIPPED": 16,
+            "SUCCESS": 67
+          },
+          "blockers": [
+            "static:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "static:FAILURE"
+          ]
+        }
+      },
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82918:4524285411:2026-05-23T05:32:13Z:re_review",
+      "comment_id": "4524285411",
+      "comment_version_key": "4524285411:2026-05-23T05:32:13Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82918#issuecomment-4524285411",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82918,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-23T05:32:13Z",
+      "comment_updated_at": "2026-05-23T05:32:13Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -59,162 +140,314 @@
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-23T06:20:29.729Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 85475
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-23T06:20:30.599Z",
-          "response_comment_id": null,
-          "response_comment_mode": "created"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82918:4523332277:2026-05-22T23:27:05Z:re_review",
+      "comment_id": "4523332277",
+      "comment_version_key": "4523332277:2026-05-22T23:27:05Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82918#issuecomment-4523332277",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82918,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T23:27:05Z",
+      "comment_updated_at": "2026-05-22T23:27:05Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "Advance iMessage catchup cursor after live handling",
-        "body": "Fixes #85363\n\n## Summary\n- After iMessage startup catchup completes successfully, subsequent live-handled rows now advance the persisted catchup cursor.\n- Catchup replay dispatches bypass the live cursor writer so the catchup loop remains responsible for retry/hold semantics.\n- Live cursor writes are conservative: they are monotonic, preserve retry state, and refuse to jump ahead while any catchup failure is still below `maxFailureRetries`.\n\n## Real behavior proof\n**Behavior addressed:** A live iMessage notification handled after successful startup catchup now advances the persisted catchup cursor, so the same already-handled live row is not replayed again on the next catchup pass.\n\n**Real environment tested:** Local OpenClaw checkout on macOS, branch `fix/imessage-live-catchup-cursor-85363`. The tests exercise the real catchup cursor store and monitor startup flow with real temporary OpenClaw state files; the `imsg` JSON-RPC boundary is simulated so the monitor receives deterministic `watch.subscribe`, `chats.list`, and live notification data.\n\n**Exact steps or command run after this patch:**\n```bash\npnpm docs:list\nnode scripts/run-vitest.mjs extensions/imessage/src/monitor/catchup.test.ts extensions/imessage/src/monitor/catchup-bridge.test.ts\nnode scripts/run-vitest.mjs extensions/imessage/src/monitor/monitor-provider.echo-cache.test.ts extensions/imessage/src/monitor.last-route.test.ts extensions/imessage/src/monitor.watch-subscribe-retry.test.ts extensions/imessage/src/monitor.plugin-payload.test.ts extensions/imessage/src/monitor.media-policy.test.ts\npnpm exec oxfmt --write --threads=1 extensions/imessage/src/monitor/catchup.ts extensions/imessage/src/monitor/catchup.test.ts extensions/imessage/src/monitor/monitor-provider.ts extensions/imessage/src/monitor.last-route.test.ts docs/channels/imessage.md\ngit diff --check\ngit log --format='%h %an <%ae> %s' upstream/main..HEAD\n```\n\n**Evidence after fix:** Terminal capture from the local OpenClaw checkout after the patch:\n```text\nRUN  v4.1.7 /Users/andy/openclaw/openclaw-85363\n\nTest Files  2 passed (2)\nTests  31 passed (31)\nStart at  11:10:47\nDuration  552ms (transform 95ms, setup 101ms, import 51ms, tests 323ms, environment 0ms)\n\nRUN  v4.1.7 /Users/andy/openclaw/openclaw-85363\n\nTest Files  5 passed (5)\nTests  15 passed (15)\nStart at  11:10:47\nDuration  3.64s (transform 1.33s, setup 99ms, import 3.32s, tests 139ms, environment 0ms)\n\nFinished in 171ms on 5 files using 1 threads.\n\n936a0a6932 Andy Ye <35905412+TurboTheTurtle@users.noreply.github.com> Advance iMessage catchup cursor after live handling\n```\n\n**Observed result after fix:** `advanceIMessageCatchupCursor` moves the cursor forward for newer live rows, preserves given-up retry entries, and refuses to advance when a below-threshold catchup failure is still retrying. `monitorIMessageProvider` persists a live rowid after successful startup catchup and a handled live notification; the regression test reads `lastSeenRowid=77` from the catchup cursor file. Existing catchup bridge behavior, echo-cache behavior, startup retry behavior, plugin payload handling, media policy, and last-route behavior remain green.\n\n**What was not tested:** I did not run a live macOS Messages/iMessage daemon restart against a real Apple Messages database in this branch. The proof uses the monitor and catchup code paths directly with deterministic `imsg` RPC data and real cursor files in a temp OpenClaw state directory.\n\n## Attribution note\nIf maintainers squash or rework this PR, please preserve author attribution or include:\nCo-authored-by: Andy Ye <35905412+TurboTheTurtle@users.noreply.github.com>\n",
-        "branch": "fix/imessage-live-catchup-cursor-85363",
-        "head_sha": "3fdb89ca6c87b9bcc8d3003f4ebcf9672a8c4131",
-        "author": "turbotheturtle",
+        "title": "fix(install): add pipe guard to prevent stdin stealing in curl | bash",
+        "body": "## Problem\n\nWhen invoked via `curl -fsSL https://openclaw.ai/install.sh | bash`, bash reads the script incrementally from stdin. Interactive prompts (gum, read) and child processes that also read stdin steal bytes from the script stream, causing:\n\n1. Truncated function names: `warn_shell_path_missing_di` instead of `warn_shell_path_missing_dir`\n2. \"command not found\" errors for the truncated names\n3. Indefinite hangs (the script stream is corrupted, bash blocks waiting for more input)\n\nReported on WSL2 Ubuntu 24.04 with 3/3 reproduction rate.\n\n## Fix\n\nAdd a pipe guard at the top of `install.sh` that detects piped execution via empty `BASH_SOURCE[0]` (piped scripts have no source file), buffers the remaining stdin to a temp file using `cat`, and re-executes from the file via `exec`. This frees stdin for interactive prompts and child processes.\n\nThe guard:\n- **Does not fire** for direct execution (`bash install.sh`) or process substitution (`bash <(curl ...)`) because `BASH_SOURCE` is set\n- **Does not fire** for CI/Docker with non-tty stdin when running from a file\n- **Cleans up** the temp file immediately after re-execution starts\n- Uses `_OPENCLAW_PIPE_BUFFERED` env var to prevent infinite re-execution loops\n\nFixes #73814\n\n## Real behavior proof\nBehavior addressed: the installer now buffers itself to a temp file when piped via curl, preventing child processes from consuming stdin bytes that corrupt the script stream.\nReal environment tested: Linux x86_64, OpenClaw 2026.5.12 installed, Node v26.0.0, bash 5.2. Tested both piped execution (`cat install.sh | bash -s -- --install-method npm`) and direct execution (`bash install.sh --install-method npm < /dev/null`).\nExact steps or command run after this patch: (1) verified pipe guard pattern with a minimal test script that includes a deliberate stdin steal (`head -c 50 < /dev/stdin`); (2) ran full installer in piped mode; (3) ran full installer in direct mode with non-tty stdin; (4) confirmed both complete successfully without truncation.\nEvidence after fix: terminal output copied below.\n\nPipe guard pattern verification (minimal test script with deliberate stdin steal):\n```\n$ cat /tmp/pipe-test-steal.sh | bash\nBefore stdin steal\nAfter stdin steal\nFunction executed correctly\nScript completed\n```\nWithout the guard, the `head -c 50` would consume 50 bytes of the script stream, truncating the function definition. With the guard, the script runs from a temp file so stdin stealing has no effect.\n\nFull installer in piped mode (script runs from temp file):\n```\n$ cat scripts/install.sh | bash -s -- --install-method npm 2>&1 | tail -10\n✓ OpenClaw installed\n\n[3/3] Finalizing setup\n· Running doctor to migrate settings\n· Running doctor\n✓ Doctor complete\n\n🦞 OpenClaw installed successfully (2026.5.12)!\n```\nNote: error source shows `/tmp/tmp.uuj4JcpyzQ: line 2988` confirming the guard buffered to temp file.\n\nFull installer in direct mode (BASH_SOURCE is set, guard does not fire):\n```\n$ bash scripts/install.sh --install-method npm < /dev/null 2>&1 | tail -10\n✓ Doctor complete\n\n🦞 OpenClaw installed successfully (2026.5.12)!\n```\nNote: error source shows `scripts/install.sh: line 3000` confirming guard did not fire.\n\nObserved result after fix: piped execution completes successfully without truncated function names or hangs. Direct execution is unaffected. The pipe guard adds negligible overhead (one mktemp + cat + exec).\nWhat was not tested: macOS bash 3.2 (BASH_SOURCE behavior may differ in very old bash versions). WSL2 Ubuntu 24.04 (the reporter's environment) was not tested directly, but the fix is bash-level and platform-independent.\n",
+        "branch": "fix/install-pipe-guard",
+        "head_sha": "49663deaffb9a11cedfc0a09423e4cc3ce4e3ff9",
+        "author": "sebtardif",
         "labels": [
-          "docs",
-          "channel: imessage",
-          "size: L",
+          "scripts",
+          "size: XS",
           "proof: supplied",
           "proof: sufficient",
-          "P1",
+          "P2",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
           "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "docs/channels/imessage.md",
-            "additions": 1,
+            "path": "scripts/install.sh",
+            "additions": 19,
             "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor.last-route.test.ts",
-            "additions": 270,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/catchup-bridge.test.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/catchup-bridge.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/catchup.test.ts",
-            "additions": 80,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/catchup.ts",
-            "additions": 83,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/coalesce.test.ts",
-            "additions": 18,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/coalesce.ts",
-            "additions": 21,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/monitor-provider.ts",
-            "additions": 54,
-            "deletions": 5,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85475",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85475.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82918",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82918.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 100,
+          "total": 84,
           "counts": {
-            "SUCCESS": 70,
-            "SKIPPED": 24,
-            "IN_PROGRESS": 3,
-            "FAILURE": 2,
-            "NEUTRAL": 1
+            "FAILURE": 1,
+            "SKIPPED": 16,
+            "SUCCESS": 67
           },
           "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS",
-            "check-lint:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
+            "static:FAILURE"
           ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS"
-          ],
+          "pending": [],
           "terminalBlockers": [
-            "check-lint:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
+            "static:FAILURE"
           ]
         }
-      }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82918:4520247901:2026-05-22T15:53:30Z:re_review",
+      "comment_id": "4520247901",
+      "comment_version_key": "4520247901:2026-05-22T15:53:30Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82918#issuecomment-4520247901",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82918,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T15:53:30Z",
+      "comment_updated_at": "2026-05-22T15:53:30Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(install): add pipe guard to prevent stdin stealing in curl | bash",
+        "body": "## Problem\n\nWhen invoked via `curl -fsSL https://openclaw.ai/install.sh | bash`, bash reads the script incrementally from stdin. Interactive prompts (gum, read) and child processes that also read stdin steal bytes from the script stream, causing:\n\n1. Truncated function names: `warn_shell_path_missing_di` instead of `warn_shell_path_missing_dir`\n2. \"command not found\" errors for the truncated names\n3. Indefinite hangs (the script stream is corrupted, bash blocks waiting for more input)\n\nReported on WSL2 Ubuntu 24.04 with 3/3 reproduction rate.\n\n## Fix\n\nAdd a pipe guard at the top of `install.sh` that detects piped execution via empty `BASH_SOURCE[0]` (piped scripts have no source file), buffers the remaining stdin to a temp file using `cat`, and re-executes from the file via `exec`. This frees stdin for interactive prompts and child processes.\n\nThe guard:\n- **Does not fire** for direct execution (`bash install.sh`) or process substitution (`bash <(curl ...)`) because `BASH_SOURCE` is set\n- **Does not fire** for CI/Docker with non-tty stdin when running from a file\n- **Cleans up** the temp file immediately after re-execution starts\n- Uses `_OPENCLAW_PIPE_BUFFERED` env var to prevent infinite re-execution loops\n\nFixes #73814\n\n## Real behavior proof\nBehavior addressed: the installer now buffers itself to a temp file when piped via curl, preventing child processes from consuming stdin bytes that corrupt the script stream.\nReal environment tested: Linux x86_64, OpenClaw 2026.5.12 installed, Node v26.0.0, bash 5.2. Tested both piped execution (`cat install.sh | bash -s -- --install-method npm`) and direct execution (`bash install.sh --install-method npm < /dev/null`).\nExact steps or command run after this patch: (1) verified pipe guard pattern with a minimal test script that includes a deliberate stdin steal (`head -c 50 < /dev/stdin`); (2) ran full installer in piped mode; (3) ran full installer in direct mode with non-tty stdin; (4) confirmed both complete successfully without truncation.\nEvidence after fix: terminal output copied below.\n\nPipe guard pattern verification (minimal test script with deliberate stdin steal):\n```\n$ cat /tmp/pipe-test-steal.sh | bash\nBefore stdin steal\nAfter stdin steal\nFunction executed correctly\nScript completed\n```\nWithout the guard, the `head -c 50` would consume 50 bytes of the script stream, truncating the function definition. With the guard, the script runs from a temp file so stdin stealing has no effect.\n\nFull installer in piped mode (script runs from temp file):\n```\n$ cat scripts/install.sh | bash -s -- --install-method npm 2>&1 | tail -10\n✓ OpenClaw installed\n\n[3/3] Finalizing setup\n· Running doctor to migrate settings\n· Running doctor\n✓ Doctor complete\n\n🦞 OpenClaw installed successfully (2026.5.12)!\n```\nNote: error source shows `/tmp/tmp.uuj4JcpyzQ: line 2988` confirming the guard buffered to temp file.\n\nFull installer in direct mode (BASH_SOURCE is set, guard does not fire):\n```\n$ bash scripts/install.sh --install-method npm < /dev/null 2>&1 | tail -10\n✓ Doctor complete\n\n🦞 OpenClaw installed successfully (2026.5.12)!\n```\nNote: error source shows `scripts/install.sh: line 3000` confirming guard did not fire.\n\nObserved result after fix: piped execution completes successfully without truncated function names or hangs. Direct execution is unaffected. The pipe guard adds negligible overhead (one mktemp + cat + exec).\nWhat was not tested: macOS bash 3.2 (BASH_SOURCE behavior may differ in very old bash versions). WSL2 Ubuntu 24.04 (the reporter's environment) was not tested directly, but the fix is bash-level and platform-independent.\n",
+        "branch": "fix/install-pipe-guard",
+        "head_sha": "49663deaffb9a11cedfc0a09423e4cc3ce4e3ff9",
+        "author": "sebtardif",
+        "labels": [
+          "scripts",
+          "size: XS",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "scripts/install.sh",
+            "additions": 19,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82918",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82918.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 84,
+          "counts": {
+            "FAILURE": 1,
+            "SKIPPED": 16,
+            "SUCCESS": 67
+          },
+          "blockers": [
+            "static:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "static:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82918:4519627834:2026-05-22T14:33:52Z:re_review",
+      "comment_id": "4519627834",
+      "comment_version_key": "4519627834:2026-05-22T14:33:52Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82918#issuecomment-4519627834",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82918,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T14:33:52Z",
+      "comment_updated_at": "2026-05-22T14:33:52Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(install): add pipe guard to prevent stdin stealing in curl | bash",
+        "body": "## Problem\n\nWhen invoked via `curl -fsSL https://openclaw.ai/install.sh | bash`, bash reads the script incrementally from stdin. Interactive prompts (gum, read) and child processes that also read stdin steal bytes from the script stream, causing:\n\n1. Truncated function names: `warn_shell_path_missing_di` instead of `warn_shell_path_missing_dir`\n2. \"command not found\" errors for the truncated names\n3. Indefinite hangs (the script stream is corrupted, bash blocks waiting for more input)\n\nReported on WSL2 Ubuntu 24.04 with 3/3 reproduction rate.\n\n## Fix\n\nAdd a pipe guard at the top of `install.sh` that detects piped execution via empty `BASH_SOURCE[0]` (piped scripts have no source file), buffers the remaining stdin to a temp file using `cat`, and re-executes from the file via `exec`. This frees stdin for interactive prompts and child processes.\n\nThe guard:\n- **Does not fire** for direct execution (`bash install.sh`) or process substitution (`bash <(curl ...)`) because `BASH_SOURCE` is set\n- **Does not fire** for CI/Docker with non-tty stdin when running from a file\n- **Cleans up** the temp file immediately after re-execution starts\n- Uses `_OPENCLAW_PIPE_BUFFERED` env var to prevent infinite re-execution loops\n\nFixes #73814\n\n## Real behavior proof\nBehavior addressed: the installer now buffers itself to a temp file when piped via curl, preventing child processes from consuming stdin bytes that corrupt the script stream.\nReal environment tested: Linux x86_64, OpenClaw 2026.5.12 installed, Node v26.0.0, bash 5.2. Tested both piped execution (`cat install.sh | bash -s -- --install-method npm`) and direct execution (`bash install.sh --install-method npm < /dev/null`).\nExact steps or command run after this patch: (1) verified pipe guard pattern with a minimal test script that includes a deliberate stdin steal (`head -c 50 < /dev/stdin`); (2) ran full installer in piped mode; (3) ran full installer in direct mode with non-tty stdin; (4) confirmed both complete successfully without truncation.\nEvidence after fix: terminal output copied below.\n\nPipe guard pattern verification (minimal test script with deliberate stdin steal):\n```\n$ cat /tmp/pipe-test-steal.sh | bash\nBefore stdin steal\nAfter stdin steal\nFunction executed correctly\nScript completed\n```\nWithout the guard, the `head -c 50` would consume 50 bytes of the script stream, truncating the function definition. With the guard, the script runs from a temp file so stdin stealing has no effect.\n\nFull installer in piped mode (script runs from temp file):\n```\n$ cat scripts/install.sh | bash -s -- --install-method npm 2>&1 | tail -10\n✓ OpenClaw installed\n\n[3/3] Finalizing setup\n· Running doctor to migrate settings\n· Running doctor\n✓ Doctor complete\n\n🦞 OpenClaw installed successfully (2026.5.12)!\n```\nNote: error source shows `/tmp/tmp.uuj4JcpyzQ: line 2988` confirming the guard buffered to temp file.\n\nFull installer in direct mode (BASH_SOURCE is set, guard does not fire):\n```\n$ bash scripts/install.sh --install-method npm < /dev/null 2>&1 | tail -10\n✓ Doctor complete\n\n🦞 OpenClaw installed successfully (2026.5.12)!\n```\nNote: error source shows `scripts/install.sh: line 3000` confirming guard did not fire.\n\nObserved result after fix: piped execution completes successfully without truncated function names or hangs. Direct execution is unaffected. The pipe guard adds negligible overhead (one mktemp + cat + exec).\nWhat was not tested: macOS bash 3.2 (BASH_SOURCE behavior may differ in very old bash versions). WSL2 Ubuntu 24.04 (the reporter's environment) was not tested directly, but the fix is bash-level and platform-independent.\n",
+        "branch": "fix/install-pipe-guard",
+        "head_sha": "49663deaffb9a11cedfc0a09423e4cc3ce4e3ff9",
+        "author": "sebtardif",
+        "labels": [
+          "scripts",
+          "size: XS",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "scripts/install.sh",
+            "additions": 19,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82918",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82918.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 84,
+          "counts": {
+            "FAILURE": 1,
+            "SKIPPED": 16,
+            "SUCCESS": 67
+          },
+          "blockers": [
+            "static:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "static:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82918:4519348231:2026-05-22T13:58:10Z:re_review",
+      "comment_id": "4519348231",
+      "comment_version_key": "4519348231:2026-05-22T13:58:10Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82918#issuecomment-4519348231",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82918,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T13:58:10Z",
+      "comment_updated_at": "2026-05-22T13:58:10Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4446,
+    "total_ms": 4766,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 501
+        "ms": 448
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1728
+        "ms": 1613
       },
       {
         "name": "classify_commands",
-        "ms": 5
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 2190
+        "ms": 2688
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
