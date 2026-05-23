@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-23T18:13:34.387Z",
+  "generated_at": "2026-05-23T18:13:33.156Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-23T15:13:32.436Z",
+  "since": "2026-05-23T15:13:31.198Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    79403
+    79391
   ],
   "comment_ids": [
-    4411052139
+    4411051547
   ],
-  "status_comment_id": 4526168660,
+  "status_comment_id": 4526168643,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:79403:4411052139:2026-05-23T18:12:39Z:re_review",
-      "comment_id": "4411052139",
-      "comment_version_key": "4411052139:2026-05-23T18:12:39Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/79403#issuecomment-4411052139",
+      "idempotency_key": "comment-router:openclaw/openclaw:79391:4411051547:2026-05-23T18:12:38Z:re_review",
+      "comment_id": "4411051547",
+      "comment_version_key": "4411051547:2026-05-23T18:12:38Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/79391#issuecomment-4411051547",
       "repo": "openclaw/openclaw",
-      "issue_number": 79403,
+      "issue_number": 79391,
       "author": "hclsys",
       "author_id": 7755017,
       "author_association": "NONE",
-      "comment_created_at": "2026-05-09T02:03:55Z",
-      "comment_updated_at": "2026-05-23T18:12:39Z",
-      "status_comment_id": 4526168660,
+      "comment_created_at": "2026-05-09T02:03:40Z",
+      "comment_updated_at": "2026-05-23T18:12:38Z",
+      "status_comment_id": 4526168643,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -64,22 +64,22 @@
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-05-23T18:13:36.389Z",
-          "response_comment_id": "4526168660",
+          "commented_at": "2026-05-23T18:13:34.963Z",
+          "response_comment_id": "4526168643",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(memory): isolate abort signal for preflight compaction and memory flush",
-        "body": "Fixes #79390\n\n## Summary\n\nBoth `runPreflightCompactionIfNeeded` and `runMemoryFlushIfNeeded` passed `replyOperation.abortSignal` directly to the embedded sub-agent call. Because the same signal object was shared, any abort originating inside compaction or the memory flush propagated back to the parent turn — killing the entire agent turn on what should have been a silent auxiliary failure.\n\n## Root cause\n\n```typescript\n// before — shared signal: compaction failure cancels main turn\nabortSignal: params.replyOperation.abortSignal,\n```\n\n`replyOperation.abortSignal` is owned by the main-turn controller. Passing it raw to a sub-operation means the sub-operation and the main turn share a single cancellation scope.\n\n## Fix\n\nReplace the direct reference with `AbortSignal.any([params.replyOperation.abortSignal])` at both call sites:\n\n```typescript\n// after — isolated signal: parent abort still propagates to compaction,\n// but compaction's own failure cannot fire the parent signal\nabortSignal: AbortSignal.any([params.replyOperation.abortSignal]),\n```\n\n`AbortSignal.any` creates a new, independent signal. Parent cancellation propagates into it (main-turn abort stops compaction), but the sub-operation cannot abort the parent. The blast radius is contained to the auxiliary work.\n\n## Files changed\n\n- `src/auto-reply/reply/agent-runner-memory.ts` — 2 call sites fixed (line 633 preflight compaction, line 948 memory flush)\n- `src/auto-reply/reply/agent-runner-memory.test.ts` — 2 new tests asserting signal isolation for each call site\n\n## Real behavior proof\n\n- Behavior or issue addressed: preflight compaction or memory flush abort propagating into the main agent turn via the shared `replyOperation.abortSignal` reference, causing cascading turn cancellation (edit tool failures, incomplete responses). After this patch, each sub-operation receives an isolated signal via `AbortSignal.any([...])` — parent can cancel the sub-op, but the sub-op cannot cancel the parent.\n- Real environment tested: Linux (DGX Spark), Node v22.22.0, vitest v4.1.5, OpenClaw source checkout at commit `52b57de595afedbd984f38dace37f4ca19991018`.\n- Exact steps or command run after this patch: `node --experimental-vm-modules node_modules/.bin/vitest run src/auto-reply/reply/agent-runner-memory.test.ts`\n- Evidence after fix:\n```\n RUN  v4.1.5 /tmp/openclaw_src\n\n ✓ |auto-reply| runMemoryFlushIfNeeded > passes an isolated abortSignal to preflight compaction so compaction abort does not kill the main turn 23ms\n ✓ |auto-reply| runMemoryFlushIfNeeded > passes an isolated abortSignal to memory flush so flush abort does not kill the main turn 19ms\n ✓ |auto-reply| runMemoryFlushIfNeeded > runs a memory flush turn, rotates after compaction, and persists metadata 116ms\n ✓ |auto-reply| runMemoryFlushIfNeeded > runs memory flush on the configured maintenance model without active fallbacks 27ms\n [... 13 more existing tests ...]\n\n Test Files  1 passed (1)\n      Tests  17 passed (17)\n   Duration  2.76s (transform 1.07s, setup 219ms, import 1.99s, tests 474ms, environment 0ms)\n```\n- Observed result after fix: The two new tests assert `compactCall.abortSignal !== parentController.signal` (isolated signal, not the parent) and `compactCall.abortSignal?.aborted === true` after `parentController.abort()` (parent propagation works). All 17 tests pass.\n- What was not tested: live gateway end-to-end with actual model timeout; vllm/Qwen3 routing chain; concurrent compaction races where multiple sub-ops abort simultaneously.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
-        "branch": "fix/preflight-compaction-abort-signal-isolation-79390",
-        "head_sha": "52b57de595afedbd984f38dace37f4ca19991018",
+        "title": "fix(gateway): allow config.patch to set tools.web.search.maxResults",
+        "body": "## Problem\n\n`tools.web.search.maxResults` is documented in the config schema (`types.tools.ts`) and labelled in `schema.labels.ts` as \\\"Web Search Max Results\\\", but it is absent from `ALLOWED_GATEWAY_CONFIG_PATHS`. Any `gateway config.patch` that changes this field is rejected:\n\n```\ngateway config.patch cannot change protected config paths: maxResults\n```\n\nThe field is a non-sensitive UX tuning knob (schema: positive int, documented range 1–10) with no auth or privilege implications. Operators are forced to restart the gateway to change it, even for trivial tuning.\n\nCloses #79384.\n\n## Solution\n\nAdd `\"tools.web.search.maxResults\"` to `ALLOWED_GATEWAY_CONFIG_PATHS` in `src/agents/tools/gateway-tool.ts`. No other changes needed — the field is already in the TypeScript type, zod schema, and label registry.\n\n## Real behavior proof\n\n- Behavior or issue addressed: Before this patch, `gateway config.patch '{ tools: { web: { search: { maxResults: 10 } } } }'` was rejected with \"cannot change protected config paths: maxResults\". After, it passes through to the gateway.\n- Real environment tested: Local OpenClaw source on DGX Spark (Linux, Node v22), vitest v4.1.5. Test calls `createGatewayTool(...).execute(...)` with `action: \"config.patch\"` and a payload that changes `tools.web.search.maxResults`, asserting the patch is forwarded to `callGatewayTool` rather than rejected.\n- Exact steps or command run after this patch: `node --experimental-vm-modules node_modules/.bin/vitest run src/agents/openclaw-gateway-tool.test.ts`\n- Evidence after fix:\n```\n RUN  v4.1.5\n\n ✓ gateway tool (54)\n   ✓ passes config.patch through when changing tools.web.search.maxResults\n\n Test Files  2 passed (2)\n      Tests  54 passed (54)\n   Duration  2.26s\n```\n- Observed result after fix: `tool.execute(\"call\", { action: \"config.patch\", raw: \"{ tools: { web: { search: { maxResults: 10 } } } }\" })` resolves (no throw) and `callGatewayTool` is called with `\"config.patch\"`, confirming the patch is forwarded.\n- What was not tested: A live `openclaw gateway config.patch` CLI call against a running gateway instance was not performed.",
+        "branch": "fix/gateway-allow-web-search-maxresults-79384",
+        "head_sha": "ec9302b7151d29bd4c33f34494074102dbc202ca",
         "author": "hclsys",
         "labels": [
           "agents",
-          "size: S",
+          "size: XS",
           "proof: supplied"
         ],
         "files": [
@@ -94,25 +94,13 @@
             "additions": 4,
             "deletions": 0,
             "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-memory.test.ts",
-            "additions": 83,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-memory.ts",
-            "additions": 5,
-            "deletions": 2,
-            "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-79403",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-79403.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-79391",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-79391.md",
         "mode": "autonomous",
         "mergeable": "UNKNOWN",
         "merge_state_status": "UNKNOWN",
@@ -134,15 +122,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4417,
+    "total_ms": 4282,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 546
+        "ms": 496
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1391
+        "ms": 1448
       },
       {
         "name": "classify_commands",
@@ -150,7 +138,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2456
+        "ms": 2313
       },
       {
         "name": "append_ledger",
