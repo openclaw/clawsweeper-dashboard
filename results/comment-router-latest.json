@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-23T18:13:32.509Z",
+  "generated_at": "2026-05-23T18:13:34.387Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-23T15:13:30.494Z",
+  "since": "2026-05-23T15:13:32.436Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    79508
+    79403
   ],
   "comment_ids": [
-    4410606511
+    4411052139
   ],
-  "status_comment_id": 4526168580,
+  "status_comment_id": 4526168660,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:79508:4410606511:2026-05-23T18:12:37Z:re_review",
-      "comment_id": "4410606511",
-      "comment_version_key": "4410606511:2026-05-23T18:12:37Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/79508#issuecomment-4410606511",
+      "idempotency_key": "comment-router:openclaw/openclaw:79403:4411052139:2026-05-23T18:12:39Z:re_review",
+      "comment_id": "4411052139",
+      "comment_version_key": "4411052139:2026-05-23T18:12:39Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/79403#issuecomment-4411052139",
       "repo": "openclaw/openclaw",
-      "issue_number": 79508,
+      "issue_number": 79403,
       "author": "hclsys",
       "author_id": 7755017,
       "author_association": "NONE",
-      "comment_created_at": "2026-05-08T23:39:40Z",
-      "comment_updated_at": "2026-05-23T18:12:37Z",
-      "status_comment_id": 4526168580,
+      "comment_created_at": "2026-05-09T02:03:55Z",
+      "comment_updated_at": "2026-05-23T18:12:39Z",
+      "status_comment_id": 4526168660,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -64,58 +64,63 @@
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-05-23T18:13:34.542Z",
-          "response_comment_id": "4526168580",
+          "commented_at": "2026-05-23T18:13:36.389Z",
+          "response_comment_id": "4526168660",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(voice-call): pass agent tools.allow to embedded response runner",
-        "body": "## Problem\n\nWhen a voice-call routed agent is configured with `tools.allow: []` (no tools), the embedded response runner still compiles and sends 13+ tool schemas to the model. For a local Ollama model with a strict JSON-output system prompt, this causes timeout failures and no spoken output, because the model tries to process the tool schemas instead of returning the expected `{\"spoken\":\"...\"}` response.\n\nRoot cause: `generateVoiceResponse` calls `runEmbeddedPiAgent` without forwarding `toolsAllow` from the routed agent's config. `runEmbeddedPiAgent` then falls back to the full tool surface regardless of the agent's `tools.allow` setting.\n\n## Fix\n\nResolve `tools.allow` from the routed agent config via `resolveAgentConfig(cfg, agentId)?.tools?.allow` and pass it as `toolsAllow` to `runEmbeddedPiAgent`.\n\n- `tools.allow: []` → `toolsAllow: []` → embedded runner returns `[]` (no tool schemas sent)\n- `tools.allow: [\"memory_get\"]` → only that tool is sent\n- No `tools.allow` in agent config → `toolsAllow` not set → full tool surface (unchanged behaviour)\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Voice-call embedded response runner ignores `tools.allow: []` from the routed agent config, sending 13 tool schemas to Ollama and causing timeout/no spoken output.\n\n- **Real environment tested**: Node.js v22.14.0, `extensions/voice-call/src/response-generator.ts` from `openclaw/openclaw` main branch. Verified via `node -e` that `resolveAgentConfig(cfg, agentId)?.tools?.allow` returns `[]` for an agent configured with `tools: { allow: [] }`.\n\n- **Exact steps or command run after this patch**: Traced the call path: `generateVoiceResponse` → `resolveAgentConfig` → `tools.allow` → `toolsAllow` passed to `runEmbeddedPiAgent` → `resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: [] })` → returns `includeCoreTools: false, runtimeToolAllowlist: []`.\n\n- **Evidence after fix**:\n```\n// Before: agentRuntime.runEmbeddedPiAgent({ ..., agentId: \"voice\" })\n// → toolsAllow not set → full 13-tool surface compiled → Ollama timeout\n\n// After: agentRuntime.runEmbeddedPiAgent({ ..., agentId: \"voice\", toolsAllow: [] })\n// → attempt-tool-construction-plan: toolsAllow.length === 0 → return []\n// → 0 tool schemas sent → Ollama returns {\"spoken\":\"...\"} in ~2s\n```\n\n- **Observed result after fix**: Voice agent with `tools.allow: []` receives no tool schemas; Ollama responds within timeout with spoken JSON output.\n\n- **What was not tested**: Live Twilio call end-to-end (no Twilio account in test environment).\n\nFixes #79506",
-        "branch": "fix/voice-call-respect-agent-tools-allow-79506",
-        "head_sha": "839620320e98d1c9b1e89cedad4e0919a7817d03",
+        "title": "fix(memory): isolate abort signal for preflight compaction and memory flush",
+        "body": "Fixes #79390\n\n## Summary\n\nBoth `runPreflightCompactionIfNeeded` and `runMemoryFlushIfNeeded` passed `replyOperation.abortSignal` directly to the embedded sub-agent call. Because the same signal object was shared, any abort originating inside compaction or the memory flush propagated back to the parent turn — killing the entire agent turn on what should have been a silent auxiliary failure.\n\n## Root cause\n\n```typescript\n// before — shared signal: compaction failure cancels main turn\nabortSignal: params.replyOperation.abortSignal,\n```\n\n`replyOperation.abortSignal` is owned by the main-turn controller. Passing it raw to a sub-operation means the sub-operation and the main turn share a single cancellation scope.\n\n## Fix\n\nReplace the direct reference with `AbortSignal.any([params.replyOperation.abortSignal])` at both call sites:\n\n```typescript\n// after — isolated signal: parent abort still propagates to compaction,\n// but compaction's own failure cannot fire the parent signal\nabortSignal: AbortSignal.any([params.replyOperation.abortSignal]),\n```\n\n`AbortSignal.any` creates a new, independent signal. Parent cancellation propagates into it (main-turn abort stops compaction), but the sub-operation cannot abort the parent. The blast radius is contained to the auxiliary work.\n\n## Files changed\n\n- `src/auto-reply/reply/agent-runner-memory.ts` — 2 call sites fixed (line 633 preflight compaction, line 948 memory flush)\n- `src/auto-reply/reply/agent-runner-memory.test.ts` — 2 new tests asserting signal isolation for each call site\n\n## Real behavior proof\n\n- Behavior or issue addressed: preflight compaction or memory flush abort propagating into the main agent turn via the shared `replyOperation.abortSignal` reference, causing cascading turn cancellation (edit tool failures, incomplete responses). After this patch, each sub-operation receives an isolated signal via `AbortSignal.any([...])` — parent can cancel the sub-op, but the sub-op cannot cancel the parent.\n- Real environment tested: Linux (DGX Spark), Node v22.22.0, vitest v4.1.5, OpenClaw source checkout at commit `52b57de595afedbd984f38dace37f4ca19991018`.\n- Exact steps or command run after this patch: `node --experimental-vm-modules node_modules/.bin/vitest run src/auto-reply/reply/agent-runner-memory.test.ts`\n- Evidence after fix:\n```\n RUN  v4.1.5 /tmp/openclaw_src\n\n ✓ |auto-reply| runMemoryFlushIfNeeded > passes an isolated abortSignal to preflight compaction so compaction abort does not kill the main turn 23ms\n ✓ |auto-reply| runMemoryFlushIfNeeded > passes an isolated abortSignal to memory flush so flush abort does not kill the main turn 19ms\n ✓ |auto-reply| runMemoryFlushIfNeeded > runs a memory flush turn, rotates after compaction, and persists metadata 116ms\n ✓ |auto-reply| runMemoryFlushIfNeeded > runs memory flush on the configured maintenance model without active fallbacks 27ms\n [... 13 more existing tests ...]\n\n Test Files  1 passed (1)\n      Tests  17 passed (17)\n   Duration  2.76s (transform 1.07s, setup 219ms, import 1.99s, tests 474ms, environment 0ms)\n```\n- Observed result after fix: The two new tests assert `compactCall.abortSignal !== parentController.signal` (isolated signal, not the parent) and `compactCall.abortSignal?.aborted === true` after `parentController.abort()` (parent propagation works). All 17 tests pass.\n- What was not tested: live gateway end-to-end with actual model timeout; vllm/Qwen3 routing chain; concurrent compaction races where multiple sub-ops abort simultaneously.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+        "branch": "fix/preflight-compaction-abort-signal-isolation-79390",
+        "head_sha": "52b57de595afedbd984f38dace37f4ca19991018",
         "author": "hclsys",
         "labels": [
-          "channel: voice-call",
+          "agents",
           "size: S",
-          "proof: supplied",
-          "proof: sufficient"
+          "proof: supplied"
         ],
         "files": [
           {
-            "path": "CHANGELOG.md",
-            "additions": 1,
+            "path": "src/agents/openclaw-gateway-tool.test.ts",
+            "additions": 36,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/voice-call/src/response-generator.test.ts",
-            "additions": 49,
+            "path": "src/agents/tools/gateway-tool.ts",
+            "additions": 4,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/voice-call/src/response-generator.ts",
+            "path": "src/auto-reply/reply/agent-runner-memory.test.ts",
+            "additions": 83,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-memory.ts",
             "additions": 5,
-            "deletions": 0,
+            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-79508",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-79508.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-79403",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-79403.md",
         "mode": "autonomous",
         "mergeable": "UNKNOWN",
         "merge_state_status": "UNKNOWN",
         "review_decision": "",
         "checks": {
-          "total": 102,
+          "total": 108,
           "counts": {
-            "SUCCESS": 80,
+            "SUCCESS": 86,
             "SKIPPED": 21,
             "NEUTRAL": 1
           },
@@ -129,15 +134,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4602,
+    "total_ms": 4417,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 614
+        "ms": 546
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1386
+        "ms": 1391
       },
       {
         "name": "classify_commands",
@@ -145,7 +150,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2574
+        "ms": 2456
       },
       {
         "name": "append_ledger",
