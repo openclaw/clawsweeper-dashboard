@@ -1,22 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-23T04:57:29.992Z",
+  "generated_at": "2026-05-23T04:58:14.407Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-23T01:57:26.682Z",
+  "since": "2026-05-23T01:58:12.581Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    84616
+    84758
   ],
-  "comment_ids": [
-    4499816274
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
+  "scanned_comments": 2,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -33,112 +31,258 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:84616:4499816274:2026-05-23T04:56:15Z:clawsweeper_auto_repair",
-      "comment_id": "4499816274",
-      "comment_version_key": "4499816274:2026-05-23T04:56:15Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84616#issuecomment-4499816274",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:84758:4504025650:2026-05-23T04:58:07Z:clawsweeper_needs_human",
+      "comment_id": "4504025650",
+      "comment_version_key": "4504025650:2026-05-23T04:58:07Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84758#issuecomment-4504025650",
       "repo": "openclaw/openclaw",
-      "issue_number": 84616,
+      "issue_number": 84758,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T15:14:25Z",
-      "comment_updated_at": "2026-05-23T04:56:15Z",
+      "comment_created_at": "2026-05-21T01:40:03Z",
+      "comment_updated_at": "2026-05-23T04:58:07Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=92b0d682c521c667698789af4acd1ac8b6b67ac6)",
-      "review_summary": "The branch adds catch handlers and delayed recovery scheduling for three subagent lifecycle completion promises, plus tests for warning logs.\n\nReproducibility: yes. at source level: current main has two timer-triggered completeSubagentRun calls and one lifecycle listener async IIFE without catch handlers. I did not run runtime fault injection because this review is read-only.",
-      "review_followup": "Needs contributor or maintainer follow-up because the recovery path needs a targeted refactor and the missing real behavior proof must come from a registered-run setup.",
+      "repair_reason": "No narrow repair is apparent; the remaining blocker is maintainer acceptance of the public placement contract and staged non-local failure behavior.; Cleared: No concrete security or supply-chain regression was found; the diff adds config/schema/tool metadata and rejects non-local execution instead of adding remote execution, dependencies, downloads, or secret handli... (sha=68f0cdcb417e013e9216f6256306d11814d16486)",
+      "review_summary": "The PR adds `agents.executionBackends` config plus `sessions_spawn.execution` backend/profile plumbing for native subagent and ACP spawns, with docs, snapshots, and focused tests.\n\nReproducibility: not applicable. as a bug reproduction; this is a feature PR. The PR body supplies copied live terminal output from a patched checkout showing default local placement, configured profile preservation, and explicit unsupported Kubernetes rejection.",
+      "review_followup": "No narrow repair is apparent; the remaining blocker is maintainer acceptance of the public placement contract and staged non-local failure behavior.",
       "freeform_prompt": null,
-      "expected_head_sha": "92b0d682c521c667698789af4acd1ac8b6b67ac6",
+      "expected_head_sha": "68f0cdcb417e013e9216f6256306d11814d16486",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): add .catch() to fire-and-forget subagent lifecycle promises",
-        "body": "## Problem\n\nThree fire-and-forget promises in `src/agents/subagent-registry.ts` can reject without a `.catch()` handler, causing unhandled promise rejections that may crash the process:\n\n1. **`schedulePendingLifecycleError`** (line 345): `void completeSubagentRun({...})` without `.catch()`.\n2. **`schedulePendingLifecycleTimeout`** (line 384): Same pattern for timeout-triggered completion.\n3. **`ensureListener` event handler** (line 1022): `completeSubagentRun({...})` inside an async IIFE without `.catch()`.\n\nIf `completeSubagentRun` throws after mutating the run entry (setting `endedAt`, `outcome`, persisting), the run is left in a partially-completed state: ended but with no cleanup flow started. The existing orphan reconciliation (`reconcileOrphanedRun`) handles this scenario during session resume, but there is no recovery path when the failure happens during normal operation.\n\n## Fix\n\n1. **Add `.catch()` to all three fire-and-forget paths** with `log.warn` for diagnostics.\n2. **Schedule two-path catch recovery** in each catch handler via `scheduleLifecycleCatchRecovery(runId)`. After a 1-second delay (to let any in-flight state settle), it checks the run state and takes the appropriate recovery action:\n\n   - **Path 1 (orphan):** If the child session is gone (`resolveSubagentRunOrphanReason` returns a reason), reconcile via `reconcileOrphanedRun` (same path as session resume).\n   - **Path 2 (non-orphan, cleanup incomplete):** If the run has `endedAt` set but `cleanupHandled` is false and `cleanupCompletedAt` is not set, drive `startSubagentAnnounceCleanupFlow` directly. This covers the case where `completeSubagentRun` threw after persisting the ended state but before triggering cleanup, and the child session still exists (so it is not an orphan).\n   - **No-op:** If the run was not ended (error happened before mutation) or cleanup already completed, the recovery does nothing.\n\nProduction diff is +46 lines in `subagent-registry.ts`, plus 163 lines of test coverage.\n\n## Real behavior proof\n\nBehavior addressed: Three fire-and-forget `completeSubagentRun` calls could reject without a handler, causing unhandled promise rejections. If the rejection happened after mutating run state, the run was left ended but without cleanup. The fix adds `.catch()` with orphan recovery to all three paths.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js v22.16.0, OpenClaw built from source (commit 2fe201d) at `/tmp/fix-84616`.\n\nExact steps or command run after this patch:\n```bash\nStep 1. Build OpenClaw from patched source\ncd /tmp/fix-84616\nCI=true pnpm install --frozen-lockfile\npnpm build\n\nStep 2. Verify scheduleOrphanReconciliation in compiled production code\ngrep -n \"scheduleOrphanReconciliation\" dist/subagent-registry-BTsJTw_b.js\n\nStep 3. Verify orphan recovery log message\ngrep -n \"recovered orphaned run\" dist/subagent-registry-BTsJTw_b.js\n\nStep 4. Start the patched gateway\ntimeout 10 node openclaw.mjs gateway\n\nStep 5. Run subagent registry test suite\nnode scripts/run-vitest.mjs src/agents/subagent-registry.test.ts\n```\n\nEvidence after fix: terminal output copied below.\n\n**Compiled production code verification**\n\nThe `scheduleLifecycleCatchRecovery` function and all three call sites are present in the compiled bundle:\n\n```console\n$ grep -n \"scheduleLifecycleCatchRecovery\" dist/subagent-registry-B-64ITBD.js\n1713:function scheduleLifecycleCatchRecovery(runId) {\n1763:scheduleLifecycleCatchRecovery(params.runId);\n1796:scheduleLifecycleCatchRecovery(params.runId);\n2238:scheduleLifecycleCatchRecovery(evt.runId);\n```\n\nBoth recovery paths are present in the compiled function:\n\n```console\nPath 1: orphan recovery\n$ grep -n \"recovered orphaned run\" dist/subagent-registry-B-64ITBD.js\n1728:log.info(\"recovered orphaned run after lifecycle completion failure\", { runId });\n\nPath 2: non-orphan cleanup resume\n$ grep -n \"resumed cleanup for ended\" dist/subagent-registry-B-64ITBD.js\n1733:if (startSubagentAnnounceCleanupFlow(runId, entry)) log.info(\"resumed cleanup for ended run after lifecycle completion failure\", { runId });\n\nPath 2 guard: only when cleanup not already handled\n$ grep -n \"cleanupHandled.*cleanupCompletedAt\" dist/subagent-registry-B-64ITBD.js | grep 1732\n1732:if (!entry.cleanupHandled && typeof entry.cleanupCompletedAt !== \"number\") {\n```\n\nPath 2 (line 1732-1733) handles the case ClawSweeper flagged: when `completeSubagentRun` rejects after setting `endedAt` but before cleanup, and the child session still exists (not an orphan). It calls `startSubagentAnnounceCleanupFlow` to resume the cleanup flow that was interrupted.\n\n**Live gateway startup proof**\n\n```console\n$ timeout 10 node openclaw.mjs gateway\n2026-05-21T14:52:15.351-07:00 [gateway] loading configuration…\n2026-05-21T14:52:15.405-07:00 [gateway] starting...\n2026-05-21T14:52:17.667-07:00 [health-monitor] started (interval: 300s, startup-grace: 60s, channel-connect-grace: 120s)\n2026-05-21T14:52:18.618-07:00 [gateway] agent model: openai/gpt-5.5 (thinking=medium, fast=off)\n2026-05-21T14:52:18.620-07:00 [gateway] http server listening (8 plugins; 3.2s)\n2026-05-21T14:52:19.121-07:00 [gateway] ready\n2026-05-21T14:52:24.916-07:00 [gateway] received SIGTERM; shutting down\n2026-05-21T14:52:24.969-07:00 [shutdown] completed cleanly in 45ms\n```\n\n**Vitest test suite (64 tests)**\n\n```console\n$ node scripts/run-vitest.mjs src/agents/subagent-registry.test.ts\n ✓ |agents-core| ../../src/agents/subagent-registry.test.ts (32 tests) 2729ms\n ✓ |agents-support| ../../src/agents/subagent-registry.test.ts (32 tests) 2544ms\n Test Files  2 passed (2)\n      Tests  64 passed (64)\n```\n\n**Fault injection proof: .catch() + scheduleLifecycleCatchRecovery fires in real gateway**\n\nThe `.catch()` handler was triggered in a **live running gateway** by injecting a conditional throw into `completeSubagentRun` in `dist/subagent-registry-B-64ITBD.js` (line 919) and a timed trigger that simulates a lifecycle completion failure. The injection calls the real `log.warn` and `scheduleLifecycleCatchRecovery` functions through the module's subsystem logger.\n\n**Steps:**\n```bash\nStep 1. Back up compiled module\ncp dist/subagent-registry-B-64ITBD.js dist/subagent-registry-B-64ITBD.js.bak\n\nStep 2. Inject conditional throw at start of completeSubagentRun (line 919)\nsed -i 's/const completeSubagentRun = async (completeParams) => {/const completeSubagentRun = async (completeParams) => { if (completeParams._injectedProof) throw new Error(\"INJECTED: subagent lifecycle completion failure\");/' dist/subagent-registry-B-64ITBD.js\n\nStep 3. Append timed trigger at end of module (fires 5s after load)\ncat >> dist/subagent-registry-B-64ITBD.js << 'EOF'\nsetTimeout(() => {\n  const fakeRunId = \"INJECTED-PROOF-RUN\";\n  completeSubagentRun({\n    _injectedProof: true, runId: fakeRunId, endedAt: Date.now(),\n    outcome: { status: \"error\", error: \"injected proof\" },\n    reason: \"error\", sendFarewell: false, triggerCleanup: true\n  }).catch((err) => {\n    log.warn(\"lifecycle error completion failed\", { err: err.message, runId: fakeRunId });\n    scheduleLifecycleCatchRecovery(fakeRunId);\n  });\n}, 5000);\nEOF\n\nStep 4. Start gateway with 25s timeout (enough for catch + 1s recovery delay)\ntimeout 25 node openclaw.mjs gateway\n\nStep 5. Restore\ncp dist/subagent-registry-B-64ITBD.js.bak dist/subagent-registry-B-64ITBD.js\n```\n\n**Terminal output:**\n\n```console\n2026-05-21T23:31:34.062-07:00 [gateway] starting...\n2026-05-21T23:31:37.001-07:00 [gateway] ready\n2026-05-21T23:31:39.737-07:00 [agents/subagent-registry] lifecycle error completion failed\n2026-05-21T23:31:53.492-07:00 [gateway] provider auth state pre-warmed in 16446ms\n2026-05-21T23:31:59.439-07:00 [gateway] received SIGTERM; shutting down\n2026-05-21T23:31:59.501-07:00 [shutdown] completed cleanly in 44ms\n```\n\n**Line-by-line analysis:**\n\n1. `[gateway] ready` at T+3s: Gateway fully started with all 8 plugins loaded.\n2. **`[agents/subagent-registry] lifecycle error completion failed`** at T+5.7s: The injected throw in `completeSubagentRun` was caught by the `.catch()` handler. The `log.warn` message uses the real `createSubsystemLogger(\"agents/subagent-registry\")` at compiled line 1585. Before this fix, this same error would be an **unhandled promise rejection** (no `.catch()` on the fire-and-forget `completeSubagentRun` call).\n3. `scheduleLifecycleCatchRecovery(\"INJECTED-PROOF-RUN\")` was called from the catch (compiled line 1763). The recovery function sets a 1-second delayed check using `resolveSubagentRunOrphanReason` + `reconcileOrphanedRun`.\n4. `[gateway] provider auth state pre-warmed` at T+19s: Gateway continued operating normally for **20 seconds** after the catch fired, proving the error was fully handled.\n5. `[shutdown] completed cleanly in 44ms`: Clean shutdown with no unhandled rejection warnings.\n\n**What the catch handler does (from compiled code):**\n```\n// Line 1759-1766 (schedulePendingLifecycleError catch):\n}).catch((err) => {\n  log.warn(\"lifecycle error completion failed\", { err, runId: params.runId });\n  scheduleLifecycleCatchRecovery(params.runId);\n});\n```\n\nThe same pattern is at lines 1792-1795 (`schedulePendingLifecycleTimeout`) and lines 2234-2237 (`ensureListener`). All three call `scheduleLifecycleCatchRecovery` which attempts orphan reconciliation or cleanup flow resumption after a 1-second delay.\n\nObserved result after fix: The `.catch()` handler fires correctly in production compiled code, logging the error with the `[agents/subagent-registry]` subsystem prefix and calling `scheduleLifecycleCatchRecovery`. The gateway continues running for 20+ seconds after the catch with no unhandled rejection warnings. Before the fix, the same error would produce an unhandled promise rejection. All 64 tests pass.\n\nWhat was not tested: The injection was triggered via a timed call rather than a real subagent lifecycle event (which requires an active subagent session to complete). The recovery function ran but found no matching run to recover (the injected run ID was not in the in-memory registry). A real lifecycle failure during an active subagent session would trigger the full orphan reconciliation or cleanup resumption path.\n\n\n",
-        "branch": "fix/subagent-lifecycle-catch",
-        "head_sha": "92b0d682c521c667698789af4acd1ac8b6b67ac6",
-        "author": "sebtardif",
+        "title": "feat(subagents): add execution backend placement contract",
+        "body": "## Summary\n\nAdds the first real implementation slice for #82017: `sessions_spawn` now accepts an optional execution placement request and validates it against `agents.executionBackends`.\n\nThis PR keeps runtime behavior conservative: the built-in `local` `process` backend is the only executable backend in this release. Forward-looking `container` and `kubernetes` configs are accepted by config validation, but spawn rejects them with an explicit runtime-policy error until those backends are implemented. Placement is recorded on spawned run metadata/list output for readback; non-local runner dispatch is intentionally not implemented here.\n\n## Linked issue\n\nRelated to #82017.\n\n## What changed\n\n- Added `agents.executionBackends` config schema/types/help/labels/tags/docs.\n- Added `sessions_spawn.execution.backend/profile` schema and plumbing.\n- Added placement resolution for subagent and ACP spawns.\n- Persisted execution placement into subagent run records and list output.\n- Regenerated prompt snapshots for the new model-facing tool schema.\n- Added unit coverage for config validation, placement resolution, tool parameter forwarding, and list readback.\n\n## Behavior\n\n- Omitted execution request defaults to `{ backend: \"local\", type: \"process\" }`.\n- Configured local process profiles can be requested by name, validated, and recorded on the run.\n- Unknown backends/profiles fail before spawn starts.\n- `container`/`kubernetes` backends are schema-valid but rejected at spawn time for now.\n\n## Real behavior proof\n\n- Behavior or issue addressed: `sessions_spawn.execution` placement resolution accepts the default local process backend, accepts a configured local profile, and rejects an unsupported Kubernetes backend instead of silently falling back.\n- Real environment tested: Local OpenClaw repository checkout at branch `feat/execution-backends-local`, rebased on `origin/main`, running the patched TypeScript source with Node/tsx.\n- Exact steps or command run after this patch:\n\n```sh\nnode --import tsx <<'EOF'\nimport { resolveAgentExecutionPlacement } from './src/agents/execution-backends.ts';\n\nconst cfg = {\n  agents: {\n    executionBackends: {\n      local: {\n        type: 'process',\n        profiles: {\n          small: { resources: { requests: { cpu: '500m', memory: '1Gi' } } },\n        },\n      },\n      k8s: {\n        type: 'kubernetes',\n        profiles: { 'large-build': {} },\n      },\n    },\n  },\n};\n\nfor (const [name, request] of [\n  ['default local process', undefined],\n  ['local small profile', { backend: 'local', profile: 'small' }],\n  ['unsupported k8s backend', { backend: 'k8s', profile: 'large-build' }],\n]) {\n  console.log(`${name}: ${JSON.stringify(resolveAgentExecutionPlacement({ cfg, request }))}`);\n}\nEOF\n```\n\n- Evidence after fix (copied live terminal output):\n\n```text\ndefault local process: {\"ok\":true,\"execution\":{\"backend\":\"local\",\"type\":\"process\"}}\nlocal small profile: {\"ok\":true,\"execution\":{\"backend\":\"local\",\"type\":\"process\",\"profile\":\"small\"}}\nunsupported k8s backend: {\"ok\":false,\"error\":\"execution backend \\\"k8s\\\" has type \\\"kubernetes\\\", but only local process execution is supported in this release\"}\n```\n\n- Observed result after fix: local process placement resolves successfully, the configured `small` profile is preserved in the placement result, and unsupported Kubernetes placement returns an explicit runtime-policy error.\n- What was not tested: full non-local container/Kubernetes runner dispatch, because this PR intentionally does not implement non-local backend runners.\n\n## Verification\n\nRan locally on branch `feat/execution-backends-local`:\n\n- `pnpm tsgo:test:src`\n- `node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/agents/execution-backends.ts src/agents/acp-spawn.ts src/agents/subagent-spawn.ts src/agents/tools/sessions-spawn-tool.ts src/agents/subagent-list.ts src/agents/subagent-list.test.ts src/config/zod-schema.agents.ts src/config/types.agents.ts src/config/schema.tags.ts src/config/schema.labels.ts`\n- `OPENCLAW_VITEST_INCLUDE_FILE=.vitest-include-help-quality node scripts/run-vitest.mjs run --config test/vitest/vitest.tooling.config.ts`\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.runtime-config.config.ts src/config/schema.test.ts`\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.unit-fast.config.ts src/agents/execution-backends.test.ts src/agents/subagent-list.test.ts`\n- `OPENCLAW_VITEST_INCLUDE_FILE=.vitest-include-agents node scripts/run-vitest.mjs run --config test/vitest/vitest.agents.config.ts`\n- `OPENCLAW_VITEST_INCLUDE_FILE=.vitest-include-agents-tools node scripts/run-vitest.mjs run --config test/vitest/vitest.agents-tools.config.ts`\n- `pnpm config:docs:check`\n- `node scripts/check-docs-mdx.mjs docs/gateway/config-agents.md docs/tools/subagents.md`\n- `pnpm format:docs:check docs/gateway/config-agents.md docs/tools/subagents.md`\n- `pnpm prompt:snapshots:check`\n- `git diff --check`\n\n## Security impact\n\nNo new secrets, network access, or remote execution implementation. This only adds placement metadata and rejects non-local execution backends until actual backend runners exist.\n",
+        "branch": "feat/execution-backends-local",
+        "head_sha": "68f0cdcb417e013e9216f6256306d11814d16486",
+        "author": "napetrov",
         "labels": [
+          "docs",
+          "gateway",
           "agents",
-          "size: M",
+          "size: L",
           "proof: supplied",
+          "proof: sufficient",
           "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look",
+          "feature: ✨ showcase"
         ],
         "files": [
           {
-            "path": "src/agents/subagent-registry.test.ts",
-            "additions": 163,
+            "path": "docs/.generated/config-baseline.sha256",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/config-agents.md",
+            "additions": 25,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/subagent-registry.ts",
-            "additions": 53,
+            "path": "docs/tools/subagents.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/acp-spawn.ts",
+            "additions": 21,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/execution-backends.test.ts",
+            "additions": 98,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/execution-backends.ts",
+            "additions": 101,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/subagent-list.test.ts",
+            "additions": 37,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-list.ts",
+            "additions": 6,
             "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-run-manager.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.types.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-spawn.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/sessions-spawn-tool.test.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/sessions-spawn-tool.ts",
+            "additions": 32,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.help.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.labels.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.tags.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.test.ts",
+            "additions": 45,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.agents.ts",
+            "additions": 27,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.agents.ts",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.discord-group.json",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.heartbeat-turn.json",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.telegram-direct.json",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/discord-group-codex-message-tool.md",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-direct-codex-message-tool.md",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-heartbeat-codex-tool.md",
+            "additions": 4,
+            "deletions": 4,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84616",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84616.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84758",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84758.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
           "total": 102,
           "counts": {
-            "SUCCESS": 72,
-            "SKIPPED": 29,
+            "CANCELLED": 2,
+            "SKIPPED": 26,
+            "SUCCESS": 73,
             "NEUTRAL": 1
           },
-          "blockers": [],
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
           "pending": [],
-          "terminalBlockers": []
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
         }
       },
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3637,
+    "total_ms": 2053,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 606
+        "ms": 319
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2690
+        "ms": 1491
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 315
+        "ms": 217
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
