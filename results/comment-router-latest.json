@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-23T14:50:06.680Z",
+  "generated_at": "2026-05-23T14:50:07.786Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-23T11:50:05.161Z",
+  "since": "2026-05-23T11:50:07.174Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     85718
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4525713744
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 2,
@@ -40,12 +42,12 @@
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-23T13:14:26Z",
-      "comment_updated_at": "2026-05-23T14:50:00Z",
+      "comment_created_at": "2026-05-23T14:48:08Z",
+      "comment_updated_at": "2026-05-23T14:48:08Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "trusted_bot": true,
@@ -59,84 +61,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(doctor): skip empty entries and memoize routes in plugin session repairs",
-        "body": "## Symptom\n\n`openclaw doctor` hangs indefinitely (5+ minutes, 100% CPU, ~1.2 GB RSS) on installations with sizable session stores. Visible output stops after the 'Plugin registry refreshed' note. With the default 30-day `session.maintenance.pruneAfter` and a relaxed `maxEntries`, a heavy CLI user can easily accumulate several hundred entries, which is enough to trigger this.\n\n## Root cause\n\n`runPluginSessionStateDoctorRepairs` (in `src/commands/doctor-session-state-providers.ts`) has two compounding inefficiencies that turn an O(N) loop over the session store into something far worse:\n\n1. **It resolves routes for every entry.** `Object.keys(params.store).map(... resolveConfiguredDoctorSessionStateRoute ...)` runs once per session key. `scanEntryForOwner` can only produce a repair or manual-review finding when the row exposes at least one of the fields covered by `entryMayContainPluginSessionRouteState` (`providerOverride`, `modelOverride`, `agentHarnessId`, `agentRuntimeOverride`, `cliSessionBindings`, `cliSessionIds`, `authProfileOverride*`, `modelOverrideSource`, `liveModelSwitchPending`, `model`, `modelProvider`). Resolving a route for any entry that fails that predicate is pure waste, and the store typically has many bare entries (every short CLI session leaves a stub row).\n2. **The route is a function of agentId, not sessionKey.** `resolveConfiguredDoctorSessionStateRoute` uses `sessionKey` only to derive the agent id via `resolveSessionAgentId`; every `agent:main:*` key resolves to the same route, so building the map per-sessionKey recomputed the same work hundreds of times.\n3. **`parseModelRef` inside `scanEntryForOwner` invokes plugin-manifest model-id normalization.** With only `allowPluginNormalization: false` set, `normalizeStaticProviderModelId` still calls `normalizeProviderModelIdWithManifest`, which calls `loadPluginMetadataSnapshot` from scratch on every call (memoization only kicks in when a 'current' snapshot is bound to process state, which it is not during doctor). Each `parseModelRef` then costs roughly the file I/O of loading the plugin metadata snapshot, ~40 ms each on this machine. With ~670 calls in the scan, that is ~27 s of pure manifest reloading per doctor run. `scanEntryForOwner` never reads the manifest-normalized model id, only the provider id, so the manifest path is unused work.\n\n## Fix\n\nTwo commits, one helper file:\n\n1. Filter `params.store` with `entryMayContainPluginSessionRouteState` before resolving routes, and memoize `resolveConfiguredDoctorSessionStateRoute` by agent id within the surviving entries. Both helpers already exist in `doctor-session-state-providers.ts`; this rearranges the existing call shape without changing what `scanSessionRouteStateOwners` sees.\n2. Pass `allowManifestNormalization: false` alongside the existing `allowPluginNormalization: false` on all three `parseModelRef` call sites in this file. `normalizeStaticProviderModelId` already short-circuits to `normalizeBuiltInProviderModelId` in that case.\n\n`scanSessionRouteStateOwners` still receives every entry it could possibly find anything for; no finding the pre-fix code would have produced is lost.\n\n## Real behavior proof\n\n- Behavior or issue addressed: `openclaw doctor --yes --non-interactive` hangs indefinitely on a real session store with ~800 entries (no visible progress after 5+ minutes; gateway stays unmodified, no further notes ever print).\n- Real environment tested: `openclaw` 2026.5.22, macOS 26.5 (Apple silicon), Node 25.9. Real OpenClaw state directory at `~/.openclaw` with an 18 MB `sessions.json` (~800 entries), gateway-mode local, ~120 plugins enabled (12 active), default `session.maintenance.pruneAfter` of 30 days.\n- Exact steps run after this patch:\n  1. `pnpm build` against this branch (clean tsdown + runtime-postbuild).\n  2. Cleaned the real store down to 230 entries via `openclaw sessions cleanup --enforce --fix-missing` (configured `maxEntries: 500`, `pruneAfter: 14d`, `mode: enforce`) so the comparison was not affected by missing-transcript pruning.\n  3. `time openclaw doctor --yes --non-interactive` from `/tmp`.\n- Evidence after fix (live terminal output, last few lines only):\n\n```\n│\n└  Doctor complete.\n\nreal    0m56.004s\nuser    0m26.166s\nsys     0m15.707s\n```\n\n- Per-contribution breakdown (instrumented locally on the same store; trace removed before commit):\n\n```\ncontribution                            before fix   after fix\ndoctor:state-integrity                    38621 ms     2438 ms   (-94 %)\ndoctor:gateway-daemon                     15376 ms    15350 ms   (unchanged, separate concern)\ndoctor:structured-health-repairs          12738 ms    13206 ms   (unchanged, separate concern)\ndoctor:claude-cli                         10363 ms    10098 ms   (unchanged, separate concern)\ndoctor:session-transcripts                 3991 ms     3917 ms\ndoctor:gateway-health                      3269 ms     3261 ms\ntotal doctor wall-clock                   89539 ms    53410 ms\n```\n\nInside `runPluginSessionStateDoctorRepairs` on the same store (230 entries, 224 filtered in, 3 owners): scan loop fell from ~36 s to <300 ms; route resolution fell from 1 call costing 2.2 s and being reissued per session-key (the old code) to 1 cached call.\n\n## Tests\n\n- `node scripts/run-vitest.mjs src/commands/doctor-session-state-providers.test.ts src/commands/doctor-state-integrity.test.ts` — 42 / 42 pass (11 existing provider tests, 30 state-integrity tests, 1 new test).\n- New test (`skips entries without plugin route state and memoizes routes per agentId`) builds a 200-entry store where two entries carry `agentHarnessId: codex-cli` and asserts the codex owner fires its 'pinned runtime' repair on those two entries, the user-declined confirmation produces no changes, and the run completes in well under 2 s (pre-fix would have exceeded 5 minutes on a real cfg; this test uses a synthetic cfg so the wall-clock guard is conservative).\n- `node scripts/run-oxlint.mjs src/commands/doctor-session-state-providers.ts src/commands/doctor-session-state-providers.test.ts` — 0 warnings, 0 errors.\n- `pnpm format:check` on touched files — clean.\n- `pnpm tsgo:core --noEmit` — clean.\n- `pnpm build` — clean, produces the same dist surface.\n\nReal `gateway`/`channel`/E2E proof skipped per AGENTS.md scoping; this change is narrow to one core doctor helper with no protocol, plugin SDK, runtime, or channel surface touched.",
-        "branch": "doctor-state-integrity-plugin-route-filter",
-        "head_sha": "e077c8cb370cf4f63f0bdbee3e93ac85f2dfed55",
-        "author": "joeyfrasier",
-        "labels": [
-          "commands",
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/commands/doctor-session-state-providers.test.ts",
-            "additions": 97,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor-session-state-providers.ts",
-            "additions": 39,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85718",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85718.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 73,
-            "SKIPPED": 27,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
-        }
-      },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1704,
+    "total_ms": 2060,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 283
+        "ms": 599
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1220
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 172
+        "ms": 1447
       },
       {
         "name": "append_ledger",
