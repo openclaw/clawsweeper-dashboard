@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-23T08:12:42.035Z",
+  "generated_at": "2026-05-23T08:13:51.883Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-23T05:12:39.497Z",
+  "since": "2026-05-23T05:13:50.498Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4524742809
   ],
-  "status_comment_id": 4524743046,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-05-23T08:11:36Z",
       "comment_updated_at": "2026-05-23T08:11:36Z",
-      "status_comment_id": 4524743046,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -59,172 +59,34 @@
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-23T08:12:42.784Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 85249
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-23T08:12:44.111Z",
-          "response_comment_id": "4524743046",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): guard against undefined sourceDelivery in isolated executor",
-        "body": "## Summary\n\nGuard against `undefined` `sourceDelivery` in the isolated cron executor to prevent `TypeError: Cannot read properties of undefined (reading 'sourceReplyDeliveryMode')`.\n\n## Problem\n\nCommit `4c613fbfe0` (\"refactor(cron): centralize source delivery plan\", 2026-05-18) replaced three separate params (`messageChannel`, `sourceReplyDeliveryMode`, `toolPolicy`) with a unified `sourceDelivery: SourceDeliveryPlan` across the lazy-import boundary between `run.ts` and `run-executor.ts`.\n\nA runtime version skew (stale compiled JS from a partial build or ESM module cache) causes `params.sourceDelivery` to be `undefined` for isolated cron jobs, crashing at `run-executor.ts:147`.\n\n## Fix\n\n1. Made `sourceDelivery` optional in both `createCronPromptExecutor` and `executeCronRun`\n2. When `sourceDelivery` is undefined, reconstruct a `SourceDeliveryPlan` that **preserves legacy caller fields**:\n   - Reads `toolPolicy` from stale caller params (`disableMessageTool`, `forceMessageTool`, `requireExplicitMessageTarget`)\n   - Reads `sourceReplyDeliveryMode` from stale caller params — selects `owner: \"message_tool\"` when mode is `\"message_tool_only\"`, preserving delivery semantics\n   - Reads `messageChannel` from stale caller params\n   - Falls back to `resolvedDelivery` for channel/to/accountId/threadId\n   - Passes `requireExplicitMessageTarget` through to `createSourceDeliveryPlan` (previously omitted, defaulting to `false`)\n3. Added `logWarn` diagnostic to flag the fallback\n\nThis ensures webhook callers that disabled the message tool still have it disabled, announce callers that set `message_tool_only` keep that mode, `requireExplicitMessageTarget` is honored, and no security boundary is widened.\n\n## Tests\n\n11 test cases in `run.source-delivery-guard.test.ts`:\n\n**`createCronPromptExecutor` level (6 tests):**\n1. `sourceDelivery: undefined` (no legacy fields) → reconstructs with safe defaults ✅\n2. `sourceDelivery: undefined` → falls back to `resolvedDelivery` channel/to/accountId/threadId ✅\n3. Stale announce caller → preserves `sourceReplyDeliveryMode` and tool policy ✅\n4. Stale webhook caller → message tool stays disabled ✅\n5. `requireExplicitMessageTarget: true` → passed through to plan ✅\n6. Valid `sourceDelivery` → works normally (regression) ✅\n\n**`executeCronRun` level (5 tests):**\n7. Stale announce caller → `sourceReplyDeliveryMode: \"message_tool_only\"` preserved through full execute path ✅\n8. No legacy mode → `sourceReplyDeliveryMode` defaults to `undefined` ✅\n9. `requireExplicitMessageTarget: true` → passed through executeCronRun fallback ✅\n10. Missing toolPolicy → `requireExplicitMessageTarget` defaults to `false` ✅\n11. Stale webhook caller → message tool disabled preserved through executeCronRun ✅\n\n## Real behavior proof\n\n- **Behavior addressed**: All `sessionTarget: \"isolated\"` cron jobs crash with `TypeError: Cannot read properties of undefined (reading 'sourceReplyDeliveryMode')`. Additionally, stale announce callers would silently lose `sourceReplyDeliveryMode` and `requireExplicitMessageTarget` through the `executeCronRun` → `createCronPromptExecutor` boundary.\n- **Real environment tested**: macOS arm64, Node.js v24.10.0, source tree at commit `65c7e3812e`\n\n### Failing proof (upstream/main, before fix)\n\nOn upstream/main (`13deea2a`), `sourceDelivery` is **required** — no guard exists, no fallback:\n\n```\n$ git show 13deea2a9d:src/cron/isolated-agent/run-executor.ts | grep -n \"sourceDelivery\"\n112:  sourceDelivery: SourceDeliveryPlan;       # <-- NOT optional\n156:  const sourceReplyDeliveryMode = params.sourceDelivery.sourceReplyDeliveryMode;  # <-- direct deref, crashes when undefined\n327:  sourceDelivery: SourceDeliveryPlan;       # <-- NOT optional in executeCronRun either\n```\n\nThe test file does not exist on main:\n```\n$ git show 13deea2a9d:src/cron/isolated-agent/run.source-delivery-guard.test.ts\nfatal: path 'src/cron/isolated-agent/run.source-delivery-guard.test.ts' does not exist in '13deea2a9d'\n```\n\n### Passing proof (fix branch, after fix)\n\n**Delivery mode preservation proof** (demonstrates the owner-selection fix):\n\n```\n$ node --import tsx scripts/cron-execute-proof.mjs\n\n=== PR #85249 executeCronRun Delivery Mode Proof ===\nEnvironment: darwin arm64 Node v24.10.0\n\nTest 1: Stale announce caller (sourceReplyDeliveryMode: message_tool_only)\n  owner resolved to: \"message_tool\"\n  plan.sourceReplyDeliveryMode: \"message_tool_only\"\n  plan.messageTool.requireExplicitTarget: true\n  plan.messageTool.enabled: true\n  plan.messageTool.force: true\n  ✅ PASSED\n\nTest 2: Stale webhook caller (sourceReplyDeliveryMode: undefined, message tool disabled)\n  owner resolved to: \"none\"\n  plan.sourceReplyDeliveryMode: undefined\n  plan.messageTool.enabled: false\n  ✅ PASSED\n\n✅ All delivery mode proofs passed\n```\n\n### Vitest proof (all 11 tests including executeCronRun-level coverage)\n\n```\n$ npx vitest run src/cron/isolated-agent/run.source-delivery-guard.test.ts --reporter=verbose\n\n ✓ cron > createCronPromptExecutor sourceDelivery guard > reconstructs a safe delivery plan when sourceDelivery is undefined 53ms\n ✓ cron > createCronPromptExecutor sourceDelivery guard > uses resolvedDelivery channel/to for legacy callers without sourceDelivery\n ✓ cron > createCronPromptExecutor sourceDelivery guard > reads legacy toolPolicy/sourceReplyDeliveryMode from stale announce caller\n ✓ cron > createCronPromptExecutor sourceDelivery guard > reads legacy toolPolicy from stale webhook caller with message tool disabled\n ✓ cron > createCronPromptExecutor sourceDelivery guard > passes requireExplicitMessageTarget from legacy toolPolicy in createCronPromptExecutor\n ✓ cron > createCronPromptExecutor sourceDelivery guard > still works with a valid sourceDelivery\n ✓ cron > executeCronRun sourceDelivery guard > preserves legacy sourceReplyDeliveryMode: message_tool_only through executeCronRun\n ✓ cron > executeCronRun sourceDelivery guard > defaults to sourceReplyDeliveryMode undefined when legacy mode is absent\n ✓ cron > executeCronRun sourceDelivery guard > passes requireExplicitMessageTarget through executeCronRun fallback\n ✓ cron > executeCronRun sourceDelivery guard > passes requireExplicitMessageTarget=false by default when legacy toolPolicy omits it\n ✓ cron > executeCronRun sourceDelivery guard > reads legacy toolPolicy with message tool disabled through executeCronRun\n\n Test Files  1 passed (1)\n      Tests  11 passed (11)\n   Duration  837ms\n```\n\n### Regression test (existing message-tool-policy tests still pass)\n\n```\n$ npx vitest run src/cron/isolated-agent/run.message-tool-policy.test.ts\n\n Test Files  1 passed (1)\n      Tests  31 passed (31)\n   Duration  8.12s\n```\n\n### What was not tested\n- Live Telegram cron delivery (would require a running Gateway with configured Telegram bot)\n- Actual version-skew scenario with stale compiled dist/ artifacts (tested via TypeScript-level params simulation)\n\nFixes #85051\n",
-        "branch": "fix/cron-isolated-source-delivery-guard",
-        "head_sha": "ba49b31dca01cd1625ad5a3e34cd0f3715f86dfb",
-        "author": "jerry-xin",
-        "labels": [
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "mantis: telegram-visible-proof",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/cron/isolated-agent/run-executor.ts",
-            "additions": 94,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run.source-delivery-guard.test.ts",
-            "additions": 348,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85249",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85249.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 103,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 43,
-            "IN_PROGRESS": 31,
-            "SKIPPED": 27,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-runtime-infra-state:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor:IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS",
-            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
-            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
-            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "checks-windows-node-test:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-runtime-infra-state:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor:IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS",
-            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
-            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
-            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "checks-windows-node-test:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
-        }
-      }
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5202,
+    "total_ms": 2439,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 516
+        "ms": 1372
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2007
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2651
+        "ms": 1054
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
