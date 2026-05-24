@@ -1,23 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T02:22:47.647Z",
+  "generated_at": "2026-05-24T02:22:48.217Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-23T23:22:45.803Z",
+  "since": "2026-05-23T23:22:46.672Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    78852
-  ],
-  "comment_ids": [
-    4527145945
+    75299
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 15,
+  "commands_seen": 6,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,17 +30,109 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:78852:4527145945:2026-05-24T02:20:38Z:re_review",
-      "comment_id": "4527145945",
-      "comment_version_key": "4527145945:2026-05-24T02:20:38Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/78852#issuecomment-4527145945",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:75299:4356786404:2026-05-24T02:22:43Z:clawsweeper_auto_repair",
+      "comment_id": "4356786404",
+      "comment_version_key": "4356786404:2026-05-24T02:22:43Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/75299#issuecomment-4356786404",
       "repo": "openclaw/openclaw",
-      "issue_number": 78852,
-      "author": "guanbear",
-      "author_id": 11829005,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-24T02:20:38Z",
-      "comment_updated_at": "2026-05-24T02:20:38Z",
+      "issue_number": 75299,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-04-30T23:11:09Z",
+      "comment_updated_at": "2026-05-24T02:22:43Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=3ffb53519071b22347717a374e30c6ec47f193e0)",
+      "review_summary": "The branch adds a 30-second starvation promotion constant, dequeue-time effective-priority selection, and a regression test for aged background work draining before fresh foreground work.\n\nReproducibility: yes. at source level: current main inserts by static priority and drains the first queued entry, so a continuous stream of foreground entries can keep older background work behind. I did not run a live contention scenario in this read-only review.",
+      "review_followup": "Needs contributor current-head real behavior proof and a maintainer decision between this standalone guard and the overlapping scheduler branch before merge automation is appropriate.",
+      "freeform_prompt": null,
+      "expected_head_sha": "3ffb53519071b22347717a374e30c6ec47f193e0",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(process): add starvation guard to priority command queue",
+        "body": "## Problem\n\nUpstream added priority scheduling (foreground/normal/background) via insertion-sort at enqueue time (#82765). This works well for the common case but has no protection against indefinite starvation: a steady stream of foreground enqueues can keep background work queued forever.\n\nFor example, manual user turns are enqueued with `priority: \"foreground\"` (#82765). If a user sends messages faster than the agent processes them, any background maintenance work (cron, heartbeats, plugin updates) queued at normal or background priority would never execute.\n\n## Fix\n\nAdd a starvation guard that promotes entries waiting longer than `STARVATION_PROMOTION_MS` (30 seconds) above all standard priorities at dequeue time.\n\n- `lanes.ts`: Export `STARVATION_PROMOTION_MS` constant (30s)\n- `command-queue.ts`: Add `effectivePriority()` and `pickNextIndex()` functions. Replace `queue.shift()` with `splice(pickNextIndex())` in `drainLane()` so the dequeue considers starvation-promoted entries\n- `command-queue.test.ts`: Add starvation promotion regression test\n\nThe insertion-sort enqueue order is preserved for the common case (no scanning overhead when no aged entries exist). The starvation scan only changes behavior when an entry has been waiting 30+ seconds.\n\n## Real behavior proof\nBehavior addressed: low-priority command queue entries waiting longer than 30 seconds are now promoted above the standard priority ceiling at dequeue time, preventing indefinite starvation by a steady stream of higher-priority work.\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js v22.16.0, OpenClaw built from source (commit af0d95f7d5) at `/tmp/fix-75299`.\n\nExact steps or command run after this patch:\nStep 1 -- build OpenClaw from patched source. Step 2 -- verify the starvation guard function is in compiled production code. Step 3 -- start the gateway to confirm the command queue module loads.\n```bash\ncd /tmp/fix-75299\nCI=true pnpm install --frozen-lockfile\npnpm build\ngrep -A5 \"effectivePriority\" dist/command-queue-Cv8D4BHq.js\ntimeout 10 node openclaw.mjs gateway\n```\n\nEvidence after fix: terminal output copied below.\n\n**Compiled production code verification:**\n\n```console\n$ grep -n \"STARVATION_PROMOTION_MS\" dist/lanes-CBM043wS.js\n7:const STARVATION_PROMOTION_MS = 3e4;\n\n$ grep -A5 \"effectivePriority\" dist/command-queue-Cv8D4BHq.js\nfunction effectivePriority(entry) {\nif (Date.now() - entry.enqueuedAt >= 3e4) return entry.priority + 1e3;\nreturn entry.priority;\n}\n```\n\nThe starvation guard is compiled into `dist/command-queue-Cv8D4BHq.js`. The `effectivePriority` function promotes entries older than 30 seconds (`3e4` ms) by adding 1000 to their priority, pushing them above the standard priority ceiling. The `pickNextIndex` function uses `effectivePriority` instead of raw `entry.priority` when selecting the next queue entry.\n\n```console\n$ grep -A12 \"pickNextIndex\" dist/command-queue-Cv8D4BHq.js\nfunction pickNextIndex(queue) {\nlet bestIdx = 0;\nlet bestPri = effectivePriority(queue[0]);\nfor (let i = 1; i < queue.length; i++) {\nconst pri = effectivePriority(queue[i]);\nif (pri > bestPri) {\nbestIdx = i;\nbestPri = pri;\n}\n}\nreturn bestIdx;\n}\n```\n\n**Live gateway startup proof:**\n\n```console\n$ timeout 10 node openclaw.mjs gateway\n2026-05-22T16:09:37.470-07:00 [gateway] starting...\n2026-05-22T16:09:42.092-07:00 [gateway] ready\n2026-05-22T16:09:48.854-07:00 [shutdown] completed cleanly in 43ms\n```\n\nThe gateway starts, loads the command queue module with the starvation guard, and shuts down cleanly.\n\nObserved result after fix: The compiled production bundle contains the `effectivePriority` function with the starvation promotion logic (`Date.now() - entry.enqueuedAt >= 30000` promotes priority by +1000). The `pickNextIndex` function uses `effectivePriority` instead of raw priority for dequeue selection. The gateway starts and shuts down cleanly with the patched command queue module loaded.\n\nWhat was not tested: Live gateway with concurrent foreground/background lanes producing sustained message traffic. The starvation threshold of 30 seconds was not tuned against real workload patterns; it is a conservative default.\n\n",
+        "branch": "feat/command-queue-priority",
+        "head_sha": "3ffb53519071b22347717a374e30c6ec47f193e0",
+        "author": "sebtardif",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/process/command-queue.test.ts",
+            "additions": 37,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/command-queue.ts",
+            "additions": 42,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/lanes.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-75299",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-75299.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "counts": {
+            "SUCCESS": 74,
+            "SKIPPED": 21,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "check-lint:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "check-lint:FAILURE"
+          ]
+        }
+      },
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:75299:4526268305:2026-05-23T18:59:51Z:re_review",
+      "comment_id": "4526268305",
+      "comment_version_key": "4526268305:2026-05-23T18:59:51Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/75299#issuecomment-4526268305",
+      "repo": "openclaw/openclaw",
+      "issue_number": 75299,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-23T18:59:51Z",
+      "comment_updated_at": "2026-05-23T18:59:51Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -64,79 +153,36 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "perf(agents): reuse media tool availability during tool prep",
-        "body": "## Summary\n- Reuse the optional media tool factory plan for the image tool instead of resolving image availability separately.\n- Let image/video/music generation tool factories skip their registration-time availability scan when createOpenClawTools already resolved availability.\n- Use the same effective media tool config for the plan and constructed media tools.\n\n## Real behavior proof\nBehavior or issue addressed: Repeated warm `createOpenClawCodingTools` prep was spending about 29ms each registering `image_generate`, `video_generate`, and `music_generate` because those factories repeated availability checks already resolved by the OpenClaw media factory plan.\n\nReal environment tested: Local OpenClaw checkout on macOS, branch `media-tool-availability-pr4c`, Node 25.9.0 through repo `pnpm exec tsx`; warm in-process tool prep probe after one warmup call.\n\nExact steps or command run after this patch: Ran a real local `node`/`tsx` probe that imports `createOpenClawCodingTools`, records `recordToolPrepStage` timings, discards one warmup call, then records 30 warm samples; wrapped with `/usr/bin/time -l`.\n\nEvidence after fix:\n```text\ntotal p50 103.68ms, p95 110.16ms\nopenclaw-tools:image_generate registration p50 0.005ms\nopenclaw-tools:video_generate registration p50 0.002ms\nopenclaw-tools:music_generate registration p50 0.002ms\n/usr/bin/time -l max RSS 850575360 bytes\n```\n\nObserved result after fix: Single-call warm p50 improved by about 84ms versus the previous same-probe baseline, from 187.74ms p50 to 103.68ms p50 (~45%). The three generation registration stages dropped from about 29ms each to near-zero. Remaining warm prep cost is mostly plugin-tools (~73ms p50) and image/media availability planning (~30ms p50).\n\nWhat was not tested: Full end-to-end provider media generation was not run; this PR only changes registration-time availability reuse, while direct factory calls and execution-time provider resolution remain covered by targeted tests.\n\n## Verification\n- pnpm test src/agents/openclaw-tools.media-factory-plan.test.ts src/agents/tools/image-generate-tool.test.ts src/agents/tools/video-generate-tool.test.ts src/agents/tools/music-generate-tool.test.ts\n- pnpm tsgo:core\n- pnpm build\n- pnpm check:changed --staged",
-        "branch": "media-tool-availability-pr4c",
-        "head_sha": "f00eb2b37b075c3e02b15233ce7d6fb70a76e6e9",
-        "author": "guanbear",
+        "title": "feat(process): add starvation guard to priority command queue",
+        "body": "## Problem\n\nUpstream added priority scheduling (foreground/normal/background) via insertion-sort at enqueue time (#82765). This works well for the common case but has no protection against indefinite starvation: a steady stream of foreground enqueues can keep background work queued forever.\n\nFor example, manual user turns are enqueued with `priority: \"foreground\"` (#82765). If a user sends messages faster than the agent processes them, any background maintenance work (cron, heartbeats, plugin updates) queued at normal or background priority would never execute.\n\n## Fix\n\nAdd a starvation guard that promotes entries waiting longer than `STARVATION_PROMOTION_MS` (30 seconds) above all standard priorities at dequeue time.\n\n- `lanes.ts`: Export `STARVATION_PROMOTION_MS` constant (30s)\n- `command-queue.ts`: Add `effectivePriority()` and `pickNextIndex()` functions. Replace `queue.shift()` with `splice(pickNextIndex())` in `drainLane()` so the dequeue considers starvation-promoted entries\n- `command-queue.test.ts`: Add starvation promotion regression test\n\nThe insertion-sort enqueue order is preserved for the common case (no scanning overhead when no aged entries exist). The starvation scan only changes behavior when an entry has been waiting 30+ seconds.\n\n## Real behavior proof\nBehavior addressed: low-priority command queue entries waiting longer than 30 seconds are now promoted above the standard priority ceiling at dequeue time, preventing indefinite starvation by a steady stream of higher-priority work.\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js v22.16.0, OpenClaw built from source (commit af0d95f7d5) at `/tmp/fix-75299`.\n\nExact steps or command run after this patch:\nStep 1 -- build OpenClaw from patched source. Step 2 -- verify the starvation guard function is in compiled production code. Step 3 -- start the gateway to confirm the command queue module loads.\n```bash\ncd /tmp/fix-75299\nCI=true pnpm install --frozen-lockfile\npnpm build\ngrep -A5 \"effectivePriority\" dist/command-queue-Cv8D4BHq.js\ntimeout 10 node openclaw.mjs gateway\n```\n\nEvidence after fix: terminal output copied below.\n\n**Compiled production code verification:**\n\n```console\n$ grep -n \"STARVATION_PROMOTION_MS\" dist/lanes-CBM043wS.js\n7:const STARVATION_PROMOTION_MS = 3e4;\n\n$ grep -A5 \"effectivePriority\" dist/command-queue-Cv8D4BHq.js\nfunction effectivePriority(entry) {\nif (Date.now() - entry.enqueuedAt >= 3e4) return entry.priority + 1e3;\nreturn entry.priority;\n}\n```\n\nThe starvation guard is compiled into `dist/command-queue-Cv8D4BHq.js`. The `effectivePriority` function promotes entries older than 30 seconds (`3e4` ms) by adding 1000 to their priority, pushing them above the standard priority ceiling. The `pickNextIndex` function uses `effectivePriority` instead of raw `entry.priority` when selecting the next queue entry.\n\n```console\n$ grep -A12 \"pickNextIndex\" dist/command-queue-Cv8D4BHq.js\nfunction pickNextIndex(queue) {\nlet bestIdx = 0;\nlet bestPri = effectivePriority(queue[0]);\nfor (let i = 1; i < queue.length; i++) {\nconst pri = effectivePriority(queue[i]);\nif (pri > bestPri) {\nbestIdx = i;\nbestPri = pri;\n}\n}\nreturn bestIdx;\n}\n```\n\n**Live gateway startup proof:**\n\n```console\n$ timeout 10 node openclaw.mjs gateway\n2026-05-22T16:09:37.470-07:00 [gateway] starting...\n2026-05-22T16:09:42.092-07:00 [gateway] ready\n2026-05-22T16:09:48.854-07:00 [shutdown] completed cleanly in 43ms\n```\n\nThe gateway starts, loads the command queue module with the starvation guard, and shuts down cleanly.\n\nObserved result after fix: The compiled production bundle contains the `effectivePriority` function with the starvation promotion logic (`Date.now() - entry.enqueuedAt >= 30000` promotes priority by +1000). The `pickNextIndex` function uses `effectivePriority` instead of raw priority for dequeue selection. The gateway starts and shuts down cleanly with the patched command queue module loaded.\n\nWhat was not tested: Live gateway with concurrent foreground/background lanes producing sustained message traffic. The starvation threshold of 30 seconds was not tuned against real workload patterns; it is a conservative default.\n\n",
+        "branch": "feat/command-queue-priority",
+        "head_sha": "3ffb53519071b22347717a374e30c6ec47f193e0",
+        "author": "sebtardif",
         "labels": [
           "agents",
           "size: M",
           "proof: supplied",
           "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "status: ⏳ waiting on author"
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "CHANGELOG.md",
-            "additions": 2,
+            "path": "src/process/command-queue.test.ts",
+            "additions": 37,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/openclaw-tools.media-factory-plan.test.ts",
-            "additions": 245,
-            "deletions": 0,
+            "path": "src/process/command-queue.ts",
+            "additions": 42,
+            "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/openclaw-tools.media-factory-plan.ts",
-            "additions": 75,
-            "deletions": 21,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openclaw-tools.ts",
-            "additions": 13,
-            "deletions": 14,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/image-generate-tool.test.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/image-generate-tool.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/music-generate-tool.test.ts",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/music-generate-tool.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/video-generate-tool.test.ts",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/video-generate-tool.ts",
-            "additions": 2,
+            "path": "src/process/lanes.ts",
+            "additions": 7,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
@@ -144,33 +190,337 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-78852",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-78852.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-75299",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-75299.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 96,
+          "total": 97,
           "counts": {
-            "SUCCESS": 71,
-            "SKIPPED": 20,
-            "IN_PROGRESS": 4,
+            "SUCCESS": 74,
+            "SKIPPED": 21,
+            "FAILURE": 1,
             "NEUTRAL": 1
           },
           "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS"
+            "check-lint:FAILURE"
           ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS"
+          "pending": [],
+          "terminalBlockers": [
+            "check-lint:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:75299:4524285454:2026-05-23T05:32:14Z:re_review",
+      "comment_id": "4524285454",
+      "comment_version_key": "4524285454:2026-05-23T05:32:14Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/75299#issuecomment-4524285454",
+      "repo": "openclaw/openclaw",
+      "issue_number": 75299,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-23T05:32:14Z",
+      "comment_updated_at": "2026-05-23T05:32:14Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(process): add starvation guard to priority command queue",
+        "body": "## Problem\n\nUpstream added priority scheduling (foreground/normal/background) via insertion-sort at enqueue time (#82765). This works well for the common case but has no protection against indefinite starvation: a steady stream of foreground enqueues can keep background work queued forever.\n\nFor example, manual user turns are enqueued with `priority: \"foreground\"` (#82765). If a user sends messages faster than the agent processes them, any background maintenance work (cron, heartbeats, plugin updates) queued at normal or background priority would never execute.\n\n## Fix\n\nAdd a starvation guard that promotes entries waiting longer than `STARVATION_PROMOTION_MS` (30 seconds) above all standard priorities at dequeue time.\n\n- `lanes.ts`: Export `STARVATION_PROMOTION_MS` constant (30s)\n- `command-queue.ts`: Add `effectivePriority()` and `pickNextIndex()` functions. Replace `queue.shift()` with `splice(pickNextIndex())` in `drainLane()` so the dequeue considers starvation-promoted entries\n- `command-queue.test.ts`: Add starvation promotion regression test\n\nThe insertion-sort enqueue order is preserved for the common case (no scanning overhead when no aged entries exist). The starvation scan only changes behavior when an entry has been waiting 30+ seconds.\n\n## Real behavior proof\nBehavior addressed: low-priority command queue entries waiting longer than 30 seconds are now promoted above the standard priority ceiling at dequeue time, preventing indefinite starvation by a steady stream of higher-priority work.\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js v22.16.0, OpenClaw built from source (commit af0d95f7d5) at `/tmp/fix-75299`.\n\nExact steps or command run after this patch:\nStep 1 -- build OpenClaw from patched source. Step 2 -- verify the starvation guard function is in compiled production code. Step 3 -- start the gateway to confirm the command queue module loads.\n```bash\ncd /tmp/fix-75299\nCI=true pnpm install --frozen-lockfile\npnpm build\ngrep -A5 \"effectivePriority\" dist/command-queue-Cv8D4BHq.js\ntimeout 10 node openclaw.mjs gateway\n```\n\nEvidence after fix: terminal output copied below.\n\n**Compiled production code verification:**\n\n```console\n$ grep -n \"STARVATION_PROMOTION_MS\" dist/lanes-CBM043wS.js\n7:const STARVATION_PROMOTION_MS = 3e4;\n\n$ grep -A5 \"effectivePriority\" dist/command-queue-Cv8D4BHq.js\nfunction effectivePriority(entry) {\nif (Date.now() - entry.enqueuedAt >= 3e4) return entry.priority + 1e3;\nreturn entry.priority;\n}\n```\n\nThe starvation guard is compiled into `dist/command-queue-Cv8D4BHq.js`. The `effectivePriority` function promotes entries older than 30 seconds (`3e4` ms) by adding 1000 to their priority, pushing them above the standard priority ceiling. The `pickNextIndex` function uses `effectivePriority` instead of raw `entry.priority` when selecting the next queue entry.\n\n```console\n$ grep -A12 \"pickNextIndex\" dist/command-queue-Cv8D4BHq.js\nfunction pickNextIndex(queue) {\nlet bestIdx = 0;\nlet bestPri = effectivePriority(queue[0]);\nfor (let i = 1; i < queue.length; i++) {\nconst pri = effectivePriority(queue[i]);\nif (pri > bestPri) {\nbestIdx = i;\nbestPri = pri;\n}\n}\nreturn bestIdx;\n}\n```\n\n**Live gateway startup proof:**\n\n```console\n$ timeout 10 node openclaw.mjs gateway\n2026-05-22T16:09:37.470-07:00 [gateway] starting...\n2026-05-22T16:09:42.092-07:00 [gateway] ready\n2026-05-22T16:09:48.854-07:00 [shutdown] completed cleanly in 43ms\n```\n\nThe gateway starts, loads the command queue module with the starvation guard, and shuts down cleanly.\n\nObserved result after fix: The compiled production bundle contains the `effectivePriority` function with the starvation promotion logic (`Date.now() - entry.enqueuedAt >= 30000` promotes priority by +1000). The `pickNextIndex` function uses `effectivePriority` instead of raw priority for dequeue selection. The gateway starts and shuts down cleanly with the patched command queue module loaded.\n\nWhat was not tested: Live gateway with concurrent foreground/background lanes producing sustained message traffic. The starvation threshold of 30 seconds was not tuned against real workload patterns; it is a conservative default.\n\n",
+        "branch": "feat/command-queue-priority",
+        "head_sha": "3ffb53519071b22347717a374e30c6ec47f193e0",
+        "author": "sebtardif",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/process/command-queue.test.ts",
+            "additions": 37,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/command-queue.ts",
+            "additions": 42,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/lanes.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-75299",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-75299.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "counts": {
+            "SUCCESS": 74,
+            "SKIPPED": 21,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "check-lint:FAILURE"
           ],
-          "terminalBlockers": []
+          "pending": [],
+          "terminalBlockers": [
+            "check-lint:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:75299:4523282532:2026-05-22T23:12:27Z:re_review",
+      "comment_id": "4523282532",
+      "comment_version_key": "4523282532:2026-05-22T23:12:27Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/75299#issuecomment-4523282532",
+      "repo": "openclaw/openclaw",
+      "issue_number": 75299,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T23:12:27Z",
+      "comment_updated_at": "2026-05-22T23:12:27Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:75299:4520247375:2026-05-22T15:53:26Z:re_review",
+      "comment_id": "4520247375",
+      "comment_version_key": "4520247375:2026-05-22T15:53:26Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/75299#issuecomment-4520247375",
+      "repo": "openclaw/openclaw",
+      "issue_number": 75299,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T15:53:26Z",
+      "comment_updated_at": "2026-05-22T15:53:26Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(process): add starvation guard to priority command queue",
+        "body": "## Problem\n\nUpstream added priority scheduling (foreground/normal/background) via insertion-sort at enqueue time (#82765). This works well for the common case but has no protection against indefinite starvation: a steady stream of foreground enqueues can keep background work queued forever.\n\nFor example, manual user turns are enqueued with `priority: \"foreground\"` (#82765). If a user sends messages faster than the agent processes them, any background maintenance work (cron, heartbeats, plugin updates) queued at normal or background priority would never execute.\n\n## Fix\n\nAdd a starvation guard that promotes entries waiting longer than `STARVATION_PROMOTION_MS` (30 seconds) above all standard priorities at dequeue time.\n\n- `lanes.ts`: Export `STARVATION_PROMOTION_MS` constant (30s)\n- `command-queue.ts`: Add `effectivePriority()` and `pickNextIndex()` functions. Replace `queue.shift()` with `splice(pickNextIndex())` in `drainLane()` so the dequeue considers starvation-promoted entries\n- `command-queue.test.ts`: Add starvation promotion regression test\n\nThe insertion-sort enqueue order is preserved for the common case (no scanning overhead when no aged entries exist). The starvation scan only changes behavior when an entry has been waiting 30+ seconds.\n\n## Real behavior proof\nBehavior addressed: low-priority command queue entries waiting longer than 30 seconds are now promoted above the standard priority ceiling at dequeue time, preventing indefinite starvation by a steady stream of higher-priority work.\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js v22.16.0, OpenClaw built from source (commit af0d95f7d5) at `/tmp/fix-75299`.\n\nExact steps or command run after this patch:\nStep 1 -- build OpenClaw from patched source. Step 2 -- verify the starvation guard function is in compiled production code. Step 3 -- start the gateway to confirm the command queue module loads.\n```bash\ncd /tmp/fix-75299\nCI=true pnpm install --frozen-lockfile\npnpm build\ngrep -A5 \"effectivePriority\" dist/command-queue-Cv8D4BHq.js\ntimeout 10 node openclaw.mjs gateway\n```\n\nEvidence after fix: terminal output copied below.\n\n**Compiled production code verification:**\n\n```console\n$ grep -n \"STARVATION_PROMOTION_MS\" dist/lanes-CBM043wS.js\n7:const STARVATION_PROMOTION_MS = 3e4;\n\n$ grep -A5 \"effectivePriority\" dist/command-queue-Cv8D4BHq.js\nfunction effectivePriority(entry) {\nif (Date.now() - entry.enqueuedAt >= 3e4) return entry.priority + 1e3;\nreturn entry.priority;\n}\n```\n\nThe starvation guard is compiled into `dist/command-queue-Cv8D4BHq.js`. The `effectivePriority` function promotes entries older than 30 seconds (`3e4` ms) by adding 1000 to their priority, pushing them above the standard priority ceiling. The `pickNextIndex` function uses `effectivePriority` instead of raw `entry.priority` when selecting the next queue entry.\n\n```console\n$ grep -A12 \"pickNextIndex\" dist/command-queue-Cv8D4BHq.js\nfunction pickNextIndex(queue) {\nlet bestIdx = 0;\nlet bestPri = effectivePriority(queue[0]);\nfor (let i = 1; i < queue.length; i++) {\nconst pri = effectivePriority(queue[i]);\nif (pri > bestPri) {\nbestIdx = i;\nbestPri = pri;\n}\n}\nreturn bestIdx;\n}\n```\n\n**Live gateway startup proof:**\n\n```console\n$ timeout 10 node openclaw.mjs gateway\n2026-05-22T16:09:37.470-07:00 [gateway] starting...\n2026-05-22T16:09:42.092-07:00 [gateway] ready\n2026-05-22T16:09:48.854-07:00 [shutdown] completed cleanly in 43ms\n```\n\nThe gateway starts, loads the command queue module with the starvation guard, and shuts down cleanly.\n\nObserved result after fix: The compiled production bundle contains the `effectivePriority` function with the starvation promotion logic (`Date.now() - entry.enqueuedAt >= 30000` promotes priority by +1000). The `pickNextIndex` function uses `effectivePriority` instead of raw priority for dequeue selection. The gateway starts and shuts down cleanly with the patched command queue module loaded.\n\nWhat was not tested: Live gateway with concurrent foreground/background lanes producing sustained message traffic. The starvation threshold of 30 seconds was not tuned against real workload patterns; it is a conservative default.\n\n",
+        "branch": "feat/command-queue-priority",
+        "head_sha": "3ffb53519071b22347717a374e30c6ec47f193e0",
+        "author": "sebtardif",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/process/command-queue.test.ts",
+            "additions": 37,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/command-queue.ts",
+            "additions": 42,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/lanes.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-75299",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-75299.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "counts": {
+            "SUCCESS": 74,
+            "SKIPPED": 21,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "check-lint:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "check-lint:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:75299:4519347038:2026-05-22T13:58:01Z:re_review",
+      "comment_id": "4519347038",
+      "comment_version_key": "4519347038:2026-05-22T13:58:01Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/75299#issuecomment-4519347038",
+      "repo": "openclaw/openclaw",
+      "issue_number": 75299,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T13:58:01Z",
+      "comment_updated_at": "2026-05-22T13:58:01Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(process): add starvation guard to priority command queue",
+        "body": "## Problem\n\nUpstream added priority scheduling (foreground/normal/background) via insertion-sort at enqueue time (#82765). This works well for the common case but has no protection against indefinite starvation: a steady stream of foreground enqueues can keep background work queued forever.\n\nFor example, manual user turns are enqueued with `priority: \"foreground\"` (#82765). If a user sends messages faster than the agent processes them, any background maintenance work (cron, heartbeats, plugin updates) queued at normal or background priority would never execute.\n\n## Fix\n\nAdd a starvation guard that promotes entries waiting longer than `STARVATION_PROMOTION_MS` (30 seconds) above all standard priorities at dequeue time.\n\n- `lanes.ts`: Export `STARVATION_PROMOTION_MS` constant (30s)\n- `command-queue.ts`: Add `effectivePriority()` and `pickNextIndex()` functions. Replace `queue.shift()` with `splice(pickNextIndex())` in `drainLane()` so the dequeue considers starvation-promoted entries\n- `command-queue.test.ts`: Add starvation promotion regression test\n\nThe insertion-sort enqueue order is preserved for the common case (no scanning overhead when no aged entries exist). The starvation scan only changes behavior when an entry has been waiting 30+ seconds.\n\n## Real behavior proof\nBehavior addressed: low-priority command queue entries waiting longer than 30 seconds are now promoted above the standard priority ceiling at dequeue time, preventing indefinite starvation by a steady stream of higher-priority work.\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js v22.16.0, OpenClaw built from source (commit af0d95f7d5) at `/tmp/fix-75299`.\n\nExact steps or command run after this patch:\nStep 1 -- build OpenClaw from patched source. Step 2 -- verify the starvation guard function is in compiled production code. Step 3 -- start the gateway to confirm the command queue module loads.\n```bash\ncd /tmp/fix-75299\nCI=true pnpm install --frozen-lockfile\npnpm build\ngrep -A5 \"effectivePriority\" dist/command-queue-Cv8D4BHq.js\ntimeout 10 node openclaw.mjs gateway\n```\n\nEvidence after fix: terminal output copied below.\n\n**Compiled production code verification:**\n\n```console\n$ grep -n \"STARVATION_PROMOTION_MS\" dist/lanes-CBM043wS.js\n7:const STARVATION_PROMOTION_MS = 3e4;\n\n$ grep -A5 \"effectivePriority\" dist/command-queue-Cv8D4BHq.js\nfunction effectivePriority(entry) {\nif (Date.now() - entry.enqueuedAt >= 3e4) return entry.priority + 1e3;\nreturn entry.priority;\n}\n```\n\nThe starvation guard is compiled into `dist/command-queue-Cv8D4BHq.js`. The `effectivePriority` function promotes entries older than 30 seconds (`3e4` ms) by adding 1000 to their priority, pushing them above the standard priority ceiling. The `pickNextIndex` function uses `effectivePriority` instead of raw `entry.priority` when selecting the next queue entry.\n\n```console\n$ grep -A12 \"pickNextIndex\" dist/command-queue-Cv8D4BHq.js\nfunction pickNextIndex(queue) {\nlet bestIdx = 0;\nlet bestPri = effectivePriority(queue[0]);\nfor (let i = 1; i < queue.length; i++) {\nconst pri = effectivePriority(queue[i]);\nif (pri > bestPri) {\nbestIdx = i;\nbestPri = pri;\n}\n}\nreturn bestIdx;\n}\n```\n\n**Live gateway startup proof:**\n\n```console\n$ timeout 10 node openclaw.mjs gateway\n2026-05-22T16:09:37.470-07:00 [gateway] starting...\n2026-05-22T16:09:42.092-07:00 [gateway] ready\n2026-05-22T16:09:48.854-07:00 [shutdown] completed cleanly in 43ms\n```\n\nThe gateway starts, loads the command queue module with the starvation guard, and shuts down cleanly.\n\nObserved result after fix: The compiled production bundle contains the `effectivePriority` function with the starvation promotion logic (`Date.now() - entry.enqueuedAt >= 30000` promotes priority by +1000). The `pickNextIndex` function uses `effectivePriority` instead of raw priority for dequeue selection. The gateway starts and shuts down cleanly with the patched command queue module loaded.\n\nWhat was not tested: Live gateway with concurrent foreground/background lanes producing sustained message traffic. The starvation threshold of 30 seconds was not tuned against real workload patterns; it is a conservative default.\n\n",
+        "branch": "feat/command-queue-priority",
+        "head_sha": "3ffb53519071b22347717a374e30c6ec47f193e0",
+        "author": "sebtardif",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/process/command-queue.test.ts",
+            "additions": 37,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/command-queue.ts",
+            "additions": 42,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/lanes.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-75299",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-75299.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "counts": {
+            "SUCCESS": 74,
+            "SKIPPED": 21,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "check-lint:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "check-lint:FAILURE"
+          ]
         }
       },
       "reason": "matching ClawSweeper response comment already exists"
@@ -178,23 +528,23 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2039,
+    "total_ms": 2530,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 460
+        "ms": 240
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1370
+        "ms": 1287
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 4
       },
       {
         "name": "execute_commands",
-        "ms": 195
+        "ms": 973
       },
       {
         "name": "append_ledger",
