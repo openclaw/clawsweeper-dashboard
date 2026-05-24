@@ -1,20 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T17:21:46.153Z",
+  "generated_at": "2026-05-24T17:21:58.887Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T14:21:44.221Z",
+  "since": "2026-05-24T14:21:56.615Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     86135
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4463689536
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
+  "scanned_comments": 1,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -55,75 +57,252 @@
       "review_summary": "The PR updates `Dockerfile` to create `/home/node/.config` as `node:node` before `/home/node/.config/openclaw` and adds a parent-directory `stat` assertion.\n\nPR surface: Other +2. Total +2 across 1 file.\n\nReproducibility: yes. source-reproducible: current `main` names only `/home/node/.config/openclaw`, the coreutils contract explains why the missing parent keeps default attributes, and the linked shipped-image report shows the parent as `root:root`. I did not run a Docker build or container in this read-only review.",
       "review_followup": "Keep this out of the repair queue because the code change looks correct and the blocker is contributor/CI real Docker proof, not an automatable patch defect.",
       "freeform_prompt": null,
-      "expected_head_sha": "680e2b0dfd04e386ab657ac33061eaa154b64207",
+      "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
+      "status": "ignored",
       "actions": [],
+      "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix(docker): create /home/node/.config with node ownership",
-        "body": "## Summary\n\n- Fix `/home/node/.config` ownership in the Docker slim image to `node:node` instead of `root:root`.\n- The `install -d` command creates intermediate directories with root ownership by default, since `-o`/`-g` flags only apply to the final target directory.\n- Added a `stat` assertion for `/home/node/.config` to prevent regression.\n\n## Verification\n\n- Traced the Dockerfile `RUN install -d` command at line 290 and confirmed `install -d` only applies owner/group to the target, not leading directories.\n- Confirmed the base `node:24-bookworm-slim` image does not pre-create `/home/node/.config`.\n- `stat -c '%U:%G %a'` assertions will fail the build if ownership is wrong.\n\n## Real behavior proof\n\n**Behavior addressed:** Docker slim image creates `/home/node/.config` with `root:root` ownership, breaking npx skill installs and other tools that need write access to `~/.config`.\n\n**Real environment tested:** Linux (this workstation), Docker unavailable (daemon permission denied), verified fix logic by reading `install(1)` behavior and Dockerfile layer construction.\n\n**Steps run after the patch:** Read the Dockerfile diff and confirmed `install -d -m 0755 -o node -g node /home/node/.config` creates the directory with correct ownership before the subdirectory `install` creates `/home/node/.config/openclaw`.\n\n**Evidence after fix:**\n\n```\n# Before fix (2026.5.22-slim):\n$ docker run --rm ghcr.io/openclaw/openclaw:2026.5.22-slim ls -la /home/node/\ndrwxr-xr-x 3 root root 4096 May 24 00:55 .config   # WRONG: root:root\n\n# After fix (expected):\n$ docker run --rm <fixed-image> ls -la /home/node/\ndrwxr-xr-x 2 node node 4096 ... .config             # CORRECT: node:node\n```\n\n**Observed result:** The `install -d` now explicitly creates `/home/node/.config` with `node:node 755` ownership, and a `stat` assertion enforces this at build time.\n\n**Not tested:** Full Docker image build (daemon unavailable on this workstation). CI will validate the build.\n\nCloses #85968",
-        "branch": "fix/85968-docker-config-permissions",
-        "head_sha": "680e2b0dfd04e386ab657ac33061eaa154b64207",
-        "author": "mushuiyu886",
+        "title": "Add plugin manifest contract for SecretRef provider integrations",
+        "body": "## Summary\n- add a manifest-level SecretRef provider integration contract for plugins\n- store plugin-owned provider refs in `secrets.providers.<alias>.pluginIntegration` instead of copying plugin resolver `command`/`args` into config\n- resolve the current exec command from the active plugin manifest at startup/reload and SecretRef resolution time\n- expose SDK types and cover manifest normalization/materialization with focused tests\n\n## Why\nExternal providers like Vault, OneCLI, 1Password, Bitwarden, and similar stores were already possible through manual exec SecretRef configuration. This makes them discoverable, portable, and installable as plugins without hardcoding provider-specific logic in OpenClaw core.\n\n## Real Behavior Proof\nBehavior addressed: External SecretRef providers could already be wired manually with `exec`, but plugin-owned Vault-style integrations were not discoverable or portable through plugin manifest metadata. This patch lets config refer to the owning plugin integration and lets OpenClaw materialize the resolver from the installed plugin manifest.\n\nReal environment tested: OpenShift namespace `openclaw-bob`, running pod `openclaw-cbbc765d8-sth7w`, container `gateway`; git-installed Vault plugin from `git:github.com/sallyom/claw-vault`; Vault available at `http://vault.vault.svc:8200`; OpenClaw image from this PR branch. Earlier proof also covered a local Podman OpenClaw + HashiCorp Vault dev setup using an external git-installed Vault plugin and OpenRouter.\n\nExact steps or command run after this patch:\n```bash\nopenclaw vault -h\nopenclaw vault status --json\n```\nThe running deployment also confirmed configured models are accessible using Vault-resolved SecretRefs.\n\nEvidence after fix:\n```text\nUsage: openclaw vault [options] [command]\n\nManage Vault SecretRefs\n\nCommands:\n  setup       Create a Vault SecretRef setup plan\n  status      Show Vault SecretRef provider status\n```\n\n```json\n{\n  \"providerAlias\": \"vault\",\n  \"provider\": {\n    \"configured\": true,\n    \"source\": \"exec\",\n    \"pluginIntegration\": {\n      \"pluginId\": \"vault\",\n      \"integrationId\": \"vault\"\n    }\n  },\n  \"resolverScript\": \"/home/node/.openclaw/git/git-c317c86c2672b3ca/repo/dist/vault-secret-ref-resolver.js\",\n  \"vaultAddr\": \"http://vault.vault.svc:8200\",\n  \"kvMount\": \"secret\",\n  \"kvVersion\": \"2\",\n  \"hasVaultToken\": true\n}\n```\nPrior live proof also ran `openclaw secrets audit --allow-exec --json` and a live OpenRouter agent turn using a Vault-resolved model API key; terminal-command repro is captured at https://gist.github.com/sallyom/50f4678b053eaa93c4311a5509e52aeb.\n\nObserved result after fix: The plugin-owned `openclaw vault` CLI command is registered, `openclaw vault status --json` reports the new `pluginIntegration` contract with canonical plugin id `vault`, the resolver script is loaded from the installed plugin root, Vault runtime env is visible without printing the token, and configured models are accessible through Vault-resolved SecretRefs.\n\nWhat was not tested: Production Vault auth methods beyond the current deployment setup, and non-Vault providers such as 1Password, Bitwarden, or OneCLI.\n\nBefore evidence: Before this contract, the same Vault resolver could only be wired by hand through explicit `secrets.providers.vault.command` / `args` config; there was no plugin manifest preset for OpenClaw to discover or materialize.\n\n## Verification\n- `node scripts/run-vitest.mjs src/secrets/provider-integrations.test.ts src/secrets/resolve.test.ts src/secrets/plan.test.ts src/commands/daemon-install-helpers.test.ts`\n- `node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo`\n- `git diff --check`\n- `.agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main`\n",
+        "branch": "secret-provider-integrations",
+        "head_sha": "582e43c8485fc0539094f5c9e2194eb9d1ef2d7d",
+        "author": "sallyom",
         "labels": [
-          "docker",
-          "size: XS",
-          "triage: needs-real-behavior-proof",
+          "docs",
+          "gateway",
+          "scripts",
+          "commands",
+          "maintainer",
+          "size: XL",
+          "proof: sufficient",
+          "dependencies-changed",
           "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 security-boundary",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "Dockerfile",
-            "additions": 4,
+            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
+            "additions": 2,
             "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/secrets.md",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/manifest.md",
+            "additions": 67,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/sdk-subpaths.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "package.json",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/lib/plugin-sdk-entrypoints.json",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/daemon-install-helpers.test.ts",
+            "additions": 69,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/daemon-install-helpers.ts",
+            "additions": 36,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.secrets.ts",
+            "additions": 13,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.core.ts",
+            "additions": 19,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/resolve-configured-secret-input-string.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-config.ts",
+            "additions": 16,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.impl.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/secret-provider-integration.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/plugins/manifest-registry.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/manifest.ts",
+            "additions": 134,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/secrets/configure.test.ts",
+            "additions": 112,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/secrets/configure.ts",
+            "additions": 93,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/secrets/plan.test.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/secrets/provider-integrations.test.ts",
+            "additions": 797,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/secrets/provider-integrations.ts",
+            "additions": 402,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/secrets/resolve.manifest-registry.test.ts",
+            "additions": 131,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/secrets/resolve.ts",
+            "additions": 60,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/secrets/runtime-fast-path.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/secrets/runtime-shared.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/secrets/runtime-state.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/secrets/runtime-web-tools.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/secrets/runtime.loadable-plugin-origins.test.ts",
+            "additions": 86,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/secrets/runtime.ts",
+            "additions": 58,
+            "deletions": 7,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86135",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86135.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82326",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82326.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
-        "review_decision": "",
+        "review_decision": "APPROVED",
         "checks": {
-          "total": 77,
+          "total": 98,
           "counts": {
+            "SUCCESS": 77,
+            "SKIPPED": 17,
             "FAILURE": 2,
-            "CANCELLED": 1,
-            "SKIPPED": 15,
-            "SUCCESS": 59
+            "NEUTRAL": 2
           },
           "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-fast:FAILURE"
+            "checks-node-core-runtime-infra-state:FAILURE",
+            "checks-node-agentic-commands-status-tools:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-fast:FAILURE"
+            "checks-node-core-runtime-infra-state:FAILURE",
+            "checks-node-agentic-commands-status-tools:FAILURE"
           ]
         }
       },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2158,
+    "total_ms": 2587,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 346
+        "ms": 575
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1558
+        "ms": 1683
       },
       {
         "name": "classify_commands",
@@ -131,7 +310,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 216
+        "ms": 315
       },
       {
         "name": "append_ledger",
