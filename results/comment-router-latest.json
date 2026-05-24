@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T03:41:53.970Z",
+  "generated_at": "2026-05-24T03:42:00.587Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T00:41:53.644Z",
+  "since": "2026-05-24T00:41:58.917Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    85912
+    85910
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 2,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +29,215 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:85910:4527286425:2026-05-24T03:41:54Z:automerge",
+      "comment_id": "4527286425",
+      "comment_version_key": "4527286425:2026-05-24T03:41:54Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85910#issuecomment-4527286425",
+      "repo": "openclaw/openclaw",
+      "issue_number": 85910,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-24T03:33:06Z",
+      "comment_updated_at": "2026-05-24T03:41:54Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "automerge",
+      "intent": "automerge",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": "The PR adds idle-TTL tracking and a gateway lifetime sweep for cached memory index managers, plus config fields and focused memory/gateway tests.\n\nReproducibility: yes. Current main source shows cached MemoryIndexManager instances are retained until explicit teardown, and the PR body provides production RSS/lsof measurements for the leak path.",
+      "review_followup": "A focused automated repair can add active-use protection and regression tests without changing the PR's product direction.",
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "ignored",
+      "actions": [],
+      "author_repository_permission": "none",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(memory): idle-evict cached MemoryIndexManager instances in long-running gateway",
+        "body": "## Problem\n\nIn long-running gateway daemons, `MemoryIndexManager` instances are cached\nin the module-level `INDEX_CACHE` indefinitely. Each instance owns a\nchokidar `FSWatcher`; with `sync.watch=true` (default) recursively watching\nthe memory directory, this leaks `FSEventWrap` native handles and file\ndescriptors for every memory/*.md file the watcher has touched.\n\nIn a production daemon we measured:\n\n- 11h uptime → 612 `FSEventWrap` native handles accumulated\n- RSS grew ~150 MB/h, +1.6 GB over 11h from baseline\n- `lsof` showed 488 `memory/*.md` file descriptors held by chokidar's\n  `awaitWriteFinish`\n\nRelated: #71335 (`sync.watch` default should be `false` in gateway mode).\n\nPrior PRs that addressed CLI-exit hangs (#40389, #40379, #40606) covered the\nshutdown path. This PR fixes the **complementary long-running daemon path**\nwhere cached managers need to be evicted *during* the daemon's lifetime,\nnot just at process shutdown.\n\n## Fix\n\nAdd idle-TTL eviction to `ManagedCache`:\n\n- Track `lastAccessAt` for each cache entry\n- Refresh on cache hit; record on initial set\n- New `closeIdleManagedCacheEntries({ idleMs })` helper evicts and calls\n  `.close()` on stale entries, isolating errors so one bad close does not\n  prevent later evictions\n\nWire into gateway startup: register a periodic gateway-lifetime sidecar\n(`scheduleMemoryIndexIdleEvict`) that calls\n`closeIdleMemorySearchManagers` via the memory plugin runtime every\n`idleEvictScanMs` (default 5min), evicting managers idle for longer than\n`idleEvictMs` (default 15min). Both intervals are configurable via\n`agents.defaults.memorySearch.sync.idleEvictMs` and\n`agents.defaults.memorySearch.sync.idleEvictScanMs`; setting either to `0`\ndisables the sweep.\n\nThe eviction call is routed through the existing memory plugin runtime\ncontract (`MemoryPluginRuntime.closeIdleMemorySearchManagers`) rather than\nimporting the manager module directly, so core never crosses the plugin\nboundary.\n\n## Validation\n\nWe validated this fix with a monkey-patched version (`--require` shim)\nrunning for 8h in our production gateway:\n\n- With patch: RSS went 2031 MB → 1859 MB over 8h (zero growth, slight\n  decrease)\n- Without patch (prior measurement on same workload): RSS grew ~150 MB/h,\n  +1.6 GB over 11h\n- `lsof | grep memory/.*\\.md` count stayed at 0 during idle periods,\n  spiked when `memory_search` ran, and dropped back to 0 within the\n  eviction window\n\n## Tests\n\n- `manager-cache.test.ts`: 5 new unit tests for `closeIdleManagedCacheEntries`\n  semantics (eviction past threshold, refresh on hit, idle threshold\n  boundary, error isolation, idempotent self-eviction during `close()`).\n- `manager.idle-gc.test.ts` (new): end-to-end tests against the live\n  `INDEX_CACHE` singleton verifying `closeIdleMemoryIndexManagers` calls\n  `.close()`, removes cache and `lastAccessAt` entries, and isolates\n  per-manager close errors.\n- `server-startup-post-attach.test.ts`: updated to assert the new\n  gateway-lifetime sidecar is registered alongside the provider auth\n  prewarm sidecar.\n- `memory-search.test.ts`: updated to reflect the new resolved sync\n  config fields.\n\n## Risk / Compatibility\n\n- Default 15min idle threshold is conservative; short-lived `memory_search`\n  bursts within a session keep the manager alive.\n- No behavior change for short-lived CLI invocations (idle GC sweep only\n  fires `idleEvictScanMs` after gateway start; CLI exits well before).\n- `INDEX_CACHE` size only shrinks via this sweep; a subsequent\n  `memory_search` request triggers the normal cache-miss path which\n  rebuilds the manager (already exercised by current tests).\n- Cleared `EMBEDDING_PROBE_CACHE` entries are re-probed on next request;\n  the TTL is 30s anyway so the practical impact is negligible.\n\n## Out of scope\n\n- Does **not** change the `sync.watch` default value (#71335 will handle\n  that separately).\n- Does **not** refactor the watcher to be singleton-per-workspace (a\n  larger structural change considered in our investigation but not\n  required for this fix).\n\n## Verification\n\nReal environment tested: yes (production OpenClaw gateway, macOS 15.7.4,\nNode v24.13.0, 8h soak test with `--require` shim implementing the same\neviction logic prior to upstreaming).\n\nExact steps or command run after this patch:\n\n```\nSHARP_IGNORE_GLOBAL_LIBVIPS=1 pnpm install\nnode scripts/run-vitest.mjs run extensions/memory-core/src/memory/manager-cache.test.ts\nnode scripts/run-vitest.mjs run extensions/memory-core/src/memory/manager.idle-gc.test.ts\nnode scripts/run-vitest.mjs run extensions/memory-core\nnode scripts/run-vitest.mjs run src/agents/memory-search.test.ts\nnode scripts/run-vitest.mjs run src/gateway/server-startup-post-attach.test.ts\nnode scripts/run-vitest.mjs run src/config src/plugins/memory-state\nnode scripts/run-oxlint-shards.mjs <changed files>\npnpm tsgo:core && pnpm tsgo:extensions && pnpm tsgo:test\npnpm build\n```\n\nEvidence after fix:\n- `manager-cache.test.ts`: 10 passed (5 new)\n- `manager.idle-gc.test.ts` (new): 5 passed\n- `extensions/memory-core` aggregate: 57 files, 702 passed\n- `src/agents/memory-search.test.ts`: 27 passed\n- `src/gateway/server-startup-post-attach.test.ts`: 41 passed\n- `src/config` + `src/plugins/memory-state` aggregate: 143 files, 1475 passed\n- `oxlint`: 0 warnings, 0 errors across scripts/core/extensions shards\n- `tsgo:core`, `tsgo:extensions`, `tsgo:test`: all clean\n- `pnpm build`: succeeded\n\nObserved result after fix: cached `MemoryIndexManager` instances idle for\nmore than 15min are evicted by the gateway-lifetime sweep, releasing their\nchokidar `FSWatcher` and the associated `FSEventWrap` native handles and\nfile descriptors. No behavior change for short-lived CLI invocations.\n\nWhat was not tested: this PR was prepared in a clean checkout; we did not\nspin up a fresh gateway against this exact commit in production. The\n8h soak test described above was against an equivalent `--require` shim\nthat implemented the same eviction semantics on `INDEX_CACHE`. Production\nverification will follow normal land/release.\n",
+        "branch": "fix/memory-index-manager-idle-evict",
+        "head_sha": "d7a2cb0c04d3ea8e51d61bc0e1488e2e68050e1d",
+        "author": "quengh",
+        "labels": [
+          "gateway",
+          "extensions: memory-core",
+          "agents",
+          "size: L",
+          "triage: needs-real-behavior-proof",
+          "proof: sufficient",
+          "P1",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-core/index.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/manager-runtime.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/index.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-cache.test.ts",
+            "additions": 165,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-cache.ts",
+            "additions": 88,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-runtime.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager.idle-gc.test.ts",
+            "additions": 130,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager.ts",
+            "additions": 36,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/search-manager.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/runtime-provider.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/memory-search.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/memory-search.ts",
+            "additions": 16,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.labels.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.tools.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.agent-runtime.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.test.ts",
+            "additions": 9,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.ts",
+            "additions": 82,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/memory-state.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85910",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85910.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 27,
+            "SUCCESS": 72,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
+    }
+  ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 578,
+    "total_ms": 1838,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 314
+        "ms": 274
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 1381
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 252
+        "ms": 168
       },
       {
         "name": "append_ledger",
