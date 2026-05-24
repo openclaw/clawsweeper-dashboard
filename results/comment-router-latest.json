@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T14:37:29.429Z",
+  "generated_at": "2026-05-24T14:37:59.049Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T11:37:27.031Z",
+  "since": "2026-05-24T11:37:58.741Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    86069
+    86075
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 4,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,334 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:86069:4529004355:2026-05-24T14:24:54Z:re_review",
-      "comment_id": "4529004355",
-      "comment_version_key": "4529004355:2026-05-24T14:24:54Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86069#issuecomment-4529004355",
-      "repo": "openclaw/openclaw",
-      "issue_number": 86069,
-      "author": "100yenadmin",
-      "author_id": 239388517,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-24T14:24:54Z",
-      "comment_updated_at": "2026-05-24T14:24:54Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(codex): make native thread token guard configurable",
-        "body": "## Summary\n\nThis is a stacked follow-up to #85978 for the hard-coded Codex app-server native-thread token reuse guard.\n\nIt makes the proactive native-token guard configurable instead of treating `70000` as the only possible policy:\n\n- Adds `agents.defaults.compaction.maxActiveTranscriptTokens`.\n- Keeps the current default at `70000` when unset, preserving existing behavior.\n- Allows numeric values or token-count strings such as `\"120k\"` / `\"1.5k\"`.\n- Allows `0` to disable only this proactive token guard.\n- Preserves byte-limit rotation and semantic binding invalidation.\n- Skips Codex rollout-directory scans when both native byte and token guards are disabled.\n\n## Stacking / Review Order\n\nThis branch is intentionally stacked on #85978 (`codex/native-thread-reuse-budget`).\n\nRecommended order:\n\n1. Review/merge #85978 first. It fixes the semantic correctness bug where an active context-engine `thread_bootstrap` binding could be cleared by the startup size guard before the context-engine projection decision had a chance to preserve it.\n2. Review this PR second. It makes the remaining legacy/non-bootstrap native token guard policy explicit and configurable.\n\nIf this PR is reviewed before #85978 lands, the intended new commit here is:\n\n```text\n80da76695c fix(codex): make native thread token guard configurable\n```\n\n## Why This Is Needed\n\nThe existing guard is not the model context window. It is a local Codex app-server native-thread reuse guard. Today it is hard-coded to `70000` tokens, and when it fires OpenClaw clears the saved native thread binding before startup:\n\n```text\ncodex app-server native transcript exceeded active token limit; starting a fresh thread\n```\n\nThat is a reasonable safety valve for legacy/stale bindings, but it is too blunt for long-running Codex sessions because the native token count can include the large bootstrap-loaded context already paid into the native thread.\n\nScenario:\n\n```mermaid\nsequenceDiagram\n  participant OC as OpenClaw\n  participant CE as Context Engine / Bootstrap\n  participant CX as Codex app-server native thread\n\n  OC->>CE: assemble bootstrap/context\n  CE-->>OC: 80k-120k effective bootstrap/context\n  OC->>CX: thread/start with developer instructions + projected context\n  CX-->>OC: rollout token_count over 70k\n  OC->>CX: next turn startup checks saved binding\n  alt legacy hard guard\n    OC->>OC: clear binding at 70k\n    OC->>CX: cold thread/start again\n  else semantic thread_bootstrap from #85978\n    OC->>OC: preserve matching semantic binding\n    OC->>CX: thread/resume warm path\n  end\n```\n\nThe bootstrap question is the crux: for legacy/non-context-engine native reuse, the guard can effectively see the native thread after it has already absorbed large startup/bootstrap instructions. For active context-engine `thread_bootstrap`, #85978 prevents that bootstrap cost from automatically invalidating the native binding on the next turn. This PR covers the remaining policy question by letting operators set the guard to match their deployment instead of forcing every installation through `70000`.\n\n## What This Does Not Solve\n\nThis does not implement the larger #86023 architecture items:\n\n- semantic compaction-preservation across Codex native threads;\n- binding ownership across session-file rollover;\n- workspace bootstrap fingerprinting as a first-class reuse reason;\n- doctor/status diagnostics for native-thread rotation reason codes.\n\nThose should stay separate because they touch lifecycle design, diagnostics, and context-engine contracts rather than just the hard-coded native guard policy.\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: The Codex app-server native-thread startup guard no longer treats `70000` as the only possible token policy. A thread binding with `86000` recorded session tokens is preserved when configured to `\"120k\"` and cleared when configured to `\"50k\"`.\n- **Real environment tested**: Local OpenClaw checkout on macOS from `/Volumes/LEXAR/repos/worktrees/openclaw-codex-semantic-reuse-guard`, using the actual patched runtime modules through `node --import tsx`.\n- **Exact steps or command run after this patch**:\n\n```text\nnode --import tsx - <<'EOF'\nimport fs from 'node:fs/promises';\nimport path from 'node:path';\nimport os from 'node:os';\nimport { testing } from './extensions/codex/src/app-server/run-attempt.ts';\nimport { readCodexAppServerBinding, writeCodexAppServerBinding } from './extensions/codex/src/app-server/session-binding.ts';\n\nconst tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'openclaw-real-proof-native-token-'));\nconst sessionFile = path.join(tempDir, 'session.jsonl');\nconst agentDir = path.join(tempDir, 'agent');\nconst cwd = path.join(tempDir, 'workspace');\nawait fs.mkdir(path.dirname(sessionFile), { recursive: true });\nawait fs.mkdir(cwd, { recursive: true });\nawait fs.writeFile(sessionFile, '');\nawait writeCodexAppServerBinding(sessionFile, {\n  threadId: 'thread-existing',\n  cwd,\n  model: 'gpt-5.4-codex',\n  modelProvider: 'openai',\n  dynamicToolsFingerprint: '[]',\n});\nawait fs.writeFile(\n  path.join(path.dirname(sessionFile), 'sessions.json'),\n  JSON.stringify({\n    'agent:main:session-1': {\n      sessionFile,\n      totalTokens: 86000,\n    },\n  }),\n);\nconst preserved = await testing.rotateOversizedCodexAppServerStartupBinding({\n  binding: await readCodexAppServerBinding(sessionFile),\n  sessionFile,\n  agentDir,\n  config: {\n    agents: { defaults: { compaction: { truncateAfterCompaction: true, maxActiveTranscriptTokens: '120k' } } },\n  },\n});\nawait writeCodexAppServerBinding(sessionFile, {\n  threadId: 'thread-existing',\n  cwd,\n  model: 'gpt-5.4-codex',\n  modelProvider: 'openai',\n  dynamicToolsFingerprint: '[]',\n});\nconst cleared = await testing.rotateOversizedCodexAppServerStartupBinding({\n  binding: await readCodexAppServerBinding(sessionFile),\n  sessionFile,\n  agentDir,\n  config: {\n    agents: { defaults: { compaction: { truncateAfterCompaction: true, maxActiveTranscriptTokens: '50k' } } },\n  },\n});\nconsole.log(JSON.stringify({\n  environment: process.cwd(),\n  observed: {\n    overDefaultConfiguredTo120k: preserved?.threadId ?? null,\n    belowConfigured50k: cleared?.threadId ?? null,\n    savedBindingAfter50k: (await readCodexAppServerBinding(sessionFile))?.threadId ?? null,\n  },\n}, null, 2));\nEOF\n```\n\n- **Evidence after fix**: Terminal output from the command above:\n\n```text\n[agent/embedded] codex app-server native transcript exceeded active token limit; starting a fresh thread\n{\n  \"environment\": \"/Volumes/LEXAR/repos/worktrees/openclaw-codex-semantic-reuse-guard\",\n  \"observed\": {\n    \"overDefaultConfiguredTo120k\": \"thread-existing\",\n    \"belowConfigured50k\": null,\n    \"savedBindingAfter50k\": null\n  }\n}\n```\n\n- **Observed result after fix**: The same `86000`-token recorded native/session state preserves the existing binding under `\"120k\"` and clears it under `\"50k\"`, matching the configurable guard behavior added by this PR.\n- **What was not tested**: A live Discord/Codex long-running channel was not exercised in this proof. That broader end-to-end slowdown remains tracked in #86023.\n\n## Validation\n\nFocused local validation from `/Volumes/LEXAR/repos/worktrees/openclaw-codex-semantic-reuse-guard`:\n\n```text\nOPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.test.ts --run -t \"configured native rollout token|token rotation when configured to zero|configured token limit below|session totals|byte rotation active|skips rollout directory scans\"\nOPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs src/config/zod-schema.agent-defaults.test.ts src/config/config.schema-regressions.test.ts src/config/config.compaction-settings.test.ts src/config/schema.help.quality.test.ts --run -t \"compaction.truncateAfterCompaction|preserves memory flush|agent compaction safeguards\"\npnpm exec oxfmt --check --threads=1 extensions/codex/src/app-server/run-attempt.ts extensions/codex/src/app-server/run-attempt.test.ts src/config/types.agent-defaults.ts src/config/zod-schema.agent-defaults.ts src/config/zod-schema.agent-defaults.test.ts src/config/config.schema-regressions.test.ts src/config/config.compaction-settings.test.ts src/config/schema.help.ts src/config/schema.labels.ts src/config/schema.help.quality.test.ts\npnpm config:schema:check\npnpm config:docs:check\ngit diff --check\npnpm tsgo:core:test\npnpm tsgo:extensions:test\n```\n\nResults: all passed locally.\n\nI also ran four read-only adversarial review agents over the diff. Two returned zero >=95% findings; two found test/efficiency gaps that were fixed before this PR was opened.\n",
-        "branch": "codex/semantic-native-reuse-guard",
-        "head_sha": "7d640c42e596c5b8e6aa9632d528438abbee8c4b",
-        "author": "100yenadmin",
-        "labels": [
-          "docs",
-          "gateway",
-          "size: L",
-          "extensions: codex",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "docs/.generated/config-baseline.sha256",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/gateway/config-agents.md",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/run-attempt.context-engine.test.ts",
-            "additions": 197,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/run-attempt.test.ts",
-            "additions": 290,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/run-attempt.ts",
-            "additions": 72,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/config.compaction-settings.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/config.schema-regressions.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/schema.help.quality.test.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/schema.help.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/schema.labels.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/types.agent-defaults.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/zod-schema.agent-defaults.test.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/zod-schema.agent-defaults.ts",
-            "additions": 28,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86069",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86069.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "SUCCESS": 74,
-            "SKIPPED": 27,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86069:4528957857:2026-05-24T14:17:11Z:clawsweeper_auto_repair",
-      "comment_id": "4528957857",
-      "comment_version_key": "4528957857:2026-05-24T14:17:11Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86069#issuecomment-4528957857",
-      "repo": "openclaw/openclaw",
-      "issue_number": 86069,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-24T14:04:28Z",
-      "comment_updated_at": "2026-05-24T14:17:11Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=80da76695cf82eadd6dba8d04965ce14456b4c3f)",
-      "review_summary": "The branch adds `agents.defaults.compaction.maxActiveTranscriptTokens`, wires it into the Codex app-server native-thread startup guard, and adds config/schema/help/test coverage for configured, default, and disabled token-guard behavior.\n\nReproducibility: not applicable. as a config-feature PR rather than a broken current-main behavior report. The PR body does provide after-patch terminal proof for the exact runtime path by exercising patched modules against real temp binding and session files.",
-      "review_followup": "Maintainer sequencing and config-surface approval are needed because the PR is stacked on an open session-state PR and adds a new core config knob; the docs finding is narrow but not the only merge consideration.",
-      "freeform_prompt": null,
-      "expected_head_sha": "80da76695cf82eadd6dba8d04965ce14456b4c3f",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(codex): make native thread token guard configurable",
-        "body": "## Summary\n\nThis is a stacked follow-up to #85978 for the hard-coded Codex app-server native-thread token reuse guard.\n\nIt makes the proactive native-token guard configurable instead of treating `70000` as the only possible policy:\n\n- Adds `agents.defaults.compaction.maxActiveTranscriptTokens`.\n- Keeps the current default at `70000` when unset, preserving existing behavior.\n- Allows numeric values or token-count strings such as `\"120k\"` / `\"1.5k\"`.\n- Allows `0` to disable only this proactive token guard.\n- Preserves byte-limit rotation and semantic binding invalidation.\n- Skips Codex rollout-directory scans when both native byte and token guards are disabled.\n\n## Stacking / Review Order\n\nThis branch is intentionally stacked on #85978 (`codex/native-thread-reuse-budget`).\n\nRecommended order:\n\n1. Review/merge #85978 first. It fixes the semantic correctness bug where an active context-engine `thread_bootstrap` binding could be cleared by the startup size guard before the context-engine projection decision had a chance to preserve it.\n2. Review this PR second. It makes the remaining legacy/non-bootstrap native token guard policy explicit and configurable.\n\nIf this PR is reviewed before #85978 lands, the intended new commit here is:\n\n```text\n80da76695c fix(codex): make native thread token guard configurable\n```\n\n## Why This Is Needed\n\nThe existing guard is not the model context window. It is a local Codex app-server native-thread reuse guard. Today it is hard-coded to `70000` tokens, and when it fires OpenClaw clears the saved native thread binding before startup:\n\n```text\ncodex app-server native transcript exceeded active token limit; starting a fresh thread\n```\n\nThat is a reasonable safety valve for legacy/stale bindings, but it is too blunt for long-running Codex sessions because the native token count can include the large bootstrap-loaded context already paid into the native thread.\n\nScenario:\n\n```mermaid\nsequenceDiagram\n  participant OC as OpenClaw\n  participant CE as Context Engine / Bootstrap\n  participant CX as Codex app-server native thread\n\n  OC->>CE: assemble bootstrap/context\n  CE-->>OC: 80k-120k effective bootstrap/context\n  OC->>CX: thread/start with developer instructions + projected context\n  CX-->>OC: rollout token_count over 70k\n  OC->>CX: next turn startup checks saved binding\n  alt legacy hard guard\n    OC->>OC: clear binding at 70k\n    OC->>CX: cold thread/start again\n  else semantic thread_bootstrap from #85978\n    OC->>OC: preserve matching semantic binding\n    OC->>CX: thread/resume warm path\n  end\n```\n\nThe bootstrap question is the crux: for legacy/non-context-engine native reuse, the guard can effectively see the native thread after it has already absorbed large startup/bootstrap instructions. For active context-engine `thread_bootstrap`, #85978 prevents that bootstrap cost from automatically invalidating the native binding on the next turn. This PR covers the remaining policy question by letting operators set the guard to match their deployment instead of forcing every installation through `70000`.\n\n## What This Does Not Solve\n\nThis does not implement the larger #86023 architecture items:\n\n- semantic compaction-preservation across Codex native threads;\n- binding ownership across session-file rollover;\n- workspace bootstrap fingerprinting as a first-class reuse reason;\n- doctor/status diagnostics for native-thread rotation reason codes.\n\nThose should stay separate because they touch lifecycle design, diagnostics, and context-engine contracts rather than just the hard-coded native guard policy.\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: The Codex app-server native-thread startup guard no longer treats `70000` as the only possible token policy. A thread binding with `86000` recorded session tokens is preserved when configured to `\"120k\"` and cleared when configured to `\"50k\"`.\n- **Real environment tested**: Local OpenClaw checkout on macOS from `/Volumes/LEXAR/repos/worktrees/openclaw-codex-semantic-reuse-guard`, using the actual patched runtime modules through `node --import tsx`.\n- **Exact steps or command run after this patch**:\n\n```text\nnode --import tsx - <<'EOF'\nimport fs from 'node:fs/promises';\nimport path from 'node:path';\nimport os from 'node:os';\nimport { testing } from './extensions/codex/src/app-server/run-attempt.ts';\nimport { readCodexAppServerBinding, writeCodexAppServerBinding } from './extensions/codex/src/app-server/session-binding.ts';\n\nconst tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'openclaw-real-proof-native-token-'));\nconst sessionFile = path.join(tempDir, 'session.jsonl');\nconst agentDir = path.join(tempDir, 'agent');\nconst cwd = path.join(tempDir, 'workspace');\nawait fs.mkdir(path.dirname(sessionFile), { recursive: true });\nawait fs.mkdir(cwd, { recursive: true });\nawait fs.writeFile(sessionFile, '');\nawait writeCodexAppServerBinding(sessionFile, {\n  threadId: 'thread-existing',\n  cwd,\n  model: 'gpt-5.4-codex',\n  modelProvider: 'openai',\n  dynamicToolsFingerprint: '[]',\n});\nawait fs.writeFile(\n  path.join(path.dirname(sessionFile), 'sessions.json'),\n  JSON.stringify({\n    'agent:main:session-1': {\n      sessionFile,\n      totalTokens: 86000,\n    },\n  }),\n);\nconst preserved = await testing.rotateOversizedCodexAppServerStartupBinding({\n  binding: await readCodexAppServerBinding(sessionFile),\n  sessionFile,\n  agentDir,\n  config: {\n    agents: { defaults: { compaction: { truncateAfterCompaction: true, maxActiveTranscriptTokens: '120k' } } },\n  },\n});\nawait writeCodexAppServerBinding(sessionFile, {\n  threadId: 'thread-existing',\n  cwd,\n  model: 'gpt-5.4-codex',\n  modelProvider: 'openai',\n  dynamicToolsFingerprint: '[]',\n});\nconst cleared = await testing.rotateOversizedCodexAppServerStartupBinding({\n  binding: await readCodexAppServerBinding(sessionFile),\n  sessionFile,\n  agentDir,\n  config: {\n    agents: { defaults: { compaction: { truncateAfterCompaction: true, maxActiveTranscriptTokens: '50k' } } },\n  },\n});\nconsole.log(JSON.stringify({\n  environment: process.cwd(),\n  observed: {\n    overDefaultConfiguredTo120k: preserved?.threadId ?? null,\n    belowConfigured50k: cleared?.threadId ?? null,\n    savedBindingAfter50k: (await readCodexAppServerBinding(sessionFile))?.threadId ?? null,\n  },\n}, null, 2));\nEOF\n```\n\n- **Evidence after fix**: Terminal output from the command above:\n\n```text\n[agent/embedded] codex app-server native transcript exceeded active token limit; starting a fresh thread\n{\n  \"environment\": \"/Volumes/LEXAR/repos/worktrees/openclaw-codex-semantic-reuse-guard\",\n  \"observed\": {\n    \"overDefaultConfiguredTo120k\": \"thread-existing\",\n    \"belowConfigured50k\": null,\n    \"savedBindingAfter50k\": null\n  }\n}\n```\n\n- **Observed result after fix**: The same `86000`-token recorded native/session state preserves the existing binding under `\"120k\"` and clears it under `\"50k\"`, matching the configurable guard behavior added by this PR.\n- **What was not tested**: A live Discord/Codex long-running channel was not exercised in this proof. That broader end-to-end slowdown remains tracked in #86023.\n\n## Validation\n\nFocused local validation from `/Volumes/LEXAR/repos/worktrees/openclaw-codex-semantic-reuse-guard`:\n\n```text\nOPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.test.ts --run -t \"configured native rollout token|token rotation when configured to zero|configured token limit below|session totals|byte rotation active|skips rollout directory scans\"\nOPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs src/config/zod-schema.agent-defaults.test.ts src/config/config.schema-regressions.test.ts src/config/config.compaction-settings.test.ts src/config/schema.help.quality.test.ts --run -t \"compaction.truncateAfterCompaction|preserves memory flush|agent compaction safeguards\"\npnpm exec oxfmt --check --threads=1 extensions/codex/src/app-server/run-attempt.ts extensions/codex/src/app-server/run-attempt.test.ts src/config/types.agent-defaults.ts src/config/zod-schema.agent-defaults.ts src/config/zod-schema.agent-defaults.test.ts src/config/config.schema-regressions.test.ts src/config/config.compaction-settings.test.ts src/config/schema.help.ts src/config/schema.labels.ts src/config/schema.help.quality.test.ts\npnpm config:schema:check\npnpm config:docs:check\ngit diff --check\npnpm tsgo:core:test\npnpm tsgo:extensions:test\n```\n\nResults: all passed locally.\n\nI also ran four read-only adversarial review agents over the diff. Two returned zero >=95% findings; two found test/efficiency gaps that were fixed before this PR was opened.\n",
-        "branch": "codex/semantic-native-reuse-guard",
-        "head_sha": "7d640c42e596c5b8e6aa9632d528438abbee8c4b",
-        "author": "100yenadmin",
-        "labels": [
-          "docs",
-          "gateway",
-          "size: L",
-          "extensions: codex",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "docs/.generated/config-baseline.sha256",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/gateway/config-agents.md",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/run-attempt.context-engine.test.ts",
-            "additions": 197,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/run-attempt.test.ts",
-            "additions": 290,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/run-attempt.ts",
-            "additions": 72,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/config.compaction-settings.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/config.schema-regressions.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/schema.help.quality.test.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/schema.help.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/schema.labels.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/types.agent-defaults.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/zod-schema.agent-defaults.test.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/zod-schema.agent-defaults.ts",
-            "additions": 28,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86069",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86069.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "SUCCESS": 74,
-            "SKIPPED": 27,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2688,
+    "total_ms": 569,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 411
+        "ms": 295
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1966
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 278
+        "ms": 261
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
