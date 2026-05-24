@@ -1,22 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T16:10:25.418Z",
+  "generated_at": "2026-05-24T16:10:52.047Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T13:10:24.598Z",
+  "since": "2026-05-24T13:10:49.259Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    82955
+    86094
   ],
   "comment_ids": [
-    4469539303
+    4529214214
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
+  "scanned_comments": 1,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -33,17 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:82955:4469539303:2026-05-24T16:08:54Z:automerge",
-      "comment_id": "4469539303",
-      "comment_version_key": "4469539303:2026-05-24T16:08:54Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82955#issuecomment-4469539303",
+      "idempotency_key": "comment-router:openclaw/openclaw:86094:4529214214:2026-05-24T16:09:42Z:automerge",
+      "comment_id": "4529214214",
+      "comment_version_key": "4529214214:2026-05-24T16:09:42Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86094#issuecomment-4529214214",
       "repo": "openclaw/openclaw",
-      "issue_number": 82955,
+      "issue_number": 86094,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-24T16:07:58Z",
-      "comment_updated_at": "2026-05-24T16:07:58Z",
+      "comment_created_at": "2026-05-24T15:49:16Z",
+      "comment_updated_at": "2026-05-24T16:09:42Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "automerge",
@@ -54,27 +54,203 @@
       "trusted_bot_author": null,
       "automation_source": null,
       "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
+      "review_summary": "Adds Codex native-thread lifecycle diagnostics, wires reuse/rotation/compaction reasons through the new event/log helper, carries the stacked `maxActiveTranscriptTokens` config support, and documents native-thread token pressure.\n\nPR surface: Source +736, Tests +866, Docs +59, Generated 0. Total +1661 across 22 files.\n\nReproducibility: yes. for the review finding: source inspection shows `extra` is spread after `payload`, and `compact.ts` already passes `extra.reason`, so the structured log can lose the stable lifecycle reason. I did not run a live gateway lifecycle scenario in this read-only review.",
+      "review_followup": "A narrow automated repair can prevent diagnostic extras from overwriting stable lifecycle fields and add a focused regression test.",
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "none",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(codex): diagnose native thread lifecycle",
+        "body": "## Summary\n\nThis is PR #3 in the Codex native-thread reuse stack, after #85978 and #86069. It does **not** change the 70k default guard, and it does **not** preserve bindings across context-engine compaction or successor transcript rollover yet. It makes every important Codex app-server native thread reuse, bypass, rotation, and compaction-invalidation decision observable first.\n\nChanges:\n\n- Add `codex.native_thread.lifecycle` as a trusted diagnostic event.\n- Add `extensions/codex/src/app-server/native-thread-diagnostics.ts` with stable lifecycle reasons and one structured log/event helper.\n- Route native token/byte guard rotation, `thread_bootstrap` semantic reuse, context-engine/projection/dynamic-tool/MCP/environment/plugin/auth mismatch, missing binding, app-server rejection, invalid image rejection, and context-engine-owned compaction invalidation through the helper.\n- Keep #85978/#86069 behavior intact: matching active `thread_bootstrap` bindings still bypass proactive token/byte guards; legacy/non-bootstrap bindings still honor configured token/byte guards.\n- Document the difference between model/app-server context overflow, OpenClaw assembly/precheck pressure, and native-thread reuse rotation.\n\n## Why this matters\n\nThe confusing part of the slowdown is that the `70000` guard is not GPT-5.5's model context limit. It is a local warm-thread reuse threshold. If a legacy Codex native transcript is already above that threshold, OpenClaw refuses to reuse the saved native thread and starts a fresh app-server thread. That can make every turn pay cold-start context rebuild pressure even when the channel/session itself is fine.\n\nExample failure mode:\n\n| Turn | Legacy/native transcript | Guard | Decision | Cost shape |\n| --- | ---: | ---: | --- | --- |\n| 1 | 86k | 70k | `native-token-guard` rotates | cold `thread/start`; bootstrap/context is rebuilt |\n| 2 | still over guard | 70k | rotates again | cold path again |\n| 3-10 | still over guard | 70k | repeats | no durable warm Codex thread |\n\nWith #86069 config support, `maxActiveTranscriptTokens: \"120k\"` preserves an 86k legacy binding, while `\"50k\"` rotates a 60k binding. Setting the token guard to `0` disables only proactive token rotation; byte guards and semantic identity mismatches can still rotate.\n\nThe best-case long-running context-engine path is different: `thread_bootstrap` projects the large context once into the fresh Codex thread, then reuses it as long as the context-engine id, policy fingerprint, projection epoch/fingerprint, and dynamic-tool surface still match. This PR emits `thread-bootstrap-semantic-reuse` for that path so maintainers can prove it is happening instead of guessing from latency.\n\n```mermaid\ngraph TD\n  A[OpenClaw turn] --> B{Saved Codex binding?}\n  B -->|no| S[Start fresh native thread]\n  B -->|yes| C{Semantic identity matches?}\n  C -->|no| R[Rotate with mismatch reason]\n  C -->|yes legacy/per-turn| G{Native token/byte guard exceeded?}\n  G -->|yes| T[Rotate with native-token/native-byte reason]\n  G -->|no| U[Resume warm native thread]\n  C -->|yes thread_bootstrap| H[Emit thread-bootstrap-semantic-reuse]\n  H --> U\n  R --> S\n  T --> S\n```\n\n## Diagnostics\n\n`codex.native_thread.lifecycle` includes stable reason/action fields plus thread/session/run ids, binding mode, context-engine identity, projection epoch/fingerprint, previous/current fingerprints, token/byte guard values, native/session token counts, prompt/developer-instruction size estimates, and bootstrap/context-engine contribution booleans.\n\nIt intentionally does not include raw prompt text, bootstrap file contents, tool args, or secrets.\n\n## Non-goals\n\n- No default guard change from `70000` in this PR.\n- No migration or config rename.\n- No binding preservation across context-engine compaction or successor transcript rollover yet.\n- No change to PI runtime compaction semantics.\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Codex native-thread lifecycle decisions now emit a structured trusted diagnostic event and matching structured log so an operator can distinguish native-token guard rotation from semantic reuse and other rotation families.\n- **Real environment tested**: Local OpenClaw source checkout on the Lexar worktree at `/Volumes/LEXAR/repos/worktrees/openclaw-codex-semantic-reuse-guard`, running the real OpenClaw package runtime with `node --import tsx`.\n- **Exact steps or command run after this patch**: Executed the real diagnostic helper through the package export path and listened through the real internal diagnostic runtime:\n\n```bash\nnode --import tsx - <<'NODE'\nimport { onInternalDiagnosticEvent, resetDiagnosticEventsForTest, waitForDiagnosticEventsDrained } from 'openclaw/plugin-sdk/diagnostic-runtime';\nimport { CodexNativeThreadLifecycleReason, emitCodexNativeThreadLifecycleDiagnostic } from './extensions/codex/src/app-server/native-thread-diagnostics.ts';\n\nresetDiagnosticEventsForTest();\nconst events = [];\nconst unsubscribe = onInternalDiagnosticEvent((event) => {\n  if (event.type === 'codex.native_thread.lifecycle') events.push(event);\n});\nemitCodexNativeThreadLifecycleDiagnostic({\n  action: 'rotated',\n  reason: CodexNativeThreadLifecycleReason.NativeTokenGuard,\n  threadId: 'thread-proof',\n  sessionId: 'session-proof',\n  sessionKey: 'agent:main:session-proof',\n  bindingMode: 'legacy',\n  maxActiveTranscriptTokens: 70000,\n  nativeTokens: 86000,\n  sessionTokens: 86000,\n});\nawait waitForDiagnosticEventsDrained();\nunsubscribe();\nconsole.log(JSON.stringify(events[0], null, 2));\nNODE\n```\n\n- **Evidence after fix**: Copied terminal output from that command:\n\n```text\n[agent/embedded] codex app-server native thread lifecycle: rotated (native-token-guard)\n{\n  \"type\": \"codex.native_thread.lifecycle\",\n  \"action\": \"rotated\",\n  \"reason\": \"native-token-guard\",\n  \"threadId\": \"thread-proof\",\n  \"sessionId\": \"session-proof\",\n  \"sessionKey\": \"agent:main:session-proof\",\n  \"bindingMode\": \"legacy\",\n  \"maxActiveTranscriptTokens\": 70000,\n  \"nativeTokens\": 86000,\n  \"sessionTokens\": 86000,\n  \"seq\": 2,\n  \"ts\": 1779637794109\n}\n```\n\n- **Observed result after fix**: The real runtime emitted exactly one `codex.native_thread.lifecycle` event with `action: \"rotated\"`, `reason: \"native-token-guard\"`, token guard values, native/session token counts, thread/session identity, and a structured log line. The output contains no raw prompt text, bootstrap file contents, tool args, or secrets.\n- **What was not tested**: I did not run a live Discord gateway session through Codex app-server in this PR. That belongs to the next operational validation pass after this diagnostic surface lands.\n\n## Test Plan\n\nValidated locally from `/Volumes/LEXAR/repos/worktrees/openclaw-codex-semantic-reuse-guard`:\n\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.extensions.config.ts extensions/codex/src/app-server/run-attempt.test.ts -t \"native rollout|native transcript|dynamic tool|MCP config|environment selection|plugin app|app-server resume rejection\"`\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.extensions.config.ts extensions/codex/src/app-server/run-attempt.context-engine.test.ts`\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.extensions.config.ts extensions/codex/src/app-server/compact.test.ts -t \"context-engine-owned|auth profile mismatch|thread binding\"`\n- `pnpm tsgo:extensions:test`\n- `pnpm exec oxfmt --check extensions/codex/src/app-server/native-thread-diagnostics.ts extensions/codex/src/app-server/run-attempt.ts extensions/codex/src/app-server/thread-lifecycle.ts extensions/codex/src/app-server/compact.ts extensions/codex/src/app-server/run-attempt.test.ts extensions/codex/src/app-server/run-attempt.context-engine.test.ts extensions/codex/src/app-server/compact.test.ts src/infra/diagnostic-events.ts`\n- `pnpm format:docs:check`\n- `git diff --check`\n",
+        "branch": "codex/native-thread-lifecycle-diagnostics",
+        "head_sha": "fe59254f188ca60139b71e38d24d9a409526b75b",
+        "author": "100yenadmin",
+        "labels": [
+          "docs",
+          "gateway",
+          "extensions: diagnostics-otel",
+          "size: XL",
+          "extensions: codex",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 session-state",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "docs/.generated/config-baseline.sha256",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/config-agents.md",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/codex-harness-reference.md",
+            "additions": 17,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/codex-harness-runtime.md",
+            "additions": 40,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/compact.test.ts",
+            "additions": 99,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/compact.ts",
+            "additions": 113,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/native-thread-diagnostics.ts",
+            "additions": 139,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/run-attempt.context-engine.test.ts",
+            "additions": 269,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/run-attempt.test.ts",
+            "additions": 482,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/run-attempt.ts",
+            "additions": 317,
+            "deletions": 34,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/thread-lifecycle.ts",
+            "additions": 142,
+            "deletions": 47,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/diagnostics-otel/src/service.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/config.compaction-settings.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/config.schema-regressions.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.help.quality.test.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.help.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.labels.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.agent-defaults.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.agent-defaults.test.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.agent-defaults.ts",
+            "additions": 28,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/diagnostic-events.ts",
+            "additions": 56,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/logging/diagnostic-stability.ts",
+            "additions": 16,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86094",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86094.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "SUCCESS": 75,
+            "SKIPPED": 26,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2002,
+    "total_ms": 3111,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 805
+        "ms": 520
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2258
       },
       {
         "name": "classify_commands",
@@ -82,7 +258,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1181
+        "ms": 323
       },
       {
         "name": "append_ledger",
