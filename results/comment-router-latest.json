@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T03:43:36.223Z",
+  "generated_at": "2026-05-24T03:44:05.254Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T00:43:35.595Z",
+  "since": "2026-05-24T00:44:03.030Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    84616
+    85763
   ],
   "comment_ids": [
-    4527301479
+    4527303900
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4527303972,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:84616:4499816274:2026-05-24T03:43:26Z:clawsweeper_auto_repair",
-      "comment_id": "4499816274",
-      "comment_version_key": "4499816274:2026-05-24T03:43:26Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84616#issuecomment-4499816274",
+      "idempotency_key": "comment-router:openclaw/openclaw:85763:4527303900:2026-05-24T03:43:10Z:re_review",
+      "comment_id": "4527303900",
+      "comment_version_key": "4527303900:2026-05-24T03:43:10Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85763#issuecomment-4527303900",
       "repo": "openclaw/openclaw",
-      "issue_number": 84616,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 85763,
+      "author": "jason-allen-oneal",
+      "author_id": 8335428,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-24T03:41:38Z",
-      "comment_updated_at": "2026-05-24T03:41:38Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-05-24T03:43:10Z",
+      "comment_updated_at": "2026-05-24T03:43:10Z",
+      "status_comment_id": 4527303972,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -59,124 +59,305 @@
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-05-24T03:44:05.844Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 85763
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-24T03:44:07.041Z",
+          "response_comment_id": "4527303972",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): add .catch() to fire-and-forget subagent lifecycle promises",
-        "body": "## Problem\n\nThree fire-and-forget promises in `src/agents/subagent-registry.ts` can reject without a `.catch()` handler, causing unhandled promise rejections that may crash the process:\n\n1. **`schedulePendingLifecycleError`** (line 345): `void completeSubagentRun({...})` without `.catch()`.\n2. **`schedulePendingLifecycleTimeout`** (line 384): Same pattern for timeout-triggered completion.\n3. **`ensureListener` event handler** (line 1022): `completeSubagentRun({...})` inside an async IIFE without `.catch()`.\n\nIf `completeSubagentRun` throws after mutating the run entry (setting `endedAt`, `outcome`, persisting), the run is left in a partially-completed state: ended but with no cleanup flow started. The existing orphan reconciliation (`reconcileOrphanedRun`) handles this scenario during session resume, but there is no recovery path when the failure happens during normal operation.\n\n## Fix\n\n1. **Add `.catch()` to all three fire-and-forget paths** with `log.warn` for diagnostics.\n2. **Schedule two-path catch recovery** in each catch handler via `scheduleLifecycleCatchRecovery(runId)`. After a 1-second delay (to let any in-flight state settle), it checks the run state and takes the appropriate recovery action:\n\n   - **Path 1 (orphan):** If the child session is gone (`resolveSubagentRunOrphanReason` returns a reason), reconcile via `reconcileOrphanedRun` (same path as session resume).\n   - **Path 2 (non-orphan, cleanup incomplete):** If the run has `endedAt` set but `cleanupHandled` is false and `cleanupCompletedAt` is not set, drive `startSubagentAnnounceCleanupFlow` directly. This covers the case where `completeSubagentRun` threw after persisting the ended state but before triggering cleanup, and the child session still exists (so it is not an orphan).\n   - **No-op:** If the run was not ended (error happened before mutation) or cleanup already completed, the recovery does nothing.\n\nProduction diff is +46 lines in `subagent-registry.ts`.\n## Real behavior proof\n\nBehavior addressed: Fire-and-forget `completeSubagentRun` calls could reject without a handler, causing unhandled promise rejections. If the rejection occurs after persisting `endedAt`/`outcome` but before the cleanup tail, the run is left half-ended with no recovery. The fix adds branch-aware `.catch()` + `scheduleLifecycleCatchRecovery` to all four completion paths: timer error, timer timeout, listener blocked, and listener ok.\n\nReal environment tested: macOS (Darwin 24.5.0), Node v26.0.0, OpenClaw built from patched source at commit e0cd9500b1.\n\nExact steps or command run after this patch:\n\nStep 1. Built OpenClaw from patched source and started the gateway\n\n```console\n$ node openclaw.mjs gateway\n2026-05-23T18:14:10.617-07:00 [gateway] starting...\n2026-05-23T18:14:12.984-07:00 [health-monitor] started (interval: 300s)\n2026-05-23T18:14:13.321-07:00 [gateway] agent model: openai/gpt-5.5 (thinking=medium, fast=off)\n2026-05-23T18:14:13.322-07:00 [gateway] http server listening (9 plugins; 2.7s)\n```\n\nStep 2. Verified all four branch-aware catch handlers in compiled production bundle\n\n```console\n$ BUNDLE=dist/subagent-registry-1ZF808Hw.js\n$ grep -n \"lifecycle.*completion failed\" \"$BUNDLE\"\n1850:log.warn(\"lifecycle error completion failed\", {\n1884:log.warn(\"lifecycle timeout completion failed\", {\n2320:log.warn(\"lifecycle blocked completion failed\", {\n2355:log.warn(\"lifecycle ok completion failed\", {\n```\n\nEach completion path (error, timeout, blocked, ok) now logs with a branch-specific message and schedules `scheduleLifecycleCatchRecovery` with its own correct completion params.\n\nStep 3. Verified recovery is scheduled for all branches\n\n```console\n$ grep -c \"scheduleLifecycleCatchRecovery\" \"$BUNDLE\"\n5\n```\n\nFive calls: one in each of the four catch handlers (error, timeout, blocked, ok) plus the recovery function definition itself.\n\nEvidence after fix: Gateway starts and runs normally. Terminal output from the compiled production bundle:\n\n```console\n$ grep -n \"lifecycle.*completion failed\" dist/subagent-registry-1ZF808Hw.js\n1850:log.warn(\"lifecycle error completion failed\"...\n1884:log.warn(\"lifecycle timeout completion failed\"...\n2320:log.warn(\"lifecycle blocked completion failed\"...\n2355:log.warn(\"lifecycle ok completion failed\"...\n```\n\nAll four completion branches now have branch-aware catch recovery. The blocked branch retries with `status: \"error\"`, the ok branch retries with `status: \"ok\"`, matching the existing timer-path pattern.\n\nObserved result after fix: Gateway operational with patched subagent lifecycle handlers. All four completion paths (error, timeout, blocked, ok) schedule `scheduleLifecycleCatchRecovery` with branch-correct params on failure. The outer catch remains as a safety net for unexpected errors in the non-async setup code.\n\nWhat was not tested: Intentionally crashing `completeSubagentRun` in a live gateway to observe each branch's catch-and-recover path. The recovery mechanism is exercised through the regression test which verifies error state preservation.\n",
-        "branch": "fix/subagent-lifecycle-catch",
-        "head_sha": "6276637b6437a29d55b3fd7858121e353ba49de3",
-        "author": "sebtardif",
+        "title": "fix: add inbound peer send policy matching",
+        "body": "## Summary\n\n- Adds native `session.sendPolicy.rules[].match.peerEquals: \"inboundPeer\"` support.\n- Allows relational send-policy checks between the outbound target and the inbound peer for the current automatic-delivery turn, including `identityLinks` aliases.\n- Threads inbound peer context through automatic replies, routed replies, tool context, plugin/gateway message-action context, and durable outbound delivery.\n- Keeps send-policy-only predicates out of shared allow/deny scopes.\n- Preserves explicit `message.send` compatibility by keeping explicit gateway/plugin/direct sends outside `session.sendPolicy` suppression.\n- Reports blocked automatic durable sends as `denied_by_send_policy` suppression outcomes.\n- Adds focused unit coverage and docs/help labels for the new predicate.\n\nFixes #85175.\n\n## Verification\n\nLatest head explicit-gateway-send follow-up validated locally: `fa5474b29b`.\n\nClean local worktree used: `~/projects/openclaw-pr-85763-send-policy`.\n\nCommands run against latest head:\n\n```text\npnpm install --frozen-lockfile\npnpm exec vitest run src/sessions/send-policy.test.ts --config test/vitest/vitest.unit-fast.config.ts\npnpm exec vitest run src/infra/outbound/message-action-runner.plugin-dispatch.test.ts --config test/vitest/vitest.infra.config.ts\nnode scripts/test-projects.mjs test/scripts/real-behavior-proof-policy.test.ts\n```\n\nEarlier broad validation on head `5b0f312431` before the schema-only follow-up:\n\n```text\npnpm protocol:check\npnpm lint\npnpm check:test-types\nOPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run src/gateway/server-startup-post-attach.test.ts\n```\n\nObserved local results on latest head:\n\n```text\npnpm install --frozen-lockfile already up to date\nsrc/sessions/send-policy.test.ts passed 13/13 tests\nsrc/infra/outbound/message-action-runner.plugin-dispatch.test.ts passed 21/21 tests\ntest/scripts/real-behavior-proof-policy.test.ts passed 23/23 tests\n```\n\nEarlier broad validation results on head `5b0f312431`:\n\n```text\npnpm protocol:check passed\npnpm lint passed with 0 warnings and 0 errors\npnpm check:test-types passed\nsrc/gateway/server-startup-post-attach.test.ts passed 39/39 tests\n```\n\nEarlier focused send-policy validation on this branch:\n\n```text\npnpm test src/sessions/send-policy.test.ts src/config/schema.hints.test.ts src/cli/config-cli.test.ts src/infra/outbound/message.test.ts src/infra/outbound/outbound-send-service.test.ts src/agents/tools/message-tool.test.ts src/infra/outbound/message-action-runner.plugin-dispatch.test.ts\npnpm check:changed\n```\n\n## Real behavior proof\n\nBehavior addressed: `sendPolicy` can now allow same-peer automatic delivery and suppress wrong-peer automatic outbound delivery when `peerEquals: \"inboundPeer\"` is configured.\n\nReal environment tested: local OpenClaw source checkout on Linux, clean worktree `~/projects/openclaw-pr-85763-send-policy`, branch `fix/send-policy-peer-equals-inbound-peer`, latest head `fa5474b29b`.\n\nExact steps or command run after this patch: from the clean PR worktree, ran `pnpm install --frozen-lockfile`, ran the focused send-policy unit test, ran the gateway explicit-send regression test, and ran the real-behavior-proof policy test. Earlier on this branch, regenerated and checked protocol artifacts, ran lint, ran test type checks, ran the gateway startup regression test, ran focused send-policy shards, and ran `check:changed` before the final schema follow-up.\n\nEvidence after fix:\n\nLatest head terminal capture:\n\n```text\npnpm install --frozen-lockfile already up to date\nsrc/sessions/send-policy.test.ts passed 13/13 tests\ntest/scripts/real-behavior-proof-policy.test.ts passed 23/23 tests\n```\n\nEarlier broad validation terminal capture:\n\n```text\npnpm protocol:check passed\npnpm lint passed with 0 warnings and 0 errors\npnpm check:test-types passed\nsrc/gateway/server-startup-post-attach.test.ts passed 39/39 tests\n```\n\nEarlier terminal capture from the focused send-policy run:\n\n```text\n[test] passed 5 Vitest shards in 32.58s\n```\n\nEarlier terminal capture from `pnpm check:changed`:\n\n```text\n[check:changed] typecheck core\n[check:changed] typecheck core tests\n[check:changed] lint core\nruntime-sidecar-loaders: local runtime sidecar loaders look OK.\nImport cycle check: 0 runtime value cycle(s).\n```\n\nThe tests cover same-peer allow, wrong-peer denial metadata, missing inbound peer behavior, `identityLinks` alias comparison, schema split rejection for shared scopes, inbound peer propagation, and automatic message-action send-policy suppression before transport.\n\nObserved result after fix: same-peer configured automatic sends are allowed when the outbound target equals a trusted inbound peer candidate; wrong-peer automatic sends are denied/suppressed before transport with `send_policy_peer_mismatch` / `denied_by_send_policy` metadata. Explicit `message.send` compatibility is preserved by keeping explicit gateway/plugin/direct sends outside `session.sendPolicy` suppression.\n\nWhat was not tested: no private Telegram credentials, IPs, phone numbers, API keys, or non-public endpoints are included here. Live Telegram proof has not been posted in this PR yet; if a maintainer or Mantis captures redacted Telegram proof, it can be appended as stronger external evidence.\n\n",
+        "branch": "fix/send-policy-peer-equals-inbound-peer",
+        "head_sha": "fa5474b29bdf0992d2ef9cb6a58bcb8462e1ef64",
+        "author": "jason-allen-oneal",
         "labels": [
+          "docs",
+          "gateway",
           "agents",
-          "size: S",
+          "size: L",
           "proof: supplied",
-          "P2",
+          "mantis: telegram-visible-proof",
+          "P1",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 compatibility",
           "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/subagent-registry-helpers.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/subagent-registry.test.ts",
-            "additions": 65,
+            "path": "docs/gateway/config-agents.md",
+            "additions": 28,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/subagent-registry.ts",
+            "path": "src/agents/openclaw-tools.plugin-context.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openclaw-tools.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/params.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-tools.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/message-tool.test.ts",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/message-tool.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-acp-delivery.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-from-config.ts",
+            "additions": 10,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/followup-runner.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/route-reply.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/skill-tool-dispatch.runtime.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/channels/message/send.test.ts",
+            "additions": 44,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/channels/message/send.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/doc-baseline.integration.test.ts",
+            "additions": 23,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.help.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.hints.ts",
             "additions": 74,
-            "deletions": 9,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.labels.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.base.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.allowdeny.ts",
+            "additions": 57,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.session.ts",
+            "additions": 6,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/deliver-types.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/deliver.ts",
+            "additions": 31,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/message-action-runner.plugin-dispatch.test.ts",
+            "additions": 83,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/message-action-runner.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/message.test.ts",
+            "additions": 22,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/message.ts",
+            "additions": 19,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/outbound-send-service.test.ts",
+            "additions": 27,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/outbound-send-service.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/session-context.ts",
+            "additions": 21,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/tool-types.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/sessions/send-policy.test.ts",
+            "additions": 153,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/sessions/send-policy.ts",
+            "additions": 225,
+            "deletions": 25,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84616",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84616.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85763",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85763.md",
         "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 102,
+          "total": 100,
           "counts": {
-            "SUCCESS": 72,
-            "SKIPPED": 29,
+            "SUCCESS": 85,
+            "SKIPPED": 14,
             "NEUTRAL": 1
           },
           "blockers": [],
           "pending": [],
           "terminalBlockers": []
         }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84616:4526230863:2026-05-23T18:41:50Z:re_review",
-      "comment_id": "4526230863",
-      "comment_version_key": "4526230863:2026-05-23T18:41:50Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84616#issuecomment-4526230863",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84616,
-      "author": "SebTardif",
-      "author_id": 1413412,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-23T18:41:50Z",
-      "comment_updated_at": "2026-05-23T18:41:50Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      }
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2000,
+    "total_ms": 4454,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 616
+        "ms": 441
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 1770
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 1373
+        "ms": 2218
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
