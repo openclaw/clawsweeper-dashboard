@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T06:27:02.428Z",
+  "generated_at": "2026-05-24T06:27:24.207Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T03:27:02.056Z",
+  "since": "2026-05-24T03:27:22.302Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    85953
+    85917
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -29,30 +29,125 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:85917:4527311392:2026-05-24T06:27:16Z:clawsweeper_needs_human",
+      "comment_id": "4527311392",
+      "comment_version_key": "4527311392:2026-05-24T06:27:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85917#issuecomment-4527311392",
+      "repo": "openclaw/openclaw",
+      "issue_number": 85917,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-24T03:47:45Z",
+      "comment_updated_at": "2026-05-24T06:27:16Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "No repair lane is needed because the updated PR no longer has a concrete blocking code finding; remaining action is maintainer review, CI/proof confirmation, and merge decision.; Cleared: The diff is limited to gateway abort/idempotency logic and tests, with no dependency, workflow, secret, permission, or package-resolution changes. (sha=b27254d5ea601c65d06a44ffc5be2df36b7d9c58)",
+      "review_summary": "The PR moves gateway chat.send abort-controller registration before attachment preparation, caches aborted and prep-failure terminal dedupe results, and adds gateway chat regression tests.\n\nReproducibility: yes. Source inspection shows current main awaits attachment preparation before registering the abort controller, while chat.abort returns aborted:false when the run has no controller entry; I did not run a local repro because this review is read-only.",
+      "review_followup": "No repair lane is needed because the updated PR no longer has a concrete blocking code finding; remaining action is maintainer review, CI/proof confirmation, and merge decision.",
+      "freeform_prompt": null,
+      "expected_head_sha": "b27254d5ea601c65d06a44ffc5be2df36b7d9c58",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): register chat abort controller before attachment prep",
+        "body": "## Summary\n\nFixes #84176. `chat.abort` sent right after `chat.send` returned `aborted:false` because the abort controller was only registered after the awaited attachment preparation, leaving a window where the run had no entry in `chatAbortControllers`.\n\nThe fix mirrors the agent RPC early-registration pattern (`src/gateway/server-methods/agent.ts:1746`):\n\n- Register the abort controller before attachment prep so a concurrent `chat.abort` immediately observes the active run.\n- Clean it up via `activeRunAbort.cleanup()` if attachment prep throws, and persist a terminal `chat:<runId>` error dedupe entry so duplicate senders that already received `status:\"in_flight\"` (and later retries with the same idempotencyKey) see the cached failure instead of spawning a fresh run.\n- After prep, check `activeRunAbort.controller.signal.aborted` — if `chat.abort` already fired, `abortChatRunById` has cleared the entry and broadcast `aborted`, so the handler skips dispatch and acknowledges with `status: \"aborted\"` instead of falsely emitting a `started` ack.\n- Cache the aborted outcome under `chat:<runId>` so retries with the same `idempotencyKey` see the cached aborted result rather than spawning a new run (mirrors the existing `started`/`ok`/`error` dedupe writes).\n\nThe pre-existing `\"duplicate attachment send wins parsing race\"` test gets stricter expectations as a consequence: with early registration the first send always wins (`started`) and any duplicate before it finishes always sees `in_flight`, which matches idempotency semantics. Two new regression tests cover (a) abort-during-attachment-prep and (b) duplicate-in_flight then prep-failure.\n\n## Real behavior proof\n\nBehavior addressed: prior to this fix, `chat.send` only inserted the abort controller into `context.chatAbortControllers` after `await gateway.chat_send.prepare_attachments`. A `chat.abort` arriving while prep was still pending called `chatAbortControllers.get(runId)`, found nothing, and returned `{ ok: true, aborted: false, runIds: [] }` even though the chat run was still active.\n\nReal environment tested: local OpenClaw source checkout on Ubuntu 22.04, Node v24.15.0, with the production `chatHandlers[\"chat.send\"]` and `chatHandlers[\"chat.abort\"]` driven directly through `node --import tsx` against a real `Map` for `chatAbortControllers`/`dedupe`, real `AbortController`, and a deferred model-catalog mock that suspends chat.send mid attachment prep so chat.abort can race with it.\n\nExact steps or command run after this patch: `node --import tsx /tmp/probe-handler-84176.mjs` — the script imports the live `chatHandlers` map, fires `chat.send` with an image attachment, waits until the handler has registered the abort controller (early registration is the fix), fires `chat.abort` for the same runId, then releases the catalog so chat.send finishes and prints the resulting handler responses plus the cached dedupe entry.\n\nEvidence after fix:\n\n```json\n{\n  \"registeredBeforeAbort\": true,\n  \"registeredAfterAbort\": false,\n  \"abortResponse\": {\n    \"ok\": true,\n    \"payload\": {\n      \"ok\": true,\n      \"aborted\": true,\n      \"runIds\": [\n        \"probe-run-84176\"\n      ]\n    }\n  },\n  \"sendResponse\": {\n    \"ok\": true,\n    \"payload\": {\n      \"runId\": \"probe-run-84176\",\n      \"status\": \"aborted\",\n      \"stopReason\": \"rpc\"\n    }\n  },\n  \"cachedChatRunDedupe\": {\n    \"ok\": true,\n    \"payload\": {\n      \"runId\": \"probe-run-84176\",\n      \"status\": \"aborted\",\n      \"stopReason\": \"rpc\"\n    }\n  }\n}\n```\n\nObserved result after fix, driven through the real handlers:\n\n- `chat.send` registered the abort controller before attachment prep finished, so `chat.abort` for the same runId returned `{ ok: true, aborted: true, runIds: [<runId>] }` instead of the buggy `aborted: false`.\n- After abort, `chatAbortControllers` no longer held the entry (cleared by `abortChatRunById`).\n- The suspended `chat.send`, once the catalog resolved and prep finished, detected `signal.aborted` and responded with `status: \"aborted\", stopReason: \"rpc\"` instead of falsely emitting `started` and dispatching the run.\n- The aborted outcome was cached under `chat:<runId>` so a retry with the same `idempotencyKey` returns the cached aborted ack instead of starting a new run.\n\nWhat was not tested: no full end-to-end gateway WS roundtrip against a live model provider; the new regression tests in `src/gateway/server.chat.gateway-server-chat-b.test.ts` exercise the same handler entry points with a real `Map` for `chatAbortControllers`/`dedupe` and a deferred catalog mock.\n\n## Verification\n\n- `node scripts/run-vitest.mjs src/gateway/` — 223 files / 2585 tests passed, including the two new regression tests (`chat.abort during attachment prep finds the active run (regression for #84176)` and `chat.send attachment-prep failure caches the error so a duplicate that already saw in_flight does not retry into a fresh run`).\n- `node scripts/run-vitest.mjs src/gateway/server.chat.gateway-server-chat-b.test.ts src/gateway/chat-abort.test.ts src/gateway/server-methods/chat.abort-authorization.test.ts` — the three test files ClawSweeper named in its review of #84176 all pass.\n- `node scripts/run-oxlint.mjs src/gateway/server-methods/chat.ts src/gateway/server.chat.gateway-server-chat-b.test.ts` — clean.\n- `node scripts/run-tsgo.mjs` — clean.\n- Auto Review (extra-high recall, 5 angles + verifier + sweep): one HIGH finding fixed (aborted-path missing `chat:<runId>` dedupe write); one LOW finding fixed (test used `.find()` without count assertion).\n- ClawSweeper P2 follow-up (`chat.ts:2481`): the second commit adds the prep-failure dedupe write and its regression test.\n",
+        "branch": "fix/chat-abort-race-pre-attachment",
+        "head_sha": "b27254d5ea601c65d06a44ffc5be2df36b7d9c58",
+        "author": "willamhou",
+        "labels": [
+          "app: web-ui",
+          "gateway",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/server-methods/chat.ts",
+            "additions": 73,
+            "deletions": 26,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.chat.gateway-server-chat-b.test.ts",
+            "additions": 279,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85917",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85917.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "CANCELLED": 2,
+            "IN_PROGRESS": 1,
+            "SKIPPED": 27,
+            "SUCCESS": 71,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "Scan changed paths (precise):IN_PROGRESS"
+          ],
+          "pending": [
+            "Scan changed paths (precise):IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 670,
+    "total_ms": 2159,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 361
+        "ms": 354
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1532
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 298
+        "ms": 242
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
