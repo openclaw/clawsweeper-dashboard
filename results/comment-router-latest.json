@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T17:08:43.625Z",
+  "generated_at": "2026-05-24T17:09:10.072Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T14:08:41.162Z",
+  "since": "2026-05-24T14:09:05.992Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    82947
+    85341
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 22,
-  "commands_seen": 11,
+  "scanned_comments": 5,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:82947:4469521058:2026-05-24T17:08:36Z:clawsweeper_needs_human",
-      "comment_id": "4469521058",
-      "comment_version_key": "4469521058:2026-05-24T17:08:36Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82947#issuecomment-4469521058",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:85341:4518443925:2026-05-24T17:09:01Z:clawsweeper_needs_human",
+      "comment_id": "4518443925",
+      "comment_version_key": "4518443925:2026-05-24T17:09:01Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85341#issuecomment-4518443925",
       "repo": "openclaw/openclaw",
-      "issue_number": 82947,
+      "issue_number": 85341,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-17T05:50:35Z",
-      "comment_updated_at": "2026-05-24T17:08:36Z",
+      "comment_created_at": "2026-05-22T11:58:41Z",
+      "comment_updated_at": "2026-05-24T17:09:01Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -51,855 +51,752 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "The code repair appears focused, but automation cannot supply the contributor's required real behavior proof; maintainers should request or provide runtime evidence before merge.; Cleared: The diff only changes local Gmail watcher process/timer lifecycle code and tests; I found no concrete credential, dependency, CI, or supply-chain regression. (sha=1e85ae03dedeaf0cdfed33bbb92c3cb0f7f62351)",
-      "review_summary": "The PR adds Gmail watcher re-entry cleanup for the existing child process, renewal interval, and respawn timeout, with regression tests in `src/hooks/gmail-watcher.test.ts`.\n\nPR surface: Source +61, Tests +160. Total +221 across 2 files.\n\nReproducibility: yes. from source inspection: current main overwrites `watcherProcess` and creates a renewal interval without clearing prior watcher state, while the respawn timer is untracked. I did not run a live Gmail watcher or reload scenario in this read-only review.",
-      "review_followup": "The code repair appears focused, but automation cannot supply the contributor's required real behavior proof; maintainers should request or provide runtime evidence before merge.",
+      "repair_reason": "Manual handling is required because missing real behavior proof and security/dependency review remain human merge gates even though the auth regression itself is mechanically fixable.; Needs attention: The diff has concrete security-review surface from dependency/shrinkwrap changes and GHAS-reported runtime findings that need maintainer triage before merge.; Review finding: [P1] Use provider metadata for env auth lo... (sha=a3c26df15b03dfa83b67479a22b277589e16e7e6)",
+      "review_summary": "This PR internalizes the former Pi agent runtime into OpenClaw-owned runtime/package surfaces, updates docs/tests/workflows, and changes provider/runtime dependency and auth plumbing.\n\nReproducibility: yes. by source inspection: the PR-head `getApiKeyEnvVars()` table omits env vars still advertised by provider manifests, and `AuthStorage` plus transports call that helper for auth detection and request keys.",
+      "review_followup": "Manual handling is required because missing real behavior proof and security/dependency review remain human merge gates even though the auth regression itself is mechanically fixable.",
       "freeform_prompt": null,
-      "expected_head_sha": "1e85ae03dedeaf0cdfed33bbb92c3cb0f7f62351",
+      "expected_head_sha": "a3c26df15b03dfa83b67479a22b277589e16e7e6",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(hooks): clear Gmail watcher renewal interval on re-entry",
-        "body": "## Problem\n\n`startGmailWatcher()` in `src/hooks/gmail-watcher.ts` does not stop the existing watcher when called a second time (e.g., during a configuration reload). On re-entry:\n\n1. **Process leak**: The old `gog serve` child process keeps running because `watcherProcess` is overwritten without killing the old process.\n2. **Interval leak**: The old `setInterval` renewal timer keeps firing because `renewInterval` is overwritten without `clearInterval`.\n3. **Respawn timer leak**: When the process exits normally, `spawnGogServe` queues a 5-second `setTimeout` for respawn. This timer is not stored or cleared. If a re-entry happens during the 5-second window, the stale timer fires and spawns a duplicate process.\n\n## Fix\n\nAdd a comprehensive re-entry guard **before async setup work** (Tailscale, Gmail API watch start):\n\n1. Set `shuttingDown = true` so the old process's exit handler skips the respawn `setTimeout`.\n2. Cancel any pending respawn timeout (`clearTimeout(respawnTimeout)`).\n3. Clear the old renewal interval.\n4. Kill the old `gog serve` process with SIGTERM.\n5. Await its **exit event**. If it does not exit within 3 seconds, escalate to SIGKILL. The promise resolves **only on exit**, never on the SIGKILL send, ensuring `shuttingDown` stays `true` until the process is confirmed dead.\n6. Reset `shuttingDown = false` and spawn fresh.\n\n**Key design decisions:**\n- Guard runs **before** `startGmailWatch()` and Tailscale setup, not after, so the old process cannot exit and queue a respawn during async work.\n- `respawnTimeout` is a new module-level variable that stores the exit handler's 5-second `setTimeout` return value. The re-entry guard and `stopGmailWatcher` both clear it.\n- `resolve()` appears **only** in the `exit` handler, **not** in the SIGKILL timeout. No race between exit-handler cleanup and replacement spawn.\n- `shuttingDown` is always reset to `false` unconditionally before `spawnGogServe`, covering both the guard path and the no-guard path.\n\nProduction diff is +22 lines changed in `gmail-watcher.ts`, plus 128 lines of test coverage (7 tests total).\n\n## Real behavior proof\n\n**Behavior addressed:** Gmail watcher no longer triggers duplicate respawns when an old child process exits after the `settleProcess` timeout. The fix strips all event listeners from the retired process after settle, preventing its late `exit` event from scheduling a conflicting respawn.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `5d0a0b39bd`\n\n**Exact steps or command run after this patch:**\n\nSource verification of the listener cleanup on current HEAD:\n\n```\n$ grep -n -A4 'settleProcess(oldProcess)' src/hooks/gmail-watcher.ts\n303:      await settleProcess(oldProcess);\n304-      // Remove lingering spawnGogServe listeners so a late exit (after the\n305-      // settleProcess timeout) cannot trigger a duplicate respawn while\n306-      // watcherProcess is null and shuttingDown is false.\n307:      oldProcess.removeAllListeners();\n```\n\n**Evidence after fix:** Terminal output from `node` confirms the guard placement and the 8-second settle timeout on the patched source:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/hooks/gmail-watcher.ts','utf8');\n  const settleIdx = src.indexOf('await settleProcess(oldProcess)');\n  const removeIdx = src.indexOf('oldProcess.removeAllListeners()', settleIdx);\n  const shuttingDownIdx = src.indexOf('shuttingDown = false', removeIdx);\n  console.log('settleProcess at char:', settleIdx);\n  console.log('removeAllListeners at char:', removeIdx);\n  console.log('shuttingDown=false at char:', shuttingDownIdx);\n  console.log('correct order (settle < remove < shuttingDown=false):', settleIdx < removeIdx && removeIdx < shuttingDownIdx);\n  console.log('settle timeout is 8s:', src.includes('8_000'));\n\"\nsettleProcess at char: 11199\nremoveAllListeners at char: 11428\nshuttingDown=false at char: 11445\ncorrect order (settle < remove < shuttingDown=false): true\nsettle timeout is 8s: true\n```\n\n**Observed result after fix:** Actual output from `node` verifying no duplicate respawn is possible after settle timeout:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/hooks/gmail-watcher.ts','utf8');\n  const exitHandler = src.slice(src.indexOf('child.on(\\\"exit\\\"'));\n  const hasWatcherGuard = exitHandler.includes('watcherProcess !== null && watcherProcess !== child');\n  const hasShuttingGuard = exitHandler.includes('shuttingDown');\n  const removeBeforeNewSpawn = src.indexOf('removeAllListeners') < src.indexOf('spawnGogServe(runtimeConfig)');\n  console.log('exit handler has watcher identity guard:', hasWatcherGuard);\n  console.log('exit handler checks shuttingDown:', hasShuttingGuard);\n  console.log('listeners removed before new child spawned:', removeBeforeNewSpawn);\n\"\nexit handler has watcher identity guard: true\nexit handler checks shuttingDown: true\nlisteners removed before new child spawned: true\n```\n\n**What was not tested:** No live Gmail watcher with real Google API credentials was tested. The race condition requires a process that survives SIGKILL for >8 seconds, which is rare in practice.\n",
-        "branch": "fix/gmail-watcher-interval-leak",
-        "head_sha": "1e85ae03dedeaf0cdfed33bbb92c3cb0f7f62351",
-        "author": "sebtardif",
+        "title": "refactor: internalize OpenClaw agent runtime",
+        "body": "## Summary\n\n- rename the former Pi agent runtime/package surfaces to OpenClaw-owned agent runtime names\n- internalize the runtime packages into core and wire the embedded OpenClaw runtime through the current plugin/runtime contracts\n- remove copied session-export HTML assets, package-manager install/update leftovers, runtime `.pi` auth discovery, and stale internal Pi naming\n- split modern agent runtime id helpers from deprecated Pi runtime-id compatibility; keep compatibility in explicit doctor/session/env/plugin-boundary helpers\n- keep deprecated plugin SDK compatibility only at named boundaries, including `resolveLegacyAgentAccessToken`\n- add the Pi third-party notice for incorporated code\n\n## Verification\n\nBehavior addressed: OpenClaw no longer has live core/runtime paths depending on Pi package names or `.pi` credential discovery; remaining Pi runtime-id compatibility is isolated in deprecated compat helpers for shipped config/session/env values and plugin SDK boundary compatibility.\nReal environment tested: local macOS checkout plus Linux Blacksmith Testbox through Crabbox.\nExact steps or command run after this patch: `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/aliases.test.ts src/agents/embedded-agent-runner/run/backend.test.ts src/agents/harness/selection.test.ts src/agents/harness/runtime-plugin.test.ts src/agents/openai-codex-routing.test.ts src/agents/runtime-plan/build.test.ts src/agents/command/cli-compaction.test.ts src/gateway/server-startup.test.ts src/gateway/server-startup-post-attach.test.ts`; `node scripts/run-tsgo.mjs -b tsconfig.projects.json`; `node scripts/run-oxlint.mjs <changed files>`; `git diff --check`; `/Users/steipete/Projects/agent-scripts/skills/autoreview/scripts/autoreview --mode local`; `node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox ... corepack pnpm check:changed`.\nEvidence after fix: targeted Vitest passed 13 files / 181 tests; local tsgo passed; targeted oxlint passed; `git diff --check` passed; autoreview clean; Testbox-through-Crabbox `tbx_01ksafhp87h8heqjsjwb7z9wgk` passed `pnpm check:changed` in Actions run https://github.com/openclaw/openclaw/actions/runs/26333664224.\nObserved result after fix: `src/agents/embedded-agent-runner/runtime.ts` is gone; modern runtime-id helpers live in `src/agents/agent-runtime-id.ts`; deprecated Pi alias handling is quarantined in `src/agents/deprecated-agent-runtime-compat.ts`; plugin SDK `resolveEmbeddedAgentRuntime` remains exported.\nWhat was not tested: full Vitest suite and live provider usage calls.\n",
+        "branch": "refactor/openclaw-agent-runtime-cleanup",
+        "head_sha": "a3c26df15b03dfa83b67479a22b277589e16e7e6",
+        "author": "steipete",
         "labels": [
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 availability",
+          "docs",
+          "channel: discord",
+          "channel: matrix",
+          "channel: slack",
+          "channel: telegram",
+          "channel: voice-call",
+          "channel: whatsapp-web",
+          "app: macos",
+          "app: web-ui",
+          "gateway",
+          "extensions: llm-task",
+          "extensions: memory-core",
+          "cli",
+          "scripts",
+          "commands",
+          "docker",
+          "agents",
+          "maintainer",
+          "size: XL",
+          "extensions: acpx",
+          "extensions: anthropic",
+          "extensions: openai",
+          "extensions: minimax",
+          "extensions: cloudflare-ai-gateway",
+          "extensions: byteplus",
+          "extensions: huggingface",
+          "extensions: kimi-coding",
+          "extensions: moonshot",
+          "extensions: synthetic",
+          "extensions: together",
+          "extensions: volcengine",
+          "extensions: xiaomi",
+          "extensions: kilocode",
+          "extensions: nvidia",
+          "extensions: vercel-ai-gateway",
+          "extensions: fal",
+          "extensions: tavily",
+          "extensions: deepseek",
+          "extensions: qa-lab",
+          "extensions: arcee",
+          "extensions: codex",
+          "extensions: lmstudio",
+          "extensions: tokenjuice",
+          "extensions: tencent",
+          "plugin: google-meet",
+          "extensions: senseaudio",
+          "extensions: litellm",
+          "extensions: inworld",
+          "extensions: gradium",
+          "plugin: azure-speech",
+          "plugin: migrate-hermes",
+          "plugin: migrate-claude",
+          "extensions: cerebras",
+          "plugin: file-transfer",
+          "extensions: amazon-bedrock",
+          "extensions: anthropic-vertex",
+          "extensions: brave",
+          "extensions: chutes",
+          "extensions: elevenlabs",
+          "extensions: firecrawl",
+          "extensions: github-copilot",
+          "extensions: google",
+          "extensions: mistral",
+          "extensions: ollama",
+          "extensions: opencode",
+          "extensions: opencode-go",
+          "extensions: openrouter",
+          "extensions: perplexity",
+          "extensions: xai",
+          "extensions: sglang",
+          "extensions: vllm",
+          "extensions: zai",
+          "dependencies-changed",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 security-boundary",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/hooks/gmail-watcher.test.ts",
-            "additions": 160,
+            "path": ".github/codeql/codeql-agent-runtime-boundary-critical-quality.yml",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": ".github/codeql/codeql-mcp-process-tool-boundary-critical-security.yml",
+            "additions": 8,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": ".github/workflows/codeql-critical-quality.yml",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": ".github/workflows/openclaw-release-checks.yml",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": ".github/workflows/qa-live-transports-convex.yml",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "CHANGELOG.md",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/hooks/gmail-watcher.ts",
-            "additions": 81,
+            "path": "LICENSE",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "README.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "THIRD_PARTY_NOTICES.md",
+            "additions": 37,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/Constants.swift",
+            "additions": 0,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
+            "additions": 0,
+            "deletions": 81,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/macos/Sources/OpenClaw/ModelCatalogLoader.swift",
+            "additions": 0,
+            "deletions": 587,
+            "changeType": "DELETED"
+          },
+          {
+            "path": "apps/macos/Tests/OpenClawIPCTests/ModelCatalogLoaderTests.swift",
+            "additions": 0,
+            "deletions": 102,
+            "changeType": "DELETED"
+          },
+          {
+            "path": "config/knip.config.ts",
+            "additions": 5,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/agent-runtime-architecture.md",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "docs/auth-credential-semantics.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/channels/group-messages.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/mcp.md",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/migrate.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/models.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/status.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/concepts/agent-loop.md",
+            "additions": 10,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/concepts/agent-runtimes.md",
+            "additions": 22,
+            "deletions": 22,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/concepts/agent.md",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/concepts/compaction.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/concepts/context-engine.md",
+            "additions": 5,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/concepts/model-failover.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/concepts/model-providers.md",
+            "additions": 10,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/concepts/models.md",
+            "additions": 4,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/concepts/oauth.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/concepts/qa-e2e-automation.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/concepts/queue-steering.md",
+            "additions": 10,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/concepts/queue.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/concepts/system-prompt.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/docs.json",
+            "additions": 10,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/background-process.md",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/config-agents.md",
+            "additions": 8,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/config-tools.md",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/configuration-reference.md",
+            "additions": 3,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/doctor.md",
+            "additions": 3,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/help/debugging.md",
+            "additions": 5,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/help/gpt55-codex-agentic-parity-maintainers.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/help/gpt55-codex-agentic-parity.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/help/testing-live.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/help/testing.md",
+            "additions": 7,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/index.md",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/nodes/images.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/openclaw-agent-runtime.md",
+            "additions": 23,
+            "deletions": 23,
+            "changeType": "RENAMED"
+          },
+          {
+            "path": "docs/pi.md",
+            "additions": 4,
+            "deletions": 570,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plan/codex-context-engine-harness.md",
+            "additions": 34,
+            "deletions": 34,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/architecture-internals.md",
+            "additions": 7,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/bundles.md",
+            "additions": 203,
+            "deletions": 232,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/codex-harness-runtime.md",
+            "additions": 5,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/codex-harness.md",
+            "additions": 20,
             "deletions": 20,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/codex-native-plugins.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/manifest.md",
+            "additions": 17,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/sdk-agent-harness.md",
+            "additions": 17,
+            "deletions": 18,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/sdk-migration.md",
+            "additions": 17,
+            "deletions": 18,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/sdk-overview.md",
+            "additions": 8,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/sdk-provider-plugins.md",
+            "additions": 14,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/sdk-runtime.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/bedrock.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/openai.md",
+            "additions": 18,
+            "deletions": 18,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/opencode-go.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/reference/AGENTS.default.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/reference/code-mode.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/reference/session-management-compaction.md",
+            "additions": 16,
+            "deletions": 16,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/reference/transcript-hygiene.md",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/tools/acp-agents-setup.md",
+            "additions": 1,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/tools/acp-agents.md",
+            "additions": 1,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/tools/index.md",
+            "additions": 16,
+            "deletions": 16,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/tools/skills.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/tools/slash-commands.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/tools/subagents.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/tools/thinking.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/tools/tokenjuice.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/tools/tool-search.md",
+            "additions": 13,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/tools/trajectory.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/web/webchat.md",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/acpx/src/codex-auth-bridge.test.ts",
+            "additions": 0,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/active-memory/index.test.ts",
+            "additions": 83,
+            "deletions": 83,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/active-memory/index.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/alibaba/openclaw.plugin.json",
+            "additions": 7,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/amazon-bedrock-mantle/mantle-anthropic.runtime.test.ts",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/amazon-bedrock-mantle/mantle-anthropic.runtime.ts",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/amazon-bedrock-mantle/npm-shrinkwrap.json",
+            "additions": 1,
+            "deletions": 562,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/amazon-bedrock-mantle/package.json",
+            "additions": 1,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/amazon-bedrock/discovery.test.ts",
+            "additions": 1,
+            "deletions": 27,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/amazon-bedrock/discovery.ts",
+            "additions": 1,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/amazon-bedrock/index.test.ts",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/amazon-bedrock/npm-shrinkwrap.json",
+            "additions": 3,
+            "deletions": 543,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/amazon-bedrock/package.json",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/amazon-bedrock/register.sync.runtime.ts",
+            "additions": 32,
+            "deletions": 51,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/amazon-bedrock/stream.runtime.test.ts",
+            "additions": 81,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/amazon-bedrock/stream.runtime.ts",
+            "additions": 949,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/anthropic-vertex/api.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/anthropic-vertex/api.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/anthropic-vertex/npm-shrinkwrap.json",
+            "additions": 1,
+            "deletions": 1013,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-82947",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82947.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85341",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85341.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 102,
+          "total": 101,
           "counts": {
-            "SUCCESS": 72,
-            "SKIPPED": 29,
-            "NEUTRAL": 1
+            "SUCCESS": 89,
+            "SKIPPED": 9,
+            "FAILURE": 1,
+            "NEUTRAL": 2
           },
-          "blockers": [],
+          "blockers": [
+            "checks-node-core-runtime-cron-isolated-agent:FAILURE"
+          ],
           "pending": [],
-          "terminalBlockers": []
+          "terminalBlockers": [
+            "checks-node-core-runtime-cron-isolated-agent:FAILURE"
+          ]
         }
       },
       "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:82947:4529388729:2026-05-24T16:49:59Z:re_review",
-      "comment_id": "4529388729",
-      "comment_version_key": "4529388729:2026-05-24T16:49:59Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82947#issuecomment-4529388729",
-      "repo": "openclaw/openclaw",
-      "issue_number": 82947,
-      "author": "SebTardif",
-      "author_id": 1413412,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-24T16:49:59Z",
-      "comment_updated_at": "2026-05-24T16:49:59Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(hooks): clear Gmail watcher renewal interval on re-entry",
-        "body": "## Problem\n\n`startGmailWatcher()` in `src/hooks/gmail-watcher.ts` does not stop the existing watcher when called a second time (e.g., during a configuration reload). On re-entry:\n\n1. **Process leak**: The old `gog serve` child process keeps running because `watcherProcess` is overwritten without killing the old process.\n2. **Interval leak**: The old `setInterval` renewal timer keeps firing because `renewInterval` is overwritten without `clearInterval`.\n3. **Respawn timer leak**: When the process exits normally, `spawnGogServe` queues a 5-second `setTimeout` for respawn. This timer is not stored or cleared. If a re-entry happens during the 5-second window, the stale timer fires and spawns a duplicate process.\n\n## Fix\n\nAdd a comprehensive re-entry guard **before async setup work** (Tailscale, Gmail API watch start):\n\n1. Set `shuttingDown = true` so the old process's exit handler skips the respawn `setTimeout`.\n2. Cancel any pending respawn timeout (`clearTimeout(respawnTimeout)`).\n3. Clear the old renewal interval.\n4. Kill the old `gog serve` process with SIGTERM.\n5. Await its **exit event**. If it does not exit within 3 seconds, escalate to SIGKILL. The promise resolves **only on exit**, never on the SIGKILL send, ensuring `shuttingDown` stays `true` until the process is confirmed dead.\n6. Reset `shuttingDown = false` and spawn fresh.\n\n**Key design decisions:**\n- Guard runs **before** `startGmailWatch()` and Tailscale setup, not after, so the old process cannot exit and queue a respawn during async work.\n- `respawnTimeout` is a new module-level variable that stores the exit handler's 5-second `setTimeout` return value. The re-entry guard and `stopGmailWatcher` both clear it.\n- `resolve()` appears **only** in the `exit` handler, **not** in the SIGKILL timeout. No race between exit-handler cleanup and replacement spawn.\n- `shuttingDown` is always reset to `false` unconditionally before `spawnGogServe`, covering both the guard path and the no-guard path.\n\nProduction diff is +22 lines changed in `gmail-watcher.ts`, plus 128 lines of test coverage (7 tests total).\n\n## Real behavior proof\n\n**Behavior addressed:** Gmail watcher no longer triggers duplicate respawns when an old child process exits after the `settleProcess` timeout. The fix strips all event listeners from the retired process after settle, preventing its late `exit` event from scheduling a conflicting respawn.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `5d0a0b39bd`\n\n**Exact steps or command run after this patch:**\n\nSource verification of the listener cleanup on current HEAD:\n\n```\n$ grep -n -A4 'settleProcess(oldProcess)' src/hooks/gmail-watcher.ts\n303:      await settleProcess(oldProcess);\n304-      // Remove lingering spawnGogServe listeners so a late exit (after the\n305-      // settleProcess timeout) cannot trigger a duplicate respawn while\n306-      // watcherProcess is null and shuttingDown is false.\n307:      oldProcess.removeAllListeners();\n```\n\n**Evidence after fix:** Terminal output from `node` confirms the guard placement and the 8-second settle timeout on the patched source:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/hooks/gmail-watcher.ts','utf8');\n  const settleIdx = src.indexOf('await settleProcess(oldProcess)');\n  const removeIdx = src.indexOf('oldProcess.removeAllListeners()', settleIdx);\n  const shuttingDownIdx = src.indexOf('shuttingDown = false', removeIdx);\n  console.log('settleProcess at char:', settleIdx);\n  console.log('removeAllListeners at char:', removeIdx);\n  console.log('shuttingDown=false at char:', shuttingDownIdx);\n  console.log('correct order (settle < remove < shuttingDown=false):', settleIdx < removeIdx && removeIdx < shuttingDownIdx);\n  console.log('settle timeout is 8s:', src.includes('8_000'));\n\"\nsettleProcess at char: 11199\nremoveAllListeners at char: 11428\nshuttingDown=false at char: 11445\ncorrect order (settle < remove < shuttingDown=false): true\nsettle timeout is 8s: true\n```\n\n**Observed result after fix:** Actual output from `node` verifying no duplicate respawn is possible after settle timeout:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/hooks/gmail-watcher.ts','utf8');\n  const exitHandler = src.slice(src.indexOf('child.on(\\\"exit\\\"'));\n  const hasWatcherGuard = exitHandler.includes('watcherProcess !== null && watcherProcess !== child');\n  const hasShuttingGuard = exitHandler.includes('shuttingDown');\n  const removeBeforeNewSpawn = src.indexOf('removeAllListeners') < src.indexOf('spawnGogServe(runtimeConfig)');\n  console.log('exit handler has watcher identity guard:', hasWatcherGuard);\n  console.log('exit handler checks shuttingDown:', hasShuttingGuard);\n  console.log('listeners removed before new child spawned:', removeBeforeNewSpawn);\n\"\nexit handler has watcher identity guard: true\nexit handler checks shuttingDown: true\nlisteners removed before new child spawned: true\n```\n\n**What was not tested:** No live Gmail watcher with real Google API credentials was tested. The race condition requires a process that survives SIGKILL for >8 seconds, which is rare in practice.\n",
-        "branch": "fix/gmail-watcher-interval-leak",
-        "head_sha": "1e85ae03dedeaf0cdfed33bbb92c3cb0f7f62351",
-        "author": "sebtardif",
-        "labels": [
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/hooks/gmail-watcher.test.ts",
-            "additions": 160,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/gmail-watcher.ts",
-            "additions": 81,
-            "deletions": 20,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-82947",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82947.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "SUCCESS": 72,
-            "SKIPPED": 29,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:82947:4526671565:2026-05-23T22:19:26Z:re_review",
-      "comment_id": "4526671565",
-      "comment_version_key": "4526671565:2026-05-23T22:19:26Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82947#issuecomment-4526671565",
-      "repo": "openclaw/openclaw",
-      "issue_number": 82947,
-      "author": "SebTardif",
-      "author_id": 1413412,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-23T22:19:26Z",
-      "comment_updated_at": "2026-05-23T22:19:26Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(hooks): clear Gmail watcher renewal interval on re-entry",
-        "body": "## Problem\n\n`startGmailWatcher()` in `src/hooks/gmail-watcher.ts` does not stop the existing watcher when called a second time (e.g., during a configuration reload). On re-entry:\n\n1. **Process leak**: The old `gog serve` child process keeps running because `watcherProcess` is overwritten without killing the old process.\n2. **Interval leak**: The old `setInterval` renewal timer keeps firing because `renewInterval` is overwritten without `clearInterval`.\n3. **Respawn timer leak**: When the process exits normally, `spawnGogServe` queues a 5-second `setTimeout` for respawn. This timer is not stored or cleared. If a re-entry happens during the 5-second window, the stale timer fires and spawns a duplicate process.\n\n## Fix\n\nAdd a comprehensive re-entry guard **before async setup work** (Tailscale, Gmail API watch start):\n\n1. Set `shuttingDown = true` so the old process's exit handler skips the respawn `setTimeout`.\n2. Cancel any pending respawn timeout (`clearTimeout(respawnTimeout)`).\n3. Clear the old renewal interval.\n4. Kill the old `gog serve` process with SIGTERM.\n5. Await its **exit event**. If it does not exit within 3 seconds, escalate to SIGKILL. The promise resolves **only on exit**, never on the SIGKILL send, ensuring `shuttingDown` stays `true` until the process is confirmed dead.\n6. Reset `shuttingDown = false` and spawn fresh.\n\n**Key design decisions:**\n- Guard runs **before** `startGmailWatch()` and Tailscale setup, not after, so the old process cannot exit and queue a respawn during async work.\n- `respawnTimeout` is a new module-level variable that stores the exit handler's 5-second `setTimeout` return value. The re-entry guard and `stopGmailWatcher` both clear it.\n- `resolve()` appears **only** in the `exit` handler, **not** in the SIGKILL timeout. No race between exit-handler cleanup and replacement spawn.\n- `shuttingDown` is always reset to `false` unconditionally before `spawnGogServe`, covering both the guard path and the no-guard path.\n\nProduction diff is +22 lines changed in `gmail-watcher.ts`, plus 128 lines of test coverage (7 tests total).\n\n## Real behavior proof\n\n**Behavior addressed:** Gmail watcher no longer triggers duplicate respawns when an old child process exits after the `settleProcess` timeout. The fix strips all event listeners from the retired process after settle, preventing its late `exit` event from scheduling a conflicting respawn.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `5d0a0b39bd`\n\n**Exact steps or command run after this patch:**\n\nSource verification of the listener cleanup on current HEAD:\n\n```\n$ grep -n -A4 'settleProcess(oldProcess)' src/hooks/gmail-watcher.ts\n303:      await settleProcess(oldProcess);\n304-      // Remove lingering spawnGogServe listeners so a late exit (after the\n305-      // settleProcess timeout) cannot trigger a duplicate respawn while\n306-      // watcherProcess is null and shuttingDown is false.\n307:      oldProcess.removeAllListeners();\n```\n\n**Evidence after fix:** Terminal output from `node` confirms the guard placement and the 8-second settle timeout on the patched source:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/hooks/gmail-watcher.ts','utf8');\n  const settleIdx = src.indexOf('await settleProcess(oldProcess)');\n  const removeIdx = src.indexOf('oldProcess.removeAllListeners()', settleIdx);\n  const shuttingDownIdx = src.indexOf('shuttingDown = false', removeIdx);\n  console.log('settleProcess at char:', settleIdx);\n  console.log('removeAllListeners at char:', removeIdx);\n  console.log('shuttingDown=false at char:', shuttingDownIdx);\n  console.log('correct order (settle < remove < shuttingDown=false):', settleIdx < removeIdx && removeIdx < shuttingDownIdx);\n  console.log('settle timeout is 8s:', src.includes('8_000'));\n\"\nsettleProcess at char: 11199\nremoveAllListeners at char: 11428\nshuttingDown=false at char: 11445\ncorrect order (settle < remove < shuttingDown=false): true\nsettle timeout is 8s: true\n```\n\n**Observed result after fix:** Actual output from `node` verifying no duplicate respawn is possible after settle timeout:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/hooks/gmail-watcher.ts','utf8');\n  const exitHandler = src.slice(src.indexOf('child.on(\\\"exit\\\"'));\n  const hasWatcherGuard = exitHandler.includes('watcherProcess !== null && watcherProcess !== child');\n  const hasShuttingGuard = exitHandler.includes('shuttingDown');\n  const removeBeforeNewSpawn = src.indexOf('removeAllListeners') < src.indexOf('spawnGogServe(runtimeConfig)');\n  console.log('exit handler has watcher identity guard:', hasWatcherGuard);\n  console.log('exit handler checks shuttingDown:', hasShuttingGuard);\n  console.log('listeners removed before new child spawned:', removeBeforeNewSpawn);\n\"\nexit handler has watcher identity guard: true\nexit handler checks shuttingDown: true\nlisteners removed before new child spawned: true\n```\n\n**What was not tested:** No live Gmail watcher with real Google API credentials was tested. The race condition requires a process that survives SIGKILL for >8 seconds, which is rare in practice.\n",
-        "branch": "fix/gmail-watcher-interval-leak",
-        "head_sha": "1e85ae03dedeaf0cdfed33bbb92c3cb0f7f62351",
-        "author": "sebtardif",
-        "labels": [
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/hooks/gmail-watcher.test.ts",
-            "additions": 160,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/gmail-watcher.ts",
-            "additions": 81,
-            "deletions": 20,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-82947",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82947.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "SUCCESS": 72,
-            "SKIPPED": 29,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:82947:4523019549:2026-05-22T22:13:18Z:re_review",
-      "comment_id": "4523019549",
-      "comment_version_key": "4523019549:2026-05-22T22:13:18Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82947#issuecomment-4523019549",
-      "repo": "openclaw/openclaw",
-      "issue_number": 82947,
-      "author": "SebTardif",
-      "author_id": 1413412,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-22T22:13:18Z",
-      "comment_updated_at": "2026-05-22T22:13:18Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(hooks): clear Gmail watcher renewal interval on re-entry",
-        "body": "## Problem\n\n`startGmailWatcher()` in `src/hooks/gmail-watcher.ts` does not stop the existing watcher when called a second time (e.g., during a configuration reload). On re-entry:\n\n1. **Process leak**: The old `gog serve` child process keeps running because `watcherProcess` is overwritten without killing the old process.\n2. **Interval leak**: The old `setInterval` renewal timer keeps firing because `renewInterval` is overwritten without `clearInterval`.\n3. **Respawn timer leak**: When the process exits normally, `spawnGogServe` queues a 5-second `setTimeout` for respawn. This timer is not stored or cleared. If a re-entry happens during the 5-second window, the stale timer fires and spawns a duplicate process.\n\n## Fix\n\nAdd a comprehensive re-entry guard **before async setup work** (Tailscale, Gmail API watch start):\n\n1. Set `shuttingDown = true` so the old process's exit handler skips the respawn `setTimeout`.\n2. Cancel any pending respawn timeout (`clearTimeout(respawnTimeout)`).\n3. Clear the old renewal interval.\n4. Kill the old `gog serve` process with SIGTERM.\n5. Await its **exit event**. If it does not exit within 3 seconds, escalate to SIGKILL. The promise resolves **only on exit**, never on the SIGKILL send, ensuring `shuttingDown` stays `true` until the process is confirmed dead.\n6. Reset `shuttingDown = false` and spawn fresh.\n\n**Key design decisions:**\n- Guard runs **before** `startGmailWatch()` and Tailscale setup, not after, so the old process cannot exit and queue a respawn during async work.\n- `respawnTimeout` is a new module-level variable that stores the exit handler's 5-second `setTimeout` return value. The re-entry guard and `stopGmailWatcher` both clear it.\n- `resolve()` appears **only** in the `exit` handler, **not** in the SIGKILL timeout. No race between exit-handler cleanup and replacement spawn.\n- `shuttingDown` is always reset to `false` unconditionally before `spawnGogServe`, covering both the guard path and the no-guard path.\n\nProduction diff is +22 lines changed in `gmail-watcher.ts`, plus 128 lines of test coverage (7 tests total).\n\n## Real behavior proof\n\n**Behavior addressed:** Gmail watcher no longer triggers duplicate respawns when an old child process exits after the `settleProcess` timeout. The fix strips all event listeners from the retired process after settle, preventing its late `exit` event from scheduling a conflicting respawn.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `5d0a0b39bd`\n\n**Exact steps or command run after this patch:**\n\nSource verification of the listener cleanup on current HEAD:\n\n```\n$ grep -n -A4 'settleProcess(oldProcess)' src/hooks/gmail-watcher.ts\n303:      await settleProcess(oldProcess);\n304-      // Remove lingering spawnGogServe listeners so a late exit (after the\n305-      // settleProcess timeout) cannot trigger a duplicate respawn while\n306-      // watcherProcess is null and shuttingDown is false.\n307:      oldProcess.removeAllListeners();\n```\n\n**Evidence after fix:** Terminal output from `node` confirms the guard placement and the 8-second settle timeout on the patched source:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/hooks/gmail-watcher.ts','utf8');\n  const settleIdx = src.indexOf('await settleProcess(oldProcess)');\n  const removeIdx = src.indexOf('oldProcess.removeAllListeners()', settleIdx);\n  const shuttingDownIdx = src.indexOf('shuttingDown = false', removeIdx);\n  console.log('settleProcess at char:', settleIdx);\n  console.log('removeAllListeners at char:', removeIdx);\n  console.log('shuttingDown=false at char:', shuttingDownIdx);\n  console.log('correct order (settle < remove < shuttingDown=false):', settleIdx < removeIdx && removeIdx < shuttingDownIdx);\n  console.log('settle timeout is 8s:', src.includes('8_000'));\n\"\nsettleProcess at char: 11199\nremoveAllListeners at char: 11428\nshuttingDown=false at char: 11445\ncorrect order (settle < remove < shuttingDown=false): true\nsettle timeout is 8s: true\n```\n\n**Observed result after fix:** Actual output from `node` verifying no duplicate respawn is possible after settle timeout:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/hooks/gmail-watcher.ts','utf8');\n  const exitHandler = src.slice(src.indexOf('child.on(\\\"exit\\\"'));\n  const hasWatcherGuard = exitHandler.includes('watcherProcess !== null && watcherProcess !== child');\n  const hasShuttingGuard = exitHandler.includes('shuttingDown');\n  const removeBeforeNewSpawn = src.indexOf('removeAllListeners') < src.indexOf('spawnGogServe(runtimeConfig)');\n  console.log('exit handler has watcher identity guard:', hasWatcherGuard);\n  console.log('exit handler checks shuttingDown:', hasShuttingGuard);\n  console.log('listeners removed before new child spawned:', removeBeforeNewSpawn);\n\"\nexit handler has watcher identity guard: true\nexit handler checks shuttingDown: true\nlisteners removed before new child spawned: true\n```\n\n**What was not tested:** No live Gmail watcher with real Google API credentials was tested. The race condition requires a process that survives SIGKILL for >8 seconds, which is rare in practice.\n",
-        "branch": "fix/gmail-watcher-interval-leak",
-        "head_sha": "1e85ae03dedeaf0cdfed33bbb92c3cb0f7f62351",
-        "author": "sebtardif",
-        "labels": [
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/hooks/gmail-watcher.test.ts",
-            "additions": 160,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/gmail-watcher.ts",
-            "additions": 81,
-            "deletions": 20,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-82947",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82947.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "SUCCESS": 72,
-            "SKIPPED": 29,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:82947:4514976672:2026-05-22T04:31:02Z:re_review",
-      "comment_id": "4514976672",
-      "comment_version_key": "4514976672:2026-05-22T04:31:02Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82947#issuecomment-4514976672",
-      "repo": "openclaw/openclaw",
-      "issue_number": 82947,
-      "author": "SebTardif",
-      "author_id": 1413412,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-22T04:31:02Z",
-      "comment_updated_at": "2026-05-22T04:31:02Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:82947:4512888118:2026-05-21T21:22:01Z:re_review",
-      "comment_id": "4512888118",
-      "comment_version_key": "4512888118:2026-05-21T21:22:01Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82947#issuecomment-4512888118",
-      "repo": "openclaw/openclaw",
-      "issue_number": 82947,
-      "author": "SebTardif",
-      "author_id": 1413412,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-21T21:22:01Z",
-      "comment_updated_at": "2026-05-21T21:22:01Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(hooks): clear Gmail watcher renewal interval on re-entry",
-        "body": "## Problem\n\n`startGmailWatcher()` in `src/hooks/gmail-watcher.ts` does not stop the existing watcher when called a second time (e.g., during a configuration reload). On re-entry:\n\n1. **Process leak**: The old `gog serve` child process keeps running because `watcherProcess` is overwritten without killing the old process.\n2. **Interval leak**: The old `setInterval` renewal timer keeps firing because `renewInterval` is overwritten without `clearInterval`.\n3. **Respawn timer leak**: When the process exits normally, `spawnGogServe` queues a 5-second `setTimeout` for respawn. This timer is not stored or cleared. If a re-entry happens during the 5-second window, the stale timer fires and spawns a duplicate process.\n\n## Fix\n\nAdd a comprehensive re-entry guard **before async setup work** (Tailscale, Gmail API watch start):\n\n1. Set `shuttingDown = true` so the old process's exit handler skips the respawn `setTimeout`.\n2. Cancel any pending respawn timeout (`clearTimeout(respawnTimeout)`).\n3. Clear the old renewal interval.\n4. Kill the old `gog serve` process with SIGTERM.\n5. Await its **exit event**. If it does not exit within 3 seconds, escalate to SIGKILL. The promise resolves **only on exit**, never on the SIGKILL send, ensuring `shuttingDown` stays `true` until the process is confirmed dead.\n6. Reset `shuttingDown = false` and spawn fresh.\n\n**Key design decisions:**\n- Guard runs **before** `startGmailWatch()` and Tailscale setup, not after, so the old process cannot exit and queue a respawn during async work.\n- `respawnTimeout` is a new module-level variable that stores the exit handler's 5-second `setTimeout` return value. The re-entry guard and `stopGmailWatcher` both clear it.\n- `resolve()` appears **only** in the `exit` handler, **not** in the SIGKILL timeout. No race between exit-handler cleanup and replacement spawn.\n- `shuttingDown` is always reset to `false` unconditionally before `spawnGogServe`, covering both the guard path and the no-guard path.\n\nProduction diff is +22 lines changed in `gmail-watcher.ts`, plus 128 lines of test coverage (7 tests total).\n\n## Real behavior proof\n\n**Behavior addressed:** Gmail watcher no longer triggers duplicate respawns when an old child process exits after the `settleProcess` timeout. The fix strips all event listeners from the retired process after settle, preventing its late `exit` event from scheduling a conflicting respawn.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `5d0a0b39bd`\n\n**Exact steps or command run after this patch:**\n\nSource verification of the listener cleanup on current HEAD:\n\n```\n$ grep -n -A4 'settleProcess(oldProcess)' src/hooks/gmail-watcher.ts\n303:      await settleProcess(oldProcess);\n304-      // Remove lingering spawnGogServe listeners so a late exit (after the\n305-      // settleProcess timeout) cannot trigger a duplicate respawn while\n306-      // watcherProcess is null and shuttingDown is false.\n307:      oldProcess.removeAllListeners();\n```\n\n**Evidence after fix:** Terminal output from `node` confirms the guard placement and the 8-second settle timeout on the patched source:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/hooks/gmail-watcher.ts','utf8');\n  const settleIdx = src.indexOf('await settleProcess(oldProcess)');\n  const removeIdx = src.indexOf('oldProcess.removeAllListeners()', settleIdx);\n  const shuttingDownIdx = src.indexOf('shuttingDown = false', removeIdx);\n  console.log('settleProcess at char:', settleIdx);\n  console.log('removeAllListeners at char:', removeIdx);\n  console.log('shuttingDown=false at char:', shuttingDownIdx);\n  console.log('correct order (settle < remove < shuttingDown=false):', settleIdx < removeIdx && removeIdx < shuttingDownIdx);\n  console.log('settle timeout is 8s:', src.includes('8_000'));\n\"\nsettleProcess at char: 11199\nremoveAllListeners at char: 11428\nshuttingDown=false at char: 11445\ncorrect order (settle < remove < shuttingDown=false): true\nsettle timeout is 8s: true\n```\n\n**Observed result after fix:** Actual output from `node` verifying no duplicate respawn is possible after settle timeout:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/hooks/gmail-watcher.ts','utf8');\n  const exitHandler = src.slice(src.indexOf('child.on(\\\"exit\\\"'));\n  const hasWatcherGuard = exitHandler.includes('watcherProcess !== null && watcherProcess !== child');\n  const hasShuttingGuard = exitHandler.includes('shuttingDown');\n  const removeBeforeNewSpawn = src.indexOf('removeAllListeners') < src.indexOf('spawnGogServe(runtimeConfig)');\n  console.log('exit handler has watcher identity guard:', hasWatcherGuard);\n  console.log('exit handler checks shuttingDown:', hasShuttingGuard);\n  console.log('listeners removed before new child spawned:', removeBeforeNewSpawn);\n\"\nexit handler has watcher identity guard: true\nexit handler checks shuttingDown: true\nlisteners removed before new child spawned: true\n```\n\n**What was not tested:** No live Gmail watcher with real Google API credentials was tested. The race condition requires a process that survives SIGKILL for >8 seconds, which is rare in practice.\n",
-        "branch": "fix/gmail-watcher-interval-leak",
-        "head_sha": "1e85ae03dedeaf0cdfed33bbb92c3cb0f7f62351",
-        "author": "sebtardif",
-        "labels": [
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/hooks/gmail-watcher.test.ts",
-            "additions": 160,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/gmail-watcher.ts",
-            "additions": 81,
-            "deletions": 20,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-82947",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82947.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "SUCCESS": 72,
-            "SKIPPED": 29,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:82947:4512669419:2026-05-21T20:51:40Z:re_review",
-      "comment_id": "4512669419",
-      "comment_version_key": "4512669419:2026-05-21T20:51:40Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82947#issuecomment-4512669419",
-      "repo": "openclaw/openclaw",
-      "issue_number": 82947,
-      "author": "SebTardif",
-      "author_id": 1413412,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-21T20:51:40Z",
-      "comment_updated_at": "2026-05-21T20:51:40Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(hooks): clear Gmail watcher renewal interval on re-entry",
-        "body": "## Problem\n\n`startGmailWatcher()` in `src/hooks/gmail-watcher.ts` does not stop the existing watcher when called a second time (e.g., during a configuration reload). On re-entry:\n\n1. **Process leak**: The old `gog serve` child process keeps running because `watcherProcess` is overwritten without killing the old process.\n2. **Interval leak**: The old `setInterval` renewal timer keeps firing because `renewInterval` is overwritten without `clearInterval`.\n3. **Respawn timer leak**: When the process exits normally, `spawnGogServe` queues a 5-second `setTimeout` for respawn. This timer is not stored or cleared. If a re-entry happens during the 5-second window, the stale timer fires and spawns a duplicate process.\n\n## Fix\n\nAdd a comprehensive re-entry guard **before async setup work** (Tailscale, Gmail API watch start):\n\n1. Set `shuttingDown = true` so the old process's exit handler skips the respawn `setTimeout`.\n2. Cancel any pending respawn timeout (`clearTimeout(respawnTimeout)`).\n3. Clear the old renewal interval.\n4. Kill the old `gog serve` process with SIGTERM.\n5. Await its **exit event**. If it does not exit within 3 seconds, escalate to SIGKILL. The promise resolves **only on exit**, never on the SIGKILL send, ensuring `shuttingDown` stays `true` until the process is confirmed dead.\n6. Reset `shuttingDown = false` and spawn fresh.\n\n**Key design decisions:**\n- Guard runs **before** `startGmailWatch()` and Tailscale setup, not after, so the old process cannot exit and queue a respawn during async work.\n- `respawnTimeout` is a new module-level variable that stores the exit handler's 5-second `setTimeout` return value. The re-entry guard and `stopGmailWatcher` both clear it.\n- `resolve()` appears **only** in the `exit` handler, **not** in the SIGKILL timeout. No race between exit-handler cleanup and replacement spawn.\n- `shuttingDown` is always reset to `false` unconditionally before `spawnGogServe`, covering both the guard path and the no-guard path.\n\nProduction diff is +22 lines changed in `gmail-watcher.ts`, plus 128 lines of test coverage (7 tests total).\n\n## Real behavior proof\n\n**Behavior addressed:** Gmail watcher no longer triggers duplicate respawns when an old child process exits after the `settleProcess` timeout. The fix strips all event listeners from the retired process after settle, preventing its late `exit` event from scheduling a conflicting respawn.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `5d0a0b39bd`\n\n**Exact steps or command run after this patch:**\n\nSource verification of the listener cleanup on current HEAD:\n\n```\n$ grep -n -A4 'settleProcess(oldProcess)' src/hooks/gmail-watcher.ts\n303:      await settleProcess(oldProcess);\n304-      // Remove lingering spawnGogServe listeners so a late exit (after the\n305-      // settleProcess timeout) cannot trigger a duplicate respawn while\n306-      // watcherProcess is null and shuttingDown is false.\n307:      oldProcess.removeAllListeners();\n```\n\n**Evidence after fix:** Terminal output from `node` confirms the guard placement and the 8-second settle timeout on the patched source:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/hooks/gmail-watcher.ts','utf8');\n  const settleIdx = src.indexOf('await settleProcess(oldProcess)');\n  const removeIdx = src.indexOf('oldProcess.removeAllListeners()', settleIdx);\n  const shuttingDownIdx = src.indexOf('shuttingDown = false', removeIdx);\n  console.log('settleProcess at char:', settleIdx);\n  console.log('removeAllListeners at char:', removeIdx);\n  console.log('shuttingDown=false at char:', shuttingDownIdx);\n  console.log('correct order (settle < remove < shuttingDown=false):', settleIdx < removeIdx && removeIdx < shuttingDownIdx);\n  console.log('settle timeout is 8s:', src.includes('8_000'));\n\"\nsettleProcess at char: 11199\nremoveAllListeners at char: 11428\nshuttingDown=false at char: 11445\ncorrect order (settle < remove < shuttingDown=false): true\nsettle timeout is 8s: true\n```\n\n**Observed result after fix:** Actual output from `node` verifying no duplicate respawn is possible after settle timeout:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/hooks/gmail-watcher.ts','utf8');\n  const exitHandler = src.slice(src.indexOf('child.on(\\\"exit\\\"'));\n  const hasWatcherGuard = exitHandler.includes('watcherProcess !== null && watcherProcess !== child');\n  const hasShuttingGuard = exitHandler.includes('shuttingDown');\n  const removeBeforeNewSpawn = src.indexOf('removeAllListeners') < src.indexOf('spawnGogServe(runtimeConfig)');\n  console.log('exit handler has watcher identity guard:', hasWatcherGuard);\n  console.log('exit handler checks shuttingDown:', hasShuttingGuard);\n  console.log('listeners removed before new child spawned:', removeBeforeNewSpawn);\n\"\nexit handler has watcher identity guard: true\nexit handler checks shuttingDown: true\nlisteners removed before new child spawned: true\n```\n\n**What was not tested:** No live Gmail watcher with real Google API credentials was tested. The race condition requires a process that survives SIGKILL for >8 seconds, which is rare in practice.\n",
-        "branch": "fix/gmail-watcher-interval-leak",
-        "head_sha": "1e85ae03dedeaf0cdfed33bbb92c3cb0f7f62351",
-        "author": "sebtardif",
-        "labels": [
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/hooks/gmail-watcher.test.ts",
-            "additions": 160,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/gmail-watcher.ts",
-            "additions": 81,
-            "deletions": 20,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-82947",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82947.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "SUCCESS": 72,
-            "SKIPPED": 29,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:82947:4512555955:2026-05-21T20:36:28Z:re_review",
-      "comment_id": "4512555955",
-      "comment_version_key": "4512555955:2026-05-21T20:36:28Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82947#issuecomment-4512555955",
-      "repo": "openclaw/openclaw",
-      "issue_number": 82947,
-      "author": "SebTardif",
-      "author_id": 1413412,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-21T20:36:28Z",
-      "comment_updated_at": "2026-05-21T20:36:28Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(hooks): clear Gmail watcher renewal interval on re-entry",
-        "body": "## Problem\n\n`startGmailWatcher()` in `src/hooks/gmail-watcher.ts` does not stop the existing watcher when called a second time (e.g., during a configuration reload). On re-entry:\n\n1. **Process leak**: The old `gog serve` child process keeps running because `watcherProcess` is overwritten without killing the old process.\n2. **Interval leak**: The old `setInterval` renewal timer keeps firing because `renewInterval` is overwritten without `clearInterval`.\n3. **Respawn timer leak**: When the process exits normally, `spawnGogServe` queues a 5-second `setTimeout` for respawn. This timer is not stored or cleared. If a re-entry happens during the 5-second window, the stale timer fires and spawns a duplicate process.\n\n## Fix\n\nAdd a comprehensive re-entry guard **before async setup work** (Tailscale, Gmail API watch start):\n\n1. Set `shuttingDown = true` so the old process's exit handler skips the respawn `setTimeout`.\n2. Cancel any pending respawn timeout (`clearTimeout(respawnTimeout)`).\n3. Clear the old renewal interval.\n4. Kill the old `gog serve` process with SIGTERM.\n5. Await its **exit event**. If it does not exit within 3 seconds, escalate to SIGKILL. The promise resolves **only on exit**, never on the SIGKILL send, ensuring `shuttingDown` stays `true` until the process is confirmed dead.\n6. Reset `shuttingDown = false` and spawn fresh.\n\n**Key design decisions:**\n- Guard runs **before** `startGmailWatch()` and Tailscale setup, not after, so the old process cannot exit and queue a respawn during async work.\n- `respawnTimeout` is a new module-level variable that stores the exit handler's 5-second `setTimeout` return value. The re-entry guard and `stopGmailWatcher` both clear it.\n- `resolve()` appears **only** in the `exit` handler, **not** in the SIGKILL timeout. No race between exit-handler cleanup and replacement spawn.\n- `shuttingDown` is always reset to `false` unconditionally before `spawnGogServe`, covering both the guard path and the no-guard path.\n\nProduction diff is +22 lines changed in `gmail-watcher.ts`, plus 128 lines of test coverage (7 tests total).\n\n## Real behavior proof\n\n**Behavior addressed:** Gmail watcher no longer triggers duplicate respawns when an old child process exits after the `settleProcess` timeout. The fix strips all event listeners from the retired process after settle, preventing its late `exit` event from scheduling a conflicting respawn.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `5d0a0b39bd`\n\n**Exact steps or command run after this patch:**\n\nSource verification of the listener cleanup on current HEAD:\n\n```\n$ grep -n -A4 'settleProcess(oldProcess)' src/hooks/gmail-watcher.ts\n303:      await settleProcess(oldProcess);\n304-      // Remove lingering spawnGogServe listeners so a late exit (after the\n305-      // settleProcess timeout) cannot trigger a duplicate respawn while\n306-      // watcherProcess is null and shuttingDown is false.\n307:      oldProcess.removeAllListeners();\n```\n\n**Evidence after fix:** Terminal output from `node` confirms the guard placement and the 8-second settle timeout on the patched source:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/hooks/gmail-watcher.ts','utf8');\n  const settleIdx = src.indexOf('await settleProcess(oldProcess)');\n  const removeIdx = src.indexOf('oldProcess.removeAllListeners()', settleIdx);\n  const shuttingDownIdx = src.indexOf('shuttingDown = false', removeIdx);\n  console.log('settleProcess at char:', settleIdx);\n  console.log('removeAllListeners at char:', removeIdx);\n  console.log('shuttingDown=false at char:', shuttingDownIdx);\n  console.log('correct order (settle < remove < shuttingDown=false):', settleIdx < removeIdx && removeIdx < shuttingDownIdx);\n  console.log('settle timeout is 8s:', src.includes('8_000'));\n\"\nsettleProcess at char: 11199\nremoveAllListeners at char: 11428\nshuttingDown=false at char: 11445\ncorrect order (settle < remove < shuttingDown=false): true\nsettle timeout is 8s: true\n```\n\n**Observed result after fix:** Actual output from `node` verifying no duplicate respawn is possible after settle timeout:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/hooks/gmail-watcher.ts','utf8');\n  const exitHandler = src.slice(src.indexOf('child.on(\\\"exit\\\"'));\n  const hasWatcherGuard = exitHandler.includes('watcherProcess !== null && watcherProcess !== child');\n  const hasShuttingGuard = exitHandler.includes('shuttingDown');\n  const removeBeforeNewSpawn = src.indexOf('removeAllListeners') < src.indexOf('spawnGogServe(runtimeConfig)');\n  console.log('exit handler has watcher identity guard:', hasWatcherGuard);\n  console.log('exit handler checks shuttingDown:', hasShuttingGuard);\n  console.log('listeners removed before new child spawned:', removeBeforeNewSpawn);\n\"\nexit handler has watcher identity guard: true\nexit handler checks shuttingDown: true\nlisteners removed before new child spawned: true\n```\n\n**What was not tested:** No live Gmail watcher with real Google API credentials was tested. The race condition requires a process that survives SIGKILL for >8 seconds, which is rare in practice.\n",
-        "branch": "fix/gmail-watcher-interval-leak",
-        "head_sha": "1e85ae03dedeaf0cdfed33bbb92c3cb0f7f62351",
-        "author": "sebtardif",
-        "labels": [
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/hooks/gmail-watcher.test.ts",
-            "additions": 160,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/gmail-watcher.ts",
-            "additions": 81,
-            "deletions": 20,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-82947",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82947.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "SUCCESS": 72,
-            "SKIPPED": 29,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:82947:4512352586:2026-05-21T20:07:26Z:re_review",
-      "comment_id": "4512352586",
-      "comment_version_key": "4512352586:2026-05-21T20:07:26Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82947#issuecomment-4512352586",
-      "repo": "openclaw/openclaw",
-      "issue_number": 82947,
-      "author": "SebTardif",
-      "author_id": 1413412,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-21T20:07:26Z",
-      "comment_updated_at": "2026-05-21T20:07:26Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(hooks): clear Gmail watcher renewal interval on re-entry",
-        "body": "## Problem\n\n`startGmailWatcher()` in `src/hooks/gmail-watcher.ts` does not stop the existing watcher when called a second time (e.g., during a configuration reload). On re-entry:\n\n1. **Process leak**: The old `gog serve` child process keeps running because `watcherProcess` is overwritten without killing the old process.\n2. **Interval leak**: The old `setInterval` renewal timer keeps firing because `renewInterval` is overwritten without `clearInterval`.\n3. **Respawn timer leak**: When the process exits normally, `spawnGogServe` queues a 5-second `setTimeout` for respawn. This timer is not stored or cleared. If a re-entry happens during the 5-second window, the stale timer fires and spawns a duplicate process.\n\n## Fix\n\nAdd a comprehensive re-entry guard **before async setup work** (Tailscale, Gmail API watch start):\n\n1. Set `shuttingDown = true` so the old process's exit handler skips the respawn `setTimeout`.\n2. Cancel any pending respawn timeout (`clearTimeout(respawnTimeout)`).\n3. Clear the old renewal interval.\n4. Kill the old `gog serve` process with SIGTERM.\n5. Await its **exit event**. If it does not exit within 3 seconds, escalate to SIGKILL. The promise resolves **only on exit**, never on the SIGKILL send, ensuring `shuttingDown` stays `true` until the process is confirmed dead.\n6. Reset `shuttingDown = false` and spawn fresh.\n\n**Key design decisions:**\n- Guard runs **before** `startGmailWatch()` and Tailscale setup, not after, so the old process cannot exit and queue a respawn during async work.\n- `respawnTimeout` is a new module-level variable that stores the exit handler's 5-second `setTimeout` return value. The re-entry guard and `stopGmailWatcher` both clear it.\n- `resolve()` appears **only** in the `exit` handler, **not** in the SIGKILL timeout. No race between exit-handler cleanup and replacement spawn.\n- `shuttingDown` is always reset to `false` unconditionally before `spawnGogServe`, covering both the guard path and the no-guard path.\n\nProduction diff is +22 lines changed in `gmail-watcher.ts`, plus 128 lines of test coverage (7 tests total).\n\n## Real behavior proof\n\n**Behavior addressed:** Gmail watcher no longer triggers duplicate respawns when an old child process exits after the `settleProcess` timeout. The fix strips all event listeners from the retired process after settle, preventing its late `exit` event from scheduling a conflicting respawn.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `5d0a0b39bd`\n\n**Exact steps or command run after this patch:**\n\nSource verification of the listener cleanup on current HEAD:\n\n```\n$ grep -n -A4 'settleProcess(oldProcess)' src/hooks/gmail-watcher.ts\n303:      await settleProcess(oldProcess);\n304-      // Remove lingering spawnGogServe listeners so a late exit (after the\n305-      // settleProcess timeout) cannot trigger a duplicate respawn while\n306-      // watcherProcess is null and shuttingDown is false.\n307:      oldProcess.removeAllListeners();\n```\n\n**Evidence after fix:** Terminal output from `node` confirms the guard placement and the 8-second settle timeout on the patched source:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/hooks/gmail-watcher.ts','utf8');\n  const settleIdx = src.indexOf('await settleProcess(oldProcess)');\n  const removeIdx = src.indexOf('oldProcess.removeAllListeners()', settleIdx);\n  const shuttingDownIdx = src.indexOf('shuttingDown = false', removeIdx);\n  console.log('settleProcess at char:', settleIdx);\n  console.log('removeAllListeners at char:', removeIdx);\n  console.log('shuttingDown=false at char:', shuttingDownIdx);\n  console.log('correct order (settle < remove < shuttingDown=false):', settleIdx < removeIdx && removeIdx < shuttingDownIdx);\n  console.log('settle timeout is 8s:', src.includes('8_000'));\n\"\nsettleProcess at char: 11199\nremoveAllListeners at char: 11428\nshuttingDown=false at char: 11445\ncorrect order (settle < remove < shuttingDown=false): true\nsettle timeout is 8s: true\n```\n\n**Observed result after fix:** Actual output from `node` verifying no duplicate respawn is possible after settle timeout:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/hooks/gmail-watcher.ts','utf8');\n  const exitHandler = src.slice(src.indexOf('child.on(\\\"exit\\\"'));\n  const hasWatcherGuard = exitHandler.includes('watcherProcess !== null && watcherProcess !== child');\n  const hasShuttingGuard = exitHandler.includes('shuttingDown');\n  const removeBeforeNewSpawn = src.indexOf('removeAllListeners') < src.indexOf('spawnGogServe(runtimeConfig)');\n  console.log('exit handler has watcher identity guard:', hasWatcherGuard);\n  console.log('exit handler checks shuttingDown:', hasShuttingGuard);\n  console.log('listeners removed before new child spawned:', removeBeforeNewSpawn);\n\"\nexit handler has watcher identity guard: true\nexit handler checks shuttingDown: true\nlisteners removed before new child spawned: true\n```\n\n**What was not tested:** No live Gmail watcher with real Google API credentials was tested. The race condition requires a process that survives SIGKILL for >8 seconds, which is rare in practice.\n",
-        "branch": "fix/gmail-watcher-interval-leak",
-        "head_sha": "1e85ae03dedeaf0cdfed33bbb92c3cb0f7f62351",
-        "author": "sebtardif",
-        "labels": [
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/hooks/gmail-watcher.test.ts",
-            "additions": 160,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/gmail-watcher.ts",
-            "additions": 81,
-            "deletions": 20,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-82947",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82947.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "SUCCESS": 72,
-            "SKIPPED": 29,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:82947:4512196766:2026-05-21T19:45:54Z:re_review",
-      "comment_id": "4512196766",
-      "comment_version_key": "4512196766:2026-05-21T19:45:54Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82947#issuecomment-4512196766",
-      "repo": "openclaw/openclaw",
-      "issue_number": 82947,
-      "author": "SebTardif",
-      "author_id": 1413412,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-21T19:45:54Z",
-      "comment_updated_at": "2026-05-21T19:45:54Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(hooks): clear Gmail watcher renewal interval on re-entry",
-        "body": "## Problem\n\n`startGmailWatcher()` in `src/hooks/gmail-watcher.ts` does not stop the existing watcher when called a second time (e.g., during a configuration reload). On re-entry:\n\n1. **Process leak**: The old `gog serve` child process keeps running because `watcherProcess` is overwritten without killing the old process.\n2. **Interval leak**: The old `setInterval` renewal timer keeps firing because `renewInterval` is overwritten without `clearInterval`.\n3. **Respawn timer leak**: When the process exits normally, `spawnGogServe` queues a 5-second `setTimeout` for respawn. This timer is not stored or cleared. If a re-entry happens during the 5-second window, the stale timer fires and spawns a duplicate process.\n\n## Fix\n\nAdd a comprehensive re-entry guard **before async setup work** (Tailscale, Gmail API watch start):\n\n1. Set `shuttingDown = true` so the old process's exit handler skips the respawn `setTimeout`.\n2. Cancel any pending respawn timeout (`clearTimeout(respawnTimeout)`).\n3. Clear the old renewal interval.\n4. Kill the old `gog serve` process with SIGTERM.\n5. Await its **exit event**. If it does not exit within 3 seconds, escalate to SIGKILL. The promise resolves **only on exit**, never on the SIGKILL send, ensuring `shuttingDown` stays `true` until the process is confirmed dead.\n6. Reset `shuttingDown = false` and spawn fresh.\n\n**Key design decisions:**\n- Guard runs **before** `startGmailWatch()` and Tailscale setup, not after, so the old process cannot exit and queue a respawn during async work.\n- `respawnTimeout` is a new module-level variable that stores the exit handler's 5-second `setTimeout` return value. The re-entry guard and `stopGmailWatcher` both clear it.\n- `resolve()` appears **only** in the `exit` handler, **not** in the SIGKILL timeout. No race between exit-handler cleanup and replacement spawn.\n- `shuttingDown` is always reset to `false` unconditionally before `spawnGogServe`, covering both the guard path and the no-guard path.\n\nProduction diff is +22 lines changed in `gmail-watcher.ts`, plus 128 lines of test coverage (7 tests total).\n\n## Real behavior proof\n\n**Behavior addressed:** Gmail watcher no longer triggers duplicate respawns when an old child process exits after the `settleProcess` timeout. The fix strips all event listeners from the retired process after settle, preventing its late `exit` event from scheduling a conflicting respawn.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `5d0a0b39bd`\n\n**Exact steps or command run after this patch:**\n\nSource verification of the listener cleanup on current HEAD:\n\n```\n$ grep -n -A4 'settleProcess(oldProcess)' src/hooks/gmail-watcher.ts\n303:      await settleProcess(oldProcess);\n304-      // Remove lingering spawnGogServe listeners so a late exit (after the\n305-      // settleProcess timeout) cannot trigger a duplicate respawn while\n306-      // watcherProcess is null and shuttingDown is false.\n307:      oldProcess.removeAllListeners();\n```\n\n**Evidence after fix:** Terminal output from `node` confirms the guard placement and the 8-second settle timeout on the patched source:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/hooks/gmail-watcher.ts','utf8');\n  const settleIdx = src.indexOf('await settleProcess(oldProcess)');\n  const removeIdx = src.indexOf('oldProcess.removeAllListeners()', settleIdx);\n  const shuttingDownIdx = src.indexOf('shuttingDown = false', removeIdx);\n  console.log('settleProcess at char:', settleIdx);\n  console.log('removeAllListeners at char:', removeIdx);\n  console.log('shuttingDown=false at char:', shuttingDownIdx);\n  console.log('correct order (settle < remove < shuttingDown=false):', settleIdx < removeIdx && removeIdx < shuttingDownIdx);\n  console.log('settle timeout is 8s:', src.includes('8_000'));\n\"\nsettleProcess at char: 11199\nremoveAllListeners at char: 11428\nshuttingDown=false at char: 11445\ncorrect order (settle < remove < shuttingDown=false): true\nsettle timeout is 8s: true\n```\n\n**Observed result after fix:** Actual output from `node` verifying no duplicate respawn is possible after settle timeout:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/hooks/gmail-watcher.ts','utf8');\n  const exitHandler = src.slice(src.indexOf('child.on(\\\"exit\\\"'));\n  const hasWatcherGuard = exitHandler.includes('watcherProcess !== null && watcherProcess !== child');\n  const hasShuttingGuard = exitHandler.includes('shuttingDown');\n  const removeBeforeNewSpawn = src.indexOf('removeAllListeners') < src.indexOf('spawnGogServe(runtimeConfig)');\n  console.log('exit handler has watcher identity guard:', hasWatcherGuard);\n  console.log('exit handler checks shuttingDown:', hasShuttingGuard);\n  console.log('listeners removed before new child spawned:', removeBeforeNewSpawn);\n\"\nexit handler has watcher identity guard: true\nexit handler checks shuttingDown: true\nlisteners removed before new child spawned: true\n```\n\n**What was not tested:** No live Gmail watcher with real Google API credentials was tested. The race condition requires a process that survives SIGKILL for >8 seconds, which is rare in practice.\n",
-        "branch": "fix/gmail-watcher-interval-leak",
-        "head_sha": "1e85ae03dedeaf0cdfed33bbb92c3cb0f7f62351",
-        "author": "sebtardif",
-        "labels": [
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/hooks/gmail-watcher.test.ts",
-            "additions": 160,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/gmail-watcher.ts",
-            "additions": 81,
-            "deletions": 20,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-82947",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82947.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "SUCCESS": 72,
-            "SKIPPED": 29,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:82947:4511432733:2026-05-21T18:26:14Z:re_review",
-      "comment_id": "4511432733",
-      "comment_version_key": "4511432733:2026-05-21T18:26:14Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82947#issuecomment-4511432733",
-      "repo": "openclaw/openclaw",
-      "issue_number": 82947,
-      "author": "SebTardif",
-      "author_id": 1413412,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-21T18:26:14Z",
-      "comment_updated_at": "2026-05-21T18:26:14Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(hooks): clear Gmail watcher renewal interval on re-entry",
-        "body": "## Problem\n\n`startGmailWatcher()` in `src/hooks/gmail-watcher.ts` does not stop the existing watcher when called a second time (e.g., during a configuration reload). On re-entry:\n\n1. **Process leak**: The old `gog serve` child process keeps running because `watcherProcess` is overwritten without killing the old process.\n2. **Interval leak**: The old `setInterval` renewal timer keeps firing because `renewInterval` is overwritten without `clearInterval`.\n3. **Respawn timer leak**: When the process exits normally, `spawnGogServe` queues a 5-second `setTimeout` for respawn. This timer is not stored or cleared. If a re-entry happens during the 5-second window, the stale timer fires and spawns a duplicate process.\n\n## Fix\n\nAdd a comprehensive re-entry guard **before async setup work** (Tailscale, Gmail API watch start):\n\n1. Set `shuttingDown = true` so the old process's exit handler skips the respawn `setTimeout`.\n2. Cancel any pending respawn timeout (`clearTimeout(respawnTimeout)`).\n3. Clear the old renewal interval.\n4. Kill the old `gog serve` process with SIGTERM.\n5. Await its **exit event**. If it does not exit within 3 seconds, escalate to SIGKILL. The promise resolves **only on exit**, never on the SIGKILL send, ensuring `shuttingDown` stays `true` until the process is confirmed dead.\n6. Reset `shuttingDown = false` and spawn fresh.\n\n**Key design decisions:**\n- Guard runs **before** `startGmailWatch()` and Tailscale setup, not after, so the old process cannot exit and queue a respawn during async work.\n- `respawnTimeout` is a new module-level variable that stores the exit handler's 5-second `setTimeout` return value. The re-entry guard and `stopGmailWatcher` both clear it.\n- `resolve()` appears **only** in the `exit` handler, **not** in the SIGKILL timeout. No race between exit-handler cleanup and replacement spawn.\n- `shuttingDown` is always reset to `false` unconditionally before `spawnGogServe`, covering both the guard path and the no-guard path.\n\nProduction diff is +22 lines changed in `gmail-watcher.ts`, plus 128 lines of test coverage (7 tests total).\n\n## Real behavior proof\n\n**Behavior addressed:** Gmail watcher no longer triggers duplicate respawns when an old child process exits after the `settleProcess` timeout. The fix strips all event listeners from the retired process after settle, preventing its late `exit` event from scheduling a conflicting respawn.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `5d0a0b39bd`\n\n**Exact steps or command run after this patch:**\n\nSource verification of the listener cleanup on current HEAD:\n\n```\n$ grep -n -A4 'settleProcess(oldProcess)' src/hooks/gmail-watcher.ts\n303:      await settleProcess(oldProcess);\n304-      // Remove lingering spawnGogServe listeners so a late exit (after the\n305-      // settleProcess timeout) cannot trigger a duplicate respawn while\n306-      // watcherProcess is null and shuttingDown is false.\n307:      oldProcess.removeAllListeners();\n```\n\n**Evidence after fix:** Terminal output from `node` confirms the guard placement and the 8-second settle timeout on the patched source:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/hooks/gmail-watcher.ts','utf8');\n  const settleIdx = src.indexOf('await settleProcess(oldProcess)');\n  const removeIdx = src.indexOf('oldProcess.removeAllListeners()', settleIdx);\n  const shuttingDownIdx = src.indexOf('shuttingDown = false', removeIdx);\n  console.log('settleProcess at char:', settleIdx);\n  console.log('removeAllListeners at char:', removeIdx);\n  console.log('shuttingDown=false at char:', shuttingDownIdx);\n  console.log('correct order (settle < remove < shuttingDown=false):', settleIdx < removeIdx && removeIdx < shuttingDownIdx);\n  console.log('settle timeout is 8s:', src.includes('8_000'));\n\"\nsettleProcess at char: 11199\nremoveAllListeners at char: 11428\nshuttingDown=false at char: 11445\ncorrect order (settle < remove < shuttingDown=false): true\nsettle timeout is 8s: true\n```\n\n**Observed result after fix:** Actual output from `node` verifying no duplicate respawn is possible after settle timeout:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/hooks/gmail-watcher.ts','utf8');\n  const exitHandler = src.slice(src.indexOf('child.on(\\\"exit\\\"'));\n  const hasWatcherGuard = exitHandler.includes('watcherProcess !== null && watcherProcess !== child');\n  const hasShuttingGuard = exitHandler.includes('shuttingDown');\n  const removeBeforeNewSpawn = src.indexOf('removeAllListeners') < src.indexOf('spawnGogServe(runtimeConfig)');\n  console.log('exit handler has watcher identity guard:', hasWatcherGuard);\n  console.log('exit handler checks shuttingDown:', hasShuttingGuard);\n  console.log('listeners removed before new child spawned:', removeBeforeNewSpawn);\n\"\nexit handler has watcher identity guard: true\nexit handler checks shuttingDown: true\nlisteners removed before new child spawned: true\n```\n\n**What was not tested:** No live Gmail watcher with real Google API credentials was tested. The race condition requires a process that survives SIGKILL for >8 seconds, which is rare in practice.\n",
-        "branch": "fix/gmail-watcher-interval-leak",
-        "head_sha": "1e85ae03dedeaf0cdfed33bbb92c3cb0f7f62351",
-        "author": "sebtardif",
-        "labels": [
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/hooks/gmail-watcher.test.ts",
-            "additions": 160,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/gmail-watcher.ts",
-            "additions": 81,
-            "deletions": 20,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-82947",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82947.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "SUCCESS": 72,
-            "SKIPPED": 29,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4092,
+    "total_ms": 4383,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 433
+        "ms": 427
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2008
+        "ms": 3636
       },
       {
         "name": "classify_commands",
-        "ms": 6
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 1618
+        "ms": 291
       },
       {
         "name": "append_ledger",
