@@ -1,22 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T01:12:40.050Z",
+  "generated_at": "2026-05-24T01:12:40.049Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-23T22:12:39.660Z",
+  "since": "2026-05-23T22:12:37.715Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    85885
+    82926
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
-  "actionable": 0,
+  "scanned_comments": 14,
+  "commands_seen": 7,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,26 +29,595 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:82926:4469464303:2026-05-24T01:12:33Z:clawsweeper_needs_human",
+      "comment_id": "4469464303",
+      "comment_version_key": "4469464303:2026-05-24T01:12:33Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82926#issuecomment-4469464303",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82926,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-17T05:28:45Z",
+      "comment_updated_at": "2026-05-24T01:12:33Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "The remaining blocker is contributor or maintainer real-environment installer proof, not a narrow code repair for automation to apply.; Cleared: The diff changes installer environment handling and post-install validation without adding new download sources, lifecycle hooks, secrets handling, or broader permissions. (sha=24f4134a9bdf3ca7aafcb74eeba0dc173e53cdbf)",
+      "review_summary": "The PR updates `scripts/install.sh` to run the NodeSource apt setup with `DEBIAN_FRONTEND=noninteractive`, verify the active Node version before reporting Linux install success, and update the installer tests for those checks.\n\nReproducibility: Partly: source inspection reproduces the false-success portion because current main prints success before validating an active supported Node. The WSL2 ioctl portion is supported by the linked issue logs but was not live-reproduced in this review.",
+      "review_followup": "The remaining blocker is contributor or maintainer real-environment installer proof, not a narrow code repair for automation to apply.",
+      "freeform_prompt": null,
+      "expected_head_sha": "24f4134a9bdf3ca7aafcb74eeba0dc173e53cdbf",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(install): verify node binary after auto-install and suppress ioctl errors",
+        "body": "## Problem\n\nThe Node.js auto-installer reports \"Node.js v22 installed\" without verifying the binary is actually available on PATH. On WSL2 Ubuntu 24.04, the NodeSource setup script produces ioctl errors (interactive terminal prompts in a non-interactive context), apt may fail silently, but the installer prints a success message and then immediately crashes with \"Node.js v22+ is required.\"\n\nTwo root causes:\n1. The NodeSource setup script (`bash \"$tmp\"`) runs without `DEBIAN_FRONTEND=noninteractive`, so it attempts interactive terminal operations that produce ioctl errors on WSL2\n2. The installer prints `ui_success \"Node.js v24 installed\"` unconditionally after the apt call, without verifying `node` is on PATH\n\n## Fix\n\n1. Pass `DEBIAN_FRONTEND=noninteractive` to the NodeSource setup script execution (both root and sudo paths)\n2. Run `activate_supported_node_on_path` and verify the active node meets the minimum version requirement (`node_is_at_least_required`) before printing the success message. If node is missing or too old, report the actual failure and exit instead of falsely reporting success.\n\nFixes #73837\n## Real behavior proof\n\nBehavior addressed: The Node.js auto-installer now (1) passes `DEBIAN_FRONTEND=noninteractive` via `sudo -E env` to suppress ioctl errors on WSL2 while preserving the caller's environment (proxy, PATH, etc.), and (2) verifies the active node binary meets the minimum version after package installation before reporting success.\n\nReal environment tested: macOS (Darwin 24.5.0), Node v26.0.0, bash 5.3.9, from patched source checkout at commit 24f4134a9b.\n\nExact steps or command run after this patch:\n\nStep 1. Verified patched script preserves both `-E` and `DEBIAN_FRONTEND`\n```console\n$ grep \"sudo.*DEBIAN_FRONTEND\" scripts/install.sh\n        sudo env DEBIAN_FRONTEND=\"${DEBIAN_FRONTEND:-noninteractive}\" NEEDRESTART_MODE=\"${NEEDRESTART_MODE:-a}\" apt-get \"$@\"\n                run_quiet_step \"Configuring NodeSource repository\" sudo -E env DEBIAN_FRONTEND=noninteractive bash \"$tmp\"\n```\nThe `apt_get()` wrapper (line 1) uses `sudo env` with explicit vars. The NodeSource setup (line 2) uses `sudo -E env` to preserve the full caller environment while adding the noninteractive flag.\n\nStep 2. Verified post-install guard rejects missing or too-old node\n```console\n$ grep -A3 \"if ! node_is_at_least_required\" scripts/install.sh\n        if ! node_is_at_least_required; then\n            local active_version\n            active_version=\"$(node -v 2>/dev/null || echo \"not found\")\"\n            ui_error \"Node.js v${NODE_MIN_VERSION}+ required but found ${active_version} after install\"\n```\n\nStep 3. Exercised the guard functions from the patched `scripts/install.sh`\n```console\n$ bash -c '\nsource <(sed -n \"/^NODE_MIN_MAJOR=/,/^activate_supported/p\" scripts/install.sh | head -200)\nsource <(sed -n \"/^parse_node_version_components_for_binary/,/^}/p\" scripts/install.sh)\nsource <(sed -n \"/^parse_node_version_components()/,/^}/p\" scripts/install.sh)\nsource <(sed -n \"/^node_is_at_least_required()/,/^}/p\" scripts/install.sh)\nNODE_MIN_MAJOR=22; NODE_MIN_MINOR=14; NODE_MIN_VERSION=\"22.14\"\n\necho \"=== Current node ===\"\nnode_is_at_least_required && echo \"PASS: $(node -v) >= v22.14\"\n\necho \"=== Missing node ===\"\nPATH=\"/nonexistent\" node_is_at_least_required || echo \"PASS: rejects missing node\"\n\necho \"=== Old node (v18) ===\"\nmkdir -p /tmp/fn; printf \"#!/bin/bash\\necho v18.0.0\" > /tmp/fn/node; chmod +x /tmp/fn/node\nPATH=\"/tmp/fn\" node_is_at_least_required || echo \"PASS: rejects v18.0.0\"\nrm -rf /tmp/fn\n'\n=== Current node ===\nPASS: v26.0.0 >= v22.14\n=== Missing node ===\nPASS: rejects missing node\n=== Old node (v18) ===\nPASS: rejects v18.0.0\n```\n\nEvidence after fix: Terminal output from the patched install.sh confirms:\n\n```console\n$ grep \"sudo -E env DEBIAN_FRONTEND\" scripts/install.sh\n                run_quiet_step \"Configuring NodeSource repository\" sudo -E env DEBIAN_FRONTEND=noninteractive bash \"$tmp\"\n```\n\nThe `-E` flag preserves the caller's environment (proxy, PATH, locale) while `env DEBIAN_FRONTEND=noninteractive` adds the noninteractive frontend flag. The post-install guard correctly rejects missing and too-old node binaries.\n\nObserved result after fix: All three guard conditions (pass, missing, too-old) produce the correct outcome. 24/24 install-sh tests pass including the updated assertion for the `sudo -E env` form.\n\nWhat was not tested: Full end-to-end installer run through the NodeSource apt path on WSL2 (requires a clean Linux VM without Node.js). The guard logic and sudo form are verified directly from the patched script.\n",
+        "branch": "fix/install-node-verify",
+        "head_sha": "24f4134a9bdf3ca7aafcb74eeba0dc173e53cdbf",
+        "author": "sebtardif",
+        "labels": [
+          "scripts",
+          "size: XS",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/install.sh",
+            "additions": 10,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/install-sh.test.ts",
+            "additions": 13,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82926",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82926.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 84,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 15,
+            "SUCCESS": 67
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82926:4526960354:2026-05-24T00:47:44Z:re_review",
+      "comment_id": "4526960354",
+      "comment_version_key": "4526960354:2026-05-24T00:47:44Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82926#issuecomment-4526960354",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82926,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-24T00:47:44Z",
+      "comment_updated_at": "2026-05-24T00:47:44Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-05-24T01:12:42.321Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 82926
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-24T01:12:43.614Z",
+          "response_comment_id": null,
+          "response_comment_mode": "created"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(install): verify node binary after auto-install and suppress ioctl errors",
+        "body": "## Problem\n\nThe Node.js auto-installer reports \"Node.js v22 installed\" without verifying the binary is actually available on PATH. On WSL2 Ubuntu 24.04, the NodeSource setup script produces ioctl errors (interactive terminal prompts in a non-interactive context), apt may fail silently, but the installer prints a success message and then immediately crashes with \"Node.js v22+ is required.\"\n\nTwo root causes:\n1. The NodeSource setup script (`bash \"$tmp\"`) runs without `DEBIAN_FRONTEND=noninteractive`, so it attempts interactive terminal operations that produce ioctl errors on WSL2\n2. The installer prints `ui_success \"Node.js v24 installed\"` unconditionally after the apt call, without verifying `node` is on PATH\n\n## Fix\n\n1. Pass `DEBIAN_FRONTEND=noninteractive` to the NodeSource setup script execution (both root and sudo paths)\n2. Run `activate_supported_node_on_path` and verify the active node meets the minimum version requirement (`node_is_at_least_required`) before printing the success message. If node is missing or too old, report the actual failure and exit instead of falsely reporting success.\n\nFixes #73837\n## Real behavior proof\n\nBehavior addressed: The Node.js auto-installer now (1) passes `DEBIAN_FRONTEND=noninteractive` via `sudo -E env` to suppress ioctl errors on WSL2 while preserving the caller's environment (proxy, PATH, etc.), and (2) verifies the active node binary meets the minimum version after package installation before reporting success.\n\nReal environment tested: macOS (Darwin 24.5.0), Node v26.0.0, bash 5.3.9, from patched source checkout at commit 24f4134a9b.\n\nExact steps or command run after this patch:\n\nStep 1. Verified patched script preserves both `-E` and `DEBIAN_FRONTEND`\n```console\n$ grep \"sudo.*DEBIAN_FRONTEND\" scripts/install.sh\n        sudo env DEBIAN_FRONTEND=\"${DEBIAN_FRONTEND:-noninteractive}\" NEEDRESTART_MODE=\"${NEEDRESTART_MODE:-a}\" apt-get \"$@\"\n                run_quiet_step \"Configuring NodeSource repository\" sudo -E env DEBIAN_FRONTEND=noninteractive bash \"$tmp\"\n```\nThe `apt_get()` wrapper (line 1) uses `sudo env` with explicit vars. The NodeSource setup (line 2) uses `sudo -E env` to preserve the full caller environment while adding the noninteractive flag.\n\nStep 2. Verified post-install guard rejects missing or too-old node\n```console\n$ grep -A3 \"if ! node_is_at_least_required\" scripts/install.sh\n        if ! node_is_at_least_required; then\n            local active_version\n            active_version=\"$(node -v 2>/dev/null || echo \"not found\")\"\n            ui_error \"Node.js v${NODE_MIN_VERSION}+ required but found ${active_version} after install\"\n```\n\nStep 3. Exercised the guard functions from the patched `scripts/install.sh`\n```console\n$ bash -c '\nsource <(sed -n \"/^NODE_MIN_MAJOR=/,/^activate_supported/p\" scripts/install.sh | head -200)\nsource <(sed -n \"/^parse_node_version_components_for_binary/,/^}/p\" scripts/install.sh)\nsource <(sed -n \"/^parse_node_version_components()/,/^}/p\" scripts/install.sh)\nsource <(sed -n \"/^node_is_at_least_required()/,/^}/p\" scripts/install.sh)\nNODE_MIN_MAJOR=22; NODE_MIN_MINOR=14; NODE_MIN_VERSION=\"22.14\"\n\necho \"=== Current node ===\"\nnode_is_at_least_required && echo \"PASS: $(node -v) >= v22.14\"\n\necho \"=== Missing node ===\"\nPATH=\"/nonexistent\" node_is_at_least_required || echo \"PASS: rejects missing node\"\n\necho \"=== Old node (v18) ===\"\nmkdir -p /tmp/fn; printf \"#!/bin/bash\\necho v18.0.0\" > /tmp/fn/node; chmod +x /tmp/fn/node\nPATH=\"/tmp/fn\" node_is_at_least_required || echo \"PASS: rejects v18.0.0\"\nrm -rf /tmp/fn\n'\n=== Current node ===\nPASS: v26.0.0 >= v22.14\n=== Missing node ===\nPASS: rejects missing node\n=== Old node (v18) ===\nPASS: rejects v18.0.0\n```\n\nEvidence after fix: Terminal output from the patched install.sh confirms:\n\n```console\n$ grep \"sudo -E env DEBIAN_FRONTEND\" scripts/install.sh\n                run_quiet_step \"Configuring NodeSource repository\" sudo -E env DEBIAN_FRONTEND=noninteractive bash \"$tmp\"\n```\n\nThe `-E` flag preserves the caller's environment (proxy, PATH, locale) while `env DEBIAN_FRONTEND=noninteractive` adds the noninteractive frontend flag. The post-install guard correctly rejects missing and too-old node binaries.\n\nObserved result after fix: All three guard conditions (pass, missing, too-old) produce the correct outcome. 24/24 install-sh tests pass including the updated assertion for the `sudo -E env` form.\n\nWhat was not tested: Full end-to-end installer run through the NodeSource apt path on WSL2 (requires a clean Linux VM without Node.js). The guard logic and sudo form are verified directly from the patched script.\n",
+        "branch": "fix/install-node-verify",
+        "head_sha": "24f4134a9bdf3ca7aafcb74eeba0dc173e53cdbf",
+        "author": "sebtardif",
+        "labels": [
+          "scripts",
+          "size: XS",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/install.sh",
+            "additions": 10,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/install-sh.test.ts",
+            "additions": 13,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82926",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82926.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 84,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 15,
+            "SUCCESS": 67
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      }
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82926:4526922791:2026-05-24T00:29:39Z:re_review",
+      "comment_id": "4526922791",
+      "comment_version_key": "4526922791:2026-05-24T00:29:39Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82926#issuecomment-4526922791",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82926,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-24T00:29:39Z",
+      "comment_updated_at": "2026-05-24T00:29:39Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(install): verify node binary after auto-install and suppress ioctl errors",
+        "body": "## Problem\n\nThe Node.js auto-installer reports \"Node.js v22 installed\" without verifying the binary is actually available on PATH. On WSL2 Ubuntu 24.04, the NodeSource setup script produces ioctl errors (interactive terminal prompts in a non-interactive context), apt may fail silently, but the installer prints a success message and then immediately crashes with \"Node.js v22+ is required.\"\n\nTwo root causes:\n1. The NodeSource setup script (`bash \"$tmp\"`) runs without `DEBIAN_FRONTEND=noninteractive`, so it attempts interactive terminal operations that produce ioctl errors on WSL2\n2. The installer prints `ui_success \"Node.js v24 installed\"` unconditionally after the apt call, without verifying `node` is on PATH\n\n## Fix\n\n1. Pass `DEBIAN_FRONTEND=noninteractive` to the NodeSource setup script execution (both root and sudo paths)\n2. Run `activate_supported_node_on_path` and verify the active node meets the minimum version requirement (`node_is_at_least_required`) before printing the success message. If node is missing or too old, report the actual failure and exit instead of falsely reporting success.\n\nFixes #73837\n## Real behavior proof\n\nBehavior addressed: The Node.js auto-installer now (1) passes `DEBIAN_FRONTEND=noninteractive` via `sudo -E env` to suppress ioctl errors on WSL2 while preserving the caller's environment (proxy, PATH, etc.), and (2) verifies the active node binary meets the minimum version after package installation before reporting success.\n\nReal environment tested: macOS (Darwin 24.5.0), Node v26.0.0, bash 5.3.9, from patched source checkout at commit 24f4134a9b.\n\nExact steps or command run after this patch:\n\nStep 1. Verified patched script preserves both `-E` and `DEBIAN_FRONTEND`\n```console\n$ grep \"sudo.*DEBIAN_FRONTEND\" scripts/install.sh\n        sudo env DEBIAN_FRONTEND=\"${DEBIAN_FRONTEND:-noninteractive}\" NEEDRESTART_MODE=\"${NEEDRESTART_MODE:-a}\" apt-get \"$@\"\n                run_quiet_step \"Configuring NodeSource repository\" sudo -E env DEBIAN_FRONTEND=noninteractive bash \"$tmp\"\n```\nThe `apt_get()` wrapper (line 1) uses `sudo env` with explicit vars. The NodeSource setup (line 2) uses `sudo -E env` to preserve the full caller environment while adding the noninteractive flag.\n\nStep 2. Verified post-install guard rejects missing or too-old node\n```console\n$ grep -A3 \"if ! node_is_at_least_required\" scripts/install.sh\n        if ! node_is_at_least_required; then\n            local active_version\n            active_version=\"$(node -v 2>/dev/null || echo \"not found\")\"\n            ui_error \"Node.js v${NODE_MIN_VERSION}+ required but found ${active_version} after install\"\n```\n\nStep 3. Exercised the guard functions from the patched `scripts/install.sh`\n```console\n$ bash -c '\nsource <(sed -n \"/^NODE_MIN_MAJOR=/,/^activate_supported/p\" scripts/install.sh | head -200)\nsource <(sed -n \"/^parse_node_version_components_for_binary/,/^}/p\" scripts/install.sh)\nsource <(sed -n \"/^parse_node_version_components()/,/^}/p\" scripts/install.sh)\nsource <(sed -n \"/^node_is_at_least_required()/,/^}/p\" scripts/install.sh)\nNODE_MIN_MAJOR=22; NODE_MIN_MINOR=14; NODE_MIN_VERSION=\"22.14\"\n\necho \"=== Current node ===\"\nnode_is_at_least_required && echo \"PASS: $(node -v) >= v22.14\"\n\necho \"=== Missing node ===\"\nPATH=\"/nonexistent\" node_is_at_least_required || echo \"PASS: rejects missing node\"\n\necho \"=== Old node (v18) ===\"\nmkdir -p /tmp/fn; printf \"#!/bin/bash\\necho v18.0.0\" > /tmp/fn/node; chmod +x /tmp/fn/node\nPATH=\"/tmp/fn\" node_is_at_least_required || echo \"PASS: rejects v18.0.0\"\nrm -rf /tmp/fn\n'\n=== Current node ===\nPASS: v26.0.0 >= v22.14\n=== Missing node ===\nPASS: rejects missing node\n=== Old node (v18) ===\nPASS: rejects v18.0.0\n```\n\nEvidence after fix: Terminal output from the patched install.sh confirms:\n\n```console\n$ grep \"sudo -E env DEBIAN_FRONTEND\" scripts/install.sh\n                run_quiet_step \"Configuring NodeSource repository\" sudo -E env DEBIAN_FRONTEND=noninteractive bash \"$tmp\"\n```\n\nThe `-E` flag preserves the caller's environment (proxy, PATH, locale) while `env DEBIAN_FRONTEND=noninteractive` adds the noninteractive frontend flag. The post-install guard correctly rejects missing and too-old node binaries.\n\nObserved result after fix: All three guard conditions (pass, missing, too-old) produce the correct outcome. 24/24 install-sh tests pass including the updated assertion for the `sudo -E env` form.\n\nWhat was not tested: Full end-to-end installer run through the NodeSource apt path on WSL2 (requires a clean Linux VM without Node.js). The guard logic and sudo form are verified directly from the patched script.\n",
+        "branch": "fix/install-node-verify",
+        "head_sha": "24f4134a9bdf3ca7aafcb74eeba0dc173e53cdbf",
+        "author": "sebtardif",
+        "labels": [
+          "scripts",
+          "size: XS",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/install.sh",
+            "additions": 10,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/install-sh.test.ts",
+            "additions": 13,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82926",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82926.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 84,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 15,
+            "SUCCESS": 67
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82926:4526254614:2026-05-23T18:53:11Z:re_review",
+      "comment_id": "4526254614",
+      "comment_version_key": "4526254614:2026-05-23T18:53:11Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82926#issuecomment-4526254614",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82926,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-23T18:53:11Z",
+      "comment_updated_at": "2026-05-23T18:53:11Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82926:4523321726:2026-05-22T23:23:42Z:re_review",
+      "comment_id": "4523321726",
+      "comment_version_key": "4523321726:2026-05-22T23:23:42Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82926#issuecomment-4523321726",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82926,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T23:23:42Z",
+      "comment_updated_at": "2026-05-22T23:23:42Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(install): verify node binary after auto-install and suppress ioctl errors",
+        "body": "## Problem\n\nThe Node.js auto-installer reports \"Node.js v22 installed\" without verifying the binary is actually available on PATH. On WSL2 Ubuntu 24.04, the NodeSource setup script produces ioctl errors (interactive terminal prompts in a non-interactive context), apt may fail silently, but the installer prints a success message and then immediately crashes with \"Node.js v22+ is required.\"\n\nTwo root causes:\n1. The NodeSource setup script (`bash \"$tmp\"`) runs without `DEBIAN_FRONTEND=noninteractive`, so it attempts interactive terminal operations that produce ioctl errors on WSL2\n2. The installer prints `ui_success \"Node.js v24 installed\"` unconditionally after the apt call, without verifying `node` is on PATH\n\n## Fix\n\n1. Pass `DEBIAN_FRONTEND=noninteractive` to the NodeSource setup script execution (both root and sudo paths)\n2. Run `activate_supported_node_on_path` and verify the active node meets the minimum version requirement (`node_is_at_least_required`) before printing the success message. If node is missing or too old, report the actual failure and exit instead of falsely reporting success.\n\nFixes #73837\n## Real behavior proof\n\nBehavior addressed: The Node.js auto-installer now (1) passes `DEBIAN_FRONTEND=noninteractive` via `sudo -E env` to suppress ioctl errors on WSL2 while preserving the caller's environment (proxy, PATH, etc.), and (2) verifies the active node binary meets the minimum version after package installation before reporting success.\n\nReal environment tested: macOS (Darwin 24.5.0), Node v26.0.0, bash 5.3.9, from patched source checkout at commit 24f4134a9b.\n\nExact steps or command run after this patch:\n\nStep 1. Verified patched script preserves both `-E` and `DEBIAN_FRONTEND`\n```console\n$ grep \"sudo.*DEBIAN_FRONTEND\" scripts/install.sh\n        sudo env DEBIAN_FRONTEND=\"${DEBIAN_FRONTEND:-noninteractive}\" NEEDRESTART_MODE=\"${NEEDRESTART_MODE:-a}\" apt-get \"$@\"\n                run_quiet_step \"Configuring NodeSource repository\" sudo -E env DEBIAN_FRONTEND=noninteractive bash \"$tmp\"\n```\nThe `apt_get()` wrapper (line 1) uses `sudo env` with explicit vars. The NodeSource setup (line 2) uses `sudo -E env` to preserve the full caller environment while adding the noninteractive flag.\n\nStep 2. Verified post-install guard rejects missing or too-old node\n```console\n$ grep -A3 \"if ! node_is_at_least_required\" scripts/install.sh\n        if ! node_is_at_least_required; then\n            local active_version\n            active_version=\"$(node -v 2>/dev/null || echo \"not found\")\"\n            ui_error \"Node.js v${NODE_MIN_VERSION}+ required but found ${active_version} after install\"\n```\n\nStep 3. Exercised the guard functions from the patched `scripts/install.sh`\n```console\n$ bash -c '\nsource <(sed -n \"/^NODE_MIN_MAJOR=/,/^activate_supported/p\" scripts/install.sh | head -200)\nsource <(sed -n \"/^parse_node_version_components_for_binary/,/^}/p\" scripts/install.sh)\nsource <(sed -n \"/^parse_node_version_components()/,/^}/p\" scripts/install.sh)\nsource <(sed -n \"/^node_is_at_least_required()/,/^}/p\" scripts/install.sh)\nNODE_MIN_MAJOR=22; NODE_MIN_MINOR=14; NODE_MIN_VERSION=\"22.14\"\n\necho \"=== Current node ===\"\nnode_is_at_least_required && echo \"PASS: $(node -v) >= v22.14\"\n\necho \"=== Missing node ===\"\nPATH=\"/nonexistent\" node_is_at_least_required || echo \"PASS: rejects missing node\"\n\necho \"=== Old node (v18) ===\"\nmkdir -p /tmp/fn; printf \"#!/bin/bash\\necho v18.0.0\" > /tmp/fn/node; chmod +x /tmp/fn/node\nPATH=\"/tmp/fn\" node_is_at_least_required || echo \"PASS: rejects v18.0.0\"\nrm -rf /tmp/fn\n'\n=== Current node ===\nPASS: v26.0.0 >= v22.14\n=== Missing node ===\nPASS: rejects missing node\n=== Old node (v18) ===\nPASS: rejects v18.0.0\n```\n\nEvidence after fix: Terminal output from the patched install.sh confirms:\n\n```console\n$ grep \"sudo -E env DEBIAN_FRONTEND\" scripts/install.sh\n                run_quiet_step \"Configuring NodeSource repository\" sudo -E env DEBIAN_FRONTEND=noninteractive bash \"$tmp\"\n```\n\nThe `-E` flag preserves the caller's environment (proxy, PATH, locale) while `env DEBIAN_FRONTEND=noninteractive` adds the noninteractive frontend flag. The post-install guard correctly rejects missing and too-old node binaries.\n\nObserved result after fix: All three guard conditions (pass, missing, too-old) produce the correct outcome. 24/24 install-sh tests pass including the updated assertion for the `sudo -E env` form.\n\nWhat was not tested: Full end-to-end installer run through the NodeSource apt path on WSL2 (requires a clean Linux VM without Node.js). The guard logic and sudo form are verified directly from the patched script.\n",
+        "branch": "fix/install-node-verify",
+        "head_sha": "24f4134a9bdf3ca7aafcb74eeba0dc173e53cdbf",
+        "author": "sebtardif",
+        "labels": [
+          "scripts",
+          "size: XS",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/install.sh",
+            "additions": 10,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/install-sh.test.ts",
+            "additions": 13,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82926",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82926.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 84,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 15,
+            "SUCCESS": 67
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82926:4523296847:2026-05-22T23:16:29Z:re_review",
+      "comment_id": "4523296847",
+      "comment_version_key": "4523296847:2026-05-22T23:16:29Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82926#issuecomment-4523296847",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82926,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T23:16:29Z",
+      "comment_updated_at": "2026-05-22T23:16:29Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(install): verify node binary after auto-install and suppress ioctl errors",
+        "body": "## Problem\n\nThe Node.js auto-installer reports \"Node.js v22 installed\" without verifying the binary is actually available on PATH. On WSL2 Ubuntu 24.04, the NodeSource setup script produces ioctl errors (interactive terminal prompts in a non-interactive context), apt may fail silently, but the installer prints a success message and then immediately crashes with \"Node.js v22+ is required.\"\n\nTwo root causes:\n1. The NodeSource setup script (`bash \"$tmp\"`) runs without `DEBIAN_FRONTEND=noninteractive`, so it attempts interactive terminal operations that produce ioctl errors on WSL2\n2. The installer prints `ui_success \"Node.js v24 installed\"` unconditionally after the apt call, without verifying `node` is on PATH\n\n## Fix\n\n1. Pass `DEBIAN_FRONTEND=noninteractive` to the NodeSource setup script execution (both root and sudo paths)\n2. Run `activate_supported_node_on_path` and verify the active node meets the minimum version requirement (`node_is_at_least_required`) before printing the success message. If node is missing or too old, report the actual failure and exit instead of falsely reporting success.\n\nFixes #73837\n## Real behavior proof\n\nBehavior addressed: The Node.js auto-installer now (1) passes `DEBIAN_FRONTEND=noninteractive` via `sudo -E env` to suppress ioctl errors on WSL2 while preserving the caller's environment (proxy, PATH, etc.), and (2) verifies the active node binary meets the minimum version after package installation before reporting success.\n\nReal environment tested: macOS (Darwin 24.5.0), Node v26.0.0, bash 5.3.9, from patched source checkout at commit 24f4134a9b.\n\nExact steps or command run after this patch:\n\nStep 1. Verified patched script preserves both `-E` and `DEBIAN_FRONTEND`\n```console\n$ grep \"sudo.*DEBIAN_FRONTEND\" scripts/install.sh\n        sudo env DEBIAN_FRONTEND=\"${DEBIAN_FRONTEND:-noninteractive}\" NEEDRESTART_MODE=\"${NEEDRESTART_MODE:-a}\" apt-get \"$@\"\n                run_quiet_step \"Configuring NodeSource repository\" sudo -E env DEBIAN_FRONTEND=noninteractive bash \"$tmp\"\n```\nThe `apt_get()` wrapper (line 1) uses `sudo env` with explicit vars. The NodeSource setup (line 2) uses `sudo -E env` to preserve the full caller environment while adding the noninteractive flag.\n\nStep 2. Verified post-install guard rejects missing or too-old node\n```console\n$ grep -A3 \"if ! node_is_at_least_required\" scripts/install.sh\n        if ! node_is_at_least_required; then\n            local active_version\n            active_version=\"$(node -v 2>/dev/null || echo \"not found\")\"\n            ui_error \"Node.js v${NODE_MIN_VERSION}+ required but found ${active_version} after install\"\n```\n\nStep 3. Exercised the guard functions from the patched `scripts/install.sh`\n```console\n$ bash -c '\nsource <(sed -n \"/^NODE_MIN_MAJOR=/,/^activate_supported/p\" scripts/install.sh | head -200)\nsource <(sed -n \"/^parse_node_version_components_for_binary/,/^}/p\" scripts/install.sh)\nsource <(sed -n \"/^parse_node_version_components()/,/^}/p\" scripts/install.sh)\nsource <(sed -n \"/^node_is_at_least_required()/,/^}/p\" scripts/install.sh)\nNODE_MIN_MAJOR=22; NODE_MIN_MINOR=14; NODE_MIN_VERSION=\"22.14\"\n\necho \"=== Current node ===\"\nnode_is_at_least_required && echo \"PASS: $(node -v) >= v22.14\"\n\necho \"=== Missing node ===\"\nPATH=\"/nonexistent\" node_is_at_least_required || echo \"PASS: rejects missing node\"\n\necho \"=== Old node (v18) ===\"\nmkdir -p /tmp/fn; printf \"#!/bin/bash\\necho v18.0.0\" > /tmp/fn/node; chmod +x /tmp/fn/node\nPATH=\"/tmp/fn\" node_is_at_least_required || echo \"PASS: rejects v18.0.0\"\nrm -rf /tmp/fn\n'\n=== Current node ===\nPASS: v26.0.0 >= v22.14\n=== Missing node ===\nPASS: rejects missing node\n=== Old node (v18) ===\nPASS: rejects v18.0.0\n```\n\nEvidence after fix: Terminal output from the patched install.sh confirms:\n\n```console\n$ grep \"sudo -E env DEBIAN_FRONTEND\" scripts/install.sh\n                run_quiet_step \"Configuring NodeSource repository\" sudo -E env DEBIAN_FRONTEND=noninteractive bash \"$tmp\"\n```\n\nThe `-E` flag preserves the caller's environment (proxy, PATH, locale) while `env DEBIAN_FRONTEND=noninteractive` adds the noninteractive frontend flag. The post-install guard correctly rejects missing and too-old node binaries.\n\nObserved result after fix: All three guard conditions (pass, missing, too-old) produce the correct outcome. 24/24 install-sh tests pass including the updated assertion for the `sudo -E env` form.\n\nWhat was not tested: Full end-to-end installer run through the NodeSource apt path on WSL2 (requires a clean Linux VM without Node.js). The guard logic and sudo form are verified directly from the patched script.\n",
+        "branch": "fix/install-node-verify",
+        "head_sha": "24f4134a9bdf3ca7aafcb74eeba0dc173e53cdbf",
+        "author": "sebtardif",
+        "labels": [
+          "scripts",
+          "size: XS",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/install.sh",
+            "additions": 10,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/install-sh.test.ts",
+            "additions": 13,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82926",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82926.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 84,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 15,
+            "SUCCESS": 67
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82926:4519348478:2026-05-22T13:58:11Z:re_review",
+      "comment_id": "4519348478",
+      "comment_version_key": "4519348478:2026-05-22T13:58:11Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82926#issuecomment-4519348478",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82926,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T13:58:11Z",
+      "comment_updated_at": "2026-05-22T13:58:11Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(install): verify node binary after auto-install and suppress ioctl errors",
+        "body": "## Problem\n\nThe Node.js auto-installer reports \"Node.js v22 installed\" without verifying the binary is actually available on PATH. On WSL2 Ubuntu 24.04, the NodeSource setup script produces ioctl errors (interactive terminal prompts in a non-interactive context), apt may fail silently, but the installer prints a success message and then immediately crashes with \"Node.js v22+ is required.\"\n\nTwo root causes:\n1. The NodeSource setup script (`bash \"$tmp\"`) runs without `DEBIAN_FRONTEND=noninteractive`, so it attempts interactive terminal operations that produce ioctl errors on WSL2\n2. The installer prints `ui_success \"Node.js v24 installed\"` unconditionally after the apt call, without verifying `node` is on PATH\n\n## Fix\n\n1. Pass `DEBIAN_FRONTEND=noninteractive` to the NodeSource setup script execution (both root and sudo paths)\n2. Run `activate_supported_node_on_path` and verify the active node meets the minimum version requirement (`node_is_at_least_required`) before printing the success message. If node is missing or too old, report the actual failure and exit instead of falsely reporting success.\n\nFixes #73837\n## Real behavior proof\n\nBehavior addressed: The Node.js auto-installer now (1) passes `DEBIAN_FRONTEND=noninteractive` via `sudo -E env` to suppress ioctl errors on WSL2 while preserving the caller's environment (proxy, PATH, etc.), and (2) verifies the active node binary meets the minimum version after package installation before reporting success.\n\nReal environment tested: macOS (Darwin 24.5.0), Node v26.0.0, bash 5.3.9, from patched source checkout at commit 24f4134a9b.\n\nExact steps or command run after this patch:\n\nStep 1. Verified patched script preserves both `-E` and `DEBIAN_FRONTEND`\n```console\n$ grep \"sudo.*DEBIAN_FRONTEND\" scripts/install.sh\n        sudo env DEBIAN_FRONTEND=\"${DEBIAN_FRONTEND:-noninteractive}\" NEEDRESTART_MODE=\"${NEEDRESTART_MODE:-a}\" apt-get \"$@\"\n                run_quiet_step \"Configuring NodeSource repository\" sudo -E env DEBIAN_FRONTEND=noninteractive bash \"$tmp\"\n```\nThe `apt_get()` wrapper (line 1) uses `sudo env` with explicit vars. The NodeSource setup (line 2) uses `sudo -E env` to preserve the full caller environment while adding the noninteractive flag.\n\nStep 2. Verified post-install guard rejects missing or too-old node\n```console\n$ grep -A3 \"if ! node_is_at_least_required\" scripts/install.sh\n        if ! node_is_at_least_required; then\n            local active_version\n            active_version=\"$(node -v 2>/dev/null || echo \"not found\")\"\n            ui_error \"Node.js v${NODE_MIN_VERSION}+ required but found ${active_version} after install\"\n```\n\nStep 3. Exercised the guard functions from the patched `scripts/install.sh`\n```console\n$ bash -c '\nsource <(sed -n \"/^NODE_MIN_MAJOR=/,/^activate_supported/p\" scripts/install.sh | head -200)\nsource <(sed -n \"/^parse_node_version_components_for_binary/,/^}/p\" scripts/install.sh)\nsource <(sed -n \"/^parse_node_version_components()/,/^}/p\" scripts/install.sh)\nsource <(sed -n \"/^node_is_at_least_required()/,/^}/p\" scripts/install.sh)\nNODE_MIN_MAJOR=22; NODE_MIN_MINOR=14; NODE_MIN_VERSION=\"22.14\"\n\necho \"=== Current node ===\"\nnode_is_at_least_required && echo \"PASS: $(node -v) >= v22.14\"\n\necho \"=== Missing node ===\"\nPATH=\"/nonexistent\" node_is_at_least_required || echo \"PASS: rejects missing node\"\n\necho \"=== Old node (v18) ===\"\nmkdir -p /tmp/fn; printf \"#!/bin/bash\\necho v18.0.0\" > /tmp/fn/node; chmod +x /tmp/fn/node\nPATH=\"/tmp/fn\" node_is_at_least_required || echo \"PASS: rejects v18.0.0\"\nrm -rf /tmp/fn\n'\n=== Current node ===\nPASS: v26.0.0 >= v22.14\n=== Missing node ===\nPASS: rejects missing node\n=== Old node (v18) ===\nPASS: rejects v18.0.0\n```\n\nEvidence after fix: Terminal output from the patched install.sh confirms:\n\n```console\n$ grep \"sudo -E env DEBIAN_FRONTEND\" scripts/install.sh\n                run_quiet_step \"Configuring NodeSource repository\" sudo -E env DEBIAN_FRONTEND=noninteractive bash \"$tmp\"\n```\n\nThe `-E` flag preserves the caller's environment (proxy, PATH, locale) while `env DEBIAN_FRONTEND=noninteractive` adds the noninteractive frontend flag. The post-install guard correctly rejects missing and too-old node binaries.\n\nObserved result after fix: All three guard conditions (pass, missing, too-old) produce the correct outcome. 24/24 install-sh tests pass including the updated assertion for the `sudo -E env` form.\n\nWhat was not tested: Full end-to-end installer run through the NodeSource apt path on WSL2 (requires a clean Linux VM without Node.js). The guard logic and sudo form are verified directly from the patched script.\n",
+        "branch": "fix/install-node-verify",
+        "head_sha": "24f4134a9bdf3ca7aafcb74eeba0dc173e53cdbf",
+        "author": "sebtardif",
+        "labels": [
+          "scripts",
+          "size: XS",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/install.sh",
+            "additions": 10,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/install-sh.test.ts",
+            "additions": 13,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82926",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82926.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 84,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 15,
+            "SUCCESS": 67
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 707,
+    "total_ms": 6738,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 380
+        "ms": 577
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1740
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 316
+        "ms": 4391
       },
       {
         "name": "append_ledger",
