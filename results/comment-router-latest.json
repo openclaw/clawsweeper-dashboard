@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T06:27:24.207Z",
+  "generated_at": "2026-05-24T06:27:30.579Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T03:27:22.302Z",
+  "since": "2026-05-24T03:27:28.795Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    85917
+    85758
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,123 +31,143 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:85917:4527311392:2026-05-24T06:27:16Z:clawsweeper_needs_human",
-      "comment_id": "4527311392",
-      "comment_version_key": "4527311392:2026-05-24T06:27:16Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/85917#issuecomment-4527311392",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:85758:4525817878:2026-05-24T06:27:24Z:clawsweeper_auto_repair",
+      "comment_id": "4525817878",
+      "comment_version_key": "4525817878:2026-05-24T06:27:24Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85758#issuecomment-4525817878",
       "repo": "openclaw/openclaw",
-      "issue_number": 85917,
+      "issue_number": 85758,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-24T03:47:45Z",
-      "comment_updated_at": "2026-05-24T06:27:16Z",
+      "comment_created_at": "2026-05-23T15:34:52Z",
+      "comment_updated_at": "2026-05-24T06:27:24Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
       "autoclose_message": null,
       "implementation_prompt": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "No repair lane is needed because the updated PR no longer has a concrete blocking code finding; remaining action is maintainer review, CI/proof confirmation, and merge decision.; Cleared: The diff is limited to gateway abort/idempotency logic and tests, with no dependency, workflow, secret, permission, or package-resolution changes. (sha=b27254d5ea601c65d06a44ffc5be2df36b7d9c58)",
-      "review_summary": "The PR moves gateway chat.send abort-controller registration before attachment preparation, caches aborted and prep-failure terminal dedupe results, and adds gateway chat regression tests.\n\nReproducibility: yes. Source inspection shows current main awaits attachment preparation before registering the abort controller, while chat.abort returns aborted:false when the run has no controller entry; I did not run a local repro because this review is read-only.",
-      "review_followup": "No repair lane is needed because the updated PR no longer has a concrete blocking code finding; remaining action is maintainer review, CI/proof confirmation, and merge decision.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=2c500544544a3051fe6feb019212ab20b7b6123f)",
+      "review_summary": "The PR adds retry fields to health-check repair context types, wraps runnable health-check execution in retry/backoff logic, and adds retry behavior tests.\n\nReproducibility: not applicable. as a user bug reproduction; this is a feature PR. Source inspection on current main verifies there is no retry behavior today, while the PR’s behavior is demonstrated only by unit tests.",
+      "review_followup": "Needs maintainer decision on the public health-check retry API plus contributor real-behavior proof; automation should not choose the permanent retry contract.",
       "freeform_prompt": null,
-      "expected_head_sha": "b27254d5ea601c65d06a44ffc5be2df36b7d9c58",
+      "expected_head_sha": "2c500544544a3051fe6feb019212ab20b7b6123f",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(gateway): register chat abort controller before attachment prep",
-        "body": "## Summary\n\nFixes #84176. `chat.abort` sent right after `chat.send` returned `aborted:false` because the abort controller was only registered after the awaited attachment preparation, leaving a window where the run had no entry in `chatAbortControllers`.\n\nThe fix mirrors the agent RPC early-registration pattern (`src/gateway/server-methods/agent.ts:1746`):\n\n- Register the abort controller before attachment prep so a concurrent `chat.abort` immediately observes the active run.\n- Clean it up via `activeRunAbort.cleanup()` if attachment prep throws, and persist a terminal `chat:<runId>` error dedupe entry so duplicate senders that already received `status:\"in_flight\"` (and later retries with the same idempotencyKey) see the cached failure instead of spawning a fresh run.\n- After prep, check `activeRunAbort.controller.signal.aborted` — if `chat.abort` already fired, `abortChatRunById` has cleared the entry and broadcast `aborted`, so the handler skips dispatch and acknowledges with `status: \"aborted\"` instead of falsely emitting a `started` ack.\n- Cache the aborted outcome under `chat:<runId>` so retries with the same `idempotencyKey` see the cached aborted result rather than spawning a new run (mirrors the existing `started`/`ok`/`error` dedupe writes).\n\nThe pre-existing `\"duplicate attachment send wins parsing race\"` test gets stricter expectations as a consequence: with early registration the first send always wins (`started`) and any duplicate before it finishes always sees `in_flight`, which matches idempotency semantics. Two new regression tests cover (a) abort-during-attachment-prep and (b) duplicate-in_flight then prep-failure.\n\n## Real behavior proof\n\nBehavior addressed: prior to this fix, `chat.send` only inserted the abort controller into `context.chatAbortControllers` after `await gateway.chat_send.prepare_attachments`. A `chat.abort` arriving while prep was still pending called `chatAbortControllers.get(runId)`, found nothing, and returned `{ ok: true, aborted: false, runIds: [] }` even though the chat run was still active.\n\nReal environment tested: local OpenClaw source checkout on Ubuntu 22.04, Node v24.15.0, with the production `chatHandlers[\"chat.send\"]` and `chatHandlers[\"chat.abort\"]` driven directly through `node --import tsx` against a real `Map` for `chatAbortControllers`/`dedupe`, real `AbortController`, and a deferred model-catalog mock that suspends chat.send mid attachment prep so chat.abort can race with it.\n\nExact steps or command run after this patch: `node --import tsx /tmp/probe-handler-84176.mjs` — the script imports the live `chatHandlers` map, fires `chat.send` with an image attachment, waits until the handler has registered the abort controller (early registration is the fix), fires `chat.abort` for the same runId, then releases the catalog so chat.send finishes and prints the resulting handler responses plus the cached dedupe entry.\n\nEvidence after fix:\n\n```json\n{\n  \"registeredBeforeAbort\": true,\n  \"registeredAfterAbort\": false,\n  \"abortResponse\": {\n    \"ok\": true,\n    \"payload\": {\n      \"ok\": true,\n      \"aborted\": true,\n      \"runIds\": [\n        \"probe-run-84176\"\n      ]\n    }\n  },\n  \"sendResponse\": {\n    \"ok\": true,\n    \"payload\": {\n      \"runId\": \"probe-run-84176\",\n      \"status\": \"aborted\",\n      \"stopReason\": \"rpc\"\n    }\n  },\n  \"cachedChatRunDedupe\": {\n    \"ok\": true,\n    \"payload\": {\n      \"runId\": \"probe-run-84176\",\n      \"status\": \"aborted\",\n      \"stopReason\": \"rpc\"\n    }\n  }\n}\n```\n\nObserved result after fix, driven through the real handlers:\n\n- `chat.send` registered the abort controller before attachment prep finished, so `chat.abort` for the same runId returned `{ ok: true, aborted: true, runIds: [<runId>] }` instead of the buggy `aborted: false`.\n- After abort, `chatAbortControllers` no longer held the entry (cleared by `abortChatRunById`).\n- The suspended `chat.send`, once the catalog resolved and prep finished, detected `signal.aborted` and responded with `status: \"aborted\", stopReason: \"rpc\"` instead of falsely emitting `started` and dispatching the run.\n- The aborted outcome was cached under `chat:<runId>` so a retry with the same `idempotencyKey` returns the cached aborted ack instead of starting a new run.\n\nWhat was not tested: no full end-to-end gateway WS roundtrip against a live model provider; the new regression tests in `src/gateway/server.chat.gateway-server-chat-b.test.ts` exercise the same handler entry points with a real `Map` for `chatAbortControllers`/`dedupe` and a deferred catalog mock.\n\n## Verification\n\n- `node scripts/run-vitest.mjs src/gateway/` — 223 files / 2585 tests passed, including the two new regression tests (`chat.abort during attachment prep finds the active run (regression for #84176)` and `chat.send attachment-prep failure caches the error so a duplicate that already saw in_flight does not retry into a fresh run`).\n- `node scripts/run-vitest.mjs src/gateway/server.chat.gateway-server-chat-b.test.ts src/gateway/chat-abort.test.ts src/gateway/server-methods/chat.abort-authorization.test.ts` — the three test files ClawSweeper named in its review of #84176 all pass.\n- `node scripts/run-oxlint.mjs src/gateway/server-methods/chat.ts src/gateway/server.chat.gateway-server-chat-b.test.ts` — clean.\n- `node scripts/run-tsgo.mjs` — clean.\n- Auto Review (extra-high recall, 5 angles + verifier + sweep): one HIGH finding fixed (aborted-path missing `chat:<runId>` dedupe write); one LOW finding fixed (test used `.find()` without count assertion).\n- ClawSweeper P2 follow-up (`chat.ts:2481`): the second commit adds the prep-failure dedupe write and its regression test.\n",
-        "branch": "fix/chat-abort-race-pre-attachment",
-        "head_sha": "b27254d5ea601c65d06a44ffc5be2df36b7d9c58",
-        "author": "willamhou",
+        "title": "feat: add retries field to HealthCheckRunContext for transient failure handling",
+        "body": "## Summary\n- Added `retries?: number` field to `HealthCheckRunContext` interface\n- Implemented retry loop in `runRunnableHealthCheck` with exponential backoff (100ms × attempt)\n- Add `retries` field to `HealthRepairContext` interface\n- Full test coverage for retry behavior (3 new tests)\n\n## Problem\nTransient failures in health checks (network timeouts, temporary file locks) would immediately fail without retry opportunities. The original PR only added the type field without wiring up actual retry behavior.\n\n## Solution\nImplements retry logic in `doctor-repair-flow.ts`:\n\n1. **Retry loop** — `runRunnableHealthCheck` now loops up to `maxAttempts = (ctx.retries ?? 0) + 1` attempts on `check.run()` failures\n2. **Exponential backoff** — `100ms * attempt` delay between retries (1st retry: 100ms, 2nd: 200ms)\n3. **Failure reporting** — final failure message reports total attempts: `\"<check.id> run failed after <N> attempts: <error>\"`\n4. **Context wiring** — `retries` passed through from `HealthRepairContext` into `HealthCheckRunContext`\n\n## Files Changed\n- `src/flows/doctor-repair-flow.ts` — retry loop + backoff around `check.run()`\n- `src/flows/health-checks.ts` — `retries` field added to `HealthRepairContext`\n- `src/flows/health-check-runner-types.ts` — existing `retries` field on `HealthCheckRunContext`\n- `src/flows/doctor-repair-flow.test.ts` — 3 new tests covering retry behavior\n\n## Testing\n**Test output (local vitest):**\n```\n✓ retries transient failures and succeeds on later attempt  303ms\n✓ fails without retry when retries is 0  1ms\n✓ exhausts retries and reports failure after all attempts fail  302ms\n\nTest Files  1 passed (1)\n     Tests  13 passed (13)\n```\n\nAll existing tests continue to pass.\n\n## Proof\nHealth check that fails twice then succeeds — retries 2 times, succeeds on 3rd call (plus 4th call for post-repair validation):\n\n```\n✓ retries transient failures and succeeds on later attempt  303ms\n```\n\nHealth check with retries=0 — fails immediately with no retry:\n```\n✓ fails without retry when retries is 0  1ms\n```\n\nHealth check that exhausts all retries — 3 total attempts, final failure warning logged:\n```\n✓ exhausts retries and reports failure after all attempts fail  302ms\n```\n\n## Risk\nLOW — additive retry capability, defaults to no retries (existing behavior preserved). Only affects health checks that explicitly pass `retries > 0`.",
+        "branch": "contrib/openclaw/health-check-retry-logic",
+        "head_sha": "2c500544544a3051fe6feb019212ab20b7b6123f",
+        "author": "okwn",
         "labels": [
-          "app: web-ui",
-          "gateway",
-          "size: M",
+          "size: S",
           "triage: needs-real-behavior-proof",
-          "proof: sufficient",
           "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look"
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/gateway/server-methods/chat.ts",
-            "additions": 73,
-            "deletions": 26,
+            "path": "src/flows/doctor-repair-flow.test.ts",
+            "additions": 97,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server.chat.gateway-server-chat-b.test.ts",
-            "additions": 279,
-            "deletions": 4,
+            "path": "src/flows/doctor-repair-flow.ts",
+            "additions": 44,
+            "deletions": 21,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/health-check-runner-types.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/flows/health-checks.ts",
+            "additions": 2,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85917",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85917.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85758",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85758.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 102,
+          "total": 106,
           "counts": {
-            "CANCELLED": 2,
-            "IN_PROGRESS": 1,
-            "SKIPPED": 27,
-            "SUCCESS": 71,
+            "FAILURE": 9,
+            "SUCCESS": 70,
+            "SKIPPED": 26,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:CANCELLED",
-            "Scan changed paths (precise):IN_PROGRESS"
+            "Real behavior proof:FAILURE",
+            "build-artifacts:FAILURE",
+            "check-guards:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
           ],
-          "pending": [
-            "Scan changed paths (precise):IN_PROGRESS"
-          ],
+          "pending": [],
           "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
+            "Real behavior proof:FAILURE",
+            "build-artifacts:FAILURE",
+            "check-guards:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
           ]
         }
       },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2159,
+    "total_ms": 2011,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 354
+        "ms": 318
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1532
+        "ms": 1452
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 242
+        "ms": 216
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
