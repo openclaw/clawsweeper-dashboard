@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T17:04:11.338Z",
+  "generated_at": "2026-05-24T17:04:38.441Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T14:04:10.768Z",
+  "since": "2026-05-24T14:04:38.084Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    84616
+    86129
   ],
-  "comment_ids": [
-    4529417731
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,143 +29,14 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:84616:4499816274:2026-05-24T17:04:01Z:clawsweeper_needs_human",
-      "comment_id": "4499816274",
-      "comment_version_key": "4499816274:2026-05-24T17:04:01Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84616#issuecomment-4499816274",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84616,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-20T15:14:25Z",
-      "comment_updated_at": "2026-05-24T17:04:01Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "Human/contributor follow-up is needed for real behavior proof and final CI settlement; no narrow code repair is identified from this review.; Cleared: The diff is limited to internal agents lifecycle TypeScript and tests, with no dependency, workflow, credential, install, or publishing surface changed. (sha=fdd3edf6647449196586f361705e32a645671664)",
-      "review_summary": "The PR adds warning handlers and delayed cleanup recovery for selected subagent lifecycle `completeSubagentRun` rejection paths, widens orphan-reconciliation source typing, and adds timeout grace regression coverage.\n\nPR surface: Source +80, Tests +51. Total +131 across 3 files.\n\nReproducibility: yes. from source for the unhandled-rejection class: current main has fire-and-forget `completeSubagentRun` calls and an uncaught async lifecycle listener. I did not establish a live current-main crash or fault-injection reproduction in this read-only review.",
-      "review_followup": "Human/contributor follow-up is needed for real behavior proof and final CI settlement; no narrow code repair is identified from this review.",
-      "freeform_prompt": null,
-      "expected_head_sha": "fdd3edf6647449196586f361705e32a645671664",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): add .catch() to fire-and-forget subagent lifecycle promises",
-        "body": "## Problem\n\nThree fire-and-forget promises in `src/agents/subagent-registry.ts` can reject without a `.catch()` handler, causing unhandled promise rejections that may crash the process:\n\n1. **`schedulePendingLifecycleError`** (line 345): `void completeSubagentRun({...})` without `.catch()`.\n2. **`schedulePendingLifecycleTimeout`** (line 384): Same pattern for timeout-triggered completion.\n3. **`ensureListener` event handler** (line 1022): `completeSubagentRun({...})` inside an async IIFE without `.catch()`.\n\nIf `completeSubagentRun` throws after mutating the run entry (setting `endedAt`, `outcome`, persisting), the run is left in a partially-completed state: ended but with no cleanup flow started. The existing orphan reconciliation (`reconcileOrphanedRun`) handles this scenario during session resume, but there is no recovery path when the failure happens during normal operation.\n\n## Fix\n\n1. **Add `.catch()` to all three fire-and-forget paths** with `log.warn` for diagnostics.\n2. **Schedule two-path catch recovery** in each catch handler via `scheduleLifecycleCatchRecovery(runId)`. After a 1-second delay (to let any in-flight state settle), it checks the run state and takes the appropriate recovery action:\n\n   - **Path 1 (orphan):** If the child session is gone (`resolveSubagentRunOrphanReason` returns a reason), reconcile via `reconcileOrphanedRun` (same path as session resume).\n   - **Path 2 (non-orphan, cleanup incomplete):** If the run has `endedAt` set but `cleanupHandled` is false and `cleanupCompletedAt` is not set, drive `startSubagentAnnounceCleanupFlow` directly. This covers the case where `completeSubagentRun` threw after persisting the ended state but before triggering cleanup, and the child session still exists (so it is not an orphan).\n   - **No-op:** If the run was not ended (error happened before mutation) or cleanup already completed, the recovery does nothing.\n\nProduction diff is +46 lines in `subagent-registry.ts`.\n## Real behavior proof\n\n**Behavior addressed:** Subagent lifecycle catch recovery now re-derives completion params from the current entry state when the delayed timer fires, instead of replaying a stale closure that captured params at the original failure time.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `d0378fd685`\n\n**Exact steps or command run after this patch:**\n\nSource verification of state-safe recovery on current HEAD:\n\n```\n$ grep -n 'scheduleLifecycleCatchRecovery' src/agents/subagent-registry.ts\n350:function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string) {\n431:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n471:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n1087:          scheduleLifecycleCatchRecovery(evt.runId, \"error\");\n1124:        scheduleLifecycleCatchRecovery(evt.runId, \"ok\");\n```\n\n**Evidence after fix:** Console output from `node` evaluation confirms the recovery function re-derives all params from the current entry at timer-fire time and no stale closure callbacks remain:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const fnStart = src.indexOf('function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string)');\n  const fnBody = src.slice(fnStart, fnStart + 1200);\n  console.log('has retryCompletion closure param:', fnBody.includes('retryCompletion'));\n  console.log('reads entry from registry at fire time:', fnBody.includes('subagentRuns.get(runId)'));\n  console.log('re-derives outcome from entry.outcome:', fnBody.includes('entry.outcome ??'));\n  console.log('re-derives reason from entry.endedReason:', fnBody.includes('entry.endedReason ??'));\n  console.log('reads accountId from entry.requesterOrigin:', fnBody.includes('entry.requesterOrigin'));\n  console.log('outcome status guard prevents overwrite:', fnBody.includes('entry.outcome.status !== expectedOutcomeStatus'));\n\"\nhas retryCompletion closure param: false\nreads entry from registry at fire time: true\nre-derives outcome from entry.outcome: true\nre-derives reason from entry.endedReason: true\nreads accountId from entry.requesterOrigin: true\noutcome status guard prevents overwrite: true\n```\n\n**Observed result after fix:** Actual output from `node` confirms all 4 callsites pass only the expected status string, with no closure callback capturing stale params:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const calls = src.match(/scheduleLifecycleCatchRecovery\\([^)]+\\)/g) || [];\n  console.log('total callsites:', calls.filter(c => !c.includes('function ')).length);\n  const hasClosureParam = calls.some(c => c.includes('=>') || c.includes('function'));\n  console.log('any callsite passes closure:', hasClosureParam);\n  calls.forEach(c => { if (!c.startsWith('function')) console.log(' ', c); });\n\"\ntotal callsites: 4\nany callsite passes closure: false\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"ok\")\n```\n\n**What was not tested:** No live gateway session with real subagent runs was tested. Fault injection (forcing `completeSubagentRun` to reject) was not performed in a running process.\n",
-        "branch": "fix/subagent-lifecycle-catch",
-        "head_sha": "fdd3edf6647449196586f361705e32a645671664",
-        "author": "sebtardif",
-        "labels": [
-          "agents",
-          "size: S",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/subagent-registry-helpers.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/subagent-registry.lifecycle-retry-grace.e2e.test.ts",
-            "additions": 51,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/subagent-registry.ts",
-            "additions": 89,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84616",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84616.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 29,
-            "SUCCESS": 69,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-agentic-agents:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-agentic-agents:FAILURE"
-          ]
-        }
-      },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84616:4529397933:2026-05-24T16:54:03Z:re_review",
-      "comment_id": "4529397933",
-      "comment_version_key": "4529397933:2026-05-24T16:54:03Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84616#issuecomment-4529397933",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84616,
-      "author": "SebTardif",
-      "author_id": 1413412,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-24T17:02:09Z",
-      "comment_updated_at": "2026-05-24T17:02:09Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    }
-  ],
+  "commands": [],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 1772,
+    "total_ms": 609,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 557
+        "ms": 346
       },
       {
         "name": "prehydrate_command_lookups",
@@ -175,11 +44,11 @@
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 1203
+        "ms": 252
       },
       {
         "name": "append_ledger",
