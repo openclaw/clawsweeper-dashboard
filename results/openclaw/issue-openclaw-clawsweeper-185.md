@@ -2,12 +2,12 @@
 repo: "openclaw/clawsweeper"
 cluster_id: "issue-openclaw-clawsweeper-185"
 mode: "autonomous"
-run_id: "26368492335"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26368492335"
+run_id: "26368852552"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26368852552"
 head_sha: "4954daa585f1ed92cc8808d87b446f47df095a65"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-24T17:57:56.685Z"
+published_at: "2026-05-24T18:13:23.940Z"
 canonical: "https://github.com/openclaw/clawsweeper/issues/185"
 canonical_issue: "https://github.com/openclaw/clawsweeper/issues/185"
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/clawsweeper
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/26368492335](https://github.com/openclaw/clawsweeper/actions/runs/26368492335)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/26368852552](https://github.com/openclaw/clawsweeper/actions/runs/26368852552)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/clawsweeper/issues/185
 
 ## Summary
 
-Issue #185 is a valid narrow implementation request. Current main tells review workers to read and follow AGENTS.md, but does not frame AGENTS.md as review policy/rubric or require concrete repository-policy conflicts to be surfaced in structured review output. A new fix PR should update the item and commit review prompts, the review decision schema text, focused prompt tests, and the changelog.
+Issue #185 is the live canonical request. Current main only tells item and commit reviewers to read and follow AGENTS.md; it does not make AGENTS.md an explicit review rubric or require policy conflicts to be surfaced in structured review output. A narrow new fix PR should update the review prompts, tests, review policy version, and changelog.
 
 ## Impact
 
@@ -67,10 +67,10 @@ Issue #185 is a valid narrow implementation request. Current main tells review w
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #185 | keep_canonical | planned | canonical | This is the source issue and should remain open until a fix PR lands; closing and merging are blocked by job frontmatter. |
-| cluster:issue-openclaw-clawsweeper-185 | fix_needed | planned |  | The requested behavior remains missing on current main and can be implemented as a narrow prompt/schema/test/changelog change. |
-| cluster:issue-openclaw-clawsweeper-185 | build_fix_artifact | planned |  | Build a new-fix-PR artifact for the executor to apply on clawsweeper/issue-openclaw-clawsweeper-185. |
-| cluster:issue-openclaw-clawsweeper-185 | open_fix_pr | planned |  | Open or update one implementation PR from clawsweeper/issue-openclaw-clawsweeper-185 after applying and validating the fix artifact. |
+| #185 | keep_canonical | planned | canonical | #185 is the source issue and should remain open while a fix PR is created; job frontmatter blocks close and merge. |
+| cluster:issue-openclaw-clawsweeper-185 | fix_needed | planned |  | The request is still valid on current main and has a narrow prompt/test/version/changelog implementation path. |
+| cluster:issue-openclaw-clawsweeper-185 | build_fix_artifact | planned |  | Produce one new fix PR from target branch clawsweeper/issue-openclaw-clawsweeper-185. |
+| cluster:issue-openclaw-clawsweeper-185 | open_fix_pr | planned |  | After applying the narrow fix artifact and validation, raise or update the single implementation PR for #185. |
 
 ## Needs Human
 
