@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T03:41:35.969Z",
+  "generated_at": "2026-05-24T03:41:41.996Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T00:41:34.216Z",
+  "since": "2026-05-24T00:41:40.331Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     85911
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4527298087
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 2,
@@ -36,16 +38,16 @@
       "comment_version_key": "4527287832:2026-05-24T03:41:29Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/85911#issuecomment-4527287832",
       "repo": "openclaw/openclaw",
-      "issue_number": 85911,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-24T03:33:52Z",
-      "comment_updated_at": "2026-05-24T03:41:29Z",
+      "issue_number": 85904,
+      "author": "guanbear",
+      "author_id": 11829005,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-24T03:39:38Z",
+      "comment_updated_at": "2026-05-24T03:39:38Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "trusted_bot": true,
@@ -59,83 +61,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(discord): surface silent reply-delivery skips and remove runtime.error optional-chain",
-        "body": "## Summary\n\n- **Problem:** Discord channel-bound assistant turns can produce text but lose it silently when the run is aborted between text-generation and delivery (e.g., during a gateway restart). The `deliver` callback in `createReplyDispatcherWithTyping` had two silent `if (isProcessAborted(abortSignal)) return;` short-circuits — the model's text persisted in the session JSONL with `terminalError: undefined` (success), but Discord never saw the message and `gateway.log` / `gateway.err.log` recorded nothing about the skip. The intentional `if (payload.isReasoning) return;` was also silent at every log level. Separately, `onError` used `runtime.error?.(...)` whose optional-chain made it a no-op if `runtime.error` were ever unwired.\n- **Solution:** Both abort-skip paths and the reasoning-skip now emit a `logVerbose(...)` line with a shared `formatDiscordReplySkip(...)` helper (mirrors the existing `formatDiscordReplyDeliveryFailure` shape, same `target=` / `session=` grep idiom). The `onError`'s `?.` is removed to honor `RuntimeEnv.error`'s required-by-type contract.\n- **What changed:** New exported pure helper `formatDiscordReplySkip` with a discriminated `DiscordReplySkipReason` union (`\"aborted before delivery\"` | `\"reasoning payload\"`); three call-site additions inside the `deliver` callback; one optional-chain removal in `onError`.\n- **What did NOT change (scope boundary):** `deliverDiscordReply`'s throw-on-failure semantics; the trajectory resolver in `src/agents/pi-embedded-runner/run/attempt-trajectory-status.ts`; any extension besides `discord`; the four sister `runtime.error?.()` sites in `extensions/discord/src/monitor/{message-handler.ts, message-run-queue.ts, message-handler.context.ts}` (out of scope for this PR; happy to file a follow-up).\n\n## Motivation\n\nReal-world incident: eight consecutive user messages on a Discord channel got no replies. Every session had assistant text in its `.jsonl` and `terminalError: undefined` (resolver classified success). Discord never saw the messages and `gateway.err.log` had zero `discord {kind} reply failed` lines. The user thought the bot was ignoring them; the operator had no signal until a complaint came in. Combined with five gateway restarts in 24 minutes and a 19.5 s event-loop stall in the same window, the silent abort-skip in `deliver` is the only path that fits the evidence. Today the bug is invisible to gateway logs, `/healthz`, `/readyz`, and `openclaw doctor` — turning it into a `logVerbose` trace is the minimum needed to make this debuggable next time without paging-level noise from routine cancellations.\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor required for the fix\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all touched areas)\n\n- [ ] Gateway / orchestration\n- [ ] Skills / tool execution\n- [ ] Auth / tokens\n- [ ] Memory / storage\n- [x] Integrations\n- [ ] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- Closes #\n- Related # (none — opening this PR directly per CONTRIBUTING.md: \"Bugs & small fixes → Open a PR!\")\n- [x] This PR fixes a bug or regression\n\n## Real behavior proof (required for external PRs)\n\n- Behavior addressed: aborted-mid-turn and reasoning-payload skip paths in the Discord reply dispatcher emit `discord {kind} reply skipped ({reason}): target=... session=...` traces via `logVerbose`. The `onError` path no longer silently no-ops when `runtime.error` is unwired.\n- Real environment tested: local source checkout (macOS 15.5, Node 22.19+), patched branch HEAD `a867550f3f`, `pnpm build` against the patched tree, then a Node harness that loads the patched bundled chunk (`dist/message-handler.process-DVNKczYd.js`) and the patched `dist/plugin-sdk/runtime-env.js` and exercises the same code the inline `deliver` lambda invokes. Live-Discord roundtrip during a real gateway SIGTERM cascade was not exercised; harness covers the formatter-and-logVerbose wiring against the built dist artifact.\n- Exact steps or command run after this patch:\n\n  ```sh\n  # 1. From the patched checkout at HEAD a867550f3f:\n  pnpm build\n\n  # 2. From an isolated proof directory (no relation to any installed openclaw state),\n  #    run the harness against the freshly built openclaw:\n  node /abs/path/to/openclaw-tickets/proof/run-abort-skip-proof.mjs /abs/path/to/openclaw\n  ```\n\n  Source of the script is included in the linked artifact (mirrors the `run-proof.mjs` pattern from PR #82985).\n\n- Evidence after fix:\n\n  ```\n  [abort-skip-proof] loading patched bundle: dist/message-handler.process-DVNKczYd.js\n  [abort-skip-proof] loading runtime-env:    dist/plugin-sdk/runtime-env.js\n  [abort-skip-proof] abort-skip   formatter output:\n      discord final reply skipped (aborted before delivery): target=channel:c1 session=agent:friday:discord:channel:c1\n  [abort-skip-proof] reasoning    formatter output:\n      discord block reply skipped (reasoning payload): target=channel:c2 session=agent:main:discord:channel:c2\n  discord final reply skipped (aborted before delivery): target=channel:c1 session=agent:friday:discord:channel:c1\n  discord block reply skipped (reasoning payload): target=channel:c2 session=agent:main:discord:channel:c2\n  [abort-skip-proof] logVerbose surfaced abort-skip line: YES\n  [abort-skip-proof] logVerbose surfaced reasoning line:  YES\n  [abort-skip-proof] OK: both skip paths emit logVerbose-visible output from the patched dist build\n  HARNESS_EXIT=0\n  ```\n\n  This is verbatim stdout from `node run-abort-skip-proof.mjs /abs/path/to/openclaw`. Lines 4-5 are the formatter's direct output; lines 6-7 are the actual `logVerbose` emission against captured stdout (the inline `deliver` lambda uses identical `logVerbose(formatDiscordReplySkip({...}))` call sites at the abort and reasoning gates).\n\n- Observed result after fix: the patched bundle exports `formatDiscordReplySkip`, the formatter produces the `target=` / `session=` grep idiom for both `reason` discriminants, and piping its output through `logVerbose` surfaces both lines to stdout. The harness exits 0.\n\n- What was not tested:\n  - Live Discord delivery against a real guild during a real gateway SIGTERM cascade (the harness uses `setVerbose(true)` + captured stdout, not a Discord WebSocket close path).\n  - Direct invocation of the inline `deliver`/`onError` lambdas inside `processDiscordMessage` (the lambdas are not exported and require a full dispatcher fixture to drive). Coverage is at the formatter contract level + harness against the built dist; the call-site-to-formatter linkage is verified by inspection of the diff and TypeScript narrowing.\n  - The four sister `runtime.error?.()` sites in `extensions/discord/src/monitor/{message-handler.ts, message-run-queue.ts, message-handler.context.ts}` (out of scope; happy to file a follow-up PR if this lands).\n\n- Before evidence: same harness run against `origin/main` (no patch) reports:\n\n  ```\n  [abort-skip-proof] loading patched bundle: dist/message-handler.process-7mDEVE6V.js\n  [abort-skip-proof] loading runtime-env:    dist/plugin-sdk/runtime-env.js\n  [abort-skip-proof] FAIL: formatDiscordReplySkip not exported from patched bundle (got undefined)\n  ```\n\n  Confirms `formatDiscordReplySkip` does not exist on the pre-patch dist, matching the production behavior the incident captured (silent reply drops with no log line). Pre-patch trace: see the original cooking-recipes session evidence in the linked issue notes — eight consecutive turns persisted assistant text in their session JSONLs but `gateway.log` / `gateway.err.log` had zero `discord {kind} reply ...` lines for the affected channel between the user pinging Friday at 14:25 MDT and the operator manually delivering the model's reply at 17:25 MDT.\n\n## Root Cause (if applicable)\n\n- Root cause: in `extensions/discord/src/monitor/message-handler.process.ts`, the `deliver` callback inside `createReplyDispatcherWithTyping` had two early `isProcessAborted(abortSignal)` gates (entry point and post-preview path) that returned without logging. The intentional `payload.isReasoning` skip was also silent. The `onError` callback used `runtime.error?.(...)`, whose optional-chain silently no-ops when `runtime.error` is unset.\n- Missing detection / guardrail: no log line, no trajectory event, no `openclaw doctor` check covers the \"model produced text, run aborted before delivery\" path. A regression guardrail at the formatter-helper level (unit-testable) was missing.\n- Contributing context (if known): rapid gateway restarts (3+ within a few minutes) that propagate `abortSignal.aborted = true` to in-flight deliveries. Without the new log, this is indistinguishable from \"the bot is fine; just no work happening\" in logs.\n\n## Regression Test Plan (if applicable)\n\n- Coverage level that should have caught this:\n  - [x] Unit test\n  - [ ] Seam / integration test\n  - [ ] End-to-end test\n  - [ ] Existing coverage already sufficient\n- Target test or file: `extensions/discord/src/monitor/message-handler.process.abort-skip.test.ts` (new) — exercises the pure `formatDiscordReplySkip` helper at 5 cases: target+session present (aborted reason), reasoning-payload reason, sessionKey undefined, empty-string sessionKey, `kind` discriminant preservation across the three union values.\n- Scenario the test should lock in: future refactors of the skip log lines must keep the `target=` / `session=` grep tokens stable and must keep the `kind` token in the message prefix so incident grep recipes continue to match.\n- Why this is the smallest reliable guardrail: the inline `deliver`/`onError` lambdas are deeply embedded in `processDiscordMessage`, which is heavy to drive end-to-end in a unit test. Extracting the pure formatter and unit-testing the wire contract locks in the operator-visible string shape without spinning up the full dispatcher. A future-PR refactor that pulls the deliver lambda into a named helper would enable direct dispatch-level testing.\n- Existing test that already covers this (if any): none — `extensions/discord/src/monitor/message-handler.*.test.ts` (15+ files) cover hydration, bot-self-filter, batch-gate, inbound-context, etc., but nothing covered the silent-drop paths.\n- If no new test is added, why not: N/A — test added.\n\n## User-visible / Behavior Changes\n\n- Operators running with verbose logging now see `discord {kind} reply skipped (aborted before delivery): target=... session=...` and `discord {kind} reply skipped (reasoning payload): target=... session=...` lines when those paths fire. Previously every level was silent.\n- `onError` no longer silently no-ops when `runtime.error` is unset; if a partial runtime is ever passed in, the call now throws. `RuntimeEnv.error` is typed required (`src/runtime.ts:6`), so no production caller should be affected; if one is, that's a construction-site bug to fix at the source rather than mask here.\n- End-user-visible behavior (Discord channel messages, replies, formatting): None.\n\n## Diagram (if applicable)\n\n```text\nBefore:\n[model turn]                       [model turn]\n     |                                  |\n     v (text produced)                  v (text produced)\n[reply dispatcher: deliver]        [reply dispatcher: onError]\n     |                                  |\n  isAborted?                       sendReply throws\n     |                                  |\n   silent return  ← bug             runtime.error?.()  ← no-op if unwired\n     |                                  |\n   nothing logged                    nothing logged\n\nAfter:\n[model turn]                       [model turn]\n     |                                  |\n     v (text produced)                  v (text produced)\n[reply dispatcher: deliver]        [reply dispatcher: onError]\n     |                                  |\n  isAborted?                       sendReply throws\n     |                                  |\n   logVerbose(formatDiscordReplySkip   runtime.error(\n     {kind, reason: \"aborted              danger(formatDiscordReplyDeliveryFailure(\n      before delivery\", target,             {kind, err, target, sessionKey})))\n      sessionKey})                          |\n     |                                  ✓ shows in gateway.err.log\n   ✓ shows in gateway.log (verbose)\n```\n\n## Security Impact (required)\n\n- New permissions/capabilities? No\n- Secrets/tokens handling changed? No\n- New/changed network calls? No\n- Command/tool execution surface changed? No\n- Data access scope changed? No\n- If any `Yes`, explain risk + mitigation: N/A — pure observability additions plus a defensive-shim removal.\n\n## Repro + Verification\n\n### Environment\n\n- OS: macOS 15.5\n- Runtime/container: local source checkout, Node 22.19+\n- Model/provider: any (no model interaction touched)\n- Integration/channel (if any): Discord (`extensions/discord`)\n- Relevant config (redacted): a Discord channel-bound agent under `agents.list[].discord.*` in `~/.openclaw/openclaw.json`; no specific config flag toggles the new code paths\n\n### Steps\n\n1. Apply this branch and run `pnpm build`.\n2. Configure a Discord agent listening on at least one channel.\n3. Start the gateway with verbose logging on.\n4. Send a message in that channel and, while the reply turn is in flight, restart the gateway via `launchctl kickstart -k \"gui/$(id -u)/ai.openclaw.gateway\"`.\n\n### Expected\n\n- After the restart, `gateway.log` contains a `discord {kind} reply skipped (aborted before delivery): target=... session=...` line at the time of the aborted turn.\n\n### Actual\n\n- Harness run (see \"Real behavior proof\" above) emits `discord final reply skipped (aborted before delivery): target=channel:c1 session=agent:friday:discord:channel:c1` to stdout, and the `setVerbose(true)` + captured-stdout assertion in the harness confirms `logVerbose` surfaces the line. Operator's `grep \"reply skipped (aborted before delivery)\" ~/.openclaw/logs/gateway.log` against a real local gateway is the follow-up live verification step the maintainer may request before merge.\n\n## Evidence\n\n- [x] Failing test/log before + passing after (new helper test in `message-handler.process.abort-skip.test.ts`)\n- [ ] Trace/log snippets — TBD by reporter at PR-open time\n- [ ] Screenshot/recording\n- [ ] Perf numbers (if relevant)\n\nVerbatim unit test output:\n\n```\nRUN  v4.1.7 /Users/umank/code/openclaw\n\n ✓ |extension-discord| .../message-handler.process.abort-skip.test.ts > formatDiscordReplySkip > includes target and session when both are present for an aborted skip 2ms\n ✓ |extension-discord| .../message-handler.process.abort-skip.test.ts > formatDiscordReplySkip > renders the reasoning-payload reason with the same shape 0ms\n ✓ |extension-discord| .../message-handler.process.abort-skip.test.ts > formatDiscordReplySkip > omits the session tag when sessionKey is undefined 0ms\n ✓ |extension-discord| .../message-handler.process.abort-skip.test.ts > formatDiscordReplySkip > treats an empty-string sessionKey the same as undefined 0ms\n ✓ |extension-discord| .../message-handler.process.abort-skip.test.ts > formatDiscordReplySkip > preserves the kind discriminant in the message prefix 0ms\n\n Test Files  1 passed (1)\n      Tests  5 passed (5)\n```\n\nExisting `extensions/discord/src/monitor` test suite still passes (697/697):\n\n```\nTest Files  63 passed (63)\n     Tests  697 passed (697)\n```\n\n`pnpm check:changed` (typecheck + lint + import-cycles + repo-wide guards) and `pnpm build` exited 0.\n\n## Human Verification (required)\n\n- Verified scenarios: synthetic Node harness against the patched dist build (`pnpm build` + `node proof/run-abort-skip-proof.mjs <openclaw>`), which loads the patched `formatDiscordReplySkip` from `dist/message-handler.process-DVNKczYd.js` and calls the same `logVerbose(formatDiscordReplySkip({...}))` integration the inline `deliver` lambda invokes. Both the abort-skip and reasoning-payload reasons emit the expected log lines, captured stdout proves `logVerbose` surfaces them with verbose mode enabled. Before/after delta confirmed by running the same harness against `origin/main` (FAIL: `formatDiscordReplySkip not exported`) vs patched HEAD (OK: both lines emit).\n- Edge cases checked: abort-skip vs reasoning-payload `reason` values render the same `target=` / `session=` grep idiom; sessionKey-missing renders without a `session=` tag; empty-string sessionKey behaves the same as missing; all three `kind` discriminant values (`tool`, `block`, `final`) preserve the kind token in the message prefix (locked by the 5-case `formatDiscordReplySkip` test).\n- What I did **not** verify: live Discord delivery against a real guild during a real gateway SIGTERM cascade (synthetic harness against built dist only); direct invocation of the inline `deliver`/`onError` lambdas inside `processDiscordMessage` (lambdas are not exported and require a full dispatcher fixture). The harness exercises the formatter + `logVerbose` integration; the abort-signal-detection-to-formatter linkage is verified by inspection of the diff and the TypeScript narrowing on `info.kind`.\n\n## Review Conversations\n\n- [x] I replied to or resolved every bot review conversation I addressed in this PR.\n- [x] I left unresolved only the conversations that still need reviewer or maintainer judgment.\n\n## Compatibility / Migration\n\n- Backward compatible? Yes\n- Config/env changes? No\n- Migration needed? No\n\n## Risks and Mitigations\n\n- Risk: Increased `logVerbose` volume during deploy-restart windows when many aborts may fire.\n  - Mitigation: `logVerbose` only surfaces when verbose mode is on; normal operators are unaffected. Same severity class as the existing 6+ `logVerbose` traces already in this file.\n- Risk: The `runtime.error?.()` removal could throw if a partial runtime is passed into `processDiscordMessage`.\n  - Mitigation: `RuntimeEnv.error` is typed required (`src/runtime.ts:6`) and all production callers pass a full `RuntimeEnv`. If a partial runtime exists in practice, that is a bug at the construction site worth fixing there rather than masking it with `?.`. If this assumption proves wrong in production, the prior `?.` was already silently dropping every delivery-failure log message — so any new exposure would be net-positive observability.\n\n---\n\n*This PR is AI-assisted. Code authored with Claude. Human-run real-behavior proof to be filled in at PR-open time.*\n\n*Branch HEAD: `a867550f3f`*\n",
-        "branch": "fix/discord-reply-silent-drops",
-        "head_sha": "a867550f3f237a47936be761991c53688a66d790",
-        "author": "ubehera",
-        "labels": [
-          "channel: discord",
-          "size: S",
-          "proof: supplied",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/discord/src/monitor/message-handler.process.abort-skip.test.ts",
-            "additions": 64,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/discord/src/monitor/message-handler.process.ts",
-            "additions": 46,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85911",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85911.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 28,
-            "SUCCESS": 65,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1957,
+    "total_ms": 3282,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 296
+        "ms": 1651
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1440
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 193
+        "ms": 1617
       },
       {
         "name": "append_ledger",
