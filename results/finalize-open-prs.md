@@ -1,6 +1,6 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-05-24T20:46:24.112Z
+Generated: 2026-05-24T20:52:32.792Z
 
 ## Summary
 
@@ -30,4 +30,4 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#86197](https://github.com/openclaw/openclaw/pull/86197) | docs: add ClawSweeper review policy to AGENTS | issue-openclaw-openclaw-86185 | MERGEABLE | CLEAN | CANCELLED:6 SKIPPED:37 SUCCESS:12; blockers:3 | needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
+| [#86197](https://github.com/openclaw/openclaw/pull/86197) | docs: add ClawSweeper review policy to AGENTS | issue-openclaw-openclaw-86185 | MERGEABLE | CLEAN | CANCELLED:6 SKIPPED:53 SUCCESS:12; blockers:3 | draft, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | undraft only after worker confirms the fix is complete |
