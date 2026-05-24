@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T13:28:42.204Z",
+  "generated_at": "2026-05-24T13:28:44.862Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T10:28:40.193Z",
+  "since": "2026-05-24T10:28:42.808Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    86046
+    85424
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 1,
+  "scanned_comments": 4,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,17 +31,181 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:86046:4528752014:2026-05-24T13:28:36Z:automerge",
-      "comment_id": "4528752014",
-      "comment_version_key": "4528752014:2026-05-24T13:28:36Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86046#issuecomment-4528752014",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:85424:4520127588:2026-05-24T13:28:38Z:clawsweeper_auto_repair",
+      "comment_id": "4520127588",
+      "comment_version_key": "4520127588:2026-05-24T13:28:38Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85424#issuecomment-4520127588",
       "repo": "openclaw/openclaw",
-      "issue_number": 86046,
+      "issue_number": 85424,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-24T13:00:52Z",
-      "comment_updated_at": "2026-05-24T13:28:36Z",
+      "comment_created_at": "2026-05-22T15:40:45Z",
+      "comment_updated_at": "2026-05-24T13:28:38Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=69cfeccd7b462550c5e2a5332778398f96bcf88d)",
+      "review_summary": "The PR changes gateway call timeout resolution and CLI wrappers so omitted `--timeout` uses the shared handshake budget, and adds event-loop drift metadata to gateway timeout errors with regression tests.\n\nReproducibility: yes. Current main and the latest release show a 10s unconfigured fallback while the source/docs default is 15s, and the contributor supplied redacted pre/post terminal proof from a real gateway path.",
+      "review_followup": "A narrow repair can drop the remaining unrelated formatter-only files; the core gateway behavior does not need an automated code repair.",
+      "freeform_prompt": null,
+      "expected_head_sha": "69cfeccd7b462550c5e2a5332778398f96bcf88d",
+      "finding_id": "review-feedback",
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): use default handshake timeout in wrapper, expose event-loop drift on timeout",
+        "body": "## Summary\n\nRepairs two related bugs that together produced \"gateway timeout after\n10000ms\" errors on slow-startup CLI environments even when the gateway\nitself responded in tens of milliseconds:\n\n1. `src/gateway/call.ts` `resolveGatewayCallTimeout` silently fell back\n   to a hardcoded 10 000 ms whenever neither `OPENCLAW_HANDSHAKE_TIMEOUT_MS`\n   nor `gateway.handshakeTimeoutMs` was set —\n   `DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS` (15 000) was unreachable in\n   that path. Raised the default to **45 000 ms** to absorb slow-startup\n   environments and dropped the silent-fallback gate.\n2. Seven CLI wrappers (`gateway-cli/call.ts`, `gateway-cli/register.ts`,\n   `gateway-rpc.runtime.ts`, `nodes-cli/rpc.ts`,\n   `nodes-cli/rpc.runtime.ts`, `devices-cli.ts`,\n   `devices-cli.runtime.ts`) each registered the `--timeout <ms>`\n   Commander option with an explicit default of `\"10000\"` *and* passed\n   `Number(opts.timeout ?? 10_000)` to `callGateway`, which silently\n   capped every CLI invocation at the old 10 s ceiling even after\n   `resolveGatewayCallTimeout` was fixed. Switched to forwarding\n   `undefined` when `--timeout` was omitted so `callGateway` resolves\n   the proper default plus env/config overrides the same way other\n   callers do.\n\nAlso surfaces `EventLoopReadyResult.maxDriftMs` on the timeout error\n(`eventLoopMaxDriftMs` field on `GatewayTransportError` and its JSON\nshape), with a one-line hint in the error message when drift >= 1 000 ms\nso operators stop blaming the gateway for what was actually a wedged CLI\nprocess.\n\n## Empirical evidence\n\nReproduced on a Linux x86_64 host (Node 24.15.0, 45+ bundled gateway\nplugins) where the gateway responds with `hello-ok` in **15 ms**\nserver-side but the CLI's event loop is blocked **28.5+ s** by\nsynchronous plugin discovery and module loading\n(`HEARTBEAT-LATE dt=28536ms`). The connect-response message event then\nqueues behind the wedge and the previous 10 s handshake budget fires\nbefore the response is dispatched. The same dist completes the same\nhandshake in 105 ms on an aarch64 host (RPi, Node 22.22.2) where there\nis no startup wedge.\n\nA new diagnostic surface in `EventLoopReadyResult.maxDriftMs` and the\n`eventLoopMaxDriftMs` field on `GatewayTransportError` makes the wedge\nvisible in the timeout error itself.\n\n## Test plan\n\n- [x] `pnpm vitest run src/gateway/call.test.ts src/gateway/handshake-timeouts.test.ts` — all 285 tests pass, including three new regressions for default reachability, drift propagation, and the message-hint threshold.\n- [x] `pnpm vitest run src/cli/devices-cli.test.ts src/cli/gateway-cli/ src/cli/nodes-cli/` — all 97 tests pass on the changed CLI wrappers.\n- [x] Comparison with `upstream/main`: this branch has **16 test deltas** in `src/cli/plugins-cli.list.test.ts` and `src/cli/plugins-cli.policy.test.ts`. All 16 are test-pollution failures — they pass cleanly when run in isolation, the assertion failures are about plugin doctor output / missing plugins (unrelated to handshake timeouts), and the underlying tests already fail at lower volumes (12 + 2 = 14) on `upstream/main` itself. The pollution surface is sensitive to suite ordering and not introduced by this PR.\n- [x] End-to-end on a slow-startup environment: `openclaw devices list` now completes successfully against the same backend that previously errored after 10 s, with the handshake completing within tens of milliseconds once the CLI's event loop frees up.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+        "branch": "fix/gateway-handshake-timeout-slow-startup",
+        "head_sha": "69cfeccd7b462550c5e2a5332778398f96bcf88d",
+        "author": "scientificprogrammer",
+        "labels": [
+          "gateway",
+          "cli",
+          "scripts",
+          "agents",
+          "size: M",
+          "triage: dirty-candidate",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "scripts/generate-npm-shrinkwrap.mjs",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-auth.ts",
+            "additions": 1,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/model.ts",
+            "additions": 1,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/devices-cli.runtime.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/devices-cli.ts",
+            "additions": 16,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/gateway-cli/call.ts",
+            "additions": 10,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/gateway-cli/register.ts",
+            "additions": 15,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/gateway-rpc.runtime.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/nodes-cli/rpc.runtime.ts",
+            "additions": 8,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/nodes-cli/rpc.ts",
+            "additions": 15,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/call.test.ts",
+            "additions": 95,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/call.ts",
+            "additions": 74,
+            "deletions": 16,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/handshake-timeouts.test.ts",
+            "additions": 28,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update-managed-service-handoff.test.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85424",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85424.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "FAILURE": 2,
+            "SUCCESS": 72,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:85424:4521409554:2026-05-22T17:53:09Z:re_review",
+      "comment_id": "4521409554",
+      "comment_version_key": "4521409554:2026-05-22T17:53:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85424#issuecomment-4521409554",
+      "repo": "openclaw/openclaw",
+      "issue_number": 85424,
+      "author": "ScientificProgrammer",
+      "author_id": 4348294,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T17:53:09Z",
+      "comment_updated_at": "2026-05-22T17:53:09Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "automerge",
@@ -62,39 +226,114 @@
       "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix(security): guard plugin modelPatterns with compileSafeRegex",
-        "body": "## Summary\n\n`resolveModelSupportMatchKind` in `src/plugins/providers.ts` compiles plugin manifest `modelPatterns` strings with raw `new RegExp(patternSource, \"u\")`. A malicious or careless pattern like `(a+)+$` causes catastrophic backtracking (ReDoS) when tested against non-matching model IDs.\n\nThe codebase already has `compileSafeRegex()` in `src/security/safe-regex.ts` that detects nested repetition and rejects unsafe patterns. This PR wires it into the model pattern matching path.\n\n**Changes:**\n- Import `compileSafeRegex` in `providers.ts`\n- Replace `new RegExp(patternSource, \"u\")` with `compileSafeRegex(patternSource, \"u\")` -- unsafe patterns return `null` and are skipped (same behavior as the previous `catch { continue }` for invalid regex, but also covers ReDoS patterns that are syntactically valid)\n- Add a test verifying a `(a+)+$` pattern against adversarial input completes in <50ms instead of hanging\n\n## Real behavior proof\n\n**Behavior addressed:** Plugin manifest `modelPatterns` entries with nested quantifiers (e.g., `(a+)+$`) cause catastrophic backtracking in `resolveModelSupportMatchKind`, freezing the provider resolution hot path. With 30 repeated characters the raw RegExp hangs for over 5 seconds; with longer input it hangs indefinitely.\n\n**Real environment tested:** macOS, Node 22.19, openclaw at commit 88a85a1fcd on branch `fix/provider-model-pattern-redos`.\n\n**Exact steps or command run after this patch:**\n\nStep 1. Demonstrate the vulnerability with raw RegExp (before fix behavior):\n\n```bash\ntimeout 5 node -e \"\nconst regex = new RegExp('(a+)+\\$', 'u');\nconst input = 'a'.repeat(30) + '!';\nconsole.log('Testing raw RegExp against 30 a + ! ...');\nconst start = performance.now();\nregex.test(input);\nconsole.log('Done in', (performance.now() - start).toFixed(0), 'ms');\n\" || echo 'TIMED OUT after 5 seconds (catastrophic backtracking)'\n```\n\nStep 2. Demonstrate the guard rejects the pattern and valid patterns still work:\n\n```bash\nnode --import tsx -e \"\nimport { compileSafeRegex } from './src/security/safe-regex.js';\nconst malicious = compileSafeRegex('(a+)+\\$', 'u');\nconsole.log('compileSafeRegex(\\\"(a+)+\\$\\\"):', malicious);\nconst valid = compileSafeRegex('^qwen3\\\\\\\\.6-27b@iq3_xxs\\$', 'u');\nconsole.log('compileSafeRegex(\\\"^qwen3.6-27b@iq3_xxs\\$\\\"):', valid);\nconsole.log('valid.test(\\\"qwen3.6-27b@iq3_xxs\\\"):', valid?.test('qwen3.6-27b@iq3_xxs'));\nconst input = 'a'.repeat(30) + '!';\nconst start = performance.now();\nconst result = malicious?.test(input) ?? 'pattern rejected';\nconsole.log('Adversarial input:', result, 'in', (performance.now() - start).toFixed(2), 'ms');\n\"\n```\n\n**Evidence after fix:**\n\nBefore (raw RegExp, unpatched behavior):\n```\n$ timeout 5 node -e \"const regex = new RegExp('(a+)+$', 'u'); ...\"\nTesting raw RegExp against 30 a + ! ...\nTIMED OUT after 5 seconds (catastrophic backtracking)\n```\n\nAfter (compileSafeRegex guard, patched behavior):\n```\n$ node --import tsx -e \"import { compileSafeRegex } from './src/security/safe-regex.js'; ...\"\ncompileSafeRegex(\"(a+)+$\"): null\ncompileSafeRegex(\"^qwen3\\.6-27b@iq3_xxs$\"): /^qwen3\\.6-27b@iq3_xxs$/u\nvalid.test(\"qwen3.6-27b@iq3_xxs\"): true\nAdversarial input: pattern rejected in 0.00 ms\n```\n\nThe malicious pattern is rejected (returns `null`) so the adversarial input never reaches the regex engine. Valid patterns like the LM Studio quant suffix pattern compile and match correctly.\n\n**Observed result after fix:** The `compileSafeRegex` guard detects nested repetition in `(a+)+$` and returns `null`, preventing the pattern from being used. The adversarial input that causes a 5+ second hang with raw RegExp resolves in 0.00ms. Legitimate plugin patterns like `^qwen3\\.6-27b@iq3_xxs$` compile and match correctly, confirming no regression in valid model pattern support.\n\n**What was not tested:** Live gateway startup with a real installed plugin containing a malicious `modelPatterns` entry (would require crafting and installing a plugin package). The proof exercises the same `compileSafeRegex` guard function used by the patched code path.\n",
-        "branch": "fix/provider-model-pattern-redos",
-        "head_sha": "d7c04dab4b9b7e4efb9a6eb7b4544de00cd411b4",
-        "author": "sebtardif",
+        "title": "fix(gateway): use default handshake timeout in wrapper, expose event-loop drift on timeout",
+        "body": "## Summary\n\nRepairs two related bugs that together produced \"gateway timeout after\n10000ms\" errors on slow-startup CLI environments even when the gateway\nitself responded in tens of milliseconds:\n\n1. `src/gateway/call.ts` `resolveGatewayCallTimeout` silently fell back\n   to a hardcoded 10 000 ms whenever neither `OPENCLAW_HANDSHAKE_TIMEOUT_MS`\n   nor `gateway.handshakeTimeoutMs` was set —\n   `DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS` (15 000) was unreachable in\n   that path. Raised the default to **45 000 ms** to absorb slow-startup\n   environments and dropped the silent-fallback gate.\n2. Seven CLI wrappers (`gateway-cli/call.ts`, `gateway-cli/register.ts`,\n   `gateway-rpc.runtime.ts`, `nodes-cli/rpc.ts`,\n   `nodes-cli/rpc.runtime.ts`, `devices-cli.ts`,\n   `devices-cli.runtime.ts`) each registered the `--timeout <ms>`\n   Commander option with an explicit default of `\"10000\"` *and* passed\n   `Number(opts.timeout ?? 10_000)` to `callGateway`, which silently\n   capped every CLI invocation at the old 10 s ceiling even after\n   `resolveGatewayCallTimeout` was fixed. Switched to forwarding\n   `undefined` when `--timeout` was omitted so `callGateway` resolves\n   the proper default plus env/config overrides the same way other\n   callers do.\n\nAlso surfaces `EventLoopReadyResult.maxDriftMs` on the timeout error\n(`eventLoopMaxDriftMs` field on `GatewayTransportError` and its JSON\nshape), with a one-line hint in the error message when drift >= 1 000 ms\nso operators stop blaming the gateway for what was actually a wedged CLI\nprocess.\n\n## Empirical evidence\n\nReproduced on a Linux x86_64 host (Node 24.15.0, 45+ bundled gateway\nplugins) where the gateway responds with `hello-ok` in **15 ms**\nserver-side but the CLI's event loop is blocked **28.5+ s** by\nsynchronous plugin discovery and module loading\n(`HEARTBEAT-LATE dt=28536ms`). The connect-response message event then\nqueues behind the wedge and the previous 10 s handshake budget fires\nbefore the response is dispatched. The same dist completes the same\nhandshake in 105 ms on an aarch64 host (RPi, Node 22.22.2) where there\nis no startup wedge.\n\nA new diagnostic surface in `EventLoopReadyResult.maxDriftMs` and the\n`eventLoopMaxDriftMs` field on `GatewayTransportError` makes the wedge\nvisible in the timeout error itself.\n\n## Test plan\n\n- [x] `pnpm vitest run src/gateway/call.test.ts src/gateway/handshake-timeouts.test.ts` — all 285 tests pass, including three new regressions for default reachability, drift propagation, and the message-hint threshold.\n- [x] `pnpm vitest run src/cli/devices-cli.test.ts src/cli/gateway-cli/ src/cli/nodes-cli/` — all 97 tests pass on the changed CLI wrappers.\n- [x] Comparison with `upstream/main`: this branch has **16 test deltas** in `src/cli/plugins-cli.list.test.ts` and `src/cli/plugins-cli.policy.test.ts`. All 16 are test-pollution failures — they pass cleanly when run in isolation, the assertion failures are about plugin doctor output / missing plugins (unrelated to handshake timeouts), and the underlying tests already fail at lower volumes (12 + 2 = 14) on `upstream/main` itself. The pollution surface is sensitive to suite ordering and not introduced by this PR.\n- [x] End-to-end on a slow-startup environment: `openclaw devices list` now completes successfully against the same backend that previously errored after 10 s, with the handshake completing within tens of milliseconds once the CLI's event loop frees up.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+        "branch": "fix/gateway-handshake-timeout-slow-startup",
+        "head_sha": "69cfeccd7b462550c5e2a5332778398f96bcf88d",
+        "author": "scientificprogrammer",
         "labels": [
-          "size: XS",
-          "proof: supplied",
+          "gateway",
+          "cli",
+          "scripts",
+          "agents",
+          "size: M",
+          "triage: dirty-candidate",
           "proof: sufficient",
           "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author"
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "src/plugins/providers.test.ts",
-            "additions": 18,
-            "deletions": 0,
+            "path": "scripts/generate-npm-shrinkwrap.mjs",
+            "additions": 3,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/plugins/providers.ts",
-            "additions": 7,
-            "deletions": 6,
+            "path": "src/agents/model-auth.ts",
+            "additions": 1,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/model.ts",
+            "additions": 1,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/devices-cli.runtime.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/devices-cli.ts",
+            "additions": 16,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/gateway-cli/call.ts",
+            "additions": 10,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/gateway-cli/register.ts",
+            "additions": 15,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/gateway-rpc.runtime.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/nodes-cli/rpc.runtime.ts",
+            "additions": 8,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/nodes-cli/rpc.ts",
+            "additions": 15,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/call.test.ts",
+            "additions": 95,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/call.ts",
+            "additions": 74,
+            "deletions": 16,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/handshake-timeouts.test.ts",
+            "additions": 28,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/update-managed-service-handoff.test.ts",
+            "additions": 2,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86046",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86046.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85424",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85424.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
@@ -103,43 +342,43 @@
           "total": 104,
           "counts": {
             "FAILURE": 2,
-            "SUCCESS": 74,
+            "SUCCESS": 72,
             "SKIPPED": 27,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Scan changed paths (precise):FAILURE",
+            "Real behavior proof:FAILURE",
             "check-test-types:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "Scan changed paths (precise):FAILURE",
+            "Real behavior proof:FAILURE",
             "check-test-types:FAILURE"
           ]
         }
       },
-      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2196,
+    "total_ms": 2283,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 284
+        "ms": 273
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1712
+        "ms": 1762
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 185
+        "ms": 215
       },
       {
         "name": "append_ledger",
