@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T16:13:40.856Z",
+  "generated_at": "2026-05-24T16:13:50.157Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T13:13:40.553Z",
+  "since": "2026-05-24T13:13:49.787Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    86112
+    86107
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,112 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86100:4529245238:2026-05-24T16:13:32Z:clawsweeper_needs_human",
-      "comment_id": "4529245238",
-      "comment_version_key": "4529245238:2026-05-24T16:13:32Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86100#issuecomment-4529245238",
-      "repo": "openclaw/openclaw",
-      "issue_number": 86100,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-24T15:57:15Z",
-      "comment_updated_at": "2026-05-24T16:13:32Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "Human review should ask for after-fix runtime proof and decide whether to require a small regression test; automation cannot supply the contributor's real-environment proof.; Cleared: The diff only propagates an existing in-process queue option and does not touch credentials, dependencies, workflows, package resolution, or artifact execution. (sha=9d9a005f6a81eaef66b0dbb89b61f7e3ec4969c3)",
-      "review_summary": "The PR changes `runEmbeddedPiAgent` so `enqueueGlobal` merges the trigger-derived `sessionQueuePriority` into its command-queue options before queueing the embedded run body.\n\nPR surface: Source +5. Total +5 across 1 file.\n\nReproducibility: yes. from source: an injected `enqueue` harness can capture the outer session enqueue and nested global enqueue; current `main` gives the session call `foreground` or `background` but leaves the global call without priority. I did not run a live repro because this review is read-only.",
-      "review_followup": "Human review should ask for after-fix runtime proof and decide whether to require a small regression test; automation cannot supply the contributor's real-environment proof.",
-      "freeform_prompt": null,
-      "expected_head_sha": "9d9a005f6a81eaef66b0dbb89b61f7e3ec4969c3",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(pi-embedded-runner): propagate trigger-derived priority to the global lane",
-        "body": "## Summary\n\n`enqueueSession` correctly injects `sessionQueuePriority` into its enqueue opts so user-facing work (`trigger: \"user\" | \"manual\"` → `\"foreground\"`) jumps ahead of background work (`trigger: \"cron\" | \"heartbeat\" | \"memory\" | \"overflow\"` → `\"background\"`) in the session lane.\n\n`enqueueGlobal` was passing `opts` through unchanged, so `priority` resolved to `\"normal\"` (numeric `0`) for both lanes. The heavy `embeddedRun` body (workspace-sandbox, core-plugin-tools, bootstrap-context, bundle-tools, system-prompt, session-resource-loader, agent-session, stream-setup) runs **inside** `enqueueGlobal`, so the global-lane queue was effectively **FIFO** between user chat and cron — defeating the priority intent on the path where it matters most.\n\nThis patch injects `sessionQueuePriority` into `enqueueGlobal` the same way it's already injected into `enqueueSession`.\n\n## The change\n\n```diff\n- const enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) =>\n-   params.enqueue\n-     ? params.enqueue(task, withLaneTimeout(opts))\n-     : enqueueCommandInLane(globalLane, task, withLaneTimeout(opts));\n+ const enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {\n+   const globalOpts: CommandQueueEnqueueOptions = {\n+     ...opts,\n+     priority: sessionQueuePriority,\n+   };\n+   return params.enqueue\n+     ? params.enqueue(task, withLaneTimeout(globalOpts))\n+     : enqueueCommandInLane(globalLane, task, withLaneTimeout(globalOpts));\n+ };\n```\n\n`sessionQueuePriority` is computed once at the top of `runEmbeddedPiAgent` via `resolveEmbeddedRunSessionQueuePriority(params.trigger)`, then reused for both lanes — no new compute, no new dependency, no new behavior for callers that don't pass `trigger`.\n\n## Real behavior proof\n\n**Behavior or issue addressed:** the global lane in `runEmbeddedPiAgent` was effectively FIFO between user chat and cron / heartbeat / memory triggers because `enqueueGlobal` did not propagate the trigger-derived `sessionQueuePriority` that the sibling `enqueueSession` already does. The session-lane queue was correctly priority-ordered; the global-lane queue was not. Since the heavy `embeddedRun` body runs inside the global lane, user chats arriving during a wake-from-idle cron+heartbeat burst queued behind every overdue background task instead of pre-empting them.\n\n**Real environment tested:** a self-hosted OpenClaw gateway running in Docker on macOS (image built from upstream `v2026.5.2`), plus a single hibernating production EC2 host running the same upstream tag. Both the local Docker gateway and the EC2 gateway exhibit the bug pre-patch.\n\n**Exact steps or command run after this patch:**\nThe patch was applied locally to the upstream `pi-embedded-runner/run.ts`. I diff-checked the patched file against the running gateway's stock source via `docker exec` against the live OpenClaw container (`/app/src/agents/pi-embedded-runner/run.ts`) and used `grep` + `sed` against the live source tree to confirm the call sites and queue insertion path that the patch affects. The runtime command set is shown below in the Evidence section.\n\n**Evidence after fix:**\n\nLive source inspection in the running OpenClaw container demonstrating each load-bearing piece of the bug and what the patch changes. All output is copied from `docker exec` against the local OpenClaw container.\n\n1. `src/process/command-queue.ts:246-265` — the lane queue is priority-ordered insertion, foreground (1) inserts ahead of normal (0) inserts ahead of background (-1):\n\n```ts\nfunction resolveQueuePriority(priority: CommandQueueEnqueueOptions[\"priority\"]): number {\n  switch (priority) {\n    case \"foreground\":\n      return 1;\n    case \"background\":\n      return -1;\n    default:\n      return 0;\n  }\n}\n\nfunction enqueueLaneEntry(state: LaneState, entry: QueueEntry): void {\n  const insertAt = state.queue.findIndex(\n    (queued) =>\n      queued.priority < entry.priority ||\n      (queued.priority === entry.priority && queued.sequence > entry.sequence),\n  );\n  ...\n}\n```\n\n2. `src/agents/pi-embedded-runner/run.ts:231-243` — the trigger → priority mapping that the global lane was failing to use:\n\n```ts\nfunction resolveEmbeddedRunSessionQueuePriority(\n  trigger: RunEmbeddedPiAgentParams[\"trigger\"],\n): CommandQueueEnqueueOptions[\"priority\"] {\n  switch (trigger) {\n    case \"user\":\n    case \"manual\":\n      return \"foreground\";\n    case \"cron\":\n    case \"heartbeat\":\n    case \"memory\":\n    case \"overflow\":\n      return \"background\";\n    default:\n```\n\n3. `src/agents/pi-embedded-runner/run.ts:429-444` — **the bug**: `enqueueGlobal` passes `opts` through unchanged, while the sibling `enqueueSession` correctly merges `sessionQueuePriority` into its opts:\n\n```ts\nconst enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) =>\n  params.enqueue\n    ? params.enqueue(task, withLaneTimeout(opts))\n    : enqueueCommandInLane(globalLane, task, withLaneTimeout(opts));\nconst enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {\n  const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };\n  return params.enqueue\n    ? params.enqueue(task, sessionOpts)\n    : enqueueCommandInLane(sessionLane, task, sessionOpts);\n};\n```\n\n4. In-tree callers of `runEmbeddedPiAgent`, demonstrating every code path that flows through the buggy `enqueueGlobal`:\n\n```\n$ grep -rn \"trigger:\" src/agents/command/attempt-execution.ts \\\n                     src/auto-reply/reply/followup-runner.ts \\\n                     src/cron/isolated-agent/run-executor.ts | grep -E \"user|cron|heartbeat\"\nsrc/agents/command/attempt-execution.ts:521:        trigger: \"user\",\nsrc/agents/command/attempt-execution.ts:634:    trigger: \"user\",\nsrc/auto-reply/reply/followup-runner.ts:618:                    trigger: opts?.isHeartbeat === true ? \"heartbeat\" : \"user\",\nsrc/auto-reply/reply/followup-runner.ts:690:                    trigger: \"user\",\nsrc/cron/isolated-agent/run-executor.ts:203:            trigger: \"cron\",\nsrc/cron/isolated-agent/run-executor.ts:243:          trigger: \"cron\",\n```\n\nSo every user chat (`attempt-execution.ts` + `followup-runner.ts`) and every cron run (`run-executor.ts`) flowed through the buggy global-lane enqueue.\n\n5. Diff of the patched fork against this PR's base, demonstrating the after-fix shape:\n\n```\n$ git diff main..fix/embedded-runner-global-lane-priority -- src/agents/pi-embedded-runner/run.ts\n@@ -433,10 +433,15 @@ export async function runEmbeddedPiAgent(\n       },\n       laneTaskTimeoutMs,\n     );\n-  const enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) =>\n-    params.enqueue\n-      ? params.enqueue(task, withLaneTimeout(opts))\n-      : enqueueCommandInLane(globalLane, task, withLaneTimeout(opts));\n+  const enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {\n+    const globalOpts: CommandQueueEnqueueOptions = {\n+      ...opts,\n+      priority: sessionQueuePriority,\n+    };\n+    return params.enqueue\n+      ? params.enqueue(task, withLaneTimeout(globalOpts))\n+      : enqueueCommandInLane(globalLane, task, withLaneTimeout(globalOpts));\n+  };\n   const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {\n```\n\n**Observed result after fix:**\n\nAfter the patch is applied:\n\n- `enqueueGlobal(task)` now resolves to `priority: \"foreground\"` when the parent `runEmbeddedPiAgent` was invoked with `trigger: \"user\"` or `\"manual\"`.\n- `enqueueGlobal(task)` now resolves to `priority: \"background\"` when invoked with `trigger: \"cron\" | \"heartbeat\" | \"memory\" | \"overflow\"`.\n- A user chat arriving while N background-trigger embedded runs are queued in the global lane lands at queue position 0 (ahead of all 27 in the production repro that motivated this patch) instead of position N (behind them). Wait time bounded by 1 currently-running global-lane task's setup duration, not N+1.\n\nNo production downtime observed during the patch validation; the patch is type-preserving and additive — callers that previously passed no opts (the only in-tree pattern) get the priority they were already supposed to get.\n\n**What was not tested:**\n\nI have not yet rebuilt the patched fork into a runnable OpenClaw container image and run a controlled wake-storm repro against it locally — that requires a full `pnpm install && pnpm build` cycle on the fork plus a Dockerfile rebuild, which I've not finished. The patch's runtime effect is therefore inferred from the static analysis above: a single additional opts merge on a code path whose siblings already do the merge and whose downstream consumer (`resolveQueuePriority`) is already exercised by the session lane. Happy to follow up with the runtime trace once the rebuild lands.\n\n## Why no behavior change for legacy callers\n\n`enqueueGlobal` was already accepting `CommandQueueEnqueueOptions` from callers. For all in-tree callers I can find, the call site passes no opts at all (`enqueueGlobal(async () => {...})`), so `opts.priority` was `undefined` → `resolveQueuePriority` returned `0`. After this patch, the same callers get `sessionQueuePriority` for that opt — which is computed from `params.trigger`. For the existing `trigger` enum values (`user`/`manual`/`cron`/`heartbeat`/`memory`/`overflow`/default), this delivers the priority that was already intended at the session lane.\n\nAny caller that explicitly passed `priority` in `opts` would have its value overwritten — currently no in-tree caller does that, but if maintainers want belt-and-braces, the spread order can flip:\n\n```ts\nconst globalOpts: CommandQueueEnqueueOptions = {\n  priority: sessionQueuePriority,\n  ...opts,   // caller-supplied priority wins\n};\n```\n\nHappy to flip if that's the preference; I went with \"session priority wins\" because the session-lane sibling does the same thing.\n",
-        "branch": "fix/embedded-runner-global-lane-priority",
-        "head_sha": "9d9a005f6a81eaef66b0dbb89b61f7e3ec4969c3",
-        "author": "coreindustries",
-        "labels": [
-          "agents",
-          "size: XS",
-          "proof: supplied",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/pi-embedded-runner/run.ts",
-            "additions": 9,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86100",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86100.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "SUCCESS": 71,
-            "CANCELLED": 1,
-            "SKIPPED": 28,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-agentic-agents:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-agentic-agents:FAILURE"
-          ]
-        }
-      },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 533,
+    "total_ms": 680,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 293
+        "ms": 358
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1728
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 229
+        "ms": 311
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
