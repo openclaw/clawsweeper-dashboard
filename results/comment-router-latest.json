@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T17:03:56.062Z",
+  "generated_at": "2026-05-24T17:04:06.810Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T14:03:53.508Z",
+  "since": "2026-05-24T14:04:05.005Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    82955
+    84616
   ],
-  "comment_ids": [
-    4529419462
-  ],
-  "status_comment_id": 4529419569,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 27,
+  "commands_seen": 12,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,18 +31,115 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:82955:4529419462:2026-05-24T17:02:50Z:re_review",
-      "comment_id": "4529419462",
-      "comment_version_key": "4529419462:2026-05-24T17:02:50Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82955#issuecomment-4529419462",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:84616:4499816274:2026-05-24T17:04:01Z:clawsweeper_needs_human",
+      "comment_id": "4499816274",
+      "comment_version_key": "4499816274:2026-05-24T17:04:01Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84616#issuecomment-4499816274",
       "repo": "openclaw/openclaw",
-      "issue_number": 82955,
+      "issue_number": 84616,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-20T15:14:25Z",
+      "comment_updated_at": "2026-05-24T17:04:01Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "Human/contributor follow-up is needed for real behavior proof and final CI settlement; no narrow code repair is identified from this review.; Cleared: The diff is limited to internal agents lifecycle TypeScript and tests, with no dependency, workflow, credential, install, or publishing surface changed. (sha=fdd3edf6647449196586f361705e32a645671664)",
+      "review_summary": "The PR adds warning handlers and delayed cleanup recovery for selected subagent lifecycle `completeSubagentRun` rejection paths, widens orphan-reconciliation source typing, and adds timeout grace regression coverage.\n\nPR surface: Source +80, Tests +51. Total +131 across 3 files.\n\nReproducibility: yes. from source for the unhandled-rejection class: current main has fire-and-forget `completeSubagentRun` calls and an uncaught async lifecycle listener. I did not establish a live current-main crash or fault-injection reproduction in this read-only review.",
+      "review_followup": "Human/contributor follow-up is needed for real behavior proof and final CI settlement; no narrow code repair is identified from this review.",
+      "freeform_prompt": null,
+      "expected_head_sha": "fdd3edf6647449196586f361705e32a645671664",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): add .catch() to fire-and-forget subagent lifecycle promises",
+        "body": "## Problem\n\nThree fire-and-forget promises in `src/agents/subagent-registry.ts` can reject without a `.catch()` handler, causing unhandled promise rejections that may crash the process:\n\n1. **`schedulePendingLifecycleError`** (line 345): `void completeSubagentRun({...})` without `.catch()`.\n2. **`schedulePendingLifecycleTimeout`** (line 384): Same pattern for timeout-triggered completion.\n3. **`ensureListener` event handler** (line 1022): `completeSubagentRun({...})` inside an async IIFE without `.catch()`.\n\nIf `completeSubagentRun` throws after mutating the run entry (setting `endedAt`, `outcome`, persisting), the run is left in a partially-completed state: ended but with no cleanup flow started. The existing orphan reconciliation (`reconcileOrphanedRun`) handles this scenario during session resume, but there is no recovery path when the failure happens during normal operation.\n\n## Fix\n\n1. **Add `.catch()` to all three fire-and-forget paths** with `log.warn` for diagnostics.\n2. **Schedule two-path catch recovery** in each catch handler via `scheduleLifecycleCatchRecovery(runId)`. After a 1-second delay (to let any in-flight state settle), it checks the run state and takes the appropriate recovery action:\n\n   - **Path 1 (orphan):** If the child session is gone (`resolveSubagentRunOrphanReason` returns a reason), reconcile via `reconcileOrphanedRun` (same path as session resume).\n   - **Path 2 (non-orphan, cleanup incomplete):** If the run has `endedAt` set but `cleanupHandled` is false and `cleanupCompletedAt` is not set, drive `startSubagentAnnounceCleanupFlow` directly. This covers the case where `completeSubagentRun` threw after persisting the ended state but before triggering cleanup, and the child session still exists (so it is not an orphan).\n   - **No-op:** If the run was not ended (error happened before mutation) or cleanup already completed, the recovery does nothing.\n\nProduction diff is +46 lines in `subagent-registry.ts`.\n## Real behavior proof\n\n**Behavior addressed:** Subagent lifecycle catch recovery now re-derives completion params from the current entry state when the delayed timer fires, instead of replaying a stale closure that captured params at the original failure time.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `d0378fd685`\n\n**Exact steps or command run after this patch:**\n\nSource verification of state-safe recovery on current HEAD:\n\n```\n$ grep -n 'scheduleLifecycleCatchRecovery' src/agents/subagent-registry.ts\n350:function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string) {\n431:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n471:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n1087:          scheduleLifecycleCatchRecovery(evt.runId, \"error\");\n1124:        scheduleLifecycleCatchRecovery(evt.runId, \"ok\");\n```\n\n**Evidence after fix:** Console output from `node` evaluation confirms the recovery function re-derives all params from the current entry at timer-fire time and no stale closure callbacks remain:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const fnStart = src.indexOf('function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string)');\n  const fnBody = src.slice(fnStart, fnStart + 1200);\n  console.log('has retryCompletion closure param:', fnBody.includes('retryCompletion'));\n  console.log('reads entry from registry at fire time:', fnBody.includes('subagentRuns.get(runId)'));\n  console.log('re-derives outcome from entry.outcome:', fnBody.includes('entry.outcome ??'));\n  console.log('re-derives reason from entry.endedReason:', fnBody.includes('entry.endedReason ??'));\n  console.log('reads accountId from entry.requesterOrigin:', fnBody.includes('entry.requesterOrigin'));\n  console.log('outcome status guard prevents overwrite:', fnBody.includes('entry.outcome.status !== expectedOutcomeStatus'));\n\"\nhas retryCompletion closure param: false\nreads entry from registry at fire time: true\nre-derives outcome from entry.outcome: true\nre-derives reason from entry.endedReason: true\nreads accountId from entry.requesterOrigin: true\noutcome status guard prevents overwrite: true\n```\n\n**Observed result after fix:** Actual output from `node` confirms all 4 callsites pass only the expected status string, with no closure callback capturing stale params:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const calls = src.match(/scheduleLifecycleCatchRecovery\\([^)]+\\)/g) || [];\n  console.log('total callsites:', calls.filter(c => !c.includes('function ')).length);\n  const hasClosureParam = calls.some(c => c.includes('=>') || c.includes('function'));\n  console.log('any callsite passes closure:', hasClosureParam);\n  calls.forEach(c => { if (!c.startsWith('function')) console.log(' ', c); });\n\"\ntotal callsites: 4\nany callsite passes closure: false\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"ok\")\n```\n\n**What was not tested:** No live gateway session with real subagent runs was tested. Fault injection (forcing `completeSubagentRun` to reject) was not performed in a running process.\n",
+        "branch": "fix/subagent-lifecycle-catch",
+        "head_sha": "fdd3edf6647449196586f361705e32a645671664",
+        "author": "sebtardif",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/subagent-registry-helpers.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.lifecycle-retry-grace.e2e.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.ts",
+            "additions": 89,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84616",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84616.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 69,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ]
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84616:4529397933:2026-05-24T16:54:03Z:re_review",
+      "comment_id": "4529397933",
+      "comment_version_key": "4529397933:2026-05-24T16:54:03Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84616#issuecomment-4529397933",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84616,
       "author": "SebTardif",
       "author_id": 1413412,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-24T17:02:50Z",
-      "comment_updated_at": "2026-05-24T17:02:50Z",
-      "status_comment_id": 4529419569,
+      "comment_created_at": "2026-05-24T16:54:03Z",
+      "comment_updated_at": "2026-05-24T16:54:03Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -59,99 +154,1077 @@
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-24T17:03:56.818Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 82955
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-24T17:03:57.862Z",
-          "response_comment_id": "4528546319",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(install): validate downloaded scripts before execution",
-        "body": "## Problem\n\nFour code paths in `scripts/install.sh` download remote scripts via `download_file` and execute them with `bash \"$tmp\"` without any validation. While HTTPS/TLS1.2 protects the transport, truncated downloads, HTML error pages (e.g., CDN 403 responses), and empty responses would be silently executed as bash scripts.\n\nAffected paths:\n1. `run_remote_bash` (Homebrew installer from `raw.githubusercontent.com`)\n2. NodeSource apt/deb setup script (`deb.nodesource.com/setup_*.x`)\n3. NodeSource dnf/rpm setup script (`rpm.nodesource.com/setup_*.x`)\n4. NodeSource yum/rpm setup script (`rpm.nodesource.com/setup_*.x`)\n\nContrast with `bootstrap_gum_temp` which verifies downloaded content with SHA256 checksums.\n\n## Fix\n\nExtract a reusable `validate_downloaded_script()` function and apply it to all four download-then-execute paths. The validation:\n1. Rejects empty files (`[[ ! -s \"$file\" ]]`)\n2. Rejects files that don't start with a shebang (`#!`)\n3. Sanitizes the first-line diagnostic before logging: strips control characters (bytes 0x00-0x1F and 0x7F) via `LC_ALL=C tr -d '\\000-\\037\\177'` and escapes backslashes (`${safe_line//\\\\/\\\\\\\\}`) so untrusted downloaded content cannot inject terminal escape sequences through `ui_error`'s `echo -e` path.\n\n`run_remote_bash` calls `validate_downloaded_script` internally. The three NodeSource paths call it explicitly after `download_file` and before `bash \"$tmp\"` (or `sudo bash \"$tmp\"`).\n\nA full SHA256 checksum pin is impractical because these setup scripts update frequently and a pinned hash would break the installer on every release.\n\n**Sanitization detail:** The `ui_error` function uses `echo -e` in the non-gum fallback path, which interprets backslash sequences (`\\033[...` ANSI escapes, `\\n` newlines, etc.). Two layers prevent terminal injection: (1) `tr -d` strips raw control bytes (actual ESC 0x1B), (2) backslash escaping prevents `echo -e` from interpreting literal `\\033[31m` text as ANSI escapes.\n\n## Real behavior proof\n\nBehavior addressed: `run_remote_bash()` executed downloaded content with `/bin/bash` unconditionally. Truncated downloads, HTML error pages, JSON errors, and binary blobs would all be piped to bash. Additionally, the first-line diagnostic in the rejection message passed untrusted content through `ui_error`'s `echo -e` path, which interprets backslash escape sequences (terminal injection).\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2, bash 5.x). The real patched `run_remote_bash` function was extracted from `scripts/install.sh` via `sed` and exercised against a local Python HTTP server serving 4 response types.\n\nExact steps or command run after this patch:\nStep 1 -- start a local HTTP server serving test responses (HTML error, empty, valid script, escape attack). Step 2 -- extract the real `run_remote_bash` from the patched `install.sh` and call it against each endpoint:\n```bash\npython3 -c '<HTTP server serving /html-error, /empty, /valid-script, /escape-attack>'\neval \"$(sed -n '/^run_remote_bash()/,/^}/p' scripts/install.sh)\"\nrun_remote_bash \"http://127.0.0.1:19877/html-error\"\nrun_remote_bash \"http://127.0.0.1:19877/empty\"\nrun_remote_bash \"http://127.0.0.1:19877/valid-script\"\nrun_remote_bash \"http://127.0.0.1:19877/escape-attack\"\n```\n\nEvidence after fix: terminal output copied below.\n\n**Live proof: real `run_remote_bash` against HTTP server**\n\nThe actual `run_remote_bash` function from the patched `install.sh` was extracted via `sed -n '/^run_remote_bash()/,/^}/p'` and called against a local Python HTTP server. This exercises the real patched code path, not a test harness copy.\n\n```console\n=== REAL run_remote_bash from patched install.sh ===\n\n--- Test 1: HTML error page ---\n✗ Downloaded file does not look like a shell script (no shebang): http://127.0.0.1:19877/html-error\n✗ First line: <html><body>404 Not Found</body></html>\nExit code: 1\n\n--- Test 2: Empty response ---\n✗ Downloaded script is empty: http://127.0.0.1:19877/empty\nExit code: 1\n\n--- Test 3: Valid #!/bin/bash script ---\nhello-from-valid-script\nExit code: 0\n\n--- Test 4: Terminal escape attack ---\n✗ Downloaded file does not look like a shell script (no shebang): http://127.0.0.1:19877/escape-attack\n✗ First line: \\033[31mHACKED\\033[0m terminal injection\nExit code: 1\n```\n\n**Test 1 (HTML):** Server returns `<html><body>404 Not Found</body></html>`. Rejected because no `#!` shebang. First line shown in diagnostic.\n\n**Test 2 (empty):** Server returns empty body. Rejected by the `[[ ! -s \"$tmp\" ]]` check.\n\n**Test 3 (valid script):** Server returns `#!/bin/bash\\necho hello-from-valid-script`. Accepted, executed by `/bin/bash`, printed `hello-from-valid-script`.\n\n**Test 4 (escape attack):** Server returns literal text `\\033[31mHACKED\\033[0m terminal injection` (ASCII backslash-zero-three-three, NOT actual ESC bytes). Rejected (no shebang). The first-line diagnostic shows `\\033[31mHACKED\\033[0m` as **literal text**, NOT as red-colored terminal output. Without the sanitization fix, `echo -e` would interpret `\\033[31m` as ANSI red and show colored \"HACKED\" text. The double sanitization (control byte stripping via `tr -d` + backslash escaping via `${safe_line//\\\\/\\\\\\\\}`) prevents both attack vectors.\n\n**Sanitization detail**\n\nTwo layers protect the first-line diagnostic from terminal injection:\n\n1. **Control byte stripping** (`LC_ALL=C tr -d '\\000-\\037\\177'`): Removes actual ESC (0x1B), NUL, and other control bytes from the downloaded content.\n2. **Backslash escaping** (`${safe_line//\\\\/\\\\\\\\}`): Doubles all backslashes so `echo -e` treats `\\033` as literal text instead of interpreting it as an ESC byte.\n\nVerification with a crafted payload:\n```console\nLiteral \\033[31m text (7 ASCII chars, no real ESC byte):\n$ echo -e \"First line: \\033[31mHACKED\\033[0m\"\nFirst line: HACKED    # <-- RED colored text (dangerous!)\n\n$ safe_line='\\033[31mHACKED\\033[0m'; safe_line=\"${safe_line//\\\\/\\\\\\\\}\"\n$ echo -e \"First line: ${safe_line}\"\nFirst line: \\033[31mHACKED\\033[0m    # <-- plain text (safe!)\n```\n\n**Supplemental: validation harness (10/10 pass)**\n\n```console\n$ bash scripts/test-install-validation.sh\n── GREEN: validation rejects bad downloads ──\n  ✓ PASS  empty file  → rejected\n  ✓ PASS  HTML error   → rejected\n  ✓ PASS  JSON error   → rejected\n  ✓ PASS  binary blob  → rejected\n  ✓ PASS  valid script (#!bash)     → accepted\n  ✓ PASS  valid script (#!env bash) → accepted\n\n── RED: no validation lets bad downloads through ──\n  ✓ PASS  empty file  → accepted (DANGEROUS without validation)\n  ✓ PASS  HTML error   → accepted (DANGEROUS without validation)\n  ✓ PASS  JSON error   → accepted (DANGEROUS without validation)\n  ✓ PASS  binary blob  → accepted (DANGEROUS without validation)\n\nResults: 10 passed, 0 failed\n```\n\n**Live HTTPS proof: unmodified `download_file` over TLS**\n\nProof using the **real unmodified `download_file` function** from `install.sh` (not a test stub). The function uses `curl --proto '=https' --tlsv1.2 --retry 3` -- the identical flags used in production for the Homebrew installer download from `raw.githubusercontent.com`.\n\nThe server is a local Python `ssl.SSLContext` HTTPS server with a self-signed certificate (SAN: `IP:127.0.0.1`). `CURL_CA_BUNDLE` is set to trust the self-signed cert, so curl's TLS verification passes. No `--insecure` flag is used.\n\n```console\n=== REAL download_file + run_remote_bash over HTTPS ===\ndownload_file: curl --proto =https --tlsv1.2 (unmodified from install.sh)\nCURL_CA_BUNDLE=/tmp/test-cert.pem (trust self-signed cert for 127.0.0.1)\n\n--- Test 1: HTTPS HTML error (real download_file) ---\nx Downloaded file does not look like a shell script (no shebang): https://127.0.0.1:19879/html-error\nx First line: <html><body>403 Forbidden</body></html>\nExit code: 1\n\n--- Test 2: HTTPS empty (real download_file) ---\nx Downloaded script is empty: https://127.0.0.1:19879/empty\nExit code: 1\n\n--- Test 3: HTTPS valid script (real download_file) ---\nhello-from-REAL-download-file-HTTPS\nExit code: 0\n```\n\nAll three tests use the **unmodified `download_file` function** extracted via `sed` from `install.sh`. The function calls `curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 1 --retry-connrefused` -- the identical command line used in production. No `--insecure` flag. `CURL_CA_BUNDLE` trusts the self-signed cert so TLS verification passes normally.\n\nObserved result after fix: The real patched `run_remote_bash` and `validate_downloaded_script` functions reject HTML errors, empty responses, and escape-attack payloads while accepting valid `#!/bin/bash` scripts. The first-line diagnostic is sanitized against both raw control bytes and literal backslash escape sequences. The HTTPS proof uses the real unmodified `download_file` function with `--proto '=https' --tlsv1.2` over TLS against a self-signed cert trusted via `CURL_CA_BUNDLE`. All 10 validation harness tests pass.\n\nWhat was not tested: Live download from `raw.githubusercontent.com` returning an actual CDN error page (structural validation is tested against local HTTP and HTTPS servers instead).\n\n\n\n",
-        "branch": "fix/install-validate-remote-script",
-        "head_sha": "177a2bbe467ffbcbd70958959aa6b4018d9e426e",
+        "title": "fix(agents): add .catch() to fire-and-forget subagent lifecycle promises",
+        "body": "## Problem\n\nThree fire-and-forget promises in `src/agents/subagent-registry.ts` can reject without a `.catch()` handler, causing unhandled promise rejections that may crash the process:\n\n1. **`schedulePendingLifecycleError`** (line 345): `void completeSubagentRun({...})` without `.catch()`.\n2. **`schedulePendingLifecycleTimeout`** (line 384): Same pattern for timeout-triggered completion.\n3. **`ensureListener` event handler** (line 1022): `completeSubagentRun({...})` inside an async IIFE without `.catch()`.\n\nIf `completeSubagentRun` throws after mutating the run entry (setting `endedAt`, `outcome`, persisting), the run is left in a partially-completed state: ended but with no cleanup flow started. The existing orphan reconciliation (`reconcileOrphanedRun`) handles this scenario during session resume, but there is no recovery path when the failure happens during normal operation.\n\n## Fix\n\n1. **Add `.catch()` to all three fire-and-forget paths** with `log.warn` for diagnostics.\n2. **Schedule two-path catch recovery** in each catch handler via `scheduleLifecycleCatchRecovery(runId)`. After a 1-second delay (to let any in-flight state settle), it checks the run state and takes the appropriate recovery action:\n\n   - **Path 1 (orphan):** If the child session is gone (`resolveSubagentRunOrphanReason` returns a reason), reconcile via `reconcileOrphanedRun` (same path as session resume).\n   - **Path 2 (non-orphan, cleanup incomplete):** If the run has `endedAt` set but `cleanupHandled` is false and `cleanupCompletedAt` is not set, drive `startSubagentAnnounceCleanupFlow` directly. This covers the case where `completeSubagentRun` threw after persisting the ended state but before triggering cleanup, and the child session still exists (so it is not an orphan).\n   - **No-op:** If the run was not ended (error happened before mutation) or cleanup already completed, the recovery does nothing.\n\nProduction diff is +46 lines in `subagent-registry.ts`.\n## Real behavior proof\n\n**Behavior addressed:** Subagent lifecycle catch recovery now re-derives completion params from the current entry state when the delayed timer fires, instead of replaying a stale closure that captured params at the original failure time.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `d0378fd685`\n\n**Exact steps or command run after this patch:**\n\nSource verification of state-safe recovery on current HEAD:\n\n```\n$ grep -n 'scheduleLifecycleCatchRecovery' src/agents/subagent-registry.ts\n350:function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string) {\n431:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n471:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n1087:          scheduleLifecycleCatchRecovery(evt.runId, \"error\");\n1124:        scheduleLifecycleCatchRecovery(evt.runId, \"ok\");\n```\n\n**Evidence after fix:** Console output from `node` evaluation confirms the recovery function re-derives all params from the current entry at timer-fire time and no stale closure callbacks remain:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const fnStart = src.indexOf('function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string)');\n  const fnBody = src.slice(fnStart, fnStart + 1200);\n  console.log('has retryCompletion closure param:', fnBody.includes('retryCompletion'));\n  console.log('reads entry from registry at fire time:', fnBody.includes('subagentRuns.get(runId)'));\n  console.log('re-derives outcome from entry.outcome:', fnBody.includes('entry.outcome ??'));\n  console.log('re-derives reason from entry.endedReason:', fnBody.includes('entry.endedReason ??'));\n  console.log('reads accountId from entry.requesterOrigin:', fnBody.includes('entry.requesterOrigin'));\n  console.log('outcome status guard prevents overwrite:', fnBody.includes('entry.outcome.status !== expectedOutcomeStatus'));\n\"\nhas retryCompletion closure param: false\nreads entry from registry at fire time: true\nre-derives outcome from entry.outcome: true\nre-derives reason from entry.endedReason: true\nreads accountId from entry.requesterOrigin: true\noutcome status guard prevents overwrite: true\n```\n\n**Observed result after fix:** Actual output from `node` confirms all 4 callsites pass only the expected status string, with no closure callback capturing stale params:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const calls = src.match(/scheduleLifecycleCatchRecovery\\([^)]+\\)/g) || [];\n  console.log('total callsites:', calls.filter(c => !c.includes('function ')).length);\n  const hasClosureParam = calls.some(c => c.includes('=>') || c.includes('function'));\n  console.log('any callsite passes closure:', hasClosureParam);\n  calls.forEach(c => { if (!c.startsWith('function')) console.log(' ', c); });\n\"\ntotal callsites: 4\nany callsite passes closure: false\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"ok\")\n```\n\n**What was not tested:** No live gateway session with real subagent runs was tested. Fault injection (forcing `completeSubagentRun` to reject) was not performed in a running process.\n",
+        "branch": "fix/subagent-lifecycle-catch",
+        "head_sha": "fdd3edf6647449196586f361705e32a645671664",
         "author": "sebtardif",
         "labels": [
-          "scripts",
-          "size: M",
+          "agents",
+          "size: S",
           "proof: supplied",
-          "proof: sufficient",
           "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 👀 ready for maintainer look"
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "scripts/install.sh",
-            "additions": 30,
+            "path": "src/agents/subagent-registry-helpers.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.lifecycle-retry-grace.e2e.test.ts",
+            "additions": 51,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "scripts/test-install-validation.sh",
-            "additions": 215,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "src/agents/subagent-registry.ts",
+            "additions": 89,
+            "deletions": 9,
+            "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-82955",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82955.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84616",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84616.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 85,
+          "total": 102,
           "counts": {
-            "SUCCESS": 70,
-            "SKIPPED": 15
+            "CANCELLED": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 69,
+            "FAILURE": 1,
+            "NEUTRAL": 1
           },
-          "blockers": [],
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ],
           "pending": [],
-          "terminalBlockers": []
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ]
         }
-      }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84616:4526918284:2026-05-24T00:27:41Z:re_review",
+      "comment_id": "4526918284",
+      "comment_version_key": "4526918284:2026-05-24T00:27:41Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84616#issuecomment-4526918284",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84616,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-24T00:27:41Z",
+      "comment_updated_at": "2026-05-24T00:27:41Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): add .catch() to fire-and-forget subagent lifecycle promises",
+        "body": "## Problem\n\nThree fire-and-forget promises in `src/agents/subagent-registry.ts` can reject without a `.catch()` handler, causing unhandled promise rejections that may crash the process:\n\n1. **`schedulePendingLifecycleError`** (line 345): `void completeSubagentRun({...})` without `.catch()`.\n2. **`schedulePendingLifecycleTimeout`** (line 384): Same pattern for timeout-triggered completion.\n3. **`ensureListener` event handler** (line 1022): `completeSubagentRun({...})` inside an async IIFE without `.catch()`.\n\nIf `completeSubagentRun` throws after mutating the run entry (setting `endedAt`, `outcome`, persisting), the run is left in a partially-completed state: ended but with no cleanup flow started. The existing orphan reconciliation (`reconcileOrphanedRun`) handles this scenario during session resume, but there is no recovery path when the failure happens during normal operation.\n\n## Fix\n\n1. **Add `.catch()` to all three fire-and-forget paths** with `log.warn` for diagnostics.\n2. **Schedule two-path catch recovery** in each catch handler via `scheduleLifecycleCatchRecovery(runId)`. After a 1-second delay (to let any in-flight state settle), it checks the run state and takes the appropriate recovery action:\n\n   - **Path 1 (orphan):** If the child session is gone (`resolveSubagentRunOrphanReason` returns a reason), reconcile via `reconcileOrphanedRun` (same path as session resume).\n   - **Path 2 (non-orphan, cleanup incomplete):** If the run has `endedAt` set but `cleanupHandled` is false and `cleanupCompletedAt` is not set, drive `startSubagentAnnounceCleanupFlow` directly. This covers the case where `completeSubagentRun` threw after persisting the ended state but before triggering cleanup, and the child session still exists (so it is not an orphan).\n   - **No-op:** If the run was not ended (error happened before mutation) or cleanup already completed, the recovery does nothing.\n\nProduction diff is +46 lines in `subagent-registry.ts`.\n## Real behavior proof\n\n**Behavior addressed:** Subagent lifecycle catch recovery now re-derives completion params from the current entry state when the delayed timer fires, instead of replaying a stale closure that captured params at the original failure time.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `d0378fd685`\n\n**Exact steps or command run after this patch:**\n\nSource verification of state-safe recovery on current HEAD:\n\n```\n$ grep -n 'scheduleLifecycleCatchRecovery' src/agents/subagent-registry.ts\n350:function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string) {\n431:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n471:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n1087:          scheduleLifecycleCatchRecovery(evt.runId, \"error\");\n1124:        scheduleLifecycleCatchRecovery(evt.runId, \"ok\");\n```\n\n**Evidence after fix:** Console output from `node` evaluation confirms the recovery function re-derives all params from the current entry at timer-fire time and no stale closure callbacks remain:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const fnStart = src.indexOf('function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string)');\n  const fnBody = src.slice(fnStart, fnStart + 1200);\n  console.log('has retryCompletion closure param:', fnBody.includes('retryCompletion'));\n  console.log('reads entry from registry at fire time:', fnBody.includes('subagentRuns.get(runId)'));\n  console.log('re-derives outcome from entry.outcome:', fnBody.includes('entry.outcome ??'));\n  console.log('re-derives reason from entry.endedReason:', fnBody.includes('entry.endedReason ??'));\n  console.log('reads accountId from entry.requesterOrigin:', fnBody.includes('entry.requesterOrigin'));\n  console.log('outcome status guard prevents overwrite:', fnBody.includes('entry.outcome.status !== expectedOutcomeStatus'));\n\"\nhas retryCompletion closure param: false\nreads entry from registry at fire time: true\nre-derives outcome from entry.outcome: true\nre-derives reason from entry.endedReason: true\nreads accountId from entry.requesterOrigin: true\noutcome status guard prevents overwrite: true\n```\n\n**Observed result after fix:** Actual output from `node` confirms all 4 callsites pass only the expected status string, with no closure callback capturing stale params:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const calls = src.match(/scheduleLifecycleCatchRecovery\\([^)]+\\)/g) || [];\n  console.log('total callsites:', calls.filter(c => !c.includes('function ')).length);\n  const hasClosureParam = calls.some(c => c.includes('=>') || c.includes('function'));\n  console.log('any callsite passes closure:', hasClosureParam);\n  calls.forEach(c => { if (!c.startsWith('function')) console.log(' ', c); });\n\"\ntotal callsites: 4\nany callsite passes closure: false\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"ok\")\n```\n\n**What was not tested:** No live gateway session with real subagent runs was tested. Fault injection (forcing `completeSubagentRun` to reject) was not performed in a running process.\n",
+        "branch": "fix/subagent-lifecycle-catch",
+        "head_sha": "fdd3edf6647449196586f361705e32a645671664",
+        "author": "sebtardif",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/subagent-registry-helpers.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.lifecycle-retry-grace.e2e.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.ts",
+            "additions": 89,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84616",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84616.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 69,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84616:4526230863:2026-05-23T18:41:50Z:re_review",
+      "comment_id": "4526230863",
+      "comment_version_key": "4526230863:2026-05-23T18:41:50Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84616#issuecomment-4526230863",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84616,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-23T18:41:50Z",
+      "comment_updated_at": "2026-05-23T18:41:50Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): add .catch() to fire-and-forget subagent lifecycle promises",
+        "body": "## Problem\n\nThree fire-and-forget promises in `src/agents/subagent-registry.ts` can reject without a `.catch()` handler, causing unhandled promise rejections that may crash the process:\n\n1. **`schedulePendingLifecycleError`** (line 345): `void completeSubagentRun({...})` without `.catch()`.\n2. **`schedulePendingLifecycleTimeout`** (line 384): Same pattern for timeout-triggered completion.\n3. **`ensureListener` event handler** (line 1022): `completeSubagentRun({...})` inside an async IIFE without `.catch()`.\n\nIf `completeSubagentRun` throws after mutating the run entry (setting `endedAt`, `outcome`, persisting), the run is left in a partially-completed state: ended but with no cleanup flow started. The existing orphan reconciliation (`reconcileOrphanedRun`) handles this scenario during session resume, but there is no recovery path when the failure happens during normal operation.\n\n## Fix\n\n1. **Add `.catch()` to all three fire-and-forget paths** with `log.warn` for diagnostics.\n2. **Schedule two-path catch recovery** in each catch handler via `scheduleLifecycleCatchRecovery(runId)`. After a 1-second delay (to let any in-flight state settle), it checks the run state and takes the appropriate recovery action:\n\n   - **Path 1 (orphan):** If the child session is gone (`resolveSubagentRunOrphanReason` returns a reason), reconcile via `reconcileOrphanedRun` (same path as session resume).\n   - **Path 2 (non-orphan, cleanup incomplete):** If the run has `endedAt` set but `cleanupHandled` is false and `cleanupCompletedAt` is not set, drive `startSubagentAnnounceCleanupFlow` directly. This covers the case where `completeSubagentRun` threw after persisting the ended state but before triggering cleanup, and the child session still exists (so it is not an orphan).\n   - **No-op:** If the run was not ended (error happened before mutation) or cleanup already completed, the recovery does nothing.\n\nProduction diff is +46 lines in `subagent-registry.ts`.\n## Real behavior proof\n\n**Behavior addressed:** Subagent lifecycle catch recovery now re-derives completion params from the current entry state when the delayed timer fires, instead of replaying a stale closure that captured params at the original failure time.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `d0378fd685`\n\n**Exact steps or command run after this patch:**\n\nSource verification of state-safe recovery on current HEAD:\n\n```\n$ grep -n 'scheduleLifecycleCatchRecovery' src/agents/subagent-registry.ts\n350:function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string) {\n431:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n471:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n1087:          scheduleLifecycleCatchRecovery(evt.runId, \"error\");\n1124:        scheduleLifecycleCatchRecovery(evt.runId, \"ok\");\n```\n\n**Evidence after fix:** Console output from `node` evaluation confirms the recovery function re-derives all params from the current entry at timer-fire time and no stale closure callbacks remain:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const fnStart = src.indexOf('function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string)');\n  const fnBody = src.slice(fnStart, fnStart + 1200);\n  console.log('has retryCompletion closure param:', fnBody.includes('retryCompletion'));\n  console.log('reads entry from registry at fire time:', fnBody.includes('subagentRuns.get(runId)'));\n  console.log('re-derives outcome from entry.outcome:', fnBody.includes('entry.outcome ??'));\n  console.log('re-derives reason from entry.endedReason:', fnBody.includes('entry.endedReason ??'));\n  console.log('reads accountId from entry.requesterOrigin:', fnBody.includes('entry.requesterOrigin'));\n  console.log('outcome status guard prevents overwrite:', fnBody.includes('entry.outcome.status !== expectedOutcomeStatus'));\n\"\nhas retryCompletion closure param: false\nreads entry from registry at fire time: true\nre-derives outcome from entry.outcome: true\nre-derives reason from entry.endedReason: true\nreads accountId from entry.requesterOrigin: true\noutcome status guard prevents overwrite: true\n```\n\n**Observed result after fix:** Actual output from `node` confirms all 4 callsites pass only the expected status string, with no closure callback capturing stale params:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const calls = src.match(/scheduleLifecycleCatchRecovery\\([^)]+\\)/g) || [];\n  console.log('total callsites:', calls.filter(c => !c.includes('function ')).length);\n  const hasClosureParam = calls.some(c => c.includes('=>') || c.includes('function'));\n  console.log('any callsite passes closure:', hasClosureParam);\n  calls.forEach(c => { if (!c.startsWith('function')) console.log(' ', c); });\n\"\ntotal callsites: 4\nany callsite passes closure: false\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"ok\")\n```\n\n**What was not tested:** No live gateway session with real subagent runs was tested. Fault injection (forcing `completeSubagentRun` to reject) was not performed in a running process.\n",
+        "branch": "fix/subagent-lifecycle-catch",
+        "head_sha": "fdd3edf6647449196586f361705e32a645671664",
+        "author": "sebtardif",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/subagent-registry-helpers.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.lifecycle-retry-grace.e2e.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.ts",
+            "additions": 89,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84616",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84616.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 69,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84616:4524285379:2026-05-23T05:32:12Z:re_review",
+      "comment_id": "4524285379",
+      "comment_version_key": "4524285379:2026-05-23T05:32:12Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84616#issuecomment-4524285379",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84616,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-23T05:32:12Z",
+      "comment_updated_at": "2026-05-23T05:32:12Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): add .catch() to fire-and-forget subagent lifecycle promises",
+        "body": "## Problem\n\nThree fire-and-forget promises in `src/agents/subagent-registry.ts` can reject without a `.catch()` handler, causing unhandled promise rejections that may crash the process:\n\n1. **`schedulePendingLifecycleError`** (line 345): `void completeSubagentRun({...})` without `.catch()`.\n2. **`schedulePendingLifecycleTimeout`** (line 384): Same pattern for timeout-triggered completion.\n3. **`ensureListener` event handler** (line 1022): `completeSubagentRun({...})` inside an async IIFE without `.catch()`.\n\nIf `completeSubagentRun` throws after mutating the run entry (setting `endedAt`, `outcome`, persisting), the run is left in a partially-completed state: ended but with no cleanup flow started. The existing orphan reconciliation (`reconcileOrphanedRun`) handles this scenario during session resume, but there is no recovery path when the failure happens during normal operation.\n\n## Fix\n\n1. **Add `.catch()` to all three fire-and-forget paths** with `log.warn` for diagnostics.\n2. **Schedule two-path catch recovery** in each catch handler via `scheduleLifecycleCatchRecovery(runId)`. After a 1-second delay (to let any in-flight state settle), it checks the run state and takes the appropriate recovery action:\n\n   - **Path 1 (orphan):** If the child session is gone (`resolveSubagentRunOrphanReason` returns a reason), reconcile via `reconcileOrphanedRun` (same path as session resume).\n   - **Path 2 (non-orphan, cleanup incomplete):** If the run has `endedAt` set but `cleanupHandled` is false and `cleanupCompletedAt` is not set, drive `startSubagentAnnounceCleanupFlow` directly. This covers the case where `completeSubagentRun` threw after persisting the ended state but before triggering cleanup, and the child session still exists (so it is not an orphan).\n   - **No-op:** If the run was not ended (error happened before mutation) or cleanup already completed, the recovery does nothing.\n\nProduction diff is +46 lines in `subagent-registry.ts`.\n## Real behavior proof\n\n**Behavior addressed:** Subagent lifecycle catch recovery now re-derives completion params from the current entry state when the delayed timer fires, instead of replaying a stale closure that captured params at the original failure time.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `d0378fd685`\n\n**Exact steps or command run after this patch:**\n\nSource verification of state-safe recovery on current HEAD:\n\n```\n$ grep -n 'scheduleLifecycleCatchRecovery' src/agents/subagent-registry.ts\n350:function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string) {\n431:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n471:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n1087:          scheduleLifecycleCatchRecovery(evt.runId, \"error\");\n1124:        scheduleLifecycleCatchRecovery(evt.runId, \"ok\");\n```\n\n**Evidence after fix:** Console output from `node` evaluation confirms the recovery function re-derives all params from the current entry at timer-fire time and no stale closure callbacks remain:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const fnStart = src.indexOf('function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string)');\n  const fnBody = src.slice(fnStart, fnStart + 1200);\n  console.log('has retryCompletion closure param:', fnBody.includes('retryCompletion'));\n  console.log('reads entry from registry at fire time:', fnBody.includes('subagentRuns.get(runId)'));\n  console.log('re-derives outcome from entry.outcome:', fnBody.includes('entry.outcome ??'));\n  console.log('re-derives reason from entry.endedReason:', fnBody.includes('entry.endedReason ??'));\n  console.log('reads accountId from entry.requesterOrigin:', fnBody.includes('entry.requesterOrigin'));\n  console.log('outcome status guard prevents overwrite:', fnBody.includes('entry.outcome.status !== expectedOutcomeStatus'));\n\"\nhas retryCompletion closure param: false\nreads entry from registry at fire time: true\nre-derives outcome from entry.outcome: true\nre-derives reason from entry.endedReason: true\nreads accountId from entry.requesterOrigin: true\noutcome status guard prevents overwrite: true\n```\n\n**Observed result after fix:** Actual output from `node` confirms all 4 callsites pass only the expected status string, with no closure callback capturing stale params:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const calls = src.match(/scheduleLifecycleCatchRecovery\\([^)]+\\)/g) || [];\n  console.log('total callsites:', calls.filter(c => !c.includes('function ')).length);\n  const hasClosureParam = calls.some(c => c.includes('=>') || c.includes('function'));\n  console.log('any callsite passes closure:', hasClosureParam);\n  calls.forEach(c => { if (!c.startsWith('function')) console.log(' ', c); });\n\"\ntotal callsites: 4\nany callsite passes closure: false\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"ok\")\n```\n\n**What was not tested:** No live gateway session with real subagent runs was tested. Fault injection (forcing `completeSubagentRun` to reject) was not performed in a running process.\n",
+        "branch": "fix/subagent-lifecycle-catch",
+        "head_sha": "fdd3edf6647449196586f361705e32a645671664",
+        "author": "sebtardif",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/subagent-registry-helpers.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.lifecycle-retry-grace.e2e.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.ts",
+            "additions": 89,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84616",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84616.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 69,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84616:4523019639:2026-05-22T22:13:19Z:re_review",
+      "comment_id": "4523019639",
+      "comment_version_key": "4523019639:2026-05-22T22:13:19Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84616#issuecomment-4523019639",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84616,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T22:13:19Z",
+      "comment_updated_at": "2026-05-22T22:13:19Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): add .catch() to fire-and-forget subagent lifecycle promises",
+        "body": "## Problem\n\nThree fire-and-forget promises in `src/agents/subagent-registry.ts` can reject without a `.catch()` handler, causing unhandled promise rejections that may crash the process:\n\n1. **`schedulePendingLifecycleError`** (line 345): `void completeSubagentRun({...})` without `.catch()`.\n2. **`schedulePendingLifecycleTimeout`** (line 384): Same pattern for timeout-triggered completion.\n3. **`ensureListener` event handler** (line 1022): `completeSubagentRun({...})` inside an async IIFE without `.catch()`.\n\nIf `completeSubagentRun` throws after mutating the run entry (setting `endedAt`, `outcome`, persisting), the run is left in a partially-completed state: ended but with no cleanup flow started. The existing orphan reconciliation (`reconcileOrphanedRun`) handles this scenario during session resume, but there is no recovery path when the failure happens during normal operation.\n\n## Fix\n\n1. **Add `.catch()` to all three fire-and-forget paths** with `log.warn` for diagnostics.\n2. **Schedule two-path catch recovery** in each catch handler via `scheduleLifecycleCatchRecovery(runId)`. After a 1-second delay (to let any in-flight state settle), it checks the run state and takes the appropriate recovery action:\n\n   - **Path 1 (orphan):** If the child session is gone (`resolveSubagentRunOrphanReason` returns a reason), reconcile via `reconcileOrphanedRun` (same path as session resume).\n   - **Path 2 (non-orphan, cleanup incomplete):** If the run has `endedAt` set but `cleanupHandled` is false and `cleanupCompletedAt` is not set, drive `startSubagentAnnounceCleanupFlow` directly. This covers the case where `completeSubagentRun` threw after persisting the ended state but before triggering cleanup, and the child session still exists (so it is not an orphan).\n   - **No-op:** If the run was not ended (error happened before mutation) or cleanup already completed, the recovery does nothing.\n\nProduction diff is +46 lines in `subagent-registry.ts`.\n## Real behavior proof\n\n**Behavior addressed:** Subagent lifecycle catch recovery now re-derives completion params from the current entry state when the delayed timer fires, instead of replaying a stale closure that captured params at the original failure time.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `d0378fd685`\n\n**Exact steps or command run after this patch:**\n\nSource verification of state-safe recovery on current HEAD:\n\n```\n$ grep -n 'scheduleLifecycleCatchRecovery' src/agents/subagent-registry.ts\n350:function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string) {\n431:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n471:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n1087:          scheduleLifecycleCatchRecovery(evt.runId, \"error\");\n1124:        scheduleLifecycleCatchRecovery(evt.runId, \"ok\");\n```\n\n**Evidence after fix:** Console output from `node` evaluation confirms the recovery function re-derives all params from the current entry at timer-fire time and no stale closure callbacks remain:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const fnStart = src.indexOf('function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string)');\n  const fnBody = src.slice(fnStart, fnStart + 1200);\n  console.log('has retryCompletion closure param:', fnBody.includes('retryCompletion'));\n  console.log('reads entry from registry at fire time:', fnBody.includes('subagentRuns.get(runId)'));\n  console.log('re-derives outcome from entry.outcome:', fnBody.includes('entry.outcome ??'));\n  console.log('re-derives reason from entry.endedReason:', fnBody.includes('entry.endedReason ??'));\n  console.log('reads accountId from entry.requesterOrigin:', fnBody.includes('entry.requesterOrigin'));\n  console.log('outcome status guard prevents overwrite:', fnBody.includes('entry.outcome.status !== expectedOutcomeStatus'));\n\"\nhas retryCompletion closure param: false\nreads entry from registry at fire time: true\nre-derives outcome from entry.outcome: true\nre-derives reason from entry.endedReason: true\nreads accountId from entry.requesterOrigin: true\noutcome status guard prevents overwrite: true\n```\n\n**Observed result after fix:** Actual output from `node` confirms all 4 callsites pass only the expected status string, with no closure callback capturing stale params:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const calls = src.match(/scheduleLifecycleCatchRecovery\\([^)]+\\)/g) || [];\n  console.log('total callsites:', calls.filter(c => !c.includes('function ')).length);\n  const hasClosureParam = calls.some(c => c.includes('=>') || c.includes('function'));\n  console.log('any callsite passes closure:', hasClosureParam);\n  calls.forEach(c => { if (!c.startsWith('function')) console.log(' ', c); });\n\"\ntotal callsites: 4\nany callsite passes closure: false\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"ok\")\n```\n\n**What was not tested:** No live gateway session with real subagent runs was tested. Fault injection (forcing `completeSubagentRun` to reject) was not performed in a running process.\n",
+        "branch": "fix/subagent-lifecycle-catch",
+        "head_sha": "fdd3edf6647449196586f361705e32a645671664",
+        "author": "sebtardif",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/subagent-registry-helpers.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.lifecycle-retry-grace.e2e.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.ts",
+            "additions": 89,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84616",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84616.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 69,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84616:4515825853:2026-05-22T06:33:16Z:re_review",
+      "comment_id": "4515825853",
+      "comment_version_key": "4515825853:2026-05-22T06:33:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84616#issuecomment-4515825853",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84616,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T06:33:16Z",
+      "comment_updated_at": "2026-05-22T06:33:16Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): add .catch() to fire-and-forget subagent lifecycle promises",
+        "body": "## Problem\n\nThree fire-and-forget promises in `src/agents/subagent-registry.ts` can reject without a `.catch()` handler, causing unhandled promise rejections that may crash the process:\n\n1. **`schedulePendingLifecycleError`** (line 345): `void completeSubagentRun({...})` without `.catch()`.\n2. **`schedulePendingLifecycleTimeout`** (line 384): Same pattern for timeout-triggered completion.\n3. **`ensureListener` event handler** (line 1022): `completeSubagentRun({...})` inside an async IIFE without `.catch()`.\n\nIf `completeSubagentRun` throws after mutating the run entry (setting `endedAt`, `outcome`, persisting), the run is left in a partially-completed state: ended but with no cleanup flow started. The existing orphan reconciliation (`reconcileOrphanedRun`) handles this scenario during session resume, but there is no recovery path when the failure happens during normal operation.\n\n## Fix\n\n1. **Add `.catch()` to all three fire-and-forget paths** with `log.warn` for diagnostics.\n2. **Schedule two-path catch recovery** in each catch handler via `scheduleLifecycleCatchRecovery(runId)`. After a 1-second delay (to let any in-flight state settle), it checks the run state and takes the appropriate recovery action:\n\n   - **Path 1 (orphan):** If the child session is gone (`resolveSubagentRunOrphanReason` returns a reason), reconcile via `reconcileOrphanedRun` (same path as session resume).\n   - **Path 2 (non-orphan, cleanup incomplete):** If the run has `endedAt` set but `cleanupHandled` is false and `cleanupCompletedAt` is not set, drive `startSubagentAnnounceCleanupFlow` directly. This covers the case where `completeSubagentRun` threw after persisting the ended state but before triggering cleanup, and the child session still exists (so it is not an orphan).\n   - **No-op:** If the run was not ended (error happened before mutation) or cleanup already completed, the recovery does nothing.\n\nProduction diff is +46 lines in `subagent-registry.ts`.\n## Real behavior proof\n\n**Behavior addressed:** Subagent lifecycle catch recovery now re-derives completion params from the current entry state when the delayed timer fires, instead of replaying a stale closure that captured params at the original failure time.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `d0378fd685`\n\n**Exact steps or command run after this patch:**\n\nSource verification of state-safe recovery on current HEAD:\n\n```\n$ grep -n 'scheduleLifecycleCatchRecovery' src/agents/subagent-registry.ts\n350:function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string) {\n431:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n471:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n1087:          scheduleLifecycleCatchRecovery(evt.runId, \"error\");\n1124:        scheduleLifecycleCatchRecovery(evt.runId, \"ok\");\n```\n\n**Evidence after fix:** Console output from `node` evaluation confirms the recovery function re-derives all params from the current entry at timer-fire time and no stale closure callbacks remain:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const fnStart = src.indexOf('function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string)');\n  const fnBody = src.slice(fnStart, fnStart + 1200);\n  console.log('has retryCompletion closure param:', fnBody.includes('retryCompletion'));\n  console.log('reads entry from registry at fire time:', fnBody.includes('subagentRuns.get(runId)'));\n  console.log('re-derives outcome from entry.outcome:', fnBody.includes('entry.outcome ??'));\n  console.log('re-derives reason from entry.endedReason:', fnBody.includes('entry.endedReason ??'));\n  console.log('reads accountId from entry.requesterOrigin:', fnBody.includes('entry.requesterOrigin'));\n  console.log('outcome status guard prevents overwrite:', fnBody.includes('entry.outcome.status !== expectedOutcomeStatus'));\n\"\nhas retryCompletion closure param: false\nreads entry from registry at fire time: true\nre-derives outcome from entry.outcome: true\nre-derives reason from entry.endedReason: true\nreads accountId from entry.requesterOrigin: true\noutcome status guard prevents overwrite: true\n```\n\n**Observed result after fix:** Actual output from `node` confirms all 4 callsites pass only the expected status string, with no closure callback capturing stale params:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const calls = src.match(/scheduleLifecycleCatchRecovery\\([^)]+\\)/g) || [];\n  console.log('total callsites:', calls.filter(c => !c.includes('function ')).length);\n  const hasClosureParam = calls.some(c => c.includes('=>') || c.includes('function'));\n  console.log('any callsite passes closure:', hasClosureParam);\n  calls.forEach(c => { if (!c.startsWith('function')) console.log(' ', c); });\n\"\ntotal callsites: 4\nany callsite passes closure: false\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"ok\")\n```\n\n**What was not tested:** No live gateway session with real subagent runs was tested. Fault injection (forcing `completeSubagentRun` to reject) was not performed in a running process.\n",
+        "branch": "fix/subagent-lifecycle-catch",
+        "head_sha": "fdd3edf6647449196586f361705e32a645671664",
+        "author": "sebtardif",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/subagent-registry-helpers.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.lifecycle-retry-grace.e2e.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.ts",
+            "additions": 89,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84616",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84616.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 69,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84616:4515715012:2026-05-22T06:19:26Z:re_review",
+      "comment_id": "4515715012",
+      "comment_version_key": "4515715012:2026-05-22T06:19:26Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84616#issuecomment-4515715012",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84616,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T06:19:26Z",
+      "comment_updated_at": "2026-05-22T06:19:26Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): add .catch() to fire-and-forget subagent lifecycle promises",
+        "body": "## Problem\n\nThree fire-and-forget promises in `src/agents/subagent-registry.ts` can reject without a `.catch()` handler, causing unhandled promise rejections that may crash the process:\n\n1. **`schedulePendingLifecycleError`** (line 345): `void completeSubagentRun({...})` without `.catch()`.\n2. **`schedulePendingLifecycleTimeout`** (line 384): Same pattern for timeout-triggered completion.\n3. **`ensureListener` event handler** (line 1022): `completeSubagentRun({...})` inside an async IIFE without `.catch()`.\n\nIf `completeSubagentRun` throws after mutating the run entry (setting `endedAt`, `outcome`, persisting), the run is left in a partially-completed state: ended but with no cleanup flow started. The existing orphan reconciliation (`reconcileOrphanedRun`) handles this scenario during session resume, but there is no recovery path when the failure happens during normal operation.\n\n## Fix\n\n1. **Add `.catch()` to all three fire-and-forget paths** with `log.warn` for diagnostics.\n2. **Schedule two-path catch recovery** in each catch handler via `scheduleLifecycleCatchRecovery(runId)`. After a 1-second delay (to let any in-flight state settle), it checks the run state and takes the appropriate recovery action:\n\n   - **Path 1 (orphan):** If the child session is gone (`resolveSubagentRunOrphanReason` returns a reason), reconcile via `reconcileOrphanedRun` (same path as session resume).\n   - **Path 2 (non-orphan, cleanup incomplete):** If the run has `endedAt` set but `cleanupHandled` is false and `cleanupCompletedAt` is not set, drive `startSubagentAnnounceCleanupFlow` directly. This covers the case where `completeSubagentRun` threw after persisting the ended state but before triggering cleanup, and the child session still exists (so it is not an orphan).\n   - **No-op:** If the run was not ended (error happened before mutation) or cleanup already completed, the recovery does nothing.\n\nProduction diff is +46 lines in `subagent-registry.ts`.\n## Real behavior proof\n\n**Behavior addressed:** Subagent lifecycle catch recovery now re-derives completion params from the current entry state when the delayed timer fires, instead of replaying a stale closure that captured params at the original failure time.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `d0378fd685`\n\n**Exact steps or command run after this patch:**\n\nSource verification of state-safe recovery on current HEAD:\n\n```\n$ grep -n 'scheduleLifecycleCatchRecovery' src/agents/subagent-registry.ts\n350:function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string) {\n431:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n471:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n1087:          scheduleLifecycleCatchRecovery(evt.runId, \"error\");\n1124:        scheduleLifecycleCatchRecovery(evt.runId, \"ok\");\n```\n\n**Evidence after fix:** Console output from `node` evaluation confirms the recovery function re-derives all params from the current entry at timer-fire time and no stale closure callbacks remain:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const fnStart = src.indexOf('function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string)');\n  const fnBody = src.slice(fnStart, fnStart + 1200);\n  console.log('has retryCompletion closure param:', fnBody.includes('retryCompletion'));\n  console.log('reads entry from registry at fire time:', fnBody.includes('subagentRuns.get(runId)'));\n  console.log('re-derives outcome from entry.outcome:', fnBody.includes('entry.outcome ??'));\n  console.log('re-derives reason from entry.endedReason:', fnBody.includes('entry.endedReason ??'));\n  console.log('reads accountId from entry.requesterOrigin:', fnBody.includes('entry.requesterOrigin'));\n  console.log('outcome status guard prevents overwrite:', fnBody.includes('entry.outcome.status !== expectedOutcomeStatus'));\n\"\nhas retryCompletion closure param: false\nreads entry from registry at fire time: true\nre-derives outcome from entry.outcome: true\nre-derives reason from entry.endedReason: true\nreads accountId from entry.requesterOrigin: true\noutcome status guard prevents overwrite: true\n```\n\n**Observed result after fix:** Actual output from `node` confirms all 4 callsites pass only the expected status string, with no closure callback capturing stale params:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const calls = src.match(/scheduleLifecycleCatchRecovery\\([^)]+\\)/g) || [];\n  console.log('total callsites:', calls.filter(c => !c.includes('function ')).length);\n  const hasClosureParam = calls.some(c => c.includes('=>') || c.includes('function'));\n  console.log('any callsite passes closure:', hasClosureParam);\n  calls.forEach(c => { if (!c.startsWith('function')) console.log(' ', c); });\n\"\ntotal callsites: 4\nany callsite passes closure: false\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"ok\")\n```\n\n**What was not tested:** No live gateway session with real subagent runs was tested. Fault injection (forcing `completeSubagentRun` to reject) was not performed in a running process.\n",
+        "branch": "fix/subagent-lifecycle-catch",
+        "head_sha": "fdd3edf6647449196586f361705e32a645671664",
+        "author": "sebtardif",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/subagent-registry-helpers.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.lifecycle-retry-grace.e2e.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.ts",
+            "additions": 89,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84616",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84616.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 69,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84616:4515005823:2026-05-22T04:37:34Z:re_review",
+      "comment_id": "4515005823",
+      "comment_version_key": "4515005823:2026-05-22T04:37:34Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84616#issuecomment-4515005823",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84616,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T04:37:34Z",
+      "comment_updated_at": "2026-05-22T04:37:34Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): add .catch() to fire-and-forget subagent lifecycle promises",
+        "body": "## Problem\n\nThree fire-and-forget promises in `src/agents/subagent-registry.ts` can reject without a `.catch()` handler, causing unhandled promise rejections that may crash the process:\n\n1. **`schedulePendingLifecycleError`** (line 345): `void completeSubagentRun({...})` without `.catch()`.\n2. **`schedulePendingLifecycleTimeout`** (line 384): Same pattern for timeout-triggered completion.\n3. **`ensureListener` event handler** (line 1022): `completeSubagentRun({...})` inside an async IIFE without `.catch()`.\n\nIf `completeSubagentRun` throws after mutating the run entry (setting `endedAt`, `outcome`, persisting), the run is left in a partially-completed state: ended but with no cleanup flow started. The existing orphan reconciliation (`reconcileOrphanedRun`) handles this scenario during session resume, but there is no recovery path when the failure happens during normal operation.\n\n## Fix\n\n1. **Add `.catch()` to all three fire-and-forget paths** with `log.warn` for diagnostics.\n2. **Schedule two-path catch recovery** in each catch handler via `scheduleLifecycleCatchRecovery(runId)`. After a 1-second delay (to let any in-flight state settle), it checks the run state and takes the appropriate recovery action:\n\n   - **Path 1 (orphan):** If the child session is gone (`resolveSubagentRunOrphanReason` returns a reason), reconcile via `reconcileOrphanedRun` (same path as session resume).\n   - **Path 2 (non-orphan, cleanup incomplete):** If the run has `endedAt` set but `cleanupHandled` is false and `cleanupCompletedAt` is not set, drive `startSubagentAnnounceCleanupFlow` directly. This covers the case where `completeSubagentRun` threw after persisting the ended state but before triggering cleanup, and the child session still exists (so it is not an orphan).\n   - **No-op:** If the run was not ended (error happened before mutation) or cleanup already completed, the recovery does nothing.\n\nProduction diff is +46 lines in `subagent-registry.ts`.\n## Real behavior proof\n\n**Behavior addressed:** Subagent lifecycle catch recovery now re-derives completion params from the current entry state when the delayed timer fires, instead of replaying a stale closure that captured params at the original failure time.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `d0378fd685`\n\n**Exact steps or command run after this patch:**\n\nSource verification of state-safe recovery on current HEAD:\n\n```\n$ grep -n 'scheduleLifecycleCatchRecovery' src/agents/subagent-registry.ts\n350:function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string) {\n431:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n471:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n1087:          scheduleLifecycleCatchRecovery(evt.runId, \"error\");\n1124:        scheduleLifecycleCatchRecovery(evt.runId, \"ok\");\n```\n\n**Evidence after fix:** Console output from `node` evaluation confirms the recovery function re-derives all params from the current entry at timer-fire time and no stale closure callbacks remain:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const fnStart = src.indexOf('function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string)');\n  const fnBody = src.slice(fnStart, fnStart + 1200);\n  console.log('has retryCompletion closure param:', fnBody.includes('retryCompletion'));\n  console.log('reads entry from registry at fire time:', fnBody.includes('subagentRuns.get(runId)'));\n  console.log('re-derives outcome from entry.outcome:', fnBody.includes('entry.outcome ??'));\n  console.log('re-derives reason from entry.endedReason:', fnBody.includes('entry.endedReason ??'));\n  console.log('reads accountId from entry.requesterOrigin:', fnBody.includes('entry.requesterOrigin'));\n  console.log('outcome status guard prevents overwrite:', fnBody.includes('entry.outcome.status !== expectedOutcomeStatus'));\n\"\nhas retryCompletion closure param: false\nreads entry from registry at fire time: true\nre-derives outcome from entry.outcome: true\nre-derives reason from entry.endedReason: true\nreads accountId from entry.requesterOrigin: true\noutcome status guard prevents overwrite: true\n```\n\n**Observed result after fix:** Actual output from `node` confirms all 4 callsites pass only the expected status string, with no closure callback capturing stale params:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const calls = src.match(/scheduleLifecycleCatchRecovery\\([^)]+\\)/g) || [];\n  console.log('total callsites:', calls.filter(c => !c.includes('function ')).length);\n  const hasClosureParam = calls.some(c => c.includes('=>') || c.includes('function'));\n  console.log('any callsite passes closure:', hasClosureParam);\n  calls.forEach(c => { if (!c.startsWith('function')) console.log(' ', c); });\n\"\ntotal callsites: 4\nany callsite passes closure: false\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"ok\")\n```\n\n**What was not tested:** No live gateway session with real subagent runs was tested. Fault injection (forcing `completeSubagentRun` to reject) was not performed in a running process.\n",
+        "branch": "fix/subagent-lifecycle-catch",
+        "head_sha": "fdd3edf6647449196586f361705e32a645671664",
+        "author": "sebtardif",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/subagent-registry-helpers.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.lifecycle-retry-grace.e2e.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.ts",
+            "additions": 89,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84616",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84616.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 69,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84616:4513172578:2026-05-21T22:09:53Z:re_review",
+      "comment_id": "4513172578",
+      "comment_version_key": "4513172578:2026-05-21T22:09:53Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84616#issuecomment-4513172578",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84616,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-21T22:09:53Z",
+      "comment_updated_at": "2026-05-21T22:09:53Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): add .catch() to fire-and-forget subagent lifecycle promises",
+        "body": "## Problem\n\nThree fire-and-forget promises in `src/agents/subagent-registry.ts` can reject without a `.catch()` handler, causing unhandled promise rejections that may crash the process:\n\n1. **`schedulePendingLifecycleError`** (line 345): `void completeSubagentRun({...})` without `.catch()`.\n2. **`schedulePendingLifecycleTimeout`** (line 384): Same pattern for timeout-triggered completion.\n3. **`ensureListener` event handler** (line 1022): `completeSubagentRun({...})` inside an async IIFE without `.catch()`.\n\nIf `completeSubagentRun` throws after mutating the run entry (setting `endedAt`, `outcome`, persisting), the run is left in a partially-completed state: ended but with no cleanup flow started. The existing orphan reconciliation (`reconcileOrphanedRun`) handles this scenario during session resume, but there is no recovery path when the failure happens during normal operation.\n\n## Fix\n\n1. **Add `.catch()` to all three fire-and-forget paths** with `log.warn` for diagnostics.\n2. **Schedule two-path catch recovery** in each catch handler via `scheduleLifecycleCatchRecovery(runId)`. After a 1-second delay (to let any in-flight state settle), it checks the run state and takes the appropriate recovery action:\n\n   - **Path 1 (orphan):** If the child session is gone (`resolveSubagentRunOrphanReason` returns a reason), reconcile via `reconcileOrphanedRun` (same path as session resume).\n   - **Path 2 (non-orphan, cleanup incomplete):** If the run has `endedAt` set but `cleanupHandled` is false and `cleanupCompletedAt` is not set, drive `startSubagentAnnounceCleanupFlow` directly. This covers the case where `completeSubagentRun` threw after persisting the ended state but before triggering cleanup, and the child session still exists (so it is not an orphan).\n   - **No-op:** If the run was not ended (error happened before mutation) or cleanup already completed, the recovery does nothing.\n\nProduction diff is +46 lines in `subagent-registry.ts`.\n## Real behavior proof\n\n**Behavior addressed:** Subagent lifecycle catch recovery now re-derives completion params from the current entry state when the delayed timer fires, instead of replaying a stale closure that captured params at the original failure time.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `d0378fd685`\n\n**Exact steps or command run after this patch:**\n\nSource verification of state-safe recovery on current HEAD:\n\n```\n$ grep -n 'scheduleLifecycleCatchRecovery' src/agents/subagent-registry.ts\n350:function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string) {\n431:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n471:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n1087:          scheduleLifecycleCatchRecovery(evt.runId, \"error\");\n1124:        scheduleLifecycleCatchRecovery(evt.runId, \"ok\");\n```\n\n**Evidence after fix:** Console output from `node` evaluation confirms the recovery function re-derives all params from the current entry at timer-fire time and no stale closure callbacks remain:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const fnStart = src.indexOf('function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string)');\n  const fnBody = src.slice(fnStart, fnStart + 1200);\n  console.log('has retryCompletion closure param:', fnBody.includes('retryCompletion'));\n  console.log('reads entry from registry at fire time:', fnBody.includes('subagentRuns.get(runId)'));\n  console.log('re-derives outcome from entry.outcome:', fnBody.includes('entry.outcome ??'));\n  console.log('re-derives reason from entry.endedReason:', fnBody.includes('entry.endedReason ??'));\n  console.log('reads accountId from entry.requesterOrigin:', fnBody.includes('entry.requesterOrigin'));\n  console.log('outcome status guard prevents overwrite:', fnBody.includes('entry.outcome.status !== expectedOutcomeStatus'));\n\"\nhas retryCompletion closure param: false\nreads entry from registry at fire time: true\nre-derives outcome from entry.outcome: true\nre-derives reason from entry.endedReason: true\nreads accountId from entry.requesterOrigin: true\noutcome status guard prevents overwrite: true\n```\n\n**Observed result after fix:** Actual output from `node` confirms all 4 callsites pass only the expected status string, with no closure callback capturing stale params:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const calls = src.match(/scheduleLifecycleCatchRecovery\\([^)]+\\)/g) || [];\n  console.log('total callsites:', calls.filter(c => !c.includes('function ')).length);\n  const hasClosureParam = calls.some(c => c.includes('=>') || c.includes('function'));\n  console.log('any callsite passes closure:', hasClosureParam);\n  calls.forEach(c => { if (!c.startsWith('function')) console.log(' ', c); });\n\"\ntotal callsites: 4\nany callsite passes closure: false\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"ok\")\n```\n\n**What was not tested:** No live gateway session with real subagent runs was tested. Fault injection (forcing `completeSubagentRun` to reject) was not performed in a running process.\n",
+        "branch": "fix/subagent-lifecycle-catch",
+        "head_sha": "fdd3edf6647449196586f361705e32a645671664",
+        "author": "sebtardif",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/subagent-registry-helpers.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.lifecycle-retry-grace.e2e.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.ts",
+            "additions": 89,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84616",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84616.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 69,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84616:4513082802:2026-05-21T21:53:51Z:re_review",
+      "comment_id": "4513082802",
+      "comment_version_key": "4513082802:2026-05-21T21:53:51Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84616#issuecomment-4513082802",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84616,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-21T21:53:51Z",
+      "comment_updated_at": "2026-05-21T21:53:51Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): add .catch() to fire-and-forget subagent lifecycle promises",
+        "body": "## Problem\n\nThree fire-and-forget promises in `src/agents/subagent-registry.ts` can reject without a `.catch()` handler, causing unhandled promise rejections that may crash the process:\n\n1. **`schedulePendingLifecycleError`** (line 345): `void completeSubagentRun({...})` without `.catch()`.\n2. **`schedulePendingLifecycleTimeout`** (line 384): Same pattern for timeout-triggered completion.\n3. **`ensureListener` event handler** (line 1022): `completeSubagentRun({...})` inside an async IIFE without `.catch()`.\n\nIf `completeSubagentRun` throws after mutating the run entry (setting `endedAt`, `outcome`, persisting), the run is left in a partially-completed state: ended but with no cleanup flow started. The existing orphan reconciliation (`reconcileOrphanedRun`) handles this scenario during session resume, but there is no recovery path when the failure happens during normal operation.\n\n## Fix\n\n1. **Add `.catch()` to all three fire-and-forget paths** with `log.warn` for diagnostics.\n2. **Schedule two-path catch recovery** in each catch handler via `scheduleLifecycleCatchRecovery(runId)`. After a 1-second delay (to let any in-flight state settle), it checks the run state and takes the appropriate recovery action:\n\n   - **Path 1 (orphan):** If the child session is gone (`resolveSubagentRunOrphanReason` returns a reason), reconcile via `reconcileOrphanedRun` (same path as session resume).\n   - **Path 2 (non-orphan, cleanup incomplete):** If the run has `endedAt` set but `cleanupHandled` is false and `cleanupCompletedAt` is not set, drive `startSubagentAnnounceCleanupFlow` directly. This covers the case where `completeSubagentRun` threw after persisting the ended state but before triggering cleanup, and the child session still exists (so it is not an orphan).\n   - **No-op:** If the run was not ended (error happened before mutation) or cleanup already completed, the recovery does nothing.\n\nProduction diff is +46 lines in `subagent-registry.ts`.\n## Real behavior proof\n\n**Behavior addressed:** Subagent lifecycle catch recovery now re-derives completion params from the current entry state when the delayed timer fires, instead of replaying a stale closure that captured params at the original failure time.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `d0378fd685`\n\n**Exact steps or command run after this patch:**\n\nSource verification of state-safe recovery on current HEAD:\n\n```\n$ grep -n 'scheduleLifecycleCatchRecovery' src/agents/subagent-registry.ts\n350:function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string) {\n431:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n471:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n1087:          scheduleLifecycleCatchRecovery(evt.runId, \"error\");\n1124:        scheduleLifecycleCatchRecovery(evt.runId, \"ok\");\n```\n\n**Evidence after fix:** Console output from `node` evaluation confirms the recovery function re-derives all params from the current entry at timer-fire time and no stale closure callbacks remain:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const fnStart = src.indexOf('function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string)');\n  const fnBody = src.slice(fnStart, fnStart + 1200);\n  console.log('has retryCompletion closure param:', fnBody.includes('retryCompletion'));\n  console.log('reads entry from registry at fire time:', fnBody.includes('subagentRuns.get(runId)'));\n  console.log('re-derives outcome from entry.outcome:', fnBody.includes('entry.outcome ??'));\n  console.log('re-derives reason from entry.endedReason:', fnBody.includes('entry.endedReason ??'));\n  console.log('reads accountId from entry.requesterOrigin:', fnBody.includes('entry.requesterOrigin'));\n  console.log('outcome status guard prevents overwrite:', fnBody.includes('entry.outcome.status !== expectedOutcomeStatus'));\n\"\nhas retryCompletion closure param: false\nreads entry from registry at fire time: true\nre-derives outcome from entry.outcome: true\nre-derives reason from entry.endedReason: true\nreads accountId from entry.requesterOrigin: true\noutcome status guard prevents overwrite: true\n```\n\n**Observed result after fix:** Actual output from `node` confirms all 4 callsites pass only the expected status string, with no closure callback capturing stale params:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const calls = src.match(/scheduleLifecycleCatchRecovery\\([^)]+\\)/g) || [];\n  console.log('total callsites:', calls.filter(c => !c.includes('function ')).length);\n  const hasClosureParam = calls.some(c => c.includes('=>') || c.includes('function'));\n  console.log('any callsite passes closure:', hasClosureParam);\n  calls.forEach(c => { if (!c.startsWith('function')) console.log(' ', c); });\n\"\ntotal callsites: 4\nany callsite passes closure: false\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"ok\")\n```\n\n**What was not tested:** No live gateway session with real subagent runs was tested. Fault injection (forcing `completeSubagentRun` to reject) was not performed in a running process.\n",
+        "branch": "fix/subagent-lifecycle-catch",
+        "head_sha": "fdd3edf6647449196586f361705e32a645671664",
+        "author": "sebtardif",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/subagent-registry-helpers.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.lifecycle-retry-grace.e2e.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.ts",
+            "additions": 89,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84616",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84616.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 69,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:84616:4509343609:2026-05-21T14:39:12Z:re_review",
+      "comment_id": "4509343609",
+      "comment_version_key": "4509343609:2026-05-21T14:39:12Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/84616#issuecomment-4509343609",
+      "repo": "openclaw/openclaw",
+      "issue_number": 84616,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-21T14:39:12Z",
+      "comment_updated_at": "2026-05-21T14:39:12Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): add .catch() to fire-and-forget subagent lifecycle promises",
+        "body": "## Problem\n\nThree fire-and-forget promises in `src/agents/subagent-registry.ts` can reject without a `.catch()` handler, causing unhandled promise rejections that may crash the process:\n\n1. **`schedulePendingLifecycleError`** (line 345): `void completeSubagentRun({...})` without `.catch()`.\n2. **`schedulePendingLifecycleTimeout`** (line 384): Same pattern for timeout-triggered completion.\n3. **`ensureListener` event handler** (line 1022): `completeSubagentRun({...})` inside an async IIFE without `.catch()`.\n\nIf `completeSubagentRun` throws after mutating the run entry (setting `endedAt`, `outcome`, persisting), the run is left in a partially-completed state: ended but with no cleanup flow started. The existing orphan reconciliation (`reconcileOrphanedRun`) handles this scenario during session resume, but there is no recovery path when the failure happens during normal operation.\n\n## Fix\n\n1. **Add `.catch()` to all three fire-and-forget paths** with `log.warn` for diagnostics.\n2. **Schedule two-path catch recovery** in each catch handler via `scheduleLifecycleCatchRecovery(runId)`. After a 1-second delay (to let any in-flight state settle), it checks the run state and takes the appropriate recovery action:\n\n   - **Path 1 (orphan):** If the child session is gone (`resolveSubagentRunOrphanReason` returns a reason), reconcile via `reconcileOrphanedRun` (same path as session resume).\n   - **Path 2 (non-orphan, cleanup incomplete):** If the run has `endedAt` set but `cleanupHandled` is false and `cleanupCompletedAt` is not set, drive `startSubagentAnnounceCleanupFlow` directly. This covers the case where `completeSubagentRun` threw after persisting the ended state but before triggering cleanup, and the child session still exists (so it is not an orphan).\n   - **No-op:** If the run was not ended (error happened before mutation) or cleanup already completed, the recovery does nothing.\n\nProduction diff is +46 lines in `subagent-registry.ts`.\n## Real behavior proof\n\n**Behavior addressed:** Subagent lifecycle catch recovery now re-derives completion params from the current entry state when the delayed timer fires, instead of replaying a stale closure that captured params at the original failure time.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `d0378fd685`\n\n**Exact steps or command run after this patch:**\n\nSource verification of state-safe recovery on current HEAD:\n\n```\n$ grep -n 'scheduleLifecycleCatchRecovery' src/agents/subagent-registry.ts\n350:function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string) {\n431:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n471:      scheduleLifecycleCatchRecovery(params.runId, \"error\");\n1087:          scheduleLifecycleCatchRecovery(evt.runId, \"error\");\n1124:        scheduleLifecycleCatchRecovery(evt.runId, \"ok\");\n```\n\n**Evidence after fix:** Console output from `node` evaluation confirms the recovery function re-derives all params from the current entry at timer-fire time and no stale closure callbacks remain:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const fnStart = src.indexOf('function scheduleLifecycleCatchRecovery(runId: string, expectedOutcomeStatus: string)');\n  const fnBody = src.slice(fnStart, fnStart + 1200);\n  console.log('has retryCompletion closure param:', fnBody.includes('retryCompletion'));\n  console.log('reads entry from registry at fire time:', fnBody.includes('subagentRuns.get(runId)'));\n  console.log('re-derives outcome from entry.outcome:', fnBody.includes('entry.outcome ??'));\n  console.log('re-derives reason from entry.endedReason:', fnBody.includes('entry.endedReason ??'));\n  console.log('reads accountId from entry.requesterOrigin:', fnBody.includes('entry.requesterOrigin'));\n  console.log('outcome status guard prevents overwrite:', fnBody.includes('entry.outcome.status !== expectedOutcomeStatus'));\n\"\nhas retryCompletion closure param: false\nreads entry from registry at fire time: true\nre-derives outcome from entry.outcome: true\nre-derives reason from entry.endedReason: true\nreads accountId from entry.requesterOrigin: true\noutcome status guard prevents overwrite: true\n```\n\n**Observed result after fix:** Actual output from `node` confirms all 4 callsites pass only the expected status string, with no closure callback capturing stale params:\n\n```\n$ node -e \"\n  const src = require('fs').readFileSync('src/agents/subagent-registry.ts','utf8');\n  const calls = src.match(/scheduleLifecycleCatchRecovery\\([^)]+\\)/g) || [];\n  console.log('total callsites:', calls.filter(c => !c.includes('function ')).length);\n  const hasClosureParam = calls.some(c => c.includes('=>') || c.includes('function'));\n  console.log('any callsite passes closure:', hasClosureParam);\n  calls.forEach(c => { if (!c.startsWith('function')) console.log(' ', c); });\n\"\ntotal callsites: 4\nany callsite passes closure: false\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(params.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"error\")\n  scheduleLifecycleCatchRecovery(evt.runId, \"ok\")\n```\n\n**What was not tested:** No live gateway session with real subagent runs was tested. Fault injection (forcing `completeSubagentRun` to reject) was not performed in a running process.\n",
+        "branch": "fix/subagent-lifecycle-catch",
+        "head_sha": "fdd3edf6647449196586f361705e32a645671664",
+        "author": "sebtardif",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/subagent-registry-helpers.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.lifecycle-retry-grace.e2e.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.ts",
+            "additions": 89,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-84616",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84616.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 69,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4900,
+    "total_ms": 2004,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 515
+        "ms": 304
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2022
+        "ms": 1481
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 6
       },
       {
         "name": "execute_commands",
-        "ms": 2334
+        "ms": 187
       },
       {
         "name": "append_ledger",
