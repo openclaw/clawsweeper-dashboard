@@ -1,19 +1,17 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T14:09:04.688Z",
+  "generated_at": "2026-05-24T14:09:20.202Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T11:09:02.455Z",
+  "since": "2026-05-24T11:09:18.071Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    86068
+    86056
   ],
-  "comment_ids": [
-    4528962718
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 2,
@@ -33,62 +31,74 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86068:4528947139:2026-05-24T14:08:54Z:clawsweeper_auto_repair",
-      "comment_id": "4528947139",
-      "comment_version_key": "4528947139:2026-05-24T14:08:54Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86068#issuecomment-4528947139",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86056:4528841945:2026-05-24T14:09:13Z:clawsweeper_needs_human",
+      "comment_id": "4528841945",
+      "comment_version_key": "4528841945:2026-05-24T14:09:13Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86056#issuecomment-4528841945",
       "repo": "openclaw/openclaw",
-      "issue_number": 86068,
+      "issue_number": 86056,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-24T14:00:17Z",
-      "comment_updated_at": "2026-05-24T14:08:54Z",
+      "comment_created_at": "2026-05-24T13:23:24Z",
+      "comment_updated_at": "2026-05-24T14:09:13Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=8926ba6cc43c8c2f8ef698b2cbefc9f85105d8ab)",
-      "review_summary": "This PR adds a root README troubleshooting section and modifies CONTRIBUTING with new proof and output-format guidance.\n\nReproducibility: yes. for the review findings: current source and docs show `openclaw status --json` rather than `--output`, and no `memory.db` contract exists in the repository.",
-      "review_followup": "Contributor revision and real behavior proof are required before merge; automation cannot supply the external proof gate for this PR.",
+      "repair_reason": "Needs maintainer merge judgment because the code change is focused and reviewable, but it intentionally changes session/message recovery behavior that automation should not accept silently.; Cleared: The diff only changes in-repo diagnostic recovery logic and tests; it does not add dependencies, scripts, workflow permissions, credential handling, or downloaded code. (sha=9cfee885b44c4410b9263921b33791deb37a366f)",
+      "review_summary": "The PR adds a stale-progress liveness gate to diagnostic stuck-session recovery, threads the resolved stuck-session abort threshold into recovery requests, and adds regression coverage for stale leaked reply work.\n\nReproducibility: yes. for a source-level reproduction: current main returns active_reply_work or active_embedded_run instead of reclaiming when a stale active flag remains and allowActiveAbort is not set. I did not run a live gateway wedge in this read-only review, but the linked report and the current skip path line up cleanly.",
+      "review_followup": "Needs maintainer merge judgment because the code change is focused and reviewable, but it intentionally changes session/message recovery behavior that automation should not accept silently.",
       "freeform_prompt": null,
-      "expected_head_sha": "8926ba6cc43c8c2f8ef698b2cbefc9f85105d8ab",
+      "expected_head_sha": "9cfee885b44c4410b9263921b33791deb37a366f",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "docs: add troubleshooting section to README",
-        "body": "Adds a troubleshooting section to the README covering common issues with gateway startup, voice/wake word, channel integrations, agent responsiveness, and performance. Also documents the 'openclaw doctor' command.",
-        "branch": "docs/add-troubleshooting",
-        "head_sha": "8926ba6cc43c8c2f8ef698b2cbefc9f85105d8ab",
-        "author": "okwn",
+        "title": "fix(diagnostics): reclaim wedged session lanes with a stale leaked active run",
+        "body": "### Summary\n\n- **Problem**: A group session lane can wedge permanently — messages queue (`queueDepth=1`) but never dispatch. Stuck-session recovery detects the wedge but skips with `reason=active_reply_work action=keep_lane`, repeating every ~2 minutes (the reporter saw 23+ days). The bot goes silent with no user-visible error. (#85639)\n- **Root Cause**: A multi-layer state divergence.\n  - An embedded agent run dies abnormally (child crash / parent doesn't observe the death cleanly), so `ACTIVE_EMBEDDED_RUNS` keeps a leaked handle and `isEmbeddedPiRunActive(...)` stays `true`, while the separate diagnostic run-activity tracking already shows no active run.\n  - The diagnostic heartbeat therefore classifies the lane as `stale_session_state` (`queued_work_without_active_run`), which is `recoveryEligible` **without** `allowActiveAbort` (that grant is reserved for `session.stalled` classifications).\n  - `recoverStuckDiagnosticSession` then reads the leaked `isEmbeddedPiRunActive` flag and, because `allowActiveAbort !== true`, skips with `active_reply_work` — a tautology: it keeps the lane because the lane *looks* active.\n  - The existing age-based escape doesn't fire: `ageMs` is the session's last-activity age, which **resets every time a new message queues**, so it never crosses a timeout (the reporter's age stayed ~124s for weeks). The existing progress-based abort (`lastProgressAgeMs`) only runs for `session.stalled` classifications, not `stale_session_state`.\n- **Fix**: Make the active-run skip a **liveness check** instead of a blind flag read. Before keeping the lane for `active_embedded_run` / `active_reply_work`, consult the run's real forward-progress age (`getDiagnosticSessionActivitySnapshot(...).lastProgressAgeMs`, which is touched by tool/model/chunk events, **not** by incoming queued messages). If a run flagged active has made no forward progress for ≥ a staleness window **and** there is queued work, treat it as a leaked/dead handle and reclaim it (abort + drain + force-clear) instead of skipping. A genuinely progressing run (recent `lastProgressAgeMs`) is still kept.\n- **What changed**:\n  - `src/logging/diagnostic-stuck-session-recovery.runtime.ts`: add `isActiveRunProgressStale` (queued work + stale `lastProgressAgeMs`); both the `active_embedded_run` and `active_reply_work` skip branches reclaim instead of skipping when the active run's progress is stale.\n  - `src/logging/diagnostic-session-recovery.ts` + `src/logging/diagnostic.ts`: thread the resolved `diagnostics.stuckSessionAbortMs` into the recovery request (`staleActiveProgressAbortMs`) so the reclaim **honors an operator-raised abort threshold**; it falls back to the `MIN_STALLED_EMBEDDED_RUN_ABORT_MS` (5 min) floor when not supplied, matching the existing stalled-run abort policy.\n  - `src/logging/diagnostic-stuck-session-recovery.runtime.test.ts`: regression coverage.\n- **What did NOT change (scope boundary)**:\n  - The `allowActiveAbort` path, the diagnostic classifier, the heartbeat, and the run registries are unchanged. The reclaim is additive: it only fires when an active flag is paired with stale forward progress and queued work, so existing skip/abort behavior is otherwise identical.\n  - No config keys, protocol, or message-delivery behavior changed.\n\n### Reproduction\n\n1. A run starts on a group session lane, then dies abnormally so its `ACTIVE_EMBEDDED_RUNS` handle is never cleared (diagnostic activity already shows no active run).\n2. New messages keep queuing on the lane.\n- Before: every heartbeat classifies `stale_session_state`, recovery reads the leaked active flag and skips with `active_reply_work` — the lane never frees (permanent wedge).\n- After: once the leaked run has made no forward progress past the staleness window with queued work waiting, recovery reclaims the lane (abort + force-clear) and queued work dispatches.\n\n### Real behavior proof\n\n- **Behavior addressed**: when a session is stuck with queued work and a leaked \"active\" run flag whose forward progress is stale, recovery must reclaim the lane rather than skip with `active_reply_work`; a still-progressing run must not be reclaimed.\n- **Real environment tested**: the real `recoverStuckDiagnosticSession` decision path exercised under Vitest (Linux, Node 22). The run/abort registry and lane seams are mocked exactly as the existing 15-case suite in this file does; the recovery logic, the new liveness gate, and `lastProgressAgeMs` thresholding are real.\n- **Exact steps or command run after this patch**: `pnpm test src/logging/diagnostic-stuck-session-recovery.runtime.test.ts`.\n- **Evidence after fix (verbatim test output)**:\n\n```text\n Test Files  1 passed (1)\n      Tests  19 passed (19)\n```\n\n- **Before evidence (same tests with the production fix reverted, on base `c91c3c6e5a`)**: the new staleness-reclaim case fails because the unpatched recovery skips (the wedge); the two control cases (still-progressing, no queued work) pass because the unpatched path also keeps the lane:\n\n```text\n × reclaims stale leaked reply work with queued work and no forward progress (#85639)\n Test Files  1 failed (1)\n      Tests  1 failed | 2 passed | 15 skipped (18)\n```\n\n- **Real-component proof (no mocked seams)**: a standalone harness (`tsx /tmp/qmd85639/repro.mts`, Linux/Node 22) drives the **real** `recoverStuckDiagnosticSession`, the **real** embedded-run registry (`setActiveEmbeddedRun` leaks a handle to simulate abnormal death), and the **real** diagnostic run-activity tracker; the clock is advanced so the run's real `lastProgressAgeMs` crosses the window. FRESH (recent progress) keeps the lane; STALE (10 min, no progress, queued work) reclaims it (real abort + force-clear), after which the handle is gone (`active=false`):\n\n```text\n=== #85639 real-component recovery repro (real registry + activity + recovery) ===\n--- FRESH: leaked active handle but recent forward progress ---\n[repro] FRESH: lastProgress=0s active=true -> status=skipped action=observe_only reason=active_embedded_run\n--- STALE: leaked active handle, no forward progress for 10m + queued work ---\n[repro] STALE: lastProgress=600s active=false -> status=aborted action=abort_embedded_run reason=-\n```\n\n(The STALE run also emitted the real gateway logs `stuck session recovery reclaiming stale active run …` and `… action=abort_embedded_run aborted=true forceCleared=true`.)\n- **Observed result after fix**: the stale leaked active run is reclaimed (abort + drain + force-clear, logged `reclaiming stale active …`); the still-progressing run and the no-queued-work cases still keep the lane (no false reclaim).\n- **What was not tested**: a full multi-process live gateway wedge over days was not run. The bug is in-memory recovery decision logic; the real-component harness above exercises the actual recovery + registry + activity tracker end to end, and the unit tests cover the decision branches. The staleness window honors `diagnostics.stuckSessionAbortMs` (default ≥ 5 min) so a live-but-slow run is not reclaimed.\n\n### Risk / Mitigation\n\n- **Risk**: reclaiming could abort a genuinely active long-running run.\n- **Mitigation**: reclaim only fires when forward progress (`lastProgressAgeMs`, which is not refreshed by incoming queued messages) is stale for ≥ the resolved `diagnostics.stuckSessionAbortMs` (operator-configurable; default ≥ 5 min) **and** there is queued work; a run making any recent progress is kept. An operator who raises the threshold to protect slow active work is honored (covered by a raised-threshold test: stale at 10 min is kept, at 25 min is reclaimed). This mirrors the existing `blocked_tool_call` abort which already triggers at the same `lastProgressAgeMs`/threshold scale. Without queued work, nothing is reclaimed.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [x] Sessions / storage\n\n### Linked Issue/PR\n\nFixes #85639\n",
+        "branch": "fix/85639-stuck-recovery-liveness-gate",
+        "head_sha": "9cfee885b44c4410b9263921b33791deb37a366f",
+        "author": "openperf",
         "labels": [
           "size: S",
-          "triage: low-signal-docs",
-          "triage: docs-discoverability",
-          "triage: needs-real-behavior-proof",
-          "P3",
-          "rating: 🧂 unranked krab",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
           "merge-risk: 🚨 compatibility",
           "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
+          "merge-risk: 🚨 message-delivery",
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "CONTRIBUTING.md",
-            "additions": 12,
+            "path": "src/logging/diagnostic-session-recovery.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/logging/diagnostic-stuck-session-recovery.runtime.test.ts",
+            "additions": 110,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/logging/diagnostic-stuck-session-recovery.runtime.ts",
+            "additions": 67,
             "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "README.md",
-            "additions": 42,
+            "path": "src/logging/diagnostic.ts",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
@@ -96,51 +106,58 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86068",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86068.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86056",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86056.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 27,
+          "total": 102,
           "counts": {
-            "FAILURE": 1,
             "CANCELLED": 1,
-            "SKIPPED": 16,
-            "SUCCESS": 9
+            "SUCCESS": 70,
+            "SKIPPED": 28,
+            "IN_PROGRESS": 1,
+            "FAILURE": 1,
+            "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:FAILURE"
+            "Real behavior proof:CANCELLED",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
+            "checks-node-agentic-agents:FAILURE"
           ],
-          "pending": [],
+          "pending": [
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS"
+          ],
           "terminalBlockers": [
-            "Real behavior proof:FAILURE"
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
           ]
         }
       },
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2566,
+    "total_ms": 2318,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 467
+        "ms": 285
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1750
+        "ms": 1827
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 321
+        "ms": 177
       },
       {
         "name": "append_ledger",
