@@ -50,6 +50,13 @@ hidden verdict/action markers so trusted repair and automerge flows can continue
 without scraping visible prose. See
 [`docs/pr-review-comments.md`](docs/pr-review-comments.md).
 
+Review prompts include compact related issue and PR context from explicit links,
+linked closing PRs, existing local ClawSweeper reports, optional gitcrawl
+clusters, and opt-in live GitHub issue search for exact event reviews. This is
+advisory context for duplicate/superseded reasoning, not a standalone close
+decision. See
+[`docs/related-issue-discovery.md`](docs/related-issue-discovery.md).
+
 For open issues with complete, current kept-open reviews, ClawSweeper also
 projects selected structured review conclusions into advisory GitHub labels for
 maintainer filtering and project views. These labels expose states such as
