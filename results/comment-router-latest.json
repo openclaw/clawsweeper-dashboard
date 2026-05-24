@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T14:57:25.927Z",
+  "generated_at": "2026-05-24T14:58:39.580Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T11:57:25.656Z",
+  "since": "2026-05-24T11:58:37.302Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    86077
+    86067
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 9,
+  "commands_seen": 3,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,182 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86067:4528942189:2026-05-24T14:58:34Z:clawsweeper_needs_human",
+      "comment_id": "4528942189",
+      "comment_version_key": "4528942189:2026-05-24T14:58:34Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86067#issuecomment-4528942189",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86067,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-24T13:58:00Z",
+      "comment_updated_at": "2026-05-24T14:58:34Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "No automated repair is needed; maintainers should review merge readiness, CI, and the availability tradeoff, then decide this PR versus the older overlapping prompt-guard PR.; Cleared: The diff only changes internal session-lock state and tests; it adds no dependencies, workflows, permissions, network calls, or secret-handling paths. (sha=65705d8c39ea5cceffba8d7c9bbe23b6dee4ac9e)",
+      "review_summary": "The branch adds a process-local per-resolved-session-file prompt-turn queue to the embedded session-lock controller, adds a non-prompt idle release for compaction waits, and covers same-file and failure cleanup paths with tests.\n\nReproducibility: yes. at source/proof level: current main releases the session write lock during provider streaming and later fences the file, while the linked issue has live logs of same-file takeover failures. I did not run a live gateway repro in this read-only review.",
+      "review_followup": "No automated repair is needed; maintainers should review merge readiness, CI, and the availability tradeoff, then decide this PR versus the older overlapping prompt-guard PR.",
+      "freeform_prompt": null,
+      "expected_head_sha": "65705d8c39ea5cceffba8d7c9bbe23b6dee4ac9e",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): file-scoped prompt-window guard for same-session embedded races",
+        "body": "## Summary\n\n- Adds a file-scoped prompt-window guard that serialises embedded-runner prompt windows on the same resolved session JSONL across concurrent lanes.\n- Introduces `releaseForSessionIdleWait()` for the post-prompt compaction window so it does not block other lanes' real prompt windows.\n- Routes every exit path through a turn-release `try/catch` and `try/finally` so the file-scoped queue is vacated on success, takeover, lock-timeout, fence-mismatch, and mid-flight release errors. A wedge in one lane never leaves later same-file waiters blocked.\n\nFixes #85913.\n\n## Background\n\n`createEmbeddedAttemptSessionLockController` releases the OS-level session write lock during provider streaming so long model calls don't hold the lock for minutes at a time. After streaming, `reacquireAfterPrompt()` reacquires the lock and `assertSessionFileFence()` checks an inode/size/mtime fingerprint to detect external mutation. If the file changed in an unowned way, the controller throws `EmbeddedAttemptSessionTakeoverError`.\n\nThe fence is a symptom-catcher, not a race preventer. The live-repro evidence on the issue shows the underlying race: two lanes on the same OpenClaw process can both resolve to the same JSONL (stuck-session recovery firing a fresh embedded run on a session UUID whose file resolution aliases to an already-active file). Both lanes release for prompt simultaneously, both stride into provider streams, the slower one's reacquire trips the fence after the provider call has already produced output, and the chain falls all the way to `Embedded agent failed before reply: All models failed`. The user sees a dropped reply.\n\n`RuntimeEnv` is module-scoped at `ownedSessionFileWrites` / `trustedSessionFileStates` — both keyed by `path.resolve(sessionFile)`. The fix extends that pattern with a third process-global map: a per-file queue of prompt turns.\n\n## What changed\n\n`src/agents/pi-embedded-runner/run/attempt.session-lock.ts`\n\n- New module-level `promptSessionFileTurnTails: Map<string, Promise<void>>` keyed by the same `resolveSessionFileFenceKey` the fence already uses.\n- `acquirePromptSessionFileTurn(sessionFileKey)` returns `{ awaitPrior, release }`. The first entrant on a file gets `awaitPrior: undefined` and falls through with no extra acquire/release. The second entrant gets the first's tail and waits on it before its own prompt window opens.\n- `performHeldLockReleaseForWindow(registerPromptHolder)` consolidates the held-lock release path. When `registerPromptHolder` is true and a prior turn exists, the entrant yields its OS lock, awaits the prior turn, reacquires fresh, and then continues with the existing fingerprint/snapshot/release sequence. Wrapped in `try/catch` so any exception between acquiring the turn and the controller taking ownership releases the turn slot before rethrowing.\n- `releaseForPrompt()` becomes a one-liner over `performHeldLockReleaseForWindow(true)`.\n- `releaseForSessionIdleWait()` (new public method) becomes a one-liner over `performHeldLockReleaseForWindow(false)`. Used for the post-prompt compaction window, which is not a provider-prompt window and must not serialise other lanes' prompts.\n- `reacquireAfterPrompt()` releases the turn in a `finally` block — the success path and every error branch (lock-timeout, takeover fence, any other exception) all vacate the slot. The no-op-early-return branch (`takeoverDetected || heldLock`) also releases the turn so a no-op entrant cannot strand the queue.\n- `resetEmbeddedAttemptSessionFilePromptGuardsForTest()` (new test helper) clears the module-level map so tests start from a clean slate.\n- Exported `releaseForSessionIdleWait` on the `EmbeddedAttemptSessionLockController` type.\n\n`src/agents/pi-embedded-runner/run/attempt.ts`\n\n- Line 4277: the post-prompt compaction wait uses `releaseForSessionIdleWait()` instead of `releaseForPrompt()`. This path was already a non-prompt release — the rename makes it not contend with real prompt windows on the same file. The matching post-compaction `withSessionWriteLock` reacquires the OS lock internally; no other behavior changes.\n\n`src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts`\n\n- `afterEach` clears the new queue alongside the existing `resetSessionWriteLockStateForTest()` cleanup.\n- Six existing multi-controller test bodies call `resetEmbeddedAttemptSessionFilePromptGuardsForTest()` between the first controller's `releaseForPrompt()` and the second controller's `releaseForPrompt()`. These tests were written before the file-scoped guard existed and use `releaseForPrompt()` as a \"drop the OS lock\" call without a paired `reacquireAfterPrompt()`. The reset preserves their existing assertions without forcing them to invent reacquire calls they don't need.\n- Five new test cases under the same `describe` block:\n  - Serialisation happy path — second same-file controller's `releaseForPrompt()` blocks until the first calls `reacquireAfterPrompt()`.\n  - **Cleanup-on-reacquire-failure** — first controller's `reacquireAfterPrompt()` rejects with a `SessionWriteLockTimeoutError`; the second controller's `releaseForPrompt()` still completes (the turn was released in the `finally`).\n  - **Cleanup-on-release-failure** — first controller's held-lock release rejects partway through `releaseForPrompt()`; the second controller's `releaseForPrompt()` still completes (the turn was released in the `catch` before re-throwing).\n  - Compaction-wait isolation — `releaseForSessionIdleWait()` does not block another lane's `releaseForPrompt()` on the same file.\n  - Cross-file isolation — controllers on different `sessionFile`s do not serialise.\n\n## Verification\n\n```sh\n# All acceptance-criteria tests from the issue's bot review:\nnode scripts/run-vitest.mjs \\\n  src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts \\\n  src/logging/diagnostic-stuck-session-recovery.runtime.test.ts \\\n  src/infra/heartbeat-runner.skips-busy-session-lane.test.ts \\\n  src/agents/model-fallback.test.ts \\\n  src/agents/failover-error.test.ts\n\n# Test Files  7 passed (7)\n#      Tests  306 passed (306)\n```\n\n`pnpm check:changed` exit 0 (typecheck, lint, runtime import cycles, repo guards).\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Two concurrent embedded attempts on the same resolved session JSONL no longer race during the provider-streaming window. The losing lane's reply was being dropped because the takeover fence fired mid-stream after the provider had already started producing output. With the file-scoped turn queue, the second entrant waits for the first to reacquire (or fail cleanly) before its own prompt window opens. Failure-path cleanup ensures one wedged prompt cannot block later prompts on the same file.\n\n- **Real environment tested:** Local OpenClaw source checkout (macOS 15.5, Node 22.19+) at the patched branch HEAD `65705d8c39`. The patched `createEmbeddedAttemptSessionLockController` runs in two real concurrent controllers against a shared session JSONL with the production `acquireSessionWriteLock` contract; per-microsecond timestamps and the lock-acquire/release event ledger are captured below. The acceptance-criteria test sweep from the issue's bot review runs against the same patched source.\n\n- **Exact steps or command run after this patch:**\n\n  ```sh\n  pnpm install\n  pnpm build\n  node scripts/run-vitest.mjs src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts\n\n  # Acceptance-criteria sweep from the issue's bot review:\n  node scripts/run-vitest.mjs \\\n    src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts \\\n    src/logging/diagnostic-stuck-session-recovery.runtime.test.ts \\\n    src/infra/heartbeat-runner.skips-busy-session-lane.test.ts \\\n    src/agents/model-fallback.test.ts \\\n    src/agents/failover-error.test.ts\n\n  # Drive the patched controller end-to-end against a shared session JSONL:\n  npx tsx /abs/path/to/pr-proof/run-session-takeover-guard-proof.mjs /abs/path/to/openclaw\n  ```\n\n- **Evidence after fix:**\n\n  **Before/after reproduction** — same scenario run against pre-patch (`5be62e779b`, the commit one before this fix) and post-patch (`65705d8c39`) source via the same `run-same-file-race-repro.mjs` script. Two real `EmbeddedAttemptSessionLockController` instances on a shared temp session JSONL; production `acquireSessionWriteLock` (no test mocks); external mutation injected mid-prompt to simulate the aliased-UUID concurrent lane from the live-repro evidence in #85913:\n\n  ```\n  PRE-PATCH (5be62e779b):\n    [   2.60ms] ctrl-A   prompt in flight (200ms hold)\n    [   9.47ms] ctrl-B   prompt in flight (200ms hold)\n    [ 111.70ms] external appending bytes outside the ownership chain\n    [ 209.67ms] ctrl-A   THREW on reacquire: TAKEOVER (EmbeddedAttemptSessionTakeoverError)\n    [ 210.98ms] ctrl-B   THREW on reacquire: TAKEOVER (EmbeddedAttemptSessionTakeoverError)\n    Result:  replies delivered 0 of 2  ·  takeover errors 2\n\n  POST-PATCH (65705d8c39):\n    [   2.64ms] ctrl-A   prompt in flight (200ms hold)\n    [ 111.53ms] external appending bytes outside the ownership chain\n    [ 209.33ms] ctrl-A   THREW on reacquire: TAKEOVER (EmbeddedAttemptSessionTakeoverError)\n    [ 210.89ms] ctrl-B   prompt in flight (200ms hold)\n    [ 415.45ms] ctrl-B   DELIVERED (reacquire succeeded)\n    Result:  replies delivered 1 of 2  ·  takeover errors 1\n  ```\n\n  Read the timestamps: on pre-patch, both controllers enter their mid-prompt sleep at ms 2 and 9 simultaneously (both have active fences capturing the same stale fingerprint), so when the external write hits at ms 111, both lanes observe the mutation when they reacquire at ms ~210. On post-patch, lane B's `prompt in flight` log line does not appear until ms 210 — which is the same moment lane A's reacquire throws. The file-scoped queue held lane B's `releaseForPrompt` until lane A's turn vacated; by then the file was stable, so lane B's release captured a fresh fingerprint and its reacquire succeeded at ms 415.\n\n  Lane A's takeover is the unavoidable case (a true external mutation during its prompt window — no coordination primitive can save it; the fence correctly fires as the safety net). Lane B is the cascade casualty the patch saves.\n\n  **Internal controller proof** — earlier in the proof pipeline, two real controllers driven through same-file contention with timestamped event ledger. Verbatim stdout from the run on this branch (`65705d8c39`):\n\n  ```\n  ============================================================\n  PR #86067 — file-scoped prompt-window guard proof\n  ============================================================\n\n  openclaw checkout: /Users/.../openclaw\n  source under test:  src/agents/pi-embedded-runner/run/attempt.session-lock.ts\n\n  ============================================================\n  Scenario A — same-file prompt windows serialise\n  ============================================================\n\n    [  509.55ms] setup                  two controllers on /tmp/proof-session.jsonl\n    [  509.59ms] first                  releaseForPrompt() — register turn-1\n    [  514.63ms] second                 releaseForPrompt() — should block on turn-1\n    [  514.69ms] observe                t+0.06ms: secondCompleted=false (expected: false)\n    [  514.70ms] first                  reacquireAfterPrompt() — release turn-1, second waiter unblocks\n    [  515.86ms] observe                t+1.23ms: secondCompleted=true (expected: true)\n\n    event ledger:\n      acquire(A-1)\n      acquire(A-2)\n      release(A-1)\n      release(A-2)\n      acquire(A-3)\n      acquire(A-4)\n      release(A-4)\n\n    Scenario A: PASS — second controller waited for first's reacquire\n\n  ============================================================\n  Scenario B — cleanup-on-failure: first's reacquire throws\n  ============================================================\n\n    [  516.19ms] setup                  two controllers; first's reacquire mocked to throw SessionWriteLockTimeoutError\n    [  516.21ms] first                  releaseForPrompt() — register turn-1\n    [  516.31ms] second                 releaseForPrompt() — should block on turn-1\n    [  516.37ms] observe                t+0.05ms: secondCompleted=false (expected: false)\n    [  516.38ms] first                  reacquireAfterPrompt() — throws SessionWriteLockTimeoutError\n    [  516.41ms] first                  threw: SessionWriteLockTimeoutError (OPENCLAW_SESSION_WRITE_LOCK_TIMEOUT)\n    [  516.42ms] observe                turn-1 must have been vacated in reacquire's finally\n    [  516.50ms] observe                t+0.18ms: secondCompleted=true (expected: true)\n\n    Scenario B: PASS — second waiter completed despite first's reacquire failure\n  ```\n\n  Scenario A's event ledger is the key observable: lock A-1 is the first controller's initial acquire, A-2 the second's initial acquire, A-3 is the first controller's reacquire-after-prompt (which fires the turn release on the queue), and A-4 is the second controller's reacquire-fresh after its prior-wait dance. Without the file-scoped guard, both A-1 and A-2 would release simultaneously and both controllers would stride into provider streams.\n\n  Scenario B's timestamps prove the cleanup-on-failure path is wired correctly: `secondCompleted` flips from `false` → `true` within 80 µs of the first controller's reacquire throwing. If `reacquireAfterPrompt`'s finally block weren't releasing the turn on the error path, this assertion would have timed out instead.\n\n  Targeted session-lock suite (74 tests including the 5 new file-scoped guard regressions):\n\n  ```\n  RUN  v4.1.7 /Users/.../openclaw\n   Test Files  2 passed (2)\n        Tests  74 passed (74)\n     Duration  919ms\n  ```\n\n  Full acceptance-criteria sweep (the five files the issue's bot review named):\n\n  ```\n  RUN  v4.1.7 /Users/.../openclaw\n   Test Files  7 passed (7)\n        Tests  306 passed (306)\n     Duration  46.34s\n  ```\n\n  The two regression tests that distinguish a correct fix from a half-fix are:\n\n  - `vacates the prompt turn so later waiters proceed when reacquireAfterPrompt throws` — drives the first controller's reacquire mock to reject with `SessionWriteLockTimeoutError`. Asserts that a second waiter blocked on the first's turn completes its `releaseForPrompt()` after the throw. If the cleanup is wired only on the success path, this test times out (the second waiter blocks forever on a turn promise that never resolves).\n  - `vacates the prompt turn when releaseForPrompt itself fails mid-flight` — drives the first controller's held-lock release to reject. The first `releaseForPrompt()` throws partway, but the `catch` in `performHeldLockReleaseForWindow` releases the turn before rethrowing. A second `releaseForPrompt()` then completes cleanly. If the cleanup is only in `reacquireAfterPrompt`, this test also times out.\n\n  Both of these are deterministic — they trigger the failure path via `vi.fn().mockRejectedValueOnce(...)`, not via timing.\n\n- **Observed result after fix:** Concurrent same-file prompt windows serialise instead of racing. Failed prompt windows (lock-timeout, takeover, release error) vacate the file-scoped queue so subsequent prompts on the same file proceed. The takeover fence remains in place as a defense-in-depth check against external mutation.\n\n- **What was not tested:** A live multi-agent gateway run that fires stuck-session recovery on an aliased session UUID. The unit tests cover the locking primitive directly through its public contract; the existing `heartbeat-runner.skips-busy-session-lane.test.ts` and `diagnostic-stuck-session-recovery.runtime.test.ts` continue to pass and exercise the surrounding flows. Verifying the end-to-end fix against the real 122-event/3-day takeover pattern from the issue would require running a patched gateway under that workload for the same window.\n\n- **Before evidence:** Without the file-scoped guard, two same-file controllers both call `releaseForPrompt()`, both stride into provider streams, and whichever reacquires second observes the other's writes and throws `EmbeddedAttemptSessionTakeoverError`. The chain falls through `model-fallback` → `failover-error` → `Embedded agent failed before reply: All models failed`. The live log slices in #85913 show 122 such events across 3 days on one local gateway, including the user-visible drop trace at `9dada894-1cb4-4610-a135-68d5ece67e51` on 2026-05-19 02:42:34.\n\n## Risk / compatibility\n\n- Public Plugin SDK surface: unchanged. `EmbeddedAttemptSessionLockController` is internal to `src/agents/pi-embedded-runner/run/` and not exposed through `openclaw/plugin-sdk/*`.\n- Backward compatibility: `releaseForPrompt()` keeps its prior signature; `releaseForSessionIdleWait()` is additive. The only production caller of `releaseForPrompt` is `installPromptSubmissionLockRelease` (`attempt.session-lock.ts:1014`), which already pairs it with `reacquireAfterPrompt` in a `try/finally` — that wrapper is what makes the file-scoped guard correct in production.\n- Single new module-level map (`promptSessionFileTurnTails`) sits alongside the existing `ownedSessionFileWrites` and `trustedSessionFileStates` singletons; same lifetime, same key scheme, same reset hook. No persistent state, no disk artefacts, no cross-process coordination.\n- Performance: no contention path is a single map lookup + an early continue. Contention path adds one extra `acquireLock + release` pair on the second entrant to yield the OS lock during the wait — this is necessary because the prior turn-holder must be able to reacquire after their provider call.\n\n## Security\n\n- New permissions/capabilities? No.\n- Secrets/tokens handling changed? No.\n- New/changed network calls? No.\n- Command/tool execution surface changed? No.\n- Data access scope changed? No. Touches in-process lock state and one new process-global map keyed by resolved session file paths.\n\n---\n\n*This PR is AI-assisted. Code authored with Claude.*\n",
+        "branch": "fix/session-takeover-file-scoped-prompt-guard",
+        "head_sha": "65705d8c39ea5cceffba8d7c9bbe23b6dee4ac9e",
+        "author": "ubehera",
+        "labels": [
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts",
+            "additions": 226,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.ts",
+            "additions": 122,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86067",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86067.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "SUCCESS": 73,
+            "SKIPPED": 28,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86067:4529060075:2026-05-24T14:48:38Z:re_review",
+      "comment_id": "4529060075",
+      "comment_version_key": "4529060075:2026-05-24T14:48:38Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86067#issuecomment-4529060075",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86067,
+      "author": "ubehera",
+      "author_id": 3691059,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-24T14:48:38Z",
+      "comment_updated_at": "2026-05-24T14:48:38Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86067:4528977396:2026-05-24T14:12:55Z:re_review",
+      "comment_id": "4528977396",
+      "comment_version_key": "4528977396:2026-05-24T14:12:55Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86067#issuecomment-4528977396",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86067,
+      "author": "ubehera",
+      "author_id": 3691059,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-24T14:12:55Z",
+      "comment_updated_at": "2026-05-24T14:12:55Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 457,
+    "total_ms": 3866,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 261
+        "ms": 219
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2042
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 186
+        "ms": 1574
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
