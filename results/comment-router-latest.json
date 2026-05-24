@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T20:05:03.027Z",
+  "generated_at": "2026-05-24T20:05:21.721Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T17:05:00.620Z",
+  "since": "2026-05-24T17:05:19.499Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -13,6 +13,9 @@
   ],
   "comment_ids": [
     4337734539
+  ],
+  "comment_ids": [
+    4435150475
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -61,74 +64,136 @@
       "finding_id": null,
       "status": "ignored",
       "actions": [],
-      "author_repository_permission": "read",
+      "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix(install): trap SIGINT so Ctrl+C exits cleanly during upgrade doctor",
-        "body": "## Problem\n\nWhen running `curl -fsSL https://openclaw.ai/install.sh | bash`, pressing Ctrl+C during `openclaw doctor` in the upgrade flow does not abort the installer. The SIGINT kills the doctor subprocess but the installer catches it as a regular failure, retries the npm install, continues past the prompt, and opens a browser to an unconfigured dashboard URL.\n\n## Fix\n\n1. **Add SIGINT/SIGTERM trap**: `abort_install` handler shows \"Installation interrupted\" and exits 130\n2. **Propagate doctor exit code 130**: capture `openclaw doctor` exit code separately; if 130 (SIGINT), call `abort_install` instead of treating it as a regular failure\n3. **Conditional dashboard open**: move `should_open_dashboard=true` into the `doctor_ok` branch so a failed/interrupted doctor never triggers the browser open\n\n## Real behavior proof\nBehavior addressed: pressing Ctrl+C (SIGINT) during the install/upgrade flow now exits the installer immediately with a clear message instead of retrying and continuing to open the dashboard.\nReal environment tested: Linux x86_64, OpenClaw 2026.5.12 already installed, Node v26.0.0, npm 11.12.1. Used `timeout --signal=INT 10 bash scripts/install.sh --install-method npm < /dev/null` to send SIGINT 10 seconds into the install, simulating a user pressing Ctrl+C during the npm install step.\nExact steps or command run after this patch: (1) checked out upstream/main install.sh, ran `timeout --signal=INT 10 bash scripts/install.sh --install-method npm < /dev/null 2>&1` and captured output; (2) applied the SIGINT trap fix, ran the same command again and captured output; (3) compared exit behavior.\nEvidence after fix: terminal output copied below.\n\nBefore (upstream/main, no SIGINT trap):\n```console\n$ timeout --signal=INT 10 bash scripts/install.sh --install-method npm < /dev/null 2>&1\n\n[2/3] Installing OpenClaw\n✓ Git already installed\n· Installing OpenClaw v2026.5.12\n! npm install failed for openclaw@latest\n  Command: env ... npm ... install -g openclaw@latest\n  Installer log: /tmp/tmp.6s6CzhIwmY\n! npm install failed; showing last log lines\n! npm install failed; retrying\n✓ OpenClaw npm package installed\n✓ OpenClaw installed\n\n[3/3] Finalizing setup\n· Running doctor to migrate settings\n· Running doctor\n```\nSIGINT killed npm but the installer treated it as a regular error, retried npm install, continued past the failure, and kept going through finalization.\n\nAfter (with SIGINT trap):\n```console\n$ timeout --signal=INT 10 bash scripts/install.sh --install-method npm < /dev/null 2>&1; echo \"EXIT=$?\"\n\n[2/3] Installing OpenClaw\n✓ Git already installed\n· Installing OpenClaw v2026.5.12\n\n! Installation interrupted\nEXIT=124\n```\nSIGINT triggered the `abort_install` trap immediately. The installer showed \"Installation interrupted\" and exited. No retry, no doctor, no dashboard open.\n\nObserved result after fix: Ctrl+C (SIGINT) during any phase of the install now triggers the abort_install trap, which cleans up temp files, prints a visible warning, and exits with code 130. The installer no longer retries after SIGINT, no longer runs doctor after an interrupted install, and no longer opens the dashboard after a failed doctor.\nWhat was not tested: SIGTERM delivery (tested SIGINT only via timeout --signal=INT). The interactive doctor Ctrl+C path (exit code 130 propagation from openclaw doctor) was not tested because non-interactive mode runs doctor with </dev/null which skips the interactive prompt. The trap handler itself is the same for both SIGINT and SIGTERM.\n\n---\n\n## Real behavior proof (927e31fb65)\n\nBehavior addressed: SIGINT during `openclaw doctor` in the upgrade flow was swallowed, and the dashboard opened regardless of doctor success/failure.\n\nReal environment tested: macOS (bash 5.x). The patched `run_doctor` function and `abort_install_int` trap were extracted from `scripts/install.sh` and exercised against mock `openclaw` binaries that simulate SIGINT (exit 130), failure (exit 1), and success (exit 0).\n\nExact steps or command run after this patch:\n\nCreated three mock binaries:\n- `openclaw_sigint`: sends `kill -INT $$` to simulate Ctrl+C during doctor\n- `openclaw_fail`: exits 1 to simulate doctor finding problems\n- `openclaw_ok`: exits 0 for happy path\n\nExtracted `run_doctor`, `abort_install_int`, and the `should_open_dashboard` gating logic from the patched `install.sh` and ran each test in an isolated subshell.\n\nEvidence after fix:\n\n```console\n--- Test 1: SIGINT trap catches Ctrl+C during doctor ---\n\n! Installation interrupted\nExit code: 130\n\n--- Test 2: Doctor failure prevents dashboard launch ---\nDoctor found problems\n! Doctor exited with status 1\nshould_open_dashboard=false\nExit code: 0\n\n--- Test 3: Doctor success opens dashboard ---\n✓ Doctor complete\nshould_open_dashboard=true\nExit code: 0\n\n--- Test 4: OLD behavior (main): doctor failure still opens dashboard ---\n(Simulated: the old code does 'run_doctor || true' then unconditionally\nsets should_open_dashboard=true)\nDoctor found problems\nshould_open_dashboard=true\nExit code: 0\n```\n\n**Test 1 (SIGINT):** Mock doctor sends SIGINT to itself. The patched `run_doctor` detects exit code 130 and calls `abort_install_int`, which shows \"Installation interrupted\" and exits 130. Dashboard never opens. On main, the `|| true` swallows the signal and continues.\n\n**Test 2 (Doctor failure):** Mock doctor exits 1. The patched `run_doctor` returns 1, so the `if run_doctor; then should_open_dashboard=true; fi` gate keeps the flag false. Dashboard does NOT open.\n\n**Test 3 (Doctor success):** Mock doctor exits 0. Dashboard flag set to true. Normal happy path.\n\n**Test 4 (Main branch behavior):** Demonstrates the old code path where `run_doctor || true` ignores the failure and unconditionally sets `should_open_dashboard=true`, opening a dashboard to an unconfigured URL.\n\nObserved result after fix: SIGINT exits 130 with a clean message, doctor failure gates the dashboard launch, and doctor success proceeds normally.\n\nWhat was not tested: Live `curl | bash` piped install with a real `openclaw doctor` failure. The proof exercises the exact patched functions against controlled exit codes.\n",
-        "branch": "fix/install-ctrl-c-handling",
-        "head_sha": "927e31fb659060cff7a17a22c1f53a3c38faea15",
-        "author": "sebtardif",
+        "title": "Redact exec tool result payloads",
+        "body": "## Summary\n- redact exec foreground tool-result text and structured `details.aggregated` before returning results to the agent\n- redact node-host exec stdout/stderr/error output before formatting tool results\n- redact process poll/log/list output and structured details that can include output tails or aggregated process output\n\n## Real behavior proof\n**Behavior or issue addressed:** Exec and background process tool results could return secret-shaped stdout/stderr/session text back to the agent. This patch redacts those returned tool-result surfaces before they leave the exec/process/node-host formatters.\n\n**Real environment tested:** Real local OpenClaw checkout on branch `fix/exec-tool-result-redaction` at `da701a0bbf6c`, using an isolated temporary `OPENCLAW_HOME`. The proof used an obvious fake canary value, not a real credential.\n\n**Exact steps or command run after this patch:** Ran a local runtime proof that exercised `createExecTool` and `createProcessTool` with a fake `REDACTION_CANARY_SECRET` value, then inspected the returned tool-result `content[0].text` and structured `details.aggregated` values for foreground exec, process poll, process log, and process list tail/details surfaces.\n\n**Evidence after fix:** Copied live output from the local runtime proof:\n\n```json\n{\n  \"foregroundExec\": {\n    \"status\": \"completed\",\n    \"text\": \"REDACTION_CANARY_SECRET=clawsw…7890\",\n    \"detailsAggregated\": \"REDACTION_CANARY_SECRET=clawsw…7890\",\n    \"rawCanaryValuePresent\": false,\n    \"redactedMarkerPresent\": true\n  },\n  \"processPoll\": {\n    \"status\": \"completed\",\n    \"text\": \"REDACTION_CANARY_SECRET=clawsw…7890\\n\\n\\nProcess exited with code 0.\",\n    \"detailsAggregated\": \"REDACTION_CANARY_SECRET=clawsw…7890\\n\",\n    \"rawCanaryValuePresent\": false,\n    \"redactedMarkerPresent\": true\n  },\n  \"processLog\": {\n    \"status\": \"completed\",\n    \"text\": \"REDACTION_CANARY_SECRET=clawsw…7890\",\n    \"detailsAggregated\": \"\",\n    \"rawCanaryValuePresent\": false,\n    \"redactedMarkerPresent\": true\n  },\n  \"processList\": {\n    \"status\": \"completed\",\n    \"textTail\": \"REDACTION_CANARY_SECRET=clawsw…7890\",\n    \"rawCanaryValuePresent\": false,\n    \"redactedMarkerPresent\": true\n  }\n}\n```\n\nSupplemental focused regression coverage also exercises node-host exec stdout redaction by passing a fake node `system.run` payload through `executeNodeHostCommand` and asserting both returned text and `details.aggregated` redact the raw canary.\n\n**Observed result after fix:** The raw fake canary value was absent from returned foreground exec, process poll, process log, and process list output. Redacted markers were present in the returned text/details where output was expected. The node-host formatter path is covered by the focused regression test for the same returned tool-result boundary.\n\n**What was not tested:** Live node-host exec against a physical connected node was unavailable in this isolated proof environment; the node-host formatter was validated with the focused regression test that feeds a fake gateway node response through the production formatter path.\n\n## Tests\n- `corepack pnpm exec oxfmt --write --threads=1 src/agents/bash-tools.exec.ts src/agents/bash-tools.exec-host-node-phases.ts src/agents/bash-tools.process.ts src/agents/bash-tools.exec-foreground-failures.test.ts src/agents/bash-tools.exec-host-node.test.ts src/agents/bash-tools.process.poll-timeout.test.ts`\n- `git diff --check`\n- `corepack pnpm tsgo:core`\n- `corepack pnpm tsgo:core:test`\n- `corepack pnpm exec vitest run --config test/vitest/vitest.agents-core.config.ts src/agents/bash-tools.exec-foreground-failures.test.ts -t 'redacts secret-shaped stdout'`\n- `corepack pnpm exec vitest run --config test/vitest/vitest.agents-core.config.ts src/agents/bash-tools.process.poll-timeout.test.ts -t 'redacts secret-shaped output'`\n- `corepack pnpm exec vitest run --config test/vitest/vitest.agents-core.config.ts src/agents/bash-tools.exec-host-node.test.ts -t 'redacts secret-shaped node stdout'`\n\nNotes: a full local run of the three targeted files is currently blocked in my environment by an unrelated invalid local `~/.openclaw/openclaw.json` model alias (`openai-codex/gpt-5.3-codex`) during the pre-existing foreground timeout test. The new redaction regression tests pass individually under the agents-core Vitest config.\n\nFixes #71211\n\n\n\n## Follow-up after review\n- Added commit `bc79136bb7` to redact background exec `details.tail` before returning running-session tool results.\n- Added regression coverage for background exec `details.tail`, process list command/tail details, and node-host stderr/error redaction in addition to stdout.\n\nAdditional local verification after follow-up:\n- `corepack pnpm tsgo:core`\n- `corepack pnpm tsgo:core:test`\n- `corepack pnpm exec vitest run --config test/vitest/vitest.agents-core.config.ts src/agents/bash-tools.exec-foreground-failures.test.ts -t 'redacts secret-shaped'`\n- `corepack pnpm exec vitest run --config test/vitest/vitest.agents-core.config.ts src/agents/bash-tools.process.poll-timeout.test.ts -t 'redacts secret-shaped'`\n- `corepack pnpm exec vitest run --config test/vitest/vitest.agents-core.config.ts src/agents/bash-tools.exec-host-node.test.ts -t 'redacts secret-shaped node'`\n- `git diff --check`\n\nNote: the full local three-file Vitest run still hits the pre-existing environment-sensitive approval path in `exec foreground failures > returns a failed text result when the default timeout is exceeded`, where local host exec approval intercepts `sleep 5` before the timeout assertion.\n\n## Review feedback update - 2026-05-21\n- Addressed ClawSweeper P1 by removing the JSON embedded-fallback behavior change from this PR; `openclaw agent --json` fallback behavior is back to the existing contract.\n- Addressed ClawSweeper P2 by replacing the live-update process timing test with deterministic `runExecProcess` regression coverage, so the previous single-line skip branches are gone.\n- Final head verified: `8793847f206cca93c49abe33e4f49b9b55a0c4dc`.\n\nAdditional verification on final head:\n- `node scripts/run-vitest.mjs src/agents/bash-tools.exec-foreground-failures.test.ts -t 'redacts secret-shaped'`\\n- `node scripts/run-vitest.mjs src/agents/bash-tools.exec-runtime.test.ts -t 'redacts secret-shaped stdout in update text and details tail'`\\n- `node scripts/run-vitest.mjs src/commands/agent-via-gateway.test.ts -t 'JSON'`\\n- `node scripts/run-vitest.mjs src/agents/bash-tools.process.poll-timeout.test.ts -t 'redacts secret-shaped'`\\n- `node scripts/run-vitest.mjs src/agents/bash-tools.exec-host-node.test.ts -t 'redacts secret-shaped node'`\\n- `pnpm exec oxlint src/agents/bash-tools.exec-foreground-failures.test.ts src/agents/bash-tools.exec-runtime.test.ts src/commands/agent-via-gateway.ts src/commands/agent-via-gateway.test.ts src/cli/program/register.agent.ts src/cli/program/register.agent.test.ts`\\n- `git diff --check && git diff --cached --check`\\n\\nChanged-file gate note: `node scripts/crabbox-wrapper.mjs run --shell -- \"pnpm check:changed\"` did not reach pnpm because local `crabbox` failed its binary sanity check. Direct `pnpm check:changed` also could not run in this local checkout because `origin/main...HEAD` has no merge base on the grafted/shallow branch. The focused tests, lint, and diff checks above passed on the final head.\n\n## Process control redaction update - 2026-05-21\n- Addressed ClawSweeper P1 by redacting command-derived process result names for running-session controls (`write`, `submit`, `paste`) plus `kill`, `remove`, `poll`, `log`, `list`, and `send-keys`.\n- Added fake-secret regression coverage for `process write` and `process send-keys` command-derived `details.name` values.\n- Final head verified locally: `24ac21f4280e9e403722c271d12fda0a4c68535d4`.\n\nAdditional verification on final head:\n- `node scripts/run-vitest.mjs src/agents/bash-tools.process.poll-timeout.test.ts -t 'redacts secret-shaped'`\\n- `node scripts/run-vitest.mjs src/agents/bash-tools.process-send-keys.test.ts -t 'redacts secret-shaped'`\\n- `node scripts/run-vitest.mjs src/agents/bash-tools.exec-foreground-failures.test.ts -t 'redacts secret-shaped'`\\n- `node scripts/run-vitest.mjs src/agents/bash-tools.exec-runtime.test.ts -t 'redacts secret-shaped stdout in update text and details tail'`\\n- `node scripts/run-vitest.mjs src/agents/bash-tools.exec-host-node.test.ts -t 'redacts secret-shaped node'`\\n- `pnpm exec oxlint src/agents/bash-tools.process.ts src/agents/bash-tools.process-send-keys.ts src/agents/bash-tools.process.poll-timeout.test.ts src/agents/bash-tools.process-send-keys.test.ts`\\n- `git diff --check && git diff --cached --check`",
+        "branch": "fix/exec-tool-result-redaction",
+        "head_sha": "cd4b36442c3be0c94bd6edeb2b9c0441ab9a46d2",
+        "author": "nhaener",
         "labels": [
-          "scripts",
-          "size: S",
-          "triage: refactor-only",
+          "agents",
+          "size: L",
           "proof: supplied",
-          "P2",
+          "proof: sufficient",
+          "P1",
           "rating: 🦐 gold shrimp",
           "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
+          "merge-risk: 🚨 security-boundary",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "scripts/install.sh",
+            "path": "src/agents/bash-tools.exec-foreground-failures.test.ts",
+            "additions": 71,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.exec-host-node-phases.ts",
+            "additions": 5,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.exec-host-node.test.ts",
             "additions": 45,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.exec-runtime.test.ts",
+            "additions": 110,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.exec-runtime.ts",
+            "additions": 16,
             "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.exec.ts",
+            "additions": 52,
+            "deletions": 24,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.process-send-keys.test.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.process-send-keys.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.process.poll-timeout.test.ts",
+            "additions": 94,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.process.ts",
+            "additions": 67,
+            "deletions": 46,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-selection-shared.ts",
+            "additions": 4,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-76386",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-76386.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-81185",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-81185.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 84,
+          "total": 106,
           "counts": {
-            "SUCCESS": 69,
-            "SKIPPED": 15
+            "SUCCESS": 81,
+            "SKIPPED": 24,
+            "NEUTRAL": 1
           },
           "blockers": [],
           "pending": [],
           "terminalBlockers": []
         }
       },
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2712,
+    "total_ms": 2407,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 496
+        "ms": 458
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1899
+        "ms": 1751
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 305
+        "ms": 185
       },
       {
         "name": "append_ledger",
