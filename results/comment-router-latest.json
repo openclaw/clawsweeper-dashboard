@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T05:02:25.836Z",
+  "generated_at": "2026-05-24T05:02:40.511Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T02:02:25.460Z",
+  "since": "2026-05-24T02:02:38.442Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    85930
+    85931
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 2,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,124 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:85931:4527439111:2026-05-24T05:02:33Z:clawsweeper_needs_human",
+      "comment_id": "4527439111",
+      "comment_version_key": "4527439111:2026-05-24T05:02:33Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85931#issuecomment-4527439111",
+      "repo": "openclaw/openclaw",
+      "issue_number": 85931,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-24T04:55:26Z",
+      "comment_updated_at": "2026-05-24T05:02:33Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "No automated repair is needed; maintainer review should decide whether the supplied harness proof is enough or whether to require a real-QMD concurrency smoke before merge.; Cleared: The diff only changes memory-core runtime/test locking behavior and does not add dependencies, workflows, package metadata, secrets handling, or broader code execution surface. (sha=00812ab49de78abbf2ded49115d7f79b455091e9)",
+      "review_summary": "The PR adds a per-agent cross-process `qmd-update.lock` around QMD update work and adds regression coverage for the lock path and options.\n\nReproducibility: yes. from source and supplied terminal proof, though I did not rerun it locally in this read-only review. Current main has only process-local update serialization, and the PR body shows a two-process SQLite writer collision turning from `SQLITE_BUSY` into a successful wait when wrapped with the same file-lock primitive.",
+      "review_followup": "No automated repair is needed; maintainer review should decide whether the supplied harness proof is enough or whether to require a real-QMD concurrency smoke before merge.",
+      "freeform_prompt": null,
+      "expected_head_sha": "00812ab49de78abbf2ded49115d7f79b455091e9",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(memory): serialize qmd update writes across processes to stop SQLITE_BUSY",
+        "body": "### Summary\n\n- **Problem**: With the gateway running, `openclaw memory search` intermittently logs `qmd update retry … (boot)` and `SQLiteError: database is locked` (e.g. from `cleanupOrphanedContent(...)` / `clearCache(...)`), making recall feel flaky — worst right after boot or right after new daily‑memory content was written. It persists even with `memory.qmd.update.onBoot = false`.\n- **Root Cause**: The QMD manager serializes its two write paths asymmetrically. The **embed** path runs under a cross‑process file lock (`withFileLock`), but the **update** path runs only under an in‑process promise queue keyed by the store dir. That queue serializes updates **within a single process**; a second process cannot see it. So a foreground `memory search` dirty‑sync (which calls `sync({ reason: \"search\" })` → `qmd update`) and a background gateway update run `qmd update` against the **same** SQLite store at the same time. WAL plus `busy_timeout=5000` (set on the OpenClaw connection) do not help writer‑vs‑writer contention, and they do not govern the `qmd` binary's own writes — so the second writer hits `SQLITE_BUSY`.\n- **Fix**: Wrap the update write in the same kind of cross‑process file lock the embed path already uses, so only one `qmd update` runs against a given store at a time across processes. The in‑process queue is kept (it still cheaply dedupes within a process); the cross‑process lock is added on top. The lock is per store (beside the agent's qmd dir, outside the qmd data dir) and the wait budget is sized from the update timeout, so a contending caller waits for the in‑flight update to finish and then proceeds instead of erroring.\n- **What changed**:\n  - `extensions/memory-core/src/memory/qmd-manager.ts`: take a per‑store cross‑process `withFileLock` around the update write inside the update queue; factor the embed/update lock‑option builders onto one shared helper so both paths share the same retry cadence.\n  - `extensions/memory-core/src/memory/qmd-manager.test.ts`: regression coverage that the update write now takes the cross‑process lock with the expected per‑store path and options; the existing embed‑lock helper now selects its call by lock path (the update path adds a second `withFileLock` call before embed).\n- **What did NOT change (scope boundary)**:\n  - The embed lock path, the in‑process update queue semantics, the update retry/repair logic, and the `qmd` invocation itself are unchanged. Embed lock options resolve to exactly the same values as before (the shared helper preserves the embed formula).\n  - No config keys, protocol, or search/result behavior changed. Single‑process behavior is unchanged; the new lock only adds cross‑process serialization for the update write.\n\n### Reproduction\n\n1. Run a gateway with the `qmd` memory backend and some daily‑memory content (e.g. `dreaming.enabled = true`), so the gateway periodically runs `qmd update`.\n2. While the gateway is running, run `openclaw memory search …` (or write new memory then search), so the CLI process also triggers a `qmd update` dirty‑sync.\n- Before: the two processes run `qmd update` concurrently against the same SQLite store and the second hits `SQLITE_BUSY` / `database is locked` (logged as `qmd update retry …`).\n- After: the update write is serialized across processes; the second `qmd update` waits for the first to finish, then runs cleanly.\n\n### Real behavior proof\n\n- **Behavior addressed**: two processes running a `qmd update`‑shaped write transaction against the same memory SQLite store must not collide with `SQLITE_BUSY`; the update write must serialize across processes the way the embed write already does.\n- **Real environment tested**: a deterministic harness using **two real OS child processes**, real `node:sqlite` `DatabaseSync` opened with the exact settings OpenClaw uses for this store (`journal_mode = WAL` + `busy_timeout = 5000`, matching `manager-db.ts`), and the **real `withFileLock`** from `openclaw/plugin-sdk/file-lock` (the same primitive the embed path uses and that this change adds to the update path). Linux, Node 22. Writer A takes the write lock and holds it ~8s (a long `qmd update`); writer B is the contending second update.\n- **Exact steps or command run after this patch**: `node /tmp/qmd66339/repro.mjs` — Phase 1 runs the two writers with no cross‑process lock (current update‑path behavior); Phase 2 runs them with each write wrapped in `withFileLock` (this fix). The harness waits for A to actually hold the write lock before starting B, so the outcome is deterministic.\n- **Evidence after fix (verbatim harness output, no color codes)**:\n\n```text\n=== PHASE 1 — current behavior (no cross-process update lock) (useLock=false) ===\n[harness] A holding write lock; starting B (the contending update) ...\n[harness] A: READY | A_OK\n[harness] B: B_ERR code=ERR_SQLITE_ERROR errcode=5 errstr=database is locked msg=database is locked  (B finished after 5587ms)\n\n=== PHASE 2 — proposed fix (update wrapped in cross-process withFileLock) (useLock=true) ===\n[harness] A holding write lock; starting B (the contending update) ...\n[harness] A: READY | A_OK\n[harness] B: B_OK  (B finished after 8542ms)\n\n================ VERDICT ================\nPhase 1 (no lock):   B HIT SQLITE_BUSY ✅ (collision reproduced)\nPhase 2 (with lock): B succeeded ✅ (serialized, waited 8542ms for A)\n\nRESULT: PASS — collision reproduced AND fixed by the cross-process update lock\n```\n\n- **Observed result after fix**: without the cross‑process lock the second writer waits out `busy_timeout` (~5.6s) and then fails with `errcode=5` (`SQLITE_BUSY`, `database is locked`) — exactly the reporter's `SQLiteError: database is locked`. With the update write wrapped in `withFileLock`, the second writer waits for the holder (~8.5s) and then succeeds; no collision.\n- **Code‑path coverage**: `pnpm test extensions/memory-core/src/memory/qmd-manager.test.ts` (107 passed) including a new case asserting the update write now acquires the cross‑process `withFileLock` with a per‑store `qmd-update.lock` path and the expected options.\n- **What was not tested**: the `qmd` binary is not installed in this environment, so the harness reproduces the SQLite‑level writer‑vs‑writer contention and the lock fix using OpenClaw's exact connection settings and the real lock primitive rather than driving two real `qmd update` subprocesses. A full real‑`qmd`, gateway‑plus‑CLI concurrent run on a machine with the binary installed is the remaining end‑to‑end check.\n\n### Risk / Mitigation\n\n- **Risk**: a cross‑process lock could make a foreground `memory search` wait, or could be held by a crashed process.\n- **Mitigation**: the contending caller waits at most for the in‑flight update (already bounded by the update timeout) and then proceeds — strictly better than today's `SQLITE_BUSY`, and consistent with the existing in‑process `waitForPendingUpdateBeforeSearch`. The lock uses the same stale/dead‑owner recovery as the embed lock (`staleRecovery: remove-if-unchanged` plus dead‑pid reclaim), so a crashed holder's lock is reclaimed. Single‑process behavior and the embed path are unchanged.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Memory / search\n- [x] Skills / tool execution\n\n### Linked Issue/PR\n\nFixes #66339\n",
+        "branch": "fix/66339-qmd-update-cross-process-lock",
+        "head_sha": "00812ab49de78abbf2ded49115d7f79b455091e9",
+        "author": "openperf",
+        "labels": [
+          "extensions: memory-core",
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-core/src/memory/qmd-manager.test.ts",
+            "additions": 51,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/qmd-manager.ts",
+            "additions": 27,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85931",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85931.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 62,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
+          ]
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 671,
+    "total_ms": 2291,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 365
+        "ms": 280
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1769
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 295
+        "ms": 210
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
