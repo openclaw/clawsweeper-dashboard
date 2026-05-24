@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T23:00:21.059Z",
+  "generated_at": "2026-05-24T23:00:52.707Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T20:00:17.273Z",
+  "since": "2026-05-24T20:00:52.189Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4530435127
   ],
-  "status_comment_id": 4530435212,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "MEMBER",
       "comment_created_at": "2026-05-24T22:59:45Z",
       "comment_updated_at": "2026-05-24T22:59:45Z",
-      "status_comment_id": 4530435212,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -59,177 +59,34 @@
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-24T23:00:21.929Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 85163
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-24T23:00:23.760Z",
-          "response_comment_id": "4530435212",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "write",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(auth): auto-migrate keychain-only legacy Codex OAuth profiles on first interactive CLI run",
-        "body": "## Summary\n\nCloses the remaining bucket from #85083: macOS users whose legacy `oauthRef` sidecar seed lives only in the Keychain still had to know to run `openclaw doctor --fix` after upgrade, because the embedded-runtime self-heal that landed in #85074 intentionally runs with `allowKeychainPrompt: false`.\n\nThe fix adds a tiny pre-command trigger in `runCli` (`src/cli/auto-migrate-legacy-oauth-sidecar.ts`) that, on darwin + TTY only, **silently** reuses the existing `maybeRepairLegacyOAuthSidecarProfiles` doctor flow when a sidecar dir is present. **There is no in-CLI confirm prompt — the macOS Keychain dialog is the only consent surface.** On Allow: migration completes inline and the original command proceeds. On Deny or any decryption failure: a permanent decline marker (`OPENCLAW_STATE_DIR/legacy-oauth-sidecar-migration-declined`) is written so the next CLI run does not re-trigger the OS dialog; `openclaw doctor --fix` is the explicit retry path. `OPENCLAW_AUTO_MIGRATE_LEGACY_OAUTH_SIDECAR=0` is an explicit opt-out for power users.\n\nHeadless paths (cron, systemd, Telegram polling, embedded sub-agent dispatch) still skip the auto-heal entirely — but the legacy sidecar loader now emits a one-shot `log.warn` that names `openclaw doctor --fix` and macOS Keychain, instead of letting the credential silently fall through to a downstream `No API key found for provider \"openai-codex\"`.\n\nAlso drops the user-confusing `sidecar-backed` phrasing from the doctor prompt/notes/changes; existing internal identifier names are left intact.\n\n## Approach\n\nApproach **B** from the issue (auto-trigger doctor migration on first interactive `openclaw <anything>` invocation), but **silent**: no clack confirm, no two-step \"we're about to prompt you for Keychain access\" UX. The macOS OS dialog itself is the explicit consent surface — clicking Allow once both authorizes the binary and triggers migration in the same step. Architecturally this leaves \"when is it safe to prompt for Keychain access?\" as one decision in one place (the embedded runtime path stays headless; the CLI path lets the OS prompt).\n\nSkip rules in order: `process.platform !== \"darwin\"` → `!isInteractiveTty` (no Keychain dialog on cron/headless) → `CI=true || OPENCLAW_NON_INTERACTIVE=1 || OPENCLAW_AUTO_MIGRATE_LEGACY_OAUTH_SIDECAR=0 || OPENCLAW_AUTH_STORE_READONLY=1` → `--help/--version` → primary is `doctor`/`update`/`help`/`completion`/`version` → `--json`/`--json=…` (anywhere in argv before `--`, keeps clean output) → sidecar dir empty → fresh decline marker. The hook is dynamically imported only on darwin (gated at the call site in `runCli`).\n\n**Skip rules deliberately removed from earlier revisions:** the auto-prompt design had a growing skip list for `--non-interactive`/`--yes`/`--no-input`/`--force` and `channels remove --delete` — the entire treadmill was about avoiding a clack prompt that no longer exists. With the OS Keychain dialog as the only consent surface, those flag-based skips are unnecessary; the OS dialog appears at most once per machine (Allow → never again; Deny → marker → never again).\n\n## Headless one-shot warning\n\nAdded in `legacy-oauth-sidecar.ts`. Fires when `loadLegacyOAuthSidecarMaterial` returns null on darwin with `allowKeychainPrompt: false` (i.e., env/file seeds were tried and Keychain was blocked). Rate-limited to one warn per process so embedded turns log it once per gateway lifetime, not per attempt. Guarded by the same VITEST env signals as the keychain read so unrelated test runs don't surface it.\n\n## Why this is safe vs. existing inline credentials\n\n- **Re-signed-in profiles are invisible to the migration.** `writeOAuthCredentials` (`provider-auth-helpers.ts:297`) builds a fresh credential object with no `oauthRef`, and `upsertAuthProfile` (`profiles.ts:139`) does `store.profiles[id] = credential` — full replacement, not merge. So any user who re-signed in via normal flow has no `oauthRef` on their profile, and the migration scan (`resolveLegacyOAuthSidecarStore`, `doctor-auth-oauth-sidecar.ts:117-126`) only includes profiles where `value.oauthRef` is a valid `LegacyOAuthRef`. Migration is a no-op for them.\n- **Runtime resolution already prefers inline material.** `persisted.ts:274-279` checks `hasInlineOAuthTokenMaterial` first; if inline tokens are present, the legacy sidecar resolver is never called regardless of what `oauthRef` says.\n- **Sidecar credentials are real OAuth tokens.** Migration just moves them from \"encrypted file referenced via `oauthRef`\" to \"inline access/refresh/idToken.\" Same values, same refresh cycle. If the refresh token still works → user is healed. If it's already revoked → user re-signs in via normal flow; migration never makes auth worse.\n\n## Regression tests\n\n- `src/cli/auto-migrate-legacy-oauth-sidecar.test.ts` — table-driven preflight skip checks for each rule (platform/TTY/env opt-outs/CI/readonly/no-sidecar/primary skips/`--json` variants), plus the silent happy path (sidecar removed, inline tokens written, no marker), unreferenced-sidecar bail-out, and decryption-failure → marker → second-run-skips. Asserts behavior (file state), not internal prompter calls.\n- `src/agents/auth-profiles/legacy-oauth-sidecar.test.ts` — exercises the headless warn path: emit once when blocked on darwin with no env/file seeds; never emit on non-darwin.\n\n## Verification\n\n- `node scripts/run-vitest.mjs src/cli/auto-migrate-legacy-oauth-sidecar.test.ts src/agents/auth-profiles/legacy-oauth-sidecar.test.ts src/commands/doctor-auth-oauth-sidecar.test.ts src/commands/doctor/repair-sequencing.test.ts` — 53/53 green across 5 files.\n- `node scripts/run-oxlint.mjs` clean on all touched files; `oxfmt --check` clean.\n\n## Scope notes\n\n- Did not touch `agents.add.test.ts` / `stale-oauth-profile-shadows.test.ts` test descriptions that still contain `sidecar-backed`; those are dev-facing and reference implementation, not UI copy.\n- Did not externalize `OPENCLAW_AUTO_MIGRATE_LEGACY_OAUTH_SIDECAR` to docs anywhere except `docs/gateway/doctor.md` accordion 5 since it is an escape hatch, not a normal-user knob.\n- No changes to `maybeRepairLegacyOAuthSidecarProfiles` itself beyond the wording rename — the migration semantics are intentionally identical between the doctor-driven and CLI-startup-driven paths. The CLI-startup caller passes `emitNotes: false` and a `confirmAutoFix: async () => true` prompter so the doctor function runs silently.\n\n## Out of scope\n\n- Removing the legacy sidecar code paths entirely. Tracked separately and should wait for the long tail to migrate.\n- Changes to `openclaw doctor --fix` behavior itself; the migration path it runs is already correct.\n\n## Related\n\n- Closes #85083\n- Companion to #85074 (file/env-seed bucket) and #85028 (fail-fast on missing refresh token)\n- Original surface: #84893 / #84752 / #83312\n- Alternative shape: #86220 (no auto-heal at all — fail-fast pointer to doctor only)\n",
-        "branch": "codex-oauth-keychain-migration",
-        "head_sha": "6630e275497bdf0f77c45e6872f4b3e714e9b26d",
-        "author": "romneyda",
-        "labels": [
-          "docs",
-          "gateway",
-          "cli",
-          "commands",
-          "agents",
-          "maintainer",
-          "size: L",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 automation",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/gateway/doctor.md",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/auth-profiles/legacy-oauth-sidecar.test.ts",
-            "additions": 142,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/auth-profiles/legacy-oauth-sidecar.ts",
-            "additions": 30,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/auto-migrate-legacy-oauth-sidecar.test.ts",
-            "additions": 366,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/cli/auto-migrate-legacy-oauth-sidecar.ts",
-            "additions": 119,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/cli/run-main.ts",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor-auth-oauth-sidecar.test.ts",
-            "additions": 4,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor-auth-oauth-sidecar.ts",
-            "additions": 16,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor/repair-sequencing.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85163",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85163.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "counts": {
-            "SUCCESS": 65,
-            "IN_PROGRESS": 9,
-            "SKIPPED": 21,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-agentic-agents:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-agentic-agents:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
-          ],
-          "terminalBlockers": []
-        }
-      }
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 7074,
+    "total_ms": 1505,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2169
+        "ms": 512
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1608
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 3284
+        "ms": 987
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
