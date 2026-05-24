@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T08:37:38.823Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-05-24T08:38:00.130Z",
+  "repo": "steipete/CodexBar",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T05:37:36.767Z",
+  "since": "2026-05-24T05:37:59.955Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    85767
+    1133
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,145 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:85767:4526886628:2026-05-24T08:37:33Z:clawsweeper_needs_human",
-      "comment_id": "4526886628",
-      "comment_version_key": "4526886628:2026-05-24T08:37:33Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/85767#issuecomment-4526886628",
-      "repo": "openclaw/openclaw",
-      "issue_number": 85767,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-24T00:12:50Z",
-      "comment_updated_at": "2026-05-24T08:37:33Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "Manual review is needed for proof-field cleanup and maintainer decisions about the visible-error and barrier-abandonment tradeoffs; there is no narrow automated code repair to queue from this review.; Cleared: The diff changes auto-reply orchestration and tests without adding dependencies, workflows, permissions, credential handling, or new external execution surfaces. (sha=793d43f99687e3a1047dd22b59cdffcea0857df8)",
-      "review_summary": "The PR defers auto-reply near-threshold memory flush work until after reply completion, adds a per-session pending-flush barrier and maintenance ReplyOperation, and expands focused auto-reply tests.\n\nReproducibility: yes. Source inspection of current main shows runReplyAgent awaits runMemoryFlushIfNeeded before runAgentTurnWithFallback, which is enough to reproduce the reported reply-path delay at the code-path level.",
-      "review_followup": "Manual review is needed for proof-field cleanup and maintainer decisions about the visible-error and barrier-abandonment tradeoffs; there is no narrow automated code repair to queue from this review.",
-      "freeform_prompt": null,
-      "expected_head_sha": "793d43f99687e3a1047dd22b59cdffcea0857df8",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "perf(auto-reply): move memory flush off the user-visible reply path",
-        "body": "## Summary\n\n- **Problem:** for a near-threshold auto-reply turn the orchestrator\n  awaited the near-threshold memory flush (an embedded housekeeping\n  LLM call) before starting the user-visible reply path, so every\n  message that crossed the flush threshold paid the flush wall time\n  on the **critical path** between user message arrival and reply\n  delivery.\n- **Requirement:** the user-visible reply should not wait for a flush\n  whose only safety contract is \"complete before the next compaction\n  mutates session state.\"\n- **Fix:** dispatch the memory flush from the reply orchestrator's\n  `finally` block (after `replyOperation.complete()`), register the\n  in-flight flush in a per-`sessionKey` map, and **preserve the\n  pre-compaction safety contract** by gating the next turn's\n  preflight compaction on a bounded barrier that awaits the prior\n  pending flush.\n- **Out of scope:** the flush body, the existing\n  `memoryFlushCompactionCount` /\n  `hasAlreadyFlushedForCurrentCompaction` dedup semantics, heartbeat\n  / CLI / followup-runner paths, persisted session state format.\n\n## Motivation\n\nOn a threshold-crossing turn the inline ordering was\n`preflight compaction → runMemoryFlushIfNeeded (LLM call) →\nrunAgentTurnWithFallback`. The user-visible reply could not start\nuntil the housekeeping LLM call returned. Moving the housekeeping\ndispatch off the user-visible reply startup path lets the reply turn\nbegin as soon as preflight compaction has resolved, while still\nresolving any required flush before a later compaction can mutate\nsession state.\n\n## Files\n\n- `src/auto-reply/reply/agent-runner.ts` — dispatch the housekeeping\n  flush from the orchestrator's `finally` block; gate the dispatch on\n  the reply path being reached; register the in-flight flush with an\n  abort callback.\n- `src/auto-reply/reply/agent-runner-memory.ts` — pending-flush\n  registry, pre-compaction `awaitPendingMemoryFlush` barrier with a\n  wait-cap and a bounded post-abort grace; post-barrier `sessionId`\n  rebind; `logVerbose` forwarding for visible flush error payloads\n  that have no caller-supplied surface.\n- `src/auto-reply/reply/reply-run-registry.ts` — new\n  `createMaintenanceReplyOperation` export. The post-reply dispatch\n  passes a maintenance `ReplyOperation` (not the original, already\n  `complete()`d reply op) into `runMemoryFlushIfNeeded` so the\n  embedded runner's `attachBackend(queueHandle)` call is not\n  cancelled by the completed-operation contract in\n  `reply-run-registry.ts:attachBackend`.\n\n## Root Cause\n\n- The deferred housekeeping LLM call was structurally on the\n  user-visible reply critical path because it was awaited inline\n  before the reply turn started. Its only consumer is the next\n  compaction (the flush writes\n  `memoryFlushAt`/`memoryFlushCompactionCount` so subsequent threshold\n  evaluation is correct). The flush therefore does not need to\n  complete before the reply begins; it only needs to complete before\n  the next compaction begins.\n- Forwarding the original `replyOperation` into\n  `runMemoryFlushIfNeeded` after `replyOperation.complete()` would\n  cancel the embedded runner's `attachBackend(queueHandle)` call:\n  `attachBackend` cancels any handle attached to a completed\n  operation with reason `\"superseded\"`. The deferred dispatch\n  therefore builds a flush-safe maintenance `ReplyOperation` per\n  call; it is not registered in `replyRunState`, has its own\n  `AbortController`, and only cancels attached backends when the\n  maintenance op itself is completed or aborted. The original\n  reply's `abortSignal` propagates one-way into the maintenance op\n  so an explicit user cancellation still stops the flush.\n- The barrier wait-cap (30 s default) is made **terminal**: on\n  timeout the barrier invokes a registered abort callback that aborts\n  the maintenance op via `abortForRestart()` (cancelling the attached\n  backend handle and aborting the embedded run's `AbortSignal`) and\n  then waits for the flush promise to settle. The post-abort wait is\n  itself bounded by a 5 s default grace; if the flush still has not\n  settled, the pending entry is removed from the registry and the\n  barrier returns so subsequent turns are not blocked indefinitely.\n\n## Real behavior proof (required for external PRs)\n\nThis PR is verified by two independent proof tracks. The first is a\n**deterministic controlled runtime proof** that drives the production\n`runReplyAgent` orchestrator end-to-end with controlled LLM-boundary\nstubs to make wall-clock ordering and latency measurable. The second\nis a **live Telegram + Gemini runtime smoke** that exercises the same\nproduction orchestrator with the real network channel, the real\nprovider, and a real model call. The two tracks answer different\nquestions and are reported separately below.\n\n### A. Deterministic controlled runtime proof (ordering + latency)\n\n- **Behavior addressed:** for the near-threshold flush-required\n  turn, the user-visible reply path no longer waits for the\n  housekeeping LLM call to complete. The housekeeping run still\n  runs, just after the reply has finalized. A later preflight\n  compaction waits for any unfinished required flush before\n  modifying session state.\n\n- **Real environment tested:** the proof exercises the **production**\n  `runReplyAgent` orchestrator end-to-end. Every orchestrator\n  decision (preflight gating, post-reply dispatch site, pending-flush\n  barrier, post-barrier `sessionId` rebind, maintenance\n  `ReplyOperation` construction and abort wiring) runs unmodified.\n  Controlled stubs are only in place at the LLM-boundary modules\n  (`pi-embedded.js`, `model-fallback.js`) to inject **deterministic\n  wall-clock latency** so the before/after delta is measurable:\n  - housekeeping embedded LLM call: simulated 200 ms wall time\n  - user-visible reply turn: simulated 50 ms wall time\n  The stubs also mirror the real embedded runner by calling\n  `params.replyOperation.attachBackend(handle)` (see\n  `src/agents/pi-embedded-runner/run/attempt.ts:3378`) so the\n  `createMaintenanceReplyOperation` contract is exercised on the\n  real path. **This track does not use a live provider or live\n  channel; the numbers below are deterministic controlled wall-clock\n  timings, not a live-traffic benchmark.** Timestamps are recorded\n  via a wrapped `ReplyOperation` whose `setPhase`/`complete` methods\n  call `performance.now()`.\n\n- **Exact steps or command run after this patch:**\n\n  Reproducible by anyone (these tests ship with the PR):\n\n  ```\n  node scripts/run-vitest.mjs \\\n    src/auto-reply/reply/agent-runner-direct-runtime-config.test.ts \\\n    src/auto-reply/reply/reply-run-registry.test.ts \\\n    src/auto-reply/reply/agent-runner-memory.test.ts\n  ```\n\n  Supplemental 3-case timing harness used to record the before/after\n  table below. The harness file is not committed; the invariants it\n  asserts are already covered by the committed tests above.\n\n  ```\n  # BEFORE — checkout upstream/main copies of the three changed source files:\n  git checkout upstream/main -- \\\n    src/auto-reply/reply/agent-runner.ts \\\n    src/auto-reply/reply/agent-runner-memory.ts \\\n    src/auto-reply/reply/reply-run-registry.ts\n  # ...run the harness...\n  # AFTER — restore PR HEAD copies and re-run the harness:\n  git checkout HEAD -- \\\n    src/auto-reply/reply/agent-runner.ts \\\n    src/auto-reply/reply/agent-runner-memory.ts \\\n    src/auto-reply/reply/reply-run-registry.ts\n  ```\n\n- **Evidence after fix:**\n\n  Terminal capture of the 3-case timing harness (invoked via\n  `node scripts/run-vitest.mjs ...`). The harness drives the\n  production `runReplyAgent` and records `performance.now()` at\n  orchestrator phase boundaries:\n\n  ```\n  EVENT [    0.01 ms] orchestration.start\n  EVENT [  710.44 ms] reply.phase.preflight_compacting\n  EVENT [  718.94 ms] reply.phase.running         <-- reply starts here on PR HEAD\n  EVENT [  816.17 ms] reply.agent_turn.invoked\n  EVENT [  866.37 ms] reply.agent_turn.returning\n  EVENT [  975.45 ms] reply.operation.complete    <-- reply complete here on PR HEAD\n  EVENT [ 1022.77 ms] flush.embedded_run.started  <-- post-reply on PR HEAD\n  EVENT [ 1223.52 ms] flush.embedded_run.completed\n  ```\n\n  Before vs after timing table (ms, controlled 200 ms flush + 50 ms\n  reply turn).\n\n  Reference: `t_orchestration_start = 0.00 ms` (entry into\n  `runReplyAgent`).\n\n  CASE 1 — flush-required near-threshold turn:\n\n  | timestamp                    | BEFORE (upstream/main) | AFTER (PR HEAD) |\n  |------------------------------|-----------------------:|----------------:|\n  | t_reply_phase_running        |              1013.95 ms |       718.94 ms |\n  | t_reply_complete             |              1221.74 ms |       975.45 ms |\n  | t_flush_start                |               812.33 ms |      1022.77 ms |\n  | t_flush_end                  |              1012.52 ms |      1223.52 ms |\n  | **Δ pre-reply (reply-start)**|              1013.95 ms |       718.94 ms |\n  | **Δ end-to-end (complete)**  |              1221.74 ms |       975.45 ms |\n\n  Improvements on this case: **−295.01 ms** to reply start (Δ\n  pre-reply) and **−246.29 ms** to reply completion (Δ end-to-end)\n  with the controlled 200 ms flush latency. The flush still runs;\n  it is just dispatched after the reply completes\n  (`t_flush_start` moves from 812 ms (pre-reply, blocking) to\n  1023 ms (post-reply, off the critical path)). Real flush wall\n  time will scale the delta; this proof does not claim a specific\n  production-time number.\n\n  CASE 2 — no-flush-needed turn (non-regression):\n\n  | timestamp                  | BEFORE (upstream/main) | AFTER (PR HEAD) |\n  |----------------------------|-----------------------:|----------------:|\n  | t_reply_phase_running      |                96.73 ms |        58.42 ms |\n  | t_reply_complete           |               336.53 ms |       309.04 ms |\n  | t_flush_start              |              (not fired) |     (not fired) |\n  | **Δ pre-reply**            |                96.73 ms |        58.42 ms |\n  | **Δ end-to-end**           |               336.53 ms |       309.04 ms |\n\n  Flush not fired on either side (token total below threshold). No\n  functional regression is observed in this controlled harness.\n\n  CASE 3 — next-turn pending flush + preflight compaction\n  (correctness):\n\n  | timestamp                              | BEFORE (upstream/main) | AFTER (PR HEAD) |\n  |----------------------------------------|-----------------------:|----------------:|\n  | t_reply_phase_running                  |               347.07 ms |        55.79 ms |\n  | t_reply_complete                       |               545.59 ms |       295.66 ms |\n  | t_flush_start                          |               141.26 ms |       337.92 ms |\n  | t_flush_end                            |               341.97 ms |       538.40 ms |\n  | barrier_held_reply_turn_until_release  |            (no barrier) |            true |\n\n  In the AFTER row the next turn's preflight compaction observation\n  point `barrier_held_reply_turn_until_release = true` confirms that\n  `runPreflightCompactionIfNeeded` awaited the externally-held\n  pending flush before invoking `compactEmbeddedPiSession` — the\n  pre-compaction safety contract is preserved.\n\n- **Observed result after fix:** for the threshold-crossing turn,\n  the user message reaches the user-visible reply path\n  ~295 ms (≈29 %) sooner under the controlled 200 ms flush latency,\n  and the reply completes ~246 ms (≈20 %) sooner; with no flush\n  required there is no regression; with a pending flush from the\n  previous turn the next compaction is correctly held until the\n  flush settles.\n\n### B. Live Telegram + Gemini runtime smoke (real-runtime validation)\n\nIndependent from the controlled-stub timing track above, the PR HEAD\nruntime was also exercised against a real Telegram channel and a real\nGoogle Gemini provider to confirm that the production orchestrator\npath is reachable, dispatches a real model call, and delivers the\nreply through the channel. This track is **not** a wall-clock\nbenchmark — it is real-runtime validation that the PR-modified\norchestrator handles real-channel traffic.\n\n- **Real environment tested:** a local OpenClaw gateway running PR\n  HEAD code with `runtime/current` symlinked at the PR worktree, a\n  real Telegram bot endpoint (`@<bot-redacted>`), and the real\n  `google` provider serving `gemini-3.1-flash-lite-preview`.\n  `GEMINI_API_KEY` is sourced from a local `.env` file by the\n  gateway's startup script; the gateway process env was verified to\n  hold the key by name (no value read or printed).\n\n- **No-compaction path (normal turn):**\n\n  ```\n  [gateway.log]\n  <ts-redacted> [telegram] Inbound message telegram:<chat-id-redacted> -> <bot-redacted> (direct, <chars> chars)\n\n  [<sid-redacted>.trajectory.jsonl]\n  type=session.started   provider=google model=gemini-3.1-flash-lite-preview source=runtime\n  type=model.completed   provider=google model=gemini-3.1-flash-lite-preview\n                         usage={\"input\":24251,\"output\":212,\"total\":24463}\n  type=session.ended\n  ```\n\n  Operator-observed Telegram delivery: a non-error assistant reply\n  was received on the user's Telegram client and reconciled against\n  the single `model.completed` event in the trajectory delta plus\n  the session-store `totalTokens` advancing to 24,251 on the same\n  turn. Compaction did not run (the session token total stayed well\n  below the flush threshold).\n\n- **Post-reply memory flush path (force-flush byte gate):**\n\n  In a second live run on the same PR HEAD runtime, the session\n  transcript byte size was inflated above the in-tree\n  `forceFlushTranscriptBytes` (default 2,097,152) by appending\n  non-conversation `custom`-type JSONL filler records. These filler\n  records were validated through the production session reader\n  (`readSessionMessagesAsync`) to confirm they are not extracted as\n  user/assistant/tool messages and therefore do not enter the model\n  prompt. Token counters were left unchanged (well below the token\n  threshold). A single short Telegram message was then sent.\n\n  ```\n  [gateway.log]\n  <ts-redacted> [telegram] Inbound message telegram:<chat-id-redacted> -> <bot-redacted> (direct, <chars> chars)\n\n  [<sid-redacted>.trajectory.jsonl, post-inbound delta]\n  # Run 1 — user-visible reply on the orchestrator's main path\n  type=session.started   provider=google model=gemini-3.1-flash-lite-preview source=runtime\n  type=model.completed   provider=google model=gemini-3.1-flash-lite-preview\n                         usage={\"input\":20756,\"output\":65,\"cacheRead\":4104,\"total\":24925}\n  type=session.ended\n\n  # Run 2 — distinct runId, starts ~2.1 s after Run 1 ends:\n  # post-reply memory flush dispatched from the orchestrator's finally block\n  type=session.started   provider=google model=gemini-3.1-flash-lite-preview source=runtime\n  type=model.completed   provider=google model=gemini-3.1-flash-lite-preview\n                         usage={\"input\":8637,\"output\":525,\"total\":9162}\n  type=session.ended\n  ```\n\n  In the same window, `sessions.json[\"agent:main:main\"].compactionCount`\n  stayed at `0` (preflight compaction did not run; the preflight\n  byte gate is disabled in this runtime config, and the token gate\n  remained below threshold). The Telegram client received the\n  Run 1 reply normally.\n\n- **What this live track shows:** the PR-modified orchestrator on\n  PR HEAD dispatches a separate post-reply housekeeping model run\n  (Run 2) after the user-visible reply (Run 1) completes, against a\n  real provider on a real channel, with the run separation visible\n  as two distinct `model.completed` events with distinct runIds in\n  the trajectory and a ~2.1 s gap. The session-store\n  `compactionCount` confirms that this dispatch came from the\n  post-reply path, not from preflight compaction. All live session\n  state mutated for the byte-gate run was backed up before mutation\n  and restored byte-for-byte after capture (verified per-file with\n  `cmp`); the inflated transcript was discarded.\n\n- **What this live track does NOT claim:** a measured wall-clock\n  improvement against a live model. Run 2's wrapper reported a\n  non-fatal local-environment error during post-call processing\n  after the model itself returned tokens; that bounded local\n  outcome does not affect the dispatch evidence and is unrelated to\n  the PR's code change. The deterministic controlled proof in\n  subsection A remains the source of truth for ordering and\n  latency. Cost / token-spend numbers are not claimed.\n\n### What was not tested (across both tracks)\n\n- A live wall-clock TTFT benchmark against a real model at scale.\n  Live track B is real-runtime validation, not a performance\n  measurement; controlled track A is the latency source of truth.\n- Live behavior under sustained traffic, retries, or under-load\n  conditions on the real channel.\n- Token / cost effect.\n\n### Evidence scope\n\nEvidence in subsections A and B was captured against PR HEAD\n`793d43f99687e3a1047dd22b59cdffcea0857df8`. The redacted runtime\nexcerpts (gateway log lines, trajectory `session.started` /\n`model.completed` events with their `usage` and `runId` fields,\nsession-store `compactionCount` deltas) and the byte-for-byte\nrestore note for the live byte-gate run are included inline in this\nPR body above — no out-of-band artifact is needed to read the\nevidence.\n\n## User-visible / Behavior Changes\n\n- The user-visible reply turn now starts before any near-threshold\n  memory flush runs. Any required flush still runs after\n  `replyOperation.complete()` and is awaited by the next turn's\n  preflight compaction before any new compaction state mutation.\n- **Removed user-visible behavior to call out:** previously, if the\n  housekeeping embedded run surfaced a visible error payload (rare;\n  e.g., the housekeeping agent reported a target-path write\n  restriction), the orchestrator returned that payload **in place\n  of** the reply for the same turn. With the housekeeping run moved\n  off the pre-reply path, that same-turn substitution is no longer\n  possible. When the flush surfaces a visible error payload and the\n  orchestrator (post-reply dispatch) does not supply an\n  `onVisibleErrorPayloads` callback, the flush body forwards each\n  dropped payload's text through `logVerbose(...)` so it is\n  recorded in the gateway log rather than silently dropped. If\n  maintainers prefer to retain visible surfacing, it can be added\n  as a follow-up PR that emits a deferred channel notification\n  after the flush settles.\n\n## Change Type\n\n- [x] Bug fix\n- [ ] Feature\n- [x] Refactor required for the fix\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope\n\n- [x] Gateway / orchestration\n- [ ] Skills / tool execution\n- [ ] Auth / tokens\n- [x] Memory / storage\n- [ ] Integrations\n- [ ] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- Closes #\n- Related #\n- [ ] This PR fixes a bug or regression\n\n## Diagram\n\n```text\nBEFORE (inline ordering on near-threshold turn):\n  user message arrives\n    -> preflight compaction\n    -> ** memory flush embedded run (blocks the reply path) **\n    -> reply turn (runAgentTurnWithFallback)\n    -> reply delivered\n\nAFTER (deferred ordering):\n  user message arrives\n    -> preflight compaction\n         -> await any pending memory flush from the previous turn\n            (bounded wait-cap + post-abort grace; abort + abandon\n             on grace timeout so the next preflight never hangs)\n    -> reply turn (runAgentTurnWithFallback)\n    -> reply delivered\n    -> replyOperation.complete()\n    -> memory flush dispatched (fire-and-forget; maintenance\n                                 ReplyOperation; registered in pending map)\n\n  Next turn:\n    -> preflight compaction\n         -> await previous turn's pending flush (so compaction sees\n            post-flush state)\n    -> ...\n```\n\n## Security Impact\n\n- New permissions/capabilities? No\n- Secrets/tokens handling changed? No\n- New/changed network calls? No\n- Command/tool execution surface changed? No\n- Data access scope changed? No\n\n## Regression Test Plan\n\n- Coverage level: unit + focused integration tests.\n- Target tests added in this PR (all committed under\n  `src/auto-reply/reply/`):\n  - `runReplyAgent runtime config > dispatches the post-reply memory\n    flush after the user-visible reply path returns`\n  - `runReplyAgent runtime config > dispatches the post-reply memory\n    flush from the reply path's finally block even when the agent\n    turn throws`\n  - `runReplyAgent runtime config > does not block the start of the\n    user-visible reply on a pending memory flush`\n  - `runReplyAgent runtime config > passes a maintenance\n    ReplyOperation (NOT the completed reply's operation) into the\n    post-reply memory flush` — captures the\n    `runMemoryFlushIfNeeded` `replyOperation` argument, asserts it\n    is a different instance whose `attachBackend(...)` stores the\n    handle (does NOT cancel), and asserts the original reply's\n    operation is in a terminal state and DOES cancel handles with\n    `superseded`.\n  - `runReplyAgent runtime config > aborts the maintenance\n    ReplyOperation when the original reply operation aborts\n    upstream`\n  - `runReplyAgent runtime config > registers the post-reply flush\n    with an abort callback that aborts the maintenance\n    ReplyOperation`\n  - `runPreflightCompactionIfNeeded pending-flush barrier > awaits a\n    pending flush before invoking compaction on the next turn`\n  - `runPreflightCompactionIfNeeded pending-flush barrier > rebinds\n    the active run sessionId after the barrier when the prior flush\n    rotated it, even if no compaction runs this turn`\n  - `runPreflightCompactionIfNeeded pending-flush barrier > does not\n    block heartbeat preflight on a pending flush`\n  - `pending memory-flush registry > awaitPendingMemoryFlush\n    proceeds after timeout when the flush hangs`\n  - `pending memory-flush registry > awaitPendingMemoryFlush makes\n    the timeout terminal: on timeout it invokes the abort callback\n    and awaits flush settlement before returning`\n  - `pending memory-flush registry > awaitPendingMemoryFlush\n    abandons the pending entry when the abort callback fails to\n    make a truly hung flush settle within the post-abort grace\n    window`\n  - `pending memory-flush registry > registers and clears a pending\n    flush after it resolves` / `... even after it rejects`\n  - `createMaintenanceReplyOperation > does not register the\n    operation in the active-run registry, so it can coexist with\n    the live reply operation for the same sessionKey`\n  - `createMaintenanceReplyOperation > attachBackend stores the\n    handle (does NOT cancel it) when the maintenance operation has\n    not completed`\n  - `createMaintenanceReplyOperation > attachBackend cancels the\n    handle with 'superseded' if complete() ran first`\n  - `createMaintenanceReplyOperation > propagates upstream abort\n    into the maintenance operation's abortSignal`\n  - `createMaintenanceReplyOperation > inherits the upstream's\n    already-aborted state at construction time`\n  - `createMaintenanceReplyOperation > complete() detaches the\n    upstream abort listener so it does not survive past terminal\n    state` / `fail() also detaches`\n  - `createMaintenanceReplyOperation > complete() does not call\n    clearReplyRunState (so it cannot disturb a live reply\n    operation for the same sessionKey)`\n  - `runMemoryFlushIfNeeded > completes the flush turn without\n    throwing when an embedded run returns a visible error payload\n    and no onVisibleErrorPayloads callback is supplied`\n\n## Compatibility / Migration\n\n- Backward compatible? Yes\n- Config/env changes? No\n- Migration needed? No\n\n## Risks and Mitigations\n\n- Risk: housekeeping run visible error payloads no longer route to\n  the user-visible reply on the same turn.\n  - Mitigation: text of each dropped payload is forwarded to\n    `logVerbose`. Same-turn surfacing can be reintroduced as a\n    deferred channel notification in a separate PR.\n- Risk: a hung housekeeping run could keep the next preflight\n  waiting on the barrier.\n  - Mitigation: the barrier inside\n    `runPreflightCompactionIfNeeded` has a wait-cap (30 s default).\n    When the cap fires, the barrier invokes a registered abort\n    callback that aborts the maintenance `ReplyOperation` via\n    `abortForRestart()` (cancelling the attached backend handle and\n    aborting the embedded run's `AbortSignal`), and then waits for\n    the flush promise to settle. The post-abort wait is itself\n    bounded by a 5 s default grace; if the flush still has not\n    settled, the pending entry is removed from the registry and the\n    barrier returns so subsequent turns are not blocked\n    indefinitely. The abandoned flush may still complete later and\n    mutate session state; that bounded risk is explicitly preferred\n    over an unbounded availability hang.\n- Risk: cross-turn ordering depends on the per-`sessionKey` map\n  being correct.\n  - Mitigation: the map is keyed by `sessionKey`, which is stable\n    across the in-flush compaction (`incrementCompactionCount`\n    mutates `sessionId` but not `sessionKey`).\n",
-        "branch": "openclaw-memory-flush-post-reply",
-        "head_sha": "793d43f99687e3a1047dd22b59cdffcea0857df8",
-        "author": "masatohoshino",
-        "labels": [
-          "size: XL",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/auto-reply/reply/agent-runner-direct-runtime-config.test.ts",
-            "additions": 239,
-            "deletions": 36,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-memory.test.ts",
-            "additions": 462,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-memory.ts",
-            "additions": 181,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner.ts",
-            "additions": 97,
-            "deletions": 55,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-run-registry.test.ts",
-            "additions": 114,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-run-registry.ts",
-            "additions": 162,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85767",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85767.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 106,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 80,
-            "SKIPPED": 24,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
-        }
-      },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2284,
+    "total_ms": 287,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 265
+        "ms": 163
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1776
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 216
+        "ms": 112
       },
       {
         "name": "append_ledger",
