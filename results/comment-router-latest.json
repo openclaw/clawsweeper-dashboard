@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T17:15:34.005Z",
+  "generated_at": "2026-05-24T17:15:45.610Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T14:15:31.736Z",
+  "since": "2026-05-24T14:15:43.578Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    85934
+    85787
   ],
-  "comment_ids": [
-    4529445675
-  ],
-  "status_comment_id": 4529445760,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 4,
+  "commands_seen": 2,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,18 +31,98 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:85934:4529445675:2026-05-24T17:14:35Z:re_review",
-      "comment_id": "4529445675",
-      "comment_version_key": "4529445675:2026-05-24T17:14:35Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/85934#issuecomment-4529445675",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:85787:4526042641:2026-05-24T17:15:39Z:clawsweeper_needs_human",
+      "comment_id": "4526042641",
+      "comment_version_key": "4526042641:2026-05-24T17:15:39Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85787#issuecomment-4526042641",
       "repo": "openclaw/openclaw",
-      "issue_number": 85934,
+      "issue_number": 85787,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-23T17:14:17Z",
+      "comment_updated_at": "2026-05-24T17:15:39Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "The PR needs contributor-supplied real behavior proof and ordinary maintainer review; there is no narrow automated code repair to request.; Cleared: The diff only changes config recovery health-state writes and colocated tests; it does not add dependencies, CI execution, secret handling, or broader file access. (sha=3656e84c4c7de53713bf21d5ac27d4ce1a6f6cfd)",
+      "review_summary": "The PR guards async and sync config recovery health-state dedup writes behind successful backup restores and adds two retry-after-failed-restore regression tests.\n\nPR surface: Source +4, Tests +81. Total +85 across 2 files.\n\nReproducibility: yes. source-reproducible: current main records lastObservedSuspiciousSignature after a failed restore, and the same helper skips future attempts when that signature is present. I did not run the reproducer because this review is read-only.",
+      "review_followup": "The PR needs contributor-supplied real behavior proof and ordinary maintainer review; there is no narrow automated code repair to request.",
+      "freeform_prompt": null,
+      "expected_head_sha": "3656e84c4c7de53713bf21d5ac27d4ce1a6f6cfd",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(config): do not suppress recovery retry after failed backup restore",
+        "body": "## Summary\n\nFix dedup-suppression bug in `maybeRecoverSuspiciousConfigRead` / `maybeRecoverSuspiciousConfigReadSync` (exported plugin SDK helpers). When a backup restore fails (e.g. EACCES), the helper unconditionally records the dedup signature, permanently blocking future recovery attempts on subsequent launches. The fix gates signature recording on `restoredFromBackup === true`.\n\n## Scope\n\n`maybeRecoverSuspiciousConfigRead` is exported in the plugin SDK (`packages/plugin-sdk/dist/src/config/io.observe-recovery.d.ts`) but is not currently called from the core runtime config path. Core config reads finalize through `observeConfigSnapshot` in `io.ts`, which does not call this helper. The fix ensures the SDK contract is correct for any current or future caller (plugins, `openclaw doctor`, extensions).\n\n## Fix\n\nIn both the async and sync variants, gate `lastObservedSuspiciousSignature` recording on `restoredFromBackup === true`:\n\n```diff\n- // Always record (even on failure)\n- lastObservedSuspiciousSignature = suspiciousHash;\n+ // Only record on successful restore so failures don't block retries\n+ if (restoredFromBackup) {\n+   lastObservedSuspiciousSignature = suspiciousHash;\n+ }\n```\n\n## Verification\n\nTwo-phase integration tests call the real `maybeRecoverSuspiciousConfigRead` and `maybeRecoverSuspiciousConfigReadSync` functions with real filesystem operations (temp dirs, real file writes, real `copyFile`/`copyFileSync`). The tests inject an EACCES failure into `copyFile` on the first call, then call the function again with working deps:\n\nPhase 1 (failed restore): `maybeRecoverSuspiciousConfigRead` is called with a `deps.fs.promises.copyFile` that rejects with EACCES. The audit log records `restoredFromBackup: false` and no health-state suppression entry is written.\n\nPhase 2 (retry succeeds): `maybeRecoverSuspiciousConfigRead` is called again with working deps. Because no suppression entry was written, the function retries the restore successfully. The audit log records `restoredFromBackup: true` and the config file is restored to the backup content.\n\n## Real behavior proof\n\n**Behavior addressed:** Config auto-restore from backup now retries on next launch after a failed `copyFile` restore. Previously, a failed restore (EACCES) wrote the \"already observed\" health entry, permanently suppressing future recovery attempts for that signature.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `3656e84c4c`\n\n**Exact steps or command run after this patch:**\n\n```\n$ OPENCLAW_TEST_FAST=1 pnpm test src/config/io.observe-recovery.test.ts -- --reporter=verbose\n```\n\n**Evidence after fix:** All 20 tests pass, including two new two-phase integration tests that call the actual `maybeRecoverSuspiciousConfigRead` / `maybeRecoverSuspiciousConfigReadSync` functions with real filesystem operations:\n\n```\n ✓  retries recovery on next launch after a failed copyFile restore (4ms)\n ✓  sync recovery retries on next launch after a failed copyFileSync restore (3ms)\n```\n\nThese tests exercise the full flow:\n1. Seed a backup + clobbered config on real disk\n2. Call `maybeRecoverSuspiciousConfigRead` with a `copyFile` that throws EACCES\n3. Assert audit log shows `restoredFromBackup: false`\n4. Call `maybeRecoverSuspiciousConfigRead` again with working deps\n5. Assert the config is restored (`gateway.mode === \"local\"`) and audit log shows `restoredFromBackup: true`\n\nSource confirmation that both guard sites are present:\n\n```\n$ grep -n 'if (restoredFromBackup)' src/config/io.observe-recovery.ts\n683:  if (restoredFromBackup) {\n795:  if (restoredFromBackup) {\n```\n\nFull test suite output:\n\n```\n ✓  auto-restores suspicious update-channel-only roots from backup (12ms)\n ✓  auto-restores when metadata disappears from an otherwise valid config (4ms)\n ✓  auto-restores when gateway mode disappears from the last-good shape (3ms)\n ✓  hardens async backup restores to owner-only config permissions (2ms)\n ✓  auto-restores after a large size drop against last-good config (3ms)\n ✓  does not restore noncritical config edits (1ms)\n ✓  records copyFile failure instead of falsely claiming restore succeeded (2ms)\n ✓  sync recovery records copyFileSync failure instead of falsely claiming restore succeeded (2ms)\n ✓  retries recovery on next launch after a failed copyFile restore (4ms)\n ✓  sync recovery retries on next launch after a failed copyFileSync restore (3ms)\n ✓  deduplicates recovery for the same suspicious signature (3ms)\n ✓  deduplicates sync recovery for the same suspicious signature (2ms)\n ✓  promotes a clean config snapshot to last-known-good backup (2ms)\n ✓  recovers from last-known-good when available (2ms)\n ✓  recovers from last-known-good when backup is missing (2ms)\n ✓  does not report spurious restore when health write fails (2ms)\n ✓  sync recovery does not report spurious restore when health write fails (1ms)\n ✓  persists bounded clobbered config snapshot to disk on recovery (2ms)\n ✓  caps the number of clobbered snapshots to prevent disk growth (6ms)\n ✓  preserves the signature hash across promote+recover roundtrip (2ms)\n\n Test Files  1 passed (1)\n      Tests  20 passed (20)\n```\n\n**Observed result after fix:** The two-phase retry tests confirm that after a failed `copyFile` restore, `maybeRecoverSuspiciousConfigRead` does NOT write the suppression signature. On the next call, the function retries the restore and succeeds. The config file content is verified to contain the backup data (`gateway.mode === \"local\"`), not the clobbered data.\n\n**What was not tested:** No live gateway restart cycle with injected filesystem faults was tested. The two-phase behavior was verified through integration tests that call the real exported function with real filesystem operations and injected `copyFile` EACCES failures.\n",
+        "branch": "fix/config-recovery-retry-suppression",
+        "head_sha": "3656e84c4c7de53713bf21d5ac27d4ce1a6f6cfd",
+        "author": "sebtardif",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/config/io.observe-recovery.test.ts",
+            "additions": 81,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/io.observe-recovery.ts",
+            "additions": 16,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85787",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85787.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "SUCCESS": 73,
+            "SKIPPED": 28,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:85787:4529426844:2026-05-24T17:05:57Z:re_review",
+      "comment_id": "4529426844",
+      "comment_version_key": "4529426844:2026-05-24T17:05:57Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85787#issuecomment-4529426844",
+      "repo": "openclaw/openclaw",
+      "issue_number": 85787,
       "author": "SebTardif",
       "author_id": 1413412,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-24T17:14:35Z",
-      "comment_updated_at": "2026-05-24T17:14:35Z",
-      "status_comment_id": 4529445760,
+      "comment_created_at": "2026-05-24T17:05:57Z",
+      "comment_updated_at": "2026-05-24T17:05:57Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -59,176 +137,80 @@
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-24T17:15:34.891Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 85934
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-24T17:15:36.595Z",
-          "response_comment_id": "4529445760",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(security): escape field names in transcript regex extraction",
-        "body": "## Summary\n\n`extractJsonStringFieldPrefix` and `extractJsonNullableStringFieldPrefix` in `session-utils.fs.ts` interpolate the `field` parameter directly into `new RegExp(...)` without escaping. All current callers pass hardcoded field names (`\"id\"`, `\"parentId\"`, `\"type\"`, `\"role\"`), but the function signature accepts any `string`. A future caller passing a field containing regex metacharacters (e.g. `\"foo.bar\"`) would match unintended patterns (`.` matches any character instead of a literal dot).\n\nThis wraps the interpolation with `escapeRegExp()` from `src/shared/regexp.ts` so metacharacters are treated literally.\n\n## Verification\n\n219 session-utils tests pass (gateway-core, gateway-server, gateway-client). The new `oversized line metadata extraction preserves id and parentId` test exercises the escapeRegExp-guarded regex path.\n\n## Real behavior proof\n\n**Behavior addressed:** Regex injection via unescaped field name interpolation in oversized transcript metadata extraction (`session-utils.fs.ts:276,293`). Metacharacter field names cause extraction failure or wrong-value extraction.\n\n**Real environment tested:** macOS arm64, Node 26.0.0, openclaw checkout at patched head.\n\n**Exact steps or command run after this patch:**\n\nStandalone runtime script that replicates the vulnerable and fixed extraction functions, then runs each against JSON prefixes containing field names with regex metacharacters:\n\n```\nnode --import tsx /tmp/proof-85934.mjs\n```\n\n**Evidence after fix:**\n\n```\n=== PR #85934: field name regex escape proof ===\n\nField with parentheses: count(items)\n  Input: {\"count(items)\":\"5\",\"other\":\"x\"}\n  Before fix: EXTRACTION FAILED\n  After fix:  5\n\nField with brackets: tags[0]\n  Input: {\"tags[0]\":\"first\",\"tags0x\":\"other\"}\n  Before fix: EXTRACTION FAILED\n  After fix:  first\n\nField with plus: rate+tax\n  Input: {\"rate+tax\":\"15\",\"ratetax\":\"10\"}\n  Before fix: 10\n  After fix:  15\n\nField with $: $ref\n  Input: {\"$ref\":\"#/definitions/model\",\"ref\":\"fallback\"}\n  Before fix: EXTRACTION FAILED\n  After fix:  #/definitions/model\n\nSafe field name (normal transcript): id\n  Input: {\"type\":\"message\",\"id\":\"msg-abc123\",\"parentId\":\"root\"}\n  Before fix: msg-abc123\n  After fix:  msg-abc123\n  Both work correctly for safe field names.\n\nescapeRegExp neutralizes metacharacters while safe names are unaffected.\n```\n\nWithout escapeRegExp, parentheses, brackets, and dollar signs cause extraction to fail entirely, and the plus sign causes extraction of the wrong value (`10` from `\"ratetax\"` instead of `15` from `\"rate+tax\"`). With escapeRegExp, all metacharacter field names are treated literally and extract the correct value.\n\n**Observed result after fix:** The escapeRegExp wrapper fixes four classes of metacharacter failures (parentheses, brackets, plus, dollar sign) while leaving safe field names unaffected. The plus-sign case is the most dangerous: it silently returns the wrong value instead of failing.\n\n**What was not tested:** End-to-end production transcript pipeline with adversarial field names (all current callers use hardcoded safe strings). The fix is defense-in-depth.\n",
-        "branch": "fix/session-utils-regex-escape",
-        "head_sha": "7750bf059213fbf3880368884b04997380b1dbf0",
+        "title": "fix(config): do not suppress recovery retry after failed backup restore",
+        "body": "## Summary\n\nFix dedup-suppression bug in `maybeRecoverSuspiciousConfigRead` / `maybeRecoverSuspiciousConfigReadSync` (exported plugin SDK helpers). When a backup restore fails (e.g. EACCES), the helper unconditionally records the dedup signature, permanently blocking future recovery attempts on subsequent launches. The fix gates signature recording on `restoredFromBackup === true`.\n\n## Scope\n\n`maybeRecoverSuspiciousConfigRead` is exported in the plugin SDK (`packages/plugin-sdk/dist/src/config/io.observe-recovery.d.ts`) but is not currently called from the core runtime config path. Core config reads finalize through `observeConfigSnapshot` in `io.ts`, which does not call this helper. The fix ensures the SDK contract is correct for any current or future caller (plugins, `openclaw doctor`, extensions).\n\n## Fix\n\nIn both the async and sync variants, gate `lastObservedSuspiciousSignature` recording on `restoredFromBackup === true`:\n\n```diff\n- // Always record (even on failure)\n- lastObservedSuspiciousSignature = suspiciousHash;\n+ // Only record on successful restore so failures don't block retries\n+ if (restoredFromBackup) {\n+   lastObservedSuspiciousSignature = suspiciousHash;\n+ }\n```\n\n## Verification\n\nTwo-phase integration tests call the real `maybeRecoverSuspiciousConfigRead` and `maybeRecoverSuspiciousConfigReadSync` functions with real filesystem operations (temp dirs, real file writes, real `copyFile`/`copyFileSync`). The tests inject an EACCES failure into `copyFile` on the first call, then call the function again with working deps:\n\nPhase 1 (failed restore): `maybeRecoverSuspiciousConfigRead` is called with a `deps.fs.promises.copyFile` that rejects with EACCES. The audit log records `restoredFromBackup: false` and no health-state suppression entry is written.\n\nPhase 2 (retry succeeds): `maybeRecoverSuspiciousConfigRead` is called again with working deps. Because no suppression entry was written, the function retries the restore successfully. The audit log records `restoredFromBackup: true` and the config file is restored to the backup content.\n\n## Real behavior proof\n\n**Behavior addressed:** Config auto-restore from backup now retries on next launch after a failed `copyFile` restore. Previously, a failed restore (EACCES) wrote the \"already observed\" health entry, permanently suppressing future recovery attempts for that signature.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `3656e84c4c`\n\n**Exact steps or command run after this patch:**\n\n```\n$ OPENCLAW_TEST_FAST=1 pnpm test src/config/io.observe-recovery.test.ts -- --reporter=verbose\n```\n\n**Evidence after fix:** All 20 tests pass, including two new two-phase integration tests that call the actual `maybeRecoverSuspiciousConfigRead` / `maybeRecoverSuspiciousConfigReadSync` functions with real filesystem operations:\n\n```\n ✓  retries recovery on next launch after a failed copyFile restore (4ms)\n ✓  sync recovery retries on next launch after a failed copyFileSync restore (3ms)\n```\n\nThese tests exercise the full flow:\n1. Seed a backup + clobbered config on real disk\n2. Call `maybeRecoverSuspiciousConfigRead` with a `copyFile` that throws EACCES\n3. Assert audit log shows `restoredFromBackup: false`\n4. Call `maybeRecoverSuspiciousConfigRead` again with working deps\n5. Assert the config is restored (`gateway.mode === \"local\"`) and audit log shows `restoredFromBackup: true`\n\nSource confirmation that both guard sites are present:\n\n```\n$ grep -n 'if (restoredFromBackup)' src/config/io.observe-recovery.ts\n683:  if (restoredFromBackup) {\n795:  if (restoredFromBackup) {\n```\n\nFull test suite output:\n\n```\n ✓  auto-restores suspicious update-channel-only roots from backup (12ms)\n ✓  auto-restores when metadata disappears from an otherwise valid config (4ms)\n ✓  auto-restores when gateway mode disappears from the last-good shape (3ms)\n ✓  hardens async backup restores to owner-only config permissions (2ms)\n ✓  auto-restores after a large size drop against last-good config (3ms)\n ✓  does not restore noncritical config edits (1ms)\n ✓  records copyFile failure instead of falsely claiming restore succeeded (2ms)\n ✓  sync recovery records copyFileSync failure instead of falsely claiming restore succeeded (2ms)\n ✓  retries recovery on next launch after a failed copyFile restore (4ms)\n ✓  sync recovery retries on next launch after a failed copyFileSync restore (3ms)\n ✓  deduplicates recovery for the same suspicious signature (3ms)\n ✓  deduplicates sync recovery for the same suspicious signature (2ms)\n ✓  promotes a clean config snapshot to last-known-good backup (2ms)\n ✓  recovers from last-known-good when available (2ms)\n ✓  recovers from last-known-good when backup is missing (2ms)\n ✓  does not report spurious restore when health write fails (2ms)\n ✓  sync recovery does not report spurious restore when health write fails (1ms)\n ✓  persists bounded clobbered config snapshot to disk on recovery (2ms)\n ✓  caps the number of clobbered snapshots to prevent disk growth (6ms)\n ✓  preserves the signature hash across promote+recover roundtrip (2ms)\n\n Test Files  1 passed (1)\n      Tests  20 passed (20)\n```\n\n**Observed result after fix:** The two-phase retry tests confirm that after a failed `copyFile` restore, `maybeRecoverSuspiciousConfigRead` does NOT write the suppression signature. On the next call, the function retries the restore and succeeds. The config file content is verified to contain the backup data (`gateway.mode === \"local\"`), not the clobbered data.\n\n**What was not tested:** No live gateway restart cycle with injected filesystem faults was tested. The two-phase behavior was verified through integration tests that call the real exported function with real filesystem operations and injected `copyFile` EACCES failures.\n",
+        "branch": "fix/config-recovery-retry-suppression",
+        "head_sha": "3656e84c4c7de53713bf21d5ac27d4ce1a6f6cfd",
         "author": "sebtardif",
         "labels": [
-          "gateway",
-          "size: XS",
+          "size: S",
           "proof: supplied",
-          "P3",
+          "P2",
           "rating: 🦪 silver shellfish",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/gateway/session-utils.fs.test.ts",
-            "additions": 33,
+            "path": "src/config/io.observe-recovery.test.ts",
+            "additions": 81,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/session-utils.fs.ts",
-            "additions": 3,
-            "deletions": 2,
+            "path": "src/config/io.observe-recovery.ts",
+            "additions": 16,
+            "deletions": 12,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85934",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85934.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85787",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85787.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 96,
+          "total": 102,
           "counts": {
-            "SUCCESS": 35,
-            "IN_PROGRESS": 38,
-            "SKIPPED": 22,
+            "SUCCESS": 73,
+            "SKIPPED": 28,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-runtime-infra-state:IN_PROGRESS",
-            "checks-node-core-runtime-infra-process:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-shared:IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-shared:IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS",
-            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
-            "checks-node-agentic-agents:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
-            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-runtime-infra-state:IN_PROGRESS",
-            "checks-node-core-runtime-infra-process:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-shared:IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-shared:IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS",
-            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
-            "checks-node-agentic-agents:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
-            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
+          "blockers": [],
+          "pending": [],
           "terminalBlockers": []
         }
-      }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5422,
+    "total_ms": 2246,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 536
+        "ms": 291
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1719
+        "ms": 1724
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 3141
+        "ms": 203
       },
       {
         "name": "append_ledger",
