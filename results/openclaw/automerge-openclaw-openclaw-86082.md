@@ -2,21 +2,21 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-86082"
 mode: "autonomous"
-run_id: "26365939235"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26365939235"
+run_id: "26366753860"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26366753860"
 head_sha: "4954daa585f1ed92cc8808d87b446f47df095a65"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-24T16:18:40.565Z"
+published_at: "2026-05-24T16:54:52.881Z"
 canonical: "#86082"
 canonical_issue: null
 canonical_pr: "#86082"
 actions_total: 1
 fix_executed: 0
 fix_failed: 0
-fix_blocked: 1
+fix_blocked: 0
 apply_executed: 0
-apply_blocked: 0
+apply_blocked: 1
 apply_skipped: 0
 needs_human_count: 0
 ---
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/26365939235](https://github.com/openclaw/clawsweeper/actions/runs/26365939235)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/26366753860](https://github.com/openclaw/clawsweeper/actions/runs/26366753860)
 
 Workflow conclusion: success
 
@@ -44,9 +44,9 @@ Make PR #86082 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 | Worker actions | 1 |
 | Fix executed | 0 |
 | Fix failed | 0 |
-| Fix blocked | 1 |
+| Fix blocked | 0 |
 | Applied executions | 0 |
-| Apply blocked | 0 |
+| Apply blocked | 1 |
 | Apply skipped | 0 |
 | Needs human | 0 |
 
@@ -54,14 +54,13 @@ Make PR #86082 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | blocked | https://github.com/openclaw/openclaw/pull/86082 |  | source PR #86082 is paused by clawsweeper:human-review; refusing to mutate the PR branch |
-| automerge_repair_outcome_comment | updated | #86082 |  |  |
+| repair_contributor_branch | pushed | https://github.com/openclaw/openclaw/pull/86082 |  |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| #86082 | merge_canonical | blocked | fix_pr | job does not allow merge |
 
 ## Worker Action Matrix
 
