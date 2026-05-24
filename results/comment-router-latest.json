@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T03:42:00.587Z",
+  "generated_at": "2026-05-24T03:42:02.986Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T00:41:58.917Z",
+  "since": "2026-05-24T00:42:01.123Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    85910
+    85835
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4527300472
+  ],
+  "status_comment_id": 4527300537,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
+  "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,161 +33,75 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:85910:4527286425:2026-05-24T03:41:54Z:automerge",
-      "comment_id": "4527286425",
-      "comment_version_key": "4527286425:2026-05-24T03:41:54Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/85910#issuecomment-4527286425",
+      "idempotency_key": "comment-router:openclaw/openclaw:85835:4527300472:2026-05-24T03:41:02Z:hatch",
+      "comment_id": "4527300472",
+      "comment_version_key": "4527300472:2026-05-24T03:41:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85835#issuecomment-4527300472",
       "repo": "openclaw/openclaw",
-      "issue_number": 85910,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 85835,
+      "author": "rendrag-git",
+      "author_id": 253747599,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-24T03:33:06Z",
-      "comment_updated_at": "2026-05-24T03:41:54Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-05-24T03:41:02Z",
+      "comment_updated_at": "2026-05-24T03:41:02Z",
+      "status_comment_id": 4527300537,
       "trigger": "mention",
-      "command": "automerge",
-      "intent": "automerge",
+      "command": "hatch",
+      "intent": "hatch",
       "autoclose_message": null,
       "implementation_prompt": null,
       "trusted_bot": false,
       "trusted_bot_author": null,
       "automation_source": null,
       "repair_reason": null,
-      "review_summary": "The PR adds idle-TTL tracking and a gateway lifetime sweep for cached memory index managers, plus config fields and focused memory/gateway tests.\n\nReproducibility: yes. Current main source shows cached MemoryIndexManager instances are retained until explicit teardown, and the PR body provides production RSS/lsof measurements for the leak path.",
-      "review_followup": "A focused automated repair can add active-use protection and regression tests without changing the PR's product direction.",
+      "review_summary": null,
+      "review_followup": null,
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "ignored",
-      "actions": [],
-      "author_repository_permission": "none",
+      "status": "executed",
+      "actions": [
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-24T03:42:04.740Z",
+          "response_comment_id": "4527300537",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(memory): idle-evict cached MemoryIndexManager instances in long-running gateway",
-        "body": "## Problem\n\nIn long-running gateway daemons, `MemoryIndexManager` instances are cached\nin the module-level `INDEX_CACHE` indefinitely. Each instance owns a\nchokidar `FSWatcher`; with `sync.watch=true` (default) recursively watching\nthe memory directory, this leaks `FSEventWrap` native handles and file\ndescriptors for every memory/*.md file the watcher has touched.\n\nIn a production daemon we measured:\n\n- 11h uptime → 612 `FSEventWrap` native handles accumulated\n- RSS grew ~150 MB/h, +1.6 GB over 11h from baseline\n- `lsof` showed 488 `memory/*.md` file descriptors held by chokidar's\n  `awaitWriteFinish`\n\nRelated: #71335 (`sync.watch` default should be `false` in gateway mode).\n\nPrior PRs that addressed CLI-exit hangs (#40389, #40379, #40606) covered the\nshutdown path. This PR fixes the **complementary long-running daemon path**\nwhere cached managers need to be evicted *during* the daemon's lifetime,\nnot just at process shutdown.\n\n## Fix\n\nAdd idle-TTL eviction to `ManagedCache`:\n\n- Track `lastAccessAt` for each cache entry\n- Refresh on cache hit; record on initial set\n- New `closeIdleManagedCacheEntries({ idleMs })` helper evicts and calls\n  `.close()` on stale entries, isolating errors so one bad close does not\n  prevent later evictions\n\nWire into gateway startup: register a periodic gateway-lifetime sidecar\n(`scheduleMemoryIndexIdleEvict`) that calls\n`closeIdleMemorySearchManagers` via the memory plugin runtime every\n`idleEvictScanMs` (default 5min), evicting managers idle for longer than\n`idleEvictMs` (default 15min). Both intervals are configurable via\n`agents.defaults.memorySearch.sync.idleEvictMs` and\n`agents.defaults.memorySearch.sync.idleEvictScanMs`; setting either to `0`\ndisables the sweep.\n\nThe eviction call is routed through the existing memory plugin runtime\ncontract (`MemoryPluginRuntime.closeIdleMemorySearchManagers`) rather than\nimporting the manager module directly, so core never crosses the plugin\nboundary.\n\n## Validation\n\nWe validated this fix with a monkey-patched version (`--require` shim)\nrunning for 8h in our production gateway:\n\n- With patch: RSS went 2031 MB → 1859 MB over 8h (zero growth, slight\n  decrease)\n- Without patch (prior measurement on same workload): RSS grew ~150 MB/h,\n  +1.6 GB over 11h\n- `lsof | grep memory/.*\\.md` count stayed at 0 during idle periods,\n  spiked when `memory_search` ran, and dropped back to 0 within the\n  eviction window\n\n## Tests\n\n- `manager-cache.test.ts`: 5 new unit tests for `closeIdleManagedCacheEntries`\n  semantics (eviction past threshold, refresh on hit, idle threshold\n  boundary, error isolation, idempotent self-eviction during `close()`).\n- `manager.idle-gc.test.ts` (new): end-to-end tests against the live\n  `INDEX_CACHE` singleton verifying `closeIdleMemoryIndexManagers` calls\n  `.close()`, removes cache and `lastAccessAt` entries, and isolates\n  per-manager close errors.\n- `server-startup-post-attach.test.ts`: updated to assert the new\n  gateway-lifetime sidecar is registered alongside the provider auth\n  prewarm sidecar.\n- `memory-search.test.ts`: updated to reflect the new resolved sync\n  config fields.\n\n## Risk / Compatibility\n\n- Default 15min idle threshold is conservative; short-lived `memory_search`\n  bursts within a session keep the manager alive.\n- No behavior change for short-lived CLI invocations (idle GC sweep only\n  fires `idleEvictScanMs` after gateway start; CLI exits well before).\n- `INDEX_CACHE` size only shrinks via this sweep; a subsequent\n  `memory_search` request triggers the normal cache-miss path which\n  rebuilds the manager (already exercised by current tests).\n- Cleared `EMBEDDING_PROBE_CACHE` entries are re-probed on next request;\n  the TTL is 30s anyway so the practical impact is negligible.\n\n## Out of scope\n\n- Does **not** change the `sync.watch` default value (#71335 will handle\n  that separately).\n- Does **not** refactor the watcher to be singleton-per-workspace (a\n  larger structural change considered in our investigation but not\n  required for this fix).\n\n## Verification\n\nReal environment tested: yes (production OpenClaw gateway, macOS 15.7.4,\nNode v24.13.0, 8h soak test with `--require` shim implementing the same\neviction logic prior to upstreaming).\n\nExact steps or command run after this patch:\n\n```\nSHARP_IGNORE_GLOBAL_LIBVIPS=1 pnpm install\nnode scripts/run-vitest.mjs run extensions/memory-core/src/memory/manager-cache.test.ts\nnode scripts/run-vitest.mjs run extensions/memory-core/src/memory/manager.idle-gc.test.ts\nnode scripts/run-vitest.mjs run extensions/memory-core\nnode scripts/run-vitest.mjs run src/agents/memory-search.test.ts\nnode scripts/run-vitest.mjs run src/gateway/server-startup-post-attach.test.ts\nnode scripts/run-vitest.mjs run src/config src/plugins/memory-state\nnode scripts/run-oxlint-shards.mjs <changed files>\npnpm tsgo:core && pnpm tsgo:extensions && pnpm tsgo:test\npnpm build\n```\n\nEvidence after fix:\n- `manager-cache.test.ts`: 10 passed (5 new)\n- `manager.idle-gc.test.ts` (new): 5 passed\n- `extensions/memory-core` aggregate: 57 files, 702 passed\n- `src/agents/memory-search.test.ts`: 27 passed\n- `src/gateway/server-startup-post-attach.test.ts`: 41 passed\n- `src/config` + `src/plugins/memory-state` aggregate: 143 files, 1475 passed\n- `oxlint`: 0 warnings, 0 errors across scripts/core/extensions shards\n- `tsgo:core`, `tsgo:extensions`, `tsgo:test`: all clean\n- `pnpm build`: succeeded\n\nObserved result after fix: cached `MemoryIndexManager` instances idle for\nmore than 15min are evicted by the gateway-lifetime sweep, releasing their\nchokidar `FSWatcher` and the associated `FSEventWrap` native handles and\nfile descriptors. No behavior change for short-lived CLI invocations.\n\nWhat was not tested: this PR was prepared in a clean checkout; we did not\nspin up a fresh gateway against this exact commit in production. The\n8h soak test described above was against an equivalent `--require` shim\nthat implemented the same eviction semantics on `INDEX_CACHE`. Production\nverification will follow normal land/release.\n",
-        "branch": "fix/memory-index-manager-idle-evict",
-        "head_sha": "d7a2cb0c04d3ea8e51d61bc0e1488e2e68050e1d",
-        "author": "quengh",
+        "title": "fix(agents): omit empty tools array for proxy-like openai-completions endpoints",
+        "body": "## Summary\n\nSupersedes #70790 with a smaller patch at the canonical seam. Both PRs fix the same downstream symptom (strict OpenAI-compatible servers — vLLM, LocalAI, llama.cpp, LM Studio, DashScope, GLM, Kimi — rejecting `tools: []` with HTTP 400), but #70790 wraps the stream function inside the embedded runner only. This PR fixes the canonical payload builder so every consumer benefits: gateway path (`openclaw infer model run`), embedded runner (`openclaw agent` / Discord / iMessage), and the public SDK consumers `extensions/zai`, `extensions/xiaomi`, `extensions/deepseek` that import `buildOpenAICompletionsParams` from `openclaw/plugin-sdk/provider-transport-runtime`.\n\n- **Problem**: `buildOpenAICompletionsParams` in `src/agents/openai-transport-stream.ts` emits `tools: []` in two cases: (1) when `context.tools` is a non-undefined empty array and `convertTools([])` returns `[]`; (2) when `hasToolHistory(context.messages)` matches and the function assigns `params.tools = []`. Current OpenAI and every strict OpenAI-compatible server reject this with HTTP 400 `` `tools` must not be an empty array. Either provide at least one tool or omit the field entirely. ``.\n- **Why it matters**: Local vLLM (and DashScope/GLM/Kimi) users cannot run any prompt against an agent whose runtime tool surface is empty for the current turn, even tool-free ones. PR #70790 only covers the embedded-runner path; the gateway path stays broken under it.\n- **What changed**: After the existing `supportsModelTools` block, post-strip an empty `params.tools` (and orphan `params.tool_choice`) when `compatDetection.capabilities.usesExplicitProxyLikeEndpoint` is true. 7 lines added, no existing branches touched.\n- **What did NOT change (scope boundary)**: Native OpenAI, Azure OpenAI, OpenRouter, and any non-proxy-like provider — byte-identical defaults. The `hasToolHistory → tools: []` branch is preserved for non-proxy paths so any historical Aliyun/Bailian-style consumer keeps existing behavior. `supportsModelTools` gate from #74738 is unchanged. Tool conversion, reasoning effort, thinking format, response_format, prompt_cache_key handling — all unchanged. `max_completion_tokens` clamp is orthogonal and tracked in #85008.\n\n## Why a new payload-builder fix instead of extending #70790\n\n- `buildOpenAICompletionsParams` is the single function that produces the wire payload. Fixing it covers every caller.\n- #70790's interceptor at `pi-embedded-runner/stream-resolution.ts` only covers traffic through the embedded runner. `openclaw infer model run --gateway` goes through the streaming transport directly (`openai-transport-stream.ts:1716`), not the embedded runner wrapper — so #70790 alone does not fix that command against vLLM.\n- `buildOpenAICompletionsParams` is re-exported from `openclaw/plugin-sdk/provider-transport-runtime` and consumed by external plugins. The interceptor approach does not flow into those plugins.\n- Pattern precedent: PR #74738 (merged) already gates this same block with a compat-derived check. This PR layers an additional capability-gated post-strip in the same file.\n\n## Change Type (select all)\n\n- [x] Bug fix\n\n## Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [x] Integrations\n\n## Linked Issue/PR\n\n- Supersedes #70790 (different seam; this PR fixes the canonical builder)\n- Related #85008 (`max_completion_tokens` clamp — orthogonal, left to that PR)\n- Related #74738 (preserved `supportsModelTools` gate; this PR layers on top)\n- Related #71472 (extends the same `usesExplicitProxyLikeEndpoint` plumbing)\n- Related #59669 (closed; documents upstream `@mariozechner/pi-ai` 0.64.0 removal of the same injection, attributed to Bailian/Aliyun)\n- Related #61147 (closed; prior delete-the-branch attempt — this PR preserves the branch for non-proxy paths instead)\n- Related #53174 (`/btw` ModelStudio empty-tools — same downstream symptom)\n- [x] This PR fixes a bug or regression\n\n## Real behavior proof (required for external PRs)\n\n- **Behavior or issue addressed**: vLLM rejects OpenClaw OpenAI-compatible chat completions when the outbound payload contains `tools: []`.\n- **Real environment tested**: Local incus container `oc-stack` running OpenClaw 2026.5.18 with this patch applied to the live `/usr/lib/node_modules/openclaw/dist/openai-transport-stream-C7fXTJ-U.js` bundle on the pmg gateway (port 18789). vLLM router at `http://10.68.198.1:31080/v1` serving `qwen3-5-122b-a10b-nvfp4` with `max_model_len=131072`. Model registered as `vllm/qwen3-5-122b-a10b-nvfp4` with provider catalog `maxTokens=8192`, `contextWindow=131072`. Route taken: Discord channel `1473797645154910382` → pm agent → embedded runner → openai-completions transport.\n- **Exact steps or command run after this patch**: Sent a `\"Testing\"` message in the Discord channel bound to the pm agent. The patch fires when `compatDetection.capabilities.usesExplicitProxyLikeEndpoint === true` (vLLM custom baseUrl) and `params.tools` resolves to `[]`.\n- **Evidence after fix**: Gateway log excerpts, redacted:\n\n  ```text\n  21:06:17.224  tool-search: cataloged 37 tools behind compact prompt surface\n  21:06:20.286  embedded run prompt start: provider=vllm api=openai-completions\n                endpoint=custom route=proxy-like policy=none\n  21:06:20.310  pre-prompt: provider=vllm/qwen3-5-122b-a10b-nvfp4\n                systemPromptChars=57970 promptChars=7\n  21:06:20.349  [model-fetch] start provider=vllm api=openai-completions\n                model=qwen3-5-122b-a10b-nvfp4 method=POST\n                url=http://10.68.198.1:31080/v1/chat/completions\n  21:06:20.471  [model-fetch] response provider=vllm\n                model=qwen3-5-122b-a10b-nvfp4 status=200 elapsedMs=122\n                contentType=text/event-stream; charset=utf-8\n  21:06:22.744  embedded run agent end: runId=651d922c-… isError=false\n  21:06:24.591  textPreview=\"Hey! Testing received 👋 How can I help you today?\"\n  ```\n\n- **Observed result after fix**: vLLM returned HTTP 200 with `Content-Type: text/event-stream` and the model produced a normal assistant reply. Before the patch the same path returned HTTP 400 with `` `tools` must not be an empty array. Either provide at least one tool or omit the field entirely. ``.\n- **What was not tested**: Live Bailian/Aliyun DashScope (no account); behavior preserved on the non-proxy path by leaving native defaults unchanged. Native OpenAI / Azure / OpenRouter behavior was not retraced live; covered by existing test suite which we extended (4 new unit cases — see Regression Test Plan).\n- **Before evidence**: On the same setup pre-patch, the gateway log showed `lane task error … 400 ... tools must not be an empty array` against the same vLLM endpoint. The earlier diagnostic write-up captures the full pre-patch reproduction including the curl-level minimal repro at `tools: []`.\n\n## Root Cause (if applicable)\n\n- **Root cause**: OpenClaw mirrors a `tools: []` injection that originated in `@mariozechner/pi-ai`'s `openai-completions.js` as a Bailian/Aliyun (DashScope) compatibility hedge. Upstream pi-ai 0.64.0 commented out the injection (per `@GitZhangChi` investigation in #59669). OpenClaw's mirror remained and is invalid against current OpenAI and every strict OpenAI-compatible server. PR #74738 narrowed the branch with `supportsModelTools(model)`, but vLLM-style models pass that gate, so the branch still fires for them.\n- **Missing detection / guardrail**: No test exercised the `context.tools = [] + proxy-like endpoint` or `transcript with tool history + no current tools + proxy-like endpoint` shape.\n- **Contributing context**: Function introduced in PR #60264 (transport adapter seam refactor) inheriting the upstream pi-ai pattern.\n\n## Regression Test Plan (if applicable)\n\n- Coverage level that should have caught this:\n  - [x] Unit test\n- **Target test or file**: `src/agents/openai-transport-stream.test.ts`\n- **Scenarios locked in by the new tests in this PR**:\n  1. Proxy-like endpoint + `context.tools = []` → payload omits `tools` and `tool_choice`.\n  2. Proxy-like endpoint + transcript with prior `toolCall`/`toolResult` + `context.tools = undefined` → payload omits `tools`.\n  3. Native endpoint + `context.tools = []` → payload still emits `tools: []` (existing behavior preserved).\n  4. Native endpoint + transcript with prior `toolCall`/`toolResult` → payload still emits `tools: []` (existing behavior preserved).\n- **Why this is the smallest reliable guardrail**: The behavior diverges only on payload field presence; a unit test on `buildOpenAICompletionsParams` output captures it without a live provider.\n\n## User-visible / Behavior Changes\n\nFor OpenAI-compatible endpoints routed through a non-OpenAI base URL (vLLM, LocalAI, llama.cpp, LM Studio, DashScope, GLM, Kimi, and similar): empty `tools` arrays are no longer sent on the wire. Native OpenAI, Azure OpenAI, and OpenRouter behavior is byte-identical.\n\n## Diagram (if applicable)\n\n```text\nBefore:\ncontext.tools = []           --> params.tools = []  --> strict server HTTP 400\ncontext.tools = undefined +\n  toolHistory in messages    --> params.tools = []  --> strict server HTTP 400\n\nAfter (proxy-like endpoint only):\nparams.tools = []            --> deleted from payload  --> HTTP 200\nparams.tool_choice (orphan)  --> deleted from payload\n\nNative OpenAI / Azure / OpenRouter: unchanged.\n```\n\n## Security Impact (required)\n\n- New permissions/capabilities? `No`\n- Secrets/tokens handling changed? `No`\n- New/changed network calls? `No` (only payload field presence on existing calls)\n- Command/tool execution surface changed? `No`\n- Data access scope changed? `No`\n\n## Repro + Verification\n\n### Environment\n\n- **OS**: Ubuntu 22.04 inside incus container `oc-stack`\n- **Runtime/container**: Node 22+ / 24, OpenClaw 2026.5.18 + this patch\n- **Model/provider**: vLLM (current) serving `qwen3-5-122b-a10b-nvfp4`, `max_model_len=131072`; OpenClaw model id `vllm/qwen3-5-122b-a10b-nvfp4`\n- **Integration/channel**: Discord channel bound to the pm agent via existing routing\n- **Relevant config (redacted)**: vLLM router `http://10.68.198.1:31080/v1` (Bearer token redacted); openclaw.json provider entry registers vLLM with the proxy-like base URL.\n\n### Steps\n\n1. Start vLLM serving `qwen3-5-122b-a10b-nvfp4`.\n2. Register the vLLM provider in OpenClaw with the proxy-like base URL.\n3. Bind a Discord channel to a pm-style agent configured with `model.primary = vllm/qwen3-5-122b-a10b-nvfp4`.\n4. Send a message in the channel.\n\n### Expected\n\n- Gateway log shows `route=proxy-like`, `[model-fetch] response status=200`, and the agent produces a reply. No outbound payload contains `tools: []`.\n\n### Actual\n\n- Matches expected. Trace lines above.\n\n## Evidence\n\n- [x] Failing test/log before + passing after\n- [x] Trace/log snippets\n\n## Human Verification (required)\n\n- **Verified scenarios**: End-to-end Discord → pm agent → embedded runner → openai-completions transport against live vLLM, no `tools: []` rejection, model reply generated.\n- **Edge cases checked**: Transcript with prior `toolCall`/`toolResult` but no current tools; `compat.supportsTools: false` model still respects #74738's earlier guard; `usesExplicitProxyLikeEndpoint: false` (native OpenAI) path byte-identical via unit tests.\n- **What I did not verify**: Live Bailian/Aliyun DashScope (no account); Azure OpenAI live (defaults unchanged, covered by existing tests).\n\n## Review Conversations\n\n- [x] I replied to or resolved every bot review conversation I addressed in this PR.\n- [ ] I left unresolved only the conversations that still need reviewer or maintainer judgment.\n\n## Compatibility / Migration\n\n- **Backward compatible?** `Yes` (only proxy-like detection path changes; all native providers byte-identical)\n- **Config/env changes?** `No`\n- **Migration needed?** `No`\n\n## Risks and Mitigations\n\n- **Risk**: A strict OpenAI-compatible provider not enumerated here relies on `tools: []` to enter a tool-replay parse mode.\n  - **Mitigation**: Change is gated on `usesExplicitProxyLikeEndpoint` (the same gate PR #71472 uses). The historical Aliyun/Bailian consumer documented in `@mariozechner/pi-ai` was removed in pi-ai 0.64.0. If a regression surfaces, the compat flag plumbing can be extended to whitelist that provider in a one-line change.\n- **Risk**: #70790 lands instead and the gateway path stays broken.\n  - **Mitigation**: This PR explicitly notes the seam difference; maintainer can choose either.\n\n---\n\n> AI-assisted PR. Investigation, full PR archaeology (#60264 → #44229 → #47947 → #59669 → #61147 → #70790 → #71472 → #74738 → #85008), patch authoring, and PR body were produced with Claude (Opus 4.7). Real behavior proof is from my own local vLLM setup; I personally ran the live Discord call and inspected the outbound payload against gateway access logs. `codex review --base origin/main` returned no actionable correctness issues.\n\n",
+        "branch": "vllm-tools",
+        "head_sha": "a30fea4f181c000bd52a1198f53ea828c4a8d867",
+        "author": "rendrag-git",
         "labels": [
-          "gateway",
-          "extensions: memory-core",
           "agents",
-          "size: L",
-          "triage: needs-real-behavior-proof",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦐 gold shrimp",
+          "size: S",
+          "proof: override",
+          "P2",
+          "rating: 🦞 diamond lobster",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "extensions/memory-core/index.ts",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/manager-runtime.ts",
+            "path": "CHANGELOG.md",
             "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/memory-core/src/memory/index.ts",
-            "additions": 1,
+            "path": "src/agents/openai-transport-stream.test.ts",
+            "additions": 136,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/memory-core/src/memory/manager-cache.test.ts",
-            "additions": 165,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager-cache.ts",
-            "additions": 88,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager-runtime.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager.idle-gc.test.ts",
-            "additions": 130,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager.ts",
-            "additions": 36,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/search-manager.ts",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/runtime-provider.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/memory-search.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/memory-search.ts",
-            "additions": 16,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/schema.labels.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/types.tools.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/zod-schema.agent-runtime.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-startup-post-attach.test.ts",
-            "additions": 9,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-startup-post-attach.ts",
-            "additions": 82,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/memory-state.ts",
-            "additions": 6,
+            "path": "src/agents/openai-transport-stream.ts",
+            "additions": 8,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
@@ -193,8 +109,8 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85910",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85910.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85835",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85835.md",
         "mode": "autonomous",
         "mergeable": "UNKNOWN",
         "merge_state_status": "UNKNOWN",
@@ -202,34 +118,29 @@
         "checks": {
           "total": 102,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 27,
-            "SUCCESS": 72,
+            "SUCCESS": 75,
+            "SKIPPED": 26,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
+          "terminalBlockers": []
         }
       },
-      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
+      "reason": "hatch requires an open pull request"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1838,
+    "total_ms": 4063,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 274
+        "ms": 560
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1381
+        "ms": 1290
       },
       {
         "name": "classify_commands",
@@ -237,11 +148,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 168
+        "ms": 2188
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
