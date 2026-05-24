@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T01:20:24.390Z",
+  "generated_at": "2026-05-24T01:20:31.252Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-23T22:20:22.461Z",
+  "since": "2026-05-23T22:20:28.982Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    85767
+    85882
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:85767:4526886628:2026-05-24T01:20:18Z:clawsweeper_auto_repair",
-      "comment_id": "4526886628",
-      "comment_version_key": "4526886628:2026-05-24T01:20:18Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/85767#issuecomment-4526886628",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:85882:4526978185:2026-05-24T01:20:24Z:clawsweeper_auto_repair",
+      "comment_id": "4526978185",
+      "comment_version_key": "4526978185:2026-05-24T01:20:24Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85882#issuecomment-4526978185",
       "repo": "openclaw/openclaw",
-      "issue_number": 85767,
+      "issue_number": 85882,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-24T00:12:50Z",
-      "comment_updated_at": "2026-05-24T01:20:18Z",
+      "comment_created_at": "2026-05-24T00:56:51Z",
+      "comment_updated_at": "2026-05-24T01:20:24Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -51,70 +51,40 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=cdd35c0c2ccccb74d9bacf7b5e77e4342ac37759)",
-      "review_summary": "The PR defers near-threshold auto-reply memory flushes until after reply completion, adds pending-flush barriers, introduces maintenance reply operations, and expands regression tests around that lifecycle.\n\nReproducibility: yes. source inspection gives a high-confidence reproduction path: current main awaits memory flush before the user-visible reply turn starts. I did not run the live scenario in this read-only review.",
-      "review_followup": "Needs human review for the session-state timeout contract, visible-error behavior, and contributor-supplied real behavior proof; this is not a safe ClawSweeper repair lane while the proof gate is unmet.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=b208701c1522edee417d4561f034e2eb14a4869c)",
+      "review_summary": "This PR changes usage-cost transcript scanning so tokenized turns with all-zero resolved pricing are counted as missing-cost entries, and adds a regression test for the codex/gpt-5.5 zero-price case.\n\nReproducibility: yes. by source inspection: current main parses transcript cost.total: 0 as a cost breakdown and never increments missingCostEntries, while the PR body supplies live before/after output for the codex/gpt-5.5 case. I did not run a local repro because this review is read-only.",
+      "review_followup": "Maintainers need to choose the pricing contract for zero versus unknown before automation can safely repair the branch.",
       "freeform_prompt": null,
-      "expected_head_sha": "cdd35c0c2ccccb74d9bacf7b5e77e4342ac37759",
+      "expected_head_sha": "b208701c1522edee417d4561f034e2eb14a4869c",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "perf(auto-reply): move memory flush off the user-visible reply path",
-        "body": "## Summary\n\n- Problem: `runMemoryFlushIfNeeded` (the near-threshold housekeeping\n  embedded run) ran on the pre-reply path of `runReplyAgent`, so the\n  user-visible reply turn could not start until that embedded LLM call\n  finished.\n- Fix: dispatch the housekeeping run from the reply orchestrator's\n  `finally` block (after `replyOperation.complete()`), register the\n  in-flight flush in a per-`sessionKey` map, and barrier on it from the\n  next turn's preflight compaction before any compaction state is\n  evaluated. The deferred dispatch builds a **flush-safe maintenance\n  ReplyOperation** for each post-reply flush so the embedded runner's\n  `attachBackend(...)` call does not get cancelled by the already-\n  completed reply operation.\n- Files: `src/auto-reply/reply/agent-runner.ts`,\n  `src/auto-reply/reply/agent-runner-memory.ts`,\n  `src/auto-reply/reply/reply-run-registry.ts` (new\n  `createMaintenanceReplyOperation` export), plus targeted unit tests.\n- Out of scope: the flush body itself, the existing\n  `memoryFlushCompactionCount` / `hasAlreadyFlushedForCurrentCompaction`\n  dedup semantics, heartbeat / CLI / followup-runner paths, persisted\n  session state format.\n\n## Motivation\n\nOn near-threshold turns, the orchestrator's order was\n`preflight compaction → runMemoryFlushIfNeeded (LLM call) → runAgentTurnWithFallback`.\nThe reply turn could not begin until the housekeeping embedded run\ncompleted. Moving the housekeeping dispatch off the user-visible reply\nstartup path lets the reply turn start as soon as preflight compaction\nhas resolved, while still resolving any required flush before a later\ncompaction can proceed.\n\n## Root Cause\n\n- Root cause: `runMemoryFlushIfNeeded` was awaited inline before the\n  reply turn. Its embedded run can itself trigger a compaction that\n  mutates `followupRun.run.sessionId` and calls\n  `replyOperation.updateSessionId(...)`. That coupling made it unsafe\n  to simply run it concurrently with the reply turn; instead the\n  dispatch is moved to *after* `replyOperation.complete()` (when\n  `setPhase` / `updateSessionId` become no-ops by `ReplyOperation`'s own\n  contract), so the flush path can update the active run/session during\n  its internal compaction without racing the reply.\n- The naive parallel approach is **not** used: the flush path can\n  update the active run/session during compaction, so the change keeps\n  flush execution serialized with session mutation rather than running\n  it concurrently with the reply.\n- Deferred-dispatch contract: forwarding the original\n  `replyOperation` into `runMemoryFlushIfNeeded` after\n  `replyOperation.complete()` would cancel the embedded runner's\n  `attachBackend(queueHandle)` call. `attachBackend` cancels any handle\n  attached to a completed operation with reason `\"superseded\"`\n  (see `src/auto-reply/reply/reply-run-registry.ts:attachBackend`), so\n  the deferred flush would short-circuit before its LLM call ever ran\n  and `memoryFlushAt` / `memoryFlushCompactionCount` would stay stale\n  on disk. The deferred dispatch builds a new flush-safe maintenance\n  `ReplyOperation` (`createMaintenanceReplyOperation`) per call: it is\n  not registered in `replyRunState`, has its own AbortController, and\n  only cancels attached backends when the maintenance op itself is\n  completed or aborted. Abort on the original reply's signal\n  propagates one-way into the maintenance op so an explicit user\n  cancellation still stops the flush.\n\n## Change Type\n\n- [x] Bug fix\n- [ ] Feature\n- [x] Refactor required for the fix\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope\n\n- [x] Gateway / orchestration\n- [ ] Skills / tool execution\n- [ ] Auth / tokens\n- [x] Memory / storage\n- [ ] Integrations\n- [ ] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- Closes #\n- Related #\n- [ ] This PR fixes a bug or regression\n\n## Real behavior proof (required for external PRs)\n\n- Behavior addressed: two behaviors.\n  1. Near-threshold memory flush previously blocked the start of the\n     user-visible reply turn. After this change the user-visible reply\n     path begins before the housekeeping embedded run starts; the\n     housekeeping run is dispatched after `replyOperation.complete()`\n     and a later compaction cannot proceed past an unfinished required\n     flush.\n  2. **Completed-reply attachBackend cancellation path:**\n     `runMemoryFlushIfNeeded` forwards its `replyOperation` into\n     `runEmbeddedPiAgent`, and the embedded runner calls\n     `replyOperation.attachBackend(queueHandle)` (see\n     `src/agents/pi-embedded-runner/run/attempt.ts:3378`).\n     `attachBackend` cancels any handle attached to a completed\n     operation with reason `\"superseded\"`. Forwarding the\n     already-completed reply operation into the deferred dispatch\n     would therefore cancel the embedded runner's queue handle before\n     any LLM call ran. This patch addresses that path by building a\n     **flush-safe maintenance `ReplyOperation`** for each post-reply\n     dispatch.\n\n- Real environment tested: production `runReplyAgent` orchestrator run\n  end-to-end via the committed regression tests under\n  `src/auto-reply/reply/`. The source files this PR changes\n  (`src/auto-reply/reply/agent-runner.ts`,\n  `src/auto-reply/reply/agent-runner-memory.ts`, and the new\n  `createMaintenanceReplyOperation` export in\n  `src/auto-reply/reply/reply-run-registry.ts`) execute unmodified.\n  The substitutions are at the LLM-boundary modules\n  (`pi-embedded.js`, `model-fallback.js`); the embedded LLM call is a\n  controlled stub that **mirrors the real embedded runner by calling\n  `params.replyOperation.attachBackend(handle)`** with a stub backend\n  handle whose `cancel(reason)` records the cancellation reason. Both\n  the production orchestrator wiring and the\n  `createMaintenanceReplyOperation` body are exercised by the\n  committed tests. The supplemental timing capture below also records\n  `performance.now()` timestamps from a wrapped `ReplyOperation` for\n  illustration.\n\n- Exact steps or command run after this patch:\n\n  Reproducible by anyone (these tests ship with the PR):\n\n  ```\n  # Targeted regression tests covering the completed-reply\n  # attachBackend cancellation path, the maintenance ReplyOperation\n  # contract, the post-reply dispatch site in the orchestrator's\n  # finally block, and the cross-turn barrier.\n  node scripts/run-vitest.mjs \\\n    src/auto-reply/reply/agent-runner-direct-runtime-config.test.ts \\\n    src/auto-reply/reply/reply-run-registry.test.ts \\\n    src/auto-reply/reply/agent-runner-memory.test.ts\n  ```\n\n  Supplemental local timing trace (used to capture the wall-clock\n  ordering shown under \"Evidence after fix\" below). The trace runner\n  is not part of the PR; it is a local helper that exercises the\n  production `runReplyAgent` with the LLM boundary stubbed. The\n  invariants it asserts (ordering and attachBackend non-cancellation)\n  are also covered by the committed tests above:\n\n  ```\n  # 1. With upstream/main copies of the two source files this PR\n  #    changes, the local trace runner records the BEFORE timeline:\n  git checkout upstream/main -- \\\n    src/auto-reply/reply/agent-runner.ts \\\n    src/auto-reply/reply/agent-runner-memory.ts\n  # 2. Restore PR HEAD copies to record the AFTER timeline:\n  git checkout HEAD -- \\\n    src/auto-reply/reply/agent-runner.ts \\\n    src/auto-reply/reply/agent-runner-memory.ts\n  ```\n\n- Evidence after fix:\n\n  Terminal capture from running the production reply orchestrator\n  against `upstream/main` source files (BEFORE):\n\n  ```\n  EVENT [    5.37 ms] proof.start\n  EVENT [  760.13 ms] reply.preflight_compacting.phase_set\n  EVENT [  819.42 ms] reply.memory_flushing.phase_set\n  EVENT [  869.51 ms] flush.embedded_run.started  trigger=memory backend_cancel=none\n  EVENT [ 1069.77 ms] flush.embedded_run.completed\n  EVENT [ 1075.69 ms] reply.running.phase_set\n  EVENT [ 1133.50 ms] reply.agent_turn.invoked\n  EVENT [ 1184.12 ms] reply.agent_turn.returning\n  EVENT [ 1295.35 ms] reply.operation.complete\n\n  OBSERVATION  flush.embedded_run.started (870 ms) < reply.operation.complete (1295 ms)\n               → pre-reply (BASELINE) ordering\n  OBSERVATION  embedded runner attachBackend: attached=true cancelReason=null\n               (baseline attaches before complete, so no cancel — the\n                cancellation regression only appears when the deferred\n                dispatch reuses the original reply operation, which the\n                fix in this PR avoids)\n  ```\n\n  Terminal capture from the same orchestrator code path against this\n  PR's source files (AFTER):\n\n  ```\n  EVENT [    5.00 ms] proof.start\n  EVENT [  738.63 ms] reply.preflight_compacting.phase_set\n  EVENT [  747.38 ms] reply.running.phase_set\n  EVENT [  849.48 ms] reply.agent_turn.invoked\n  EVENT [  899.95 ms] reply.agent_turn.returning\n  EVENT [ 1002.99 ms] reply.operation.complete\n  EVENT [ 1051.31 ms] flush.embedded_run.started  trigger=memory backend_cancel=none\n  EVENT [ 1252.03 ms] flush.embedded_run.completed\n\n  PASS  reply.agent_turn.returning (900 ms) < flush.embedded_run.started (1051 ms)\n  PASS  reply.operation.complete  (1003 ms) < flush.embedded_run.started (1051 ms)\n  PASS  flush.embedded_run elapsed: 200.72 ms\n  PASS  embedded runner attached backend handle, backend NOT cancelled (cancelReason=null)\n  ```\n\n  The final PASS line is the deferred-dispatch contract check:\n  the proof's `runEmbeddedPiAgent` stub mirrors\n  `src/agents/pi-embedded-runner/run/attempt.ts:3378` by calling\n  `params.replyOperation.attachBackend(handle)`. After the fix, the\n  dispatched flush observes a non-completed maintenance ReplyOperation\n  and the handle is stored rather than cancelled. Without the fix (the\n  pre-fix HEAD), this stub would have recorded `cancelReason=superseded`.\n\n  Cross-turn barrier capture from the same proof runner (PR HEAD, a\n  second `runReplyAgent` call with a still-pending flush from turn 1):\n\n  ```\n  EVENT [ 1264.90 ms] turn2.preflight.start\n  OBSERVE before release: reply agent turn invoked? false\n  EVENT [ 1317.93 ms] reply.running.phase_set\n  EVENT [ 1507.23 ms] reply.operation.complete\n  EVENT [ 1552.49 ms] turn2.preflight.return\n\n  PASS  reply agent turn NOT invoked while previous-turn flush was still pending\n  PASS  reply agent turn invoked AFTER barrier resolved\n  ```\n\n- Observed result after fix:\n  - The reply path no longer waits for near-threshold memory flush\n    before beginning the user-visible response; any required flush is\n    still resolved before a later compaction can proceed.\n  - The runtime log above shows\n    `flush.embedded_run.started` ordered **before**\n    `reply.operation.complete` on baseline (870 ms vs 1295 ms) and\n    **after** `reply.operation.complete` on PR HEAD\n    (1051 ms vs 1003 ms).\n  - The deferred dispatch passes a **non-completed maintenance\n    ReplyOperation** into `runEmbeddedPiAgent`, so the embedded\n    runner's `attachBackend(...)` call stores the handle rather than\n    cancelling it with `superseded`. The proof's\n    `runEmbeddedPiAgent` stub records `cancelReason=null` after the\n    fix.\n  - A subsequent turn's preflight compaction barriers on the\n    previous turn's pending flush before invoking\n    `compactEmbeddedPiSession`.\n\n- What was not tested: live channel wall-clock TTFT against a real\n  Anthropic / OpenAI / Bedrock model. The embedded LLM call is stubbed\n  with a fixed 200 ms latency for the proof. Token / cost effect is\n  not claimed as a measured number — this change moves the\n  housekeeping embedded run off the user-visible reply startup path.\n\n## User-visible / Behavior Changes\n\n- The user-visible reply turn now starts before any near-threshold\n  memory flush runs. Any required flush still runs after\n  `replyOperation.complete()` and is awaited by the next turn's\n  preflight compaction before any new compaction state mutation.\n- Removed user-visible behavior: previously, if the housekeeping\n  embedded run surfaced a visible error payload (rare; e.g., the\n  housekeeping agent reported a target-path write restriction), the\n  orchestrator returned that payload **in place of** the reply for the\n  same turn. With the housekeeping run moved off the pre-reply path,\n  that same-turn substitution is no longer possible. When the flush\n  surfaces a visible error payload and the orchestrator (post-reply\n  dispatch) does not supply an `onVisibleErrorPayloads` callback, the\n  flush body forwards each dropped payload's text through\n  `logVerbose(...)` so it is recorded in the gateway log rather than\n  silently dropped. If maintainers prefer to retain visible surfacing,\n  it can be added as a follow-up PR that emits a deferred channel\n  notification after the flush settles.\n\n## Diagram\n\n```text\nBefore:\n[user message]\n  -> preflight compaction\n  -> ** memory flush embedded run (blocks here on threshold-crossing turns) **\n  -> reply turn (runAgentTurnWithFallback)\n  -> reply delivered\n\nAfter:\n[user message]\n  -> preflight compaction\n       -> await any pending memory flush from the previous turn (bounded timeout)\n  -> reply turn (runAgentTurnWithFallback)\n  -> reply delivered\n  -> replyOperation.complete()\n  -> memory flush dispatched (fire-and-forget; registered in pending map)\n\nNext turn:\n  -> preflight compaction\n       -> await previous turn's pending flush (so compaction sees post-flush state)\n  -> ...\n```\n\n## Security Impact\n\n- New permissions/capabilities? No\n- Secrets/tokens handling changed? No\n- New/changed network calls? No\n- Command/tool execution surface changed? No\n- Data access scope changed? No\n\n## Regression Test Plan\n\n- Coverage level: unit + seam-level integration tests.\n- Target tests added in this PR:\n  - `runReplyAgent runtime config > dispatches the post-reply memory\n    flush after the user-visible reply path returns`\n  - `runReplyAgent runtime config > dispatches the post-reply memory\n    flush from the reply path's finally block even when the agent turn\n    throws`\n  - `runReplyAgent runtime config > does not block the start of the\n    user-visible reply on a pending memory flush`\n  - `runPreflightCompactionIfNeeded pending-flush barrier > awaits a\n    pending flush before invoking compaction on the next turn`\n  - `runPreflightCompactionIfNeeded pending-flush barrier > rebinds the\n    active run sessionId after the barrier when the prior flush rotated\n    it, even if no compaction runs this turn`\n  - `runPreflightCompactionIfNeeded pending-flush barrier > does not\n    block heartbeat preflight on a pending flush`\n  - `pending memory-flush registry > awaitPendingMemoryFlush proceeds\n    after timeout when the flush hangs`\n  - `pending memory-flush registry > registers and clears a pending\n    flush after it resolves` / `... even after it rejects`\n  - `runMemoryFlushIfNeeded > completes the flush turn without\n    throwing when an embedded run returns a visible error payload and\n    no onVisibleErrorPayloads callback is supplied`\n  - `runReplyAgent runtime config > passes a maintenance ReplyOperation\n    (NOT the completed reply's operation) into the post-reply memory\n    flush` — captures the runMemoryFlushIfNeeded `replyOperation`\n    argument, asserts it is a different instance whose\n    `attachBackend(...)` stores the handle (does NOT cancel), and\n    asserts the original reply's operation is in a terminal state and\n    DOES cancel handles with `superseded`. This is the direct\n    regression guard for the deferred-dispatch attachBackend bug.\n  - `runReplyAgent runtime config > aborts the maintenance ReplyOperation\n    when the original reply operation aborts upstream` — exercises the\n    one-way abort propagation from the reply's upstream signal into the\n    maintenance op.\n  - `createMaintenanceReplyOperation > does not register the operation\n    in the active-run registry, so it can coexist with the live reply\n    operation for the same sessionKey`\n  - `createMaintenanceReplyOperation > attachBackend stores the handle\n    (does NOT cancel it) when the maintenance operation has not\n    completed`\n  - `createMaintenanceReplyOperation > attachBackend cancels the handle\n    with 'superseded' if complete() ran first`\n  - `createMaintenanceReplyOperation > propagates upstream abort into\n    the maintenance operation's abortSignal`\n  - `createMaintenanceReplyOperation > inherits the upstream's\n    already-aborted state at construction time`\n  - `createMaintenanceReplyOperation > complete() does not call\n    clearReplyRunState (so it cannot disturb a live reply operation for\n    the same sessionKey)`\n\n## Compatibility / Migration\n\n- Backward compatible? Yes\n- Config/env changes? No\n- Migration needed? No\n\n## Risks and Mitigations\n\n- Risk: housekeeping run visible error payloads no longer route to the\n  user-visible reply on the same turn.\n  - Mitigation: text of each dropped payload is forwarded to\n    `logVerbose`. Same-turn surfacing can be reintroduced as a deferred\n    channel notification in a separate PR.\n- Risk: a hung housekeeping run could leave a pending-map entry until\n  it eventually settles, costing each subsequent non-heartbeat\n  preflight up to a 30 s barrier wait.\n  - Mitigation: the barrier inside\n    `runPreflightCompactionIfNeeded` is timeout-bounded so subsequent\n    compactions always proceed. The map entry self-cleans on settle\n    (resolve or reject). The 30 s default is a heuristic upper bound\n    and can be lowered or made configurable.\n- Risk: cross-turn ordering depends on the per-`sessionKey` map being\n  correct.\n  - Mitigation: the map is keyed by `sessionKey`, which is stable\n    across the in-flush compaction (`incrementCompactionCount` mutates\n    `sessionId` but not `sessionKey`).\n",
-        "branch": "openclaw-memory-flush-post-reply",
-        "head_sha": "cdd35c0c2ccccb74d9bacf7b5e77e4342ac37759",
-        "author": "masatohoshino",
+        "title": "fix(usage-cost): surface unpriced-model spend as missingCostEntries instead of a confident $0",
+        "body": "## Summary\n\n- **Problem:** `openclaw gateway usage-cost` reports `totalCost: 0` with `missingCostEntries: 0` for models that ship an all-zero `cost` block (e.g. codex `gpt-5.5`, whose Codex backend exposes no per-token price). Real pay-per-token usage is therefore reported as a confident, *complete* `$0`, and every budget / spike / daily-spend safeguard that keys off `totalCost` is silently blind to it.\n- **Solution:** In `scanTranscriptFile`, when a model's resolved pricing is *unknown* — no positive per-token rate and no tiered pricing — and the turn actually burned tokens, drop the transport's fabricated `$0` and surface the turn as a missing-cost entry instead of recording a confident `$0`.\n- **What changed:** `src/infra/session-cost-usage.ts` — new `isModelPricingKnown()` helper and a sibling branch in `scanTranscriptFile` that mirrors the existing tiered-pricing override. `src/infra/session-cost-usage.test.ts` — regression test.\n- **What did NOT change (scope boundary):** Models with positive or tiered pricing are unaffected; entries with zero token usage are not flagged; a transport-recorded *positive* cost is preserved; recorded costs for priced models are untouched. No change to model-catalog generation or the gateway pricing cache.\n\n## Motivation\n\nA freshly-onboarded, idle host on `2026.5.20` (default `openai/gpt-5.5`, `api_key` auth) accrued ~1.78M tokens/day, yet `usage-cost` reported `$0` with `missingCostEntries: 0`, so budget/spike monitoring never fired. Surfacing unknown-priced usage as *missing* lets downstream tooling tell \"genuinely free\" apart from \"price unknown\" instead of trusting a false `$0`. Tracks #85858.\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor required for the fix\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [ ] Skills / tool execution\n- [ ] Auth / tokens\n- [ ] Memory / storage\n- [ ] Integrations\n- [ ] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- Related #85858\n- [x] This PR fixes a bug or regression\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: `usage-cost` reports a confident `$0` (`missingCostEntries: 0`) for unpriced `gpt-5.5` usage, hiding real spend from budget/spike monitoring.\n- Real environment tested: self-hosted OpenClaw `2026.5.20 (e510042)` on Linux; default model `openai/gpt-5.5`; `api_key` auth.\n- Exact steps or command run after this patch: applied the equivalent change to the installed build, restarted the gateway, then ran `openclaw gateway usage-cost --days 2 --json --expect-final` over the same already-logged usage.\n- Evidence after fix: copied live terminal output of the `openclaw gateway usage-cost` command — before vs. after the patch, same logs:\n\n```\nBEFORE (shipped build) -- openclaw gateway usage-cost --days 2 --json\n  totals: { totalTokens: 1780235, totalCost: 0, missingCostEntries: 0 }\n\nAFTER (patched build) -- same command, same already-logged usage\n  totals: { totalTokens: 1780235, totalCost: 0, missingCostEntries: 32 }\n```\n\n- Observed result after fix: the same 1,780,235 tokens of otherwise-invisible unpriced usage are now surfaced as 32 missing-cost entries; `totalCost` stays `0` (no fabricated price is invented).\n- What was not tested: models configured with *intentional* zero pricing (these would also be surfaced as missing — see scope note below); the macOS/Control-UI cost views.\n- Before evidence: included in the terminal capture above.\n\n## Root Cause (if applicable)\n\n- **Root cause:** codex models ship `cost: {input:0, output:0, cacheRead:0, cacheWrite:0}` in the generated `models.json` because the Codex backend exposes no per-token price. `resolveModelCostConfig` returns that *defined* zero, `estimateUsageCost` computes a confident `0`, and the transport records `cost.total: 0` per turn. Cost aggregation (`applyCostTotal` / `applyCostBreakdown`) only treats `undefined` — not `0` — as missing, so \"price unknown\" is indistinguishable from \"genuinely free.\"\n\n## Note on the free-vs-unknown distinction\n\nThis fix treats an all-zero resolved cost as \"unknown\" only when the turn has no trustworthy recorded cost (recorded cost is `0`/absent), so a turn that carries a real positive cost is always preserved. A model configured with an *intentional* `0` price would still be surfaced as missing; in practice all-zero catalog costs mean \"we don't have a price.\" A future refinement could add an explicit \"free\" marker (e.g. `cost: null` vs `cost: 0`) so the two can be told apart; this PR keeps to the minimal, provider-agnostic change that stops the silent `$0`.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+        "branch": "fix/usage-cost-unknown-pricing-missing",
+        "head_sha": "b208701c1522edee417d4561f034e2eb14a4869c",
+        "author": "michaelzelbel",
         "labels": [
-          "size: XL",
+          "size: S",
           "proof: supplied",
-          "P2",
+          "proof: sufficient",
+          "P1",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
+          "merge-risk: 🚨 compatibility",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/auto-reply/reply/agent-runner-direct-runtime-config.test.ts",
-            "additions": 197,
-            "deletions": 36,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-memory.test.ts",
-            "additions": 388,
+            "path": "src/infra/session-cost-usage.test.ts",
+            "additions": 58,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/agent-runner-memory.ts",
-            "additions": 109,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner.ts",
-            "additions": 89,
-            "deletions": 55,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-run-registry.test.ts",
-            "additions": 114,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-run-registry.ts",
-            "additions": 162,
+            "path": "src/infra/session-cost-usage.ts",
+            "additions": 29,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
@@ -122,22 +92,27 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85767",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85767.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85882",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85882.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
           "total": 102,
           "counts": {
-            "SUCCESS": 75,
-            "SKIPPED": 26,
+            "SUCCESS": 72,
+            "SKIPPED": 28,
+            "CANCELLED": 1,
             "NEUTRAL": 1
           },
-          "blockers": [],
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
           "pending": [],
-          "terminalBlockers": []
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
         }
       },
       "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
@@ -145,27 +120,27 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2112,
+    "total_ms": 2613,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 295
+        "ms": 450
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1617
+        "ms": 1799
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 172
+        "ms": 331
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
