@@ -1,19 +1,19 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-05-24T21:15:45.713Z
+Generated: 2026-05-24T22:19:02.880Z
 
 ## Summary
 
 | Metric | Count |
 | --- | ---: |
-| open_prs | 1 |
+| open_prs | 0 |
 | ready_candidates | 0 |
 | security_hold | 0 |
 | needs_rebase | 0 |
 | mergeability_unknown | 0 |
 | needs_checks | 0 |
 | needs_review | 0 |
-| needs_merge_preflight | 1 |
+| needs_merge_preflight | 0 |
 | needs_result_backfill | 0 |
 
 ## Dispatch
@@ -30,4 +30,4 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#86197](https://github.com/openclaw/openclaw/pull/86197) | docs: add ClawSweeper review policy to AGENTS | issue-openclaw-openclaw-86185 | MERGEABLE | CLEAN | SKIPPED:21 SUCCESS:8 | draft, needs_merge_preflight | undraft only after worker confirms the fix is complete |
+| _None_ |  |  |  |  |  |  |  |
