@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T00:22:35.258Z",
+  "generated_at": "2026-05-24T00:22:42.370Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-23T21:22:33.553Z",
+  "since": "2026-05-23T21:22:40.138Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    82947
+    82951
   ],
   "comment_ids": [
-    4469521058
+    4526905771
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4526905942,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,21 +33,21 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:82947:4469521058:2026-05-24T00:21:33Z:clawsweeper_auto_repair",
-      "comment_id": "4469521058",
-      "comment_version_key": "4469521058:2026-05-24T00:21:33Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82947#issuecomment-4469521058",
+      "idempotency_key": "comment-router:openclaw/openclaw:82951:4526905771:2026-05-24T00:21:44Z:re_review",
+      "comment_id": "4526905771",
+      "comment_version_key": "4526905771:2026-05-24T00:21:44Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82951#issuecomment-4526905771",
       "repo": "openclaw/openclaw",
-      "issue_number": 82947,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 82951,
+      "author": "SebTardif",
+      "author_id": 1413412,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-17T05:50:35Z",
-      "comment_updated_at": "2026-05-24T00:21:33Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "comment_created_at": "2026-05-24T00:21:44Z",
+      "comment_updated_at": "2026-05-24T00:21:44Z",
+      "status_comment_id": 4526905942,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "trusted_bot": true,
@@ -59,79 +59,203 @@
       "freeform_prompt": null,
       "expected_head_sha": "6f4c910612bca6e3dbc237345bb228131fa04b42",
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-05-24T00:22:43.065Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 82951
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-24T00:22:44.425Z",
+          "response_comment_id": "4526905942",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(hooks): clear Gmail watcher renewal interval on re-entry",
-        "body": "## Problem\n\n`startGmailWatcher()` in `src/hooks/gmail-watcher.ts` does not stop the existing watcher when called a second time (e.g., during a configuration reload). On re-entry:\n\n1. **Process leak**: The old `gog serve` child process keeps running because `watcherProcess` is overwritten without killing the old process.\n2. **Interval leak**: The old `setInterval` renewal timer keeps firing because `renewInterval` is overwritten without `clearInterval`.\n3. **Respawn timer leak**: When the process exits normally, `spawnGogServe` queues a 5-second `setTimeout` for respawn. This timer is not stored or cleared. If a re-entry happens during the 5-second window, the stale timer fires and spawns a duplicate process.\n\n## Fix\n\nAdd a comprehensive re-entry guard **before async setup work** (Tailscale, Gmail API watch start):\n\n1. Set `shuttingDown = true` so the old process's exit handler skips the respawn `setTimeout`.\n2. Cancel any pending respawn timeout (`clearTimeout(respawnTimeout)`).\n3. Clear the old renewal interval.\n4. Kill the old `gog serve` process with SIGTERM.\n5. Await its **exit event**. If it does not exit within 3 seconds, escalate to SIGKILL. The promise resolves **only on exit**, never on the SIGKILL send, ensuring `shuttingDown` stays `true` until the process is confirmed dead.\n6. Reset `shuttingDown = false` and spawn fresh.\n\n**Key design decisions:**\n- Guard runs **before** `startGmailWatch()` and Tailscale setup, not after, so the old process cannot exit and queue a respawn during async work.\n- `respawnTimeout` is a new module-level variable that stores the exit handler's 5-second `setTimeout` return value. The re-entry guard and `stopGmailWatcher` both clear it.\n- `resolve()` appears **only** in the `exit` handler, **not** in the SIGKILL timeout. No race between exit-handler cleanup and replacement spawn.\n- `shuttingDown` is always reset to `false` unconditionally before `spawnGogServe`, covering both the guard path and the no-guard path.\n\nProduction diff is +22 lines changed in `gmail-watcher.ts`, plus 128 lines of test coverage (7 tests total).\n\n## Real behavior proof\n\nBehavior addressed: Calling `startGmailWatcher()` twice without stopping leaked the old `gog serve` process, renewal interval, and respawn timeout. Three separate leak vectors: (1) old process kept running, (2) old renewal timer kept firing, (3) stale 5-second respawn timer spawned a duplicate after re-entry.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js v22.16.0, OpenClaw built from source (commit dc44fdf) at `/tmp/fix-82947`.\n\nExact steps or command run after this patch:\n```bash\nStep 1. Build OpenClaw from patched source\ncd /tmp/fix-82947\nCI=true pnpm install --frozen-lockfile\npnpm build\n\nStep 2. Verify respawnTimeout tracking in compiled production code\ngrep -n \"respawnTimeout\" dist/gmail-watcher-lvUqmZO6.js\n\nStep 3. Verify the full re-entry guard\ngrep -n -B2 -A8 \"oldProcess.kill\" dist/gmail-watcher-lvUqmZO6.js\n\nStep 4. Start the patched gateway\ntimeout 10 node openclaw.mjs gateway\n\nStep 5. Run Gmail watcher test suite (7 tests)\nnode scripts/run-vitest.mjs src/hooks/gmail-watcher.test.ts\n```\n\nEvidence after fix: terminal output copied below.\n\n**Compiled production code verification**\n\nThe `respawnTimeout` variable is tracked at all three lifecycle points:\n\n```console\n$ grep -n \"respawnTimeout\" dist/gmail-watcher-lvUqmZO6.js\n25:let respawnTimeout = null;\n94:respawnTimeout = setTimeout(() => {\n95:respawnTimeout = null;\n168:if (watcherProcess || renewInterval || respawnTimeout) {\n170:if (respawnTimeout) {\n171:clearTimeout(respawnTimeout);\n172:respawnTimeout = null;\n238:if (respawnTimeout) {\n239:clearTimeout(respawnTimeout);\n240:respawnTimeout = null;\n```\n\n- **Line 25**: Module-level declaration.\n- **Line 94**: Stored in exit handler (was previously a fire-and-forget `setTimeout`).\n- **Lines 168-172**: Cleared in re-entry guard (before async setup).\n- **Lines 238-240**: Cleared in `stopGmailWatcher`.\n\nThe SIGTERM + SIGKILL escalation with exit-only resolution:\n\n```console\n$ grep -n -B2 -A8 \"oldProcess.kill\" dist/gmail-watcher-lvUqmZO6.js\n183-watcherProcess = null;\n184:oldProcess.kill(\"SIGTERM\");\n185-await new Promise((resolve) => {\n186-const escalation = setTimeout(() => {\n187:oldProcess.kill(\"SIGKILL\");\n188-}, 3e3);\n189-oldProcess.on(\"exit\", () => {\n190-clearTimeout(escalation);\n191-resolve();\n192-});\n193-});\n```\n\n`resolve()` is at line 191 (exit handler only). The SIGKILL at line 187 escalates but does not resolve. `shuttingDown` stays `true` until exit is confirmed.\n\n**Live watcher lifecycle proof: mock gog process spawn, exit, respawn, and cleanup**\n\nThe full gmail watcher lifecycle was exercised in a real running gateway by configuring gmail hooks and providing a mock `gog` binary that exits after 2 seconds. This triggers the respawn timer (the core of the fix) in production compiled code.\n\n**Setup:**\n```bash\nStep 1. Create a mock gog binary that exits after 2s (triggers respawn)\ncat > /tmp/gog << 'EOF'\n#!/bin/bash\ncase \"$*\" in\n  *\"watch start\"*) echo \"watch registered\"; exit 0;;\n  *\"watch serve\"*)  echo \"mock gog serve starting\"; sleep 2; exit 1;;\n  *)                exit 0;;\nesac\nEOF\nchmod +x /tmp/gog\n\nStep 2. Configure gmail hooks in openclaw.json (hooks.enabled + hooks.gmail.account/topic/pushToken)\nStep 3. Start gateway with mock gog in PATH\ncd /tmp/fix-82947\nPATH=\"/tmp:$PATH\" timeout 20 node openclaw.mjs gateway\n```\n\n**Terminal output (full watcher lifecycle):**\n\n```console\n2026-05-21T21:25:01.868-07:00 [gateway] starting...\n2026-05-21T21:25:03.585-07:00 [gateway] ready\n2026-05-21T21:25:03.649-07:00 [gmail-watcher] watch started for test@gmail.com\n2026-05-21T21:25:03.650-07:00 [gmail-watcher] starting gog gmail watch serve --account test@gmail.com --bind 127.0.0.1 --port 18787 --path /gmail-pubsub --include-body --max-bytes 20000\n2026-05-21T21:25:03.654-07:00 [gmail-watcher] gmail watcher started for test@gmail.com (renew every 720m)\n2026-05-21T21:25:03.655-07:00 [hooks] gmail watcher started\n2026-05-21T21:25:03.659-07:00 [gmail-watcher] [gog] mock gog serve starting on port 8787\n2026-05-21T21:25:06.075-07:00 [gmail-watcher] [gog] mock gog serve exiting\n2026-05-21T21:25:06.076-07:00 [gmail-watcher] gog exited (code=1, signal=null); restarting in 5s\n2026-05-21T21:25:18.577-07:00 [gmail-watcher] starting gog gmail watch serve --account test@gmail.com --bind 127.0.0.1 --port 18787 --path /gmail-pubsub --include-body --max-bytes 20000\n2026-05-21T21:25:18.582-07:00 [gmail-watcher] [gog] mock gog serve starting on port 8787\n2026-05-21T21:25:20.583-07:00 [gmail-watcher] [gog] mock gog serve exiting\n2026-05-21T21:25:20.584-07:00 [gmail-watcher] gog exited (code=1, signal=null); restarting in 5s\n2026-05-21T21:25:22.266-07:00 [gateway] received SIGTERM; shutting down\n2026-05-21T21:25:22.309-07:00 [gmail-watcher] gmail watcher stopped\n2026-05-21T21:25:22.311-07:00 [shutdown] completed cleanly in 37ms\n```\n\n**Line-by-line analysis of the fix's behavior:**\n\n1. `[gmail-watcher] watch started for test@gmail.com`: `startGmailWatch` registered with Gmail API (mock gog exits 0).\n2. `[gmail-watcher] starting gog gmail watch serve ...`: `spawnGogServe` spawned the mock gog process.\n3. `[gmail-watcher] gmail watcher started for test@gmail.com (renew every 720m)`: Watcher fully initialized, `renewInterval` set.\n4. `[gmail-watcher] [gog] mock gog serve exiting`: Mock gog exits after 2 seconds.\n5. **`[gmail-watcher] gog exited (code=1, signal=null); restarting in 5s`**: The exit handler fires. **This is where `respawnTimeout` is stored** (line 94 in compiled code: `respawnTimeout = setTimeout(..., 5000)`). Before this fix, this `setTimeout` was fire-and-forget with no reference stored.\n6. `[gmail-watcher] starting gog gmail watch serve ...`: **The respawn timer fired**, spawning a new process. Proves `respawnTimeout` storage works.\n7. Second exit + second `restarting in 5s`: Cycle repeats.\n8. `[gateway] received SIGTERM; shutting down`: SIGTERM arrives during the 5-second respawn window.\n9. **`[gmail-watcher] gmail watcher stopped`**: `stopGmailWatcher` ran, which sets `shuttingDown = true` and calls `clearTimeout(respawnTimeout)` (lines 238-240 in compiled code). The pending respawn timer is cancelled, preventing a duplicate process from spawning after shutdown. Before this fix, this timeout would fire and spawn a process into a stopped gateway.\n\n**What this proves:**\n- The `respawnTimeout` variable correctly stores the `setTimeout` return value in the exit handler.\n- The respawn mechanism works: process exits, timer fires, new process spawns.\n- `stopGmailWatcher` correctly clears the pending respawn timer via `clearTimeout(respawnTimeout)`.\n- SIGTERM during a respawn window does not leak a duplicate process.\n\n**Vitest test suite (7 tests, supplemental)**\n\n```console\n$ node scripts/run-vitest.mjs src/hooks/gmail-watcher.test.ts\n ✓ |hooks| ../../src/hooks/gmail-watcher.test.ts (7 tests) 127ms\n Test Files  1 passed (1)\n      Tests  7 passed (7)\n```\n\nThe 7 tests cover all re-entry scenarios:\n\n1. **Kills existing process on re-entry**: Verifies `.kill(\"SIGTERM\")` on the old child.\n2. **Clears interval on re-entry**: Verifies timer count stays stable.\n3. **Only one renewal per tick**: One renewal after double start.\n4. **Cancels stale respawn timeout on re-entry**: Process exits (queuing 5s respawn), then re-entry happens, then 6 seconds pass. Verifies exactly 2 spawns (no duplicate from stale timer).\n5. **Does not let a stale cancelled startup clear newer watcher config**: Concurrent start race.\n6. **Starts gmail watcher**: Happy path.\n7. **Starts gmail watcher (restarts serve with updated config)**: Config change path.\n\nObserved result after fix: The mock gog lifecycle proof shows the full respawn cycle working in production compiled code: process spawn, process exit, `respawnTimeout` stored, respawn fires, second cycle, SIGTERM during respawn window, `stopGmailWatcher` clears the pending timeout and shuts down cleanly. The compiled bundle tracks `respawnTimeout` at all three lifecycle points (storage in exit handler, clearing in re-entry guard, clearing in stop). All 7 tests pass.\n\nWhat was not tested: Triggering the re-entry guard specifically (calling `startGmailWatcher` twice during a live session). The re-entry guard's process kill + timer cleanup was proven via Vitest mock in test 1, 2, and 4. The mock gog proof covers the respawn and stop paths.\n\n\n",
-        "branch": "fix/gmail-watcher-interval-leak",
-        "head_sha": "6f4c910612bca6e3dbc237345bb228131fa04b42",
+        "title": "fix(proxy): redact sensitive headers in standalone debug proxy captures",
+        "body": "## Problem\n\nThe standalone debug proxy (`openclaw proxy start`) stores raw request and response headers in capture events via `JSON.stringify(req.headers)` without redaction. This includes `Authorization`, `x-api-key`, `Cookie`, and other sensitive headers in the capture database.\n\nThe runtime proxy path (`runtime.ts`) already uses `redactedCaptureHeaders()` with a comprehensive sensitive-header allowlist (lines 19-41), but the standalone `proxy-server.ts` does not. This inconsistency means captured traffic from `openclaw proxy start` contains secrets that `openclaw proxy run` would redact.\n\n## Fix\n\nAdd a `redactHeaders` function to `proxy-server.ts` that delegates sensitivity\ndetection to the **shared** `isSensitiveCaptureHeaderName` function exported from\n`runtime.ts`. This eliminates the duplicate header lists and ensures the\nstandalone proxy and the in-process fetch-patch always use the identical\nsensitivity logic (exact names + fragment matching). The function is applied to\nall three header storage points:\n1. HTTP request headers (outbound capture)\n2. HTTP response headers (inbound capture)\n3. CONNECT request headers (tunnel capture)\n\n**Centralization**: `proxy-server.ts` imports `isSensitiveCaptureHeaderName` from\n`runtime.ts` (lines 20–41 there) rather than duplicating the constant lists.\nChanges to the sensitive-header vocabulary are now single-source.\n\n## Real behavior proof\n\nBehavior addressed: Debug proxy capture events stored raw `Authorization`, `Cookie`, `X-Api-Key`, and other sensitive headers in the capture SQLite database. The standalone proxy path (`openclaw proxy start`) was missing the redaction that the in-process fetch-patch already applies.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js v22.16.0, OpenClaw built from source (commit 92bc1d4) at `/tmp/fix-82951`. Debug proxy started via `node openclaw.mjs proxy start --port 18999`.\n\nExact steps or command run after this patch:\n```bash\nStep 1. Build OpenClaw from patched source\ncd /tmp/fix-82951\nCI=true pnpm install --frozen-lockfile\npnpm build\n\nStep 2. Start the debug proxy\nnode openclaw.mjs proxy start --port 18999\n\nStep 3. Send a request with sensitive headers through the proxy\ncurl -x http://127.0.0.1:18999 \\\n  -H \"Authorization: Bearer sk-SUPER-SECRET-API-KEY-12345\" \\\n  -H \"Cookie: session_id=PRIVATE-SESSION-abc123\" \\\n  -H \"X-Api-Key: xai-SECRET-KEY-67890\" \\\n  -H \"Content-Type: application/json\" \\\n  -H \"User-Agent: openclaw-proof/1.0\" \\\n  http://httpbin.org/headers\n\nStep 4. Query the capture database to verify redaction\nsqlite3 ~/.openclaw/debug-proxy/capture.sqlite \\\n  \"SELECT direction, method, host, headers_json FROM capture_events\n   ORDER BY ts DESC LIMIT 2;\"\n```\n\nEvidence after fix: terminal output copied below.\n\n**Live debug proxy redaction proof**\n\nSent a real HTTP request with 3 sensitive headers (`Authorization`, `Cookie`, `X-Api-Key`) through the patched debug proxy to httpbin.org. Then queried the capture database:\n\n**Outbound request capture (what the proxy stored):**\n```console\n$ sqlite3 ~/.openclaw/debug-proxy/capture.sqlite \\\n    \"SELECT headers_json FROM capture_events WHERE direction='outbound' ORDER BY ts DESC LIMIT 1;\"\n{\"host\":\"httpbin.org\",\"accept\":\"*/*\",\"proxy-connection\":\"Keep-Alive\",\"authorization\":\"[REDACTED]\",\"cookie\":\"[REDACTED]\",\"x-api-key\":\"[REDACTED]\",\"content-type\":\"application/json\",\"user-agent\":\"openclaw-proof/1.0\"}\n```\n\n**Inbound response capture:**\n```console\n$ sqlite3 ~/.openclaw/debug-proxy/capture.sqlite \\\n    \"SELECT headers_json FROM capture_events WHERE direction='inbound' ORDER BY ts DESC LIMIT 1;\"\n{\"date\":\"Thu, 21 May 2026 17:26:01 GMT\",\"content-type\":\"application/json\",\"content-length\":\"416\",\"connection\":\"keep-alive\",\"server\":\"gunicorn/19.9.0\",\"access-control-allow-origin\":\"*\",\"access-control-allow-credentials\":\"[REDACTED]\"}\n```\n\n**What was redacted:**\n- `authorization`: `Bearer sk-SUPER-SECRET-API-KEY-12345` -> `[REDACTED]`\n- `cookie`: `session_id=PRIVATE-SESSION-abc123` -> `[REDACTED]`\n- `x-api-key`: `xai-SECRET-KEY-67890` -> `[REDACTED]`\n- `access-control-allow-credentials` -> `[REDACTED]` (matches `credential` fragment)\n\n**What was preserved (non-sensitive):**\n- `content-type`: `application/json` (unchanged)\n- `user-agent`: `openclaw-proof/1.0` (unchanged)\n- `host`: `httpbin.org` (unchanged)\n\n**Compiled production code verification**\n\nThe `redactHeaders` function is present in the compiled proxy bundle:\n\n```console\n$ grep -A3 \"function redactHeaders\" dist/proxy-cli.runtime-COhjksq-.js\nfunction redactHeaders(headers) {\nconst result = {};\nfor (const [name, value] of Object.entries(headers)) result[name] = isSensitiveCaptureHeaderName(name) ? \"[REDACTED]\" : value;\nreturn result;\n```\n\n**Vitest test suite (13 tests, supplemental)**\n\n```console\n$ node scripts/run-vitest.mjs src/proxy-capture/proxy-server.test.ts\n ✓ |unit-fast| proxy-server.test.ts (13 tests) 4ms\n Test Files  1 passed (1)\n      Tests  13 passed (13)\n```\n\nObserved result after fix: The patched debug proxy redacts `Authorization`, `Cookie`, `X-Api-Key`, and all other sensitive headers in the capture database. Non-sensitive headers pass through unchanged. Before the fix, all headers were stored raw via `JSON.stringify(req.headers)`.\n\nWhat was not tested: HTTPS CONNECT tunnel capture redaction (tested via unit tests only; the live proof covers the HTTP forward-proxy path). The CONNECT tunnel path uses the same `redactHeaders` call at line 284.\n\n## Blocker fixes (ClawSweeper review)\n\n1. **Compile blocker (duplicate declarations)**: The original PR had\n   `SENSITIVE_HEADER_NAMES`, `SENSITIVE_HEADER_FRAGMENTS`, and `redactHeaders`\n   declared twice in `proxy-server.ts`. Removed all duplicates; now one clean\n   `redactHeaders` function that delegates to the shared import.\n2. **Centralize redaction**: `proxy-server.ts` now imports\n   `isSensitiveCaptureHeaderName` from `runtime.ts` instead of maintaining a\n   separate copy of the sensitive-header lists. Zero drift risk.\n3. **Red-green verified**: 13 tests pass with redaction; without the\n   `redactHeaders` call the raw `JSON.stringify(req.headers)` path stores\n   secrets in plain text.\n\n",
+        "branch": "fix/proxy-redact-captured-headers",
+        "head_sha": "fd1f4f7d79c1055b479c385f2dc1f6beb6accde0",
         "author": "sebtardif",
         "labels": [
           "size: M",
           "proof: supplied",
+          "proof: sufficient",
           "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 security-boundary",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/hooks/gmail-watcher.test.ts",
-            "additions": 160,
+            "path": "src/proxy-capture/header-redaction.ts",
+            "additions": 44,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/proxy-capture/proxy-server.test.ts",
+            "additions": 132,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/hooks/gmail-watcher.ts",
-            "additions": 71,
-            "deletions": 20,
+            "path": "src/proxy-capture/proxy-server.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/proxy-capture/runtime.ts",
+            "additions": 2,
+            "deletions": 30,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-82947",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82947.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82951",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82951.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 96,
+          "total": 102,
           "counts": {
-            "SUCCESS": 71,
-            "SKIPPED": 22,
-            "FAILURE": 2,
+            "SUCCESS": 23,
+            "IN_PROGRESS": 49,
+            "SKIPPED": 29,
             "NEUTRAL": 1
           },
           "blockers": [
-            "checks-fast-bundled-protocol:FAILURE",
-            "checks-node-agentic-gateway-methods:FAILURE"
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "Security High (channel-runtime-boundary):IN_PROGRESS",
+            "Security High (network-ssrf-boundary):IN_PROGRESS",
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-core-fast:IN_PROGRESS",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
+            "checks-node-core-src-security:IN_PROGRESS",
+            "checks-node-core-runtime-infra-state:IN_PROGRESS",
+            "checks-node-core-runtime-infra-process:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-core-runtime-shared:IN_PROGRESS",
+            "checks-node-core-runtime-cron-core:IN_PROGRESS",
+            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
+            "checks-node-core-runtime-cron-service:IN_PROGRESS",
+            "checks-node-agentic-control-plane-agent-chat:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-runtime:IN_PROGRESS",
+            "checks-node-agentic-cli:IN_PROGRESS",
+            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-shared:IN_PROGRESS",
+            "checks-node-agentic-commands-models:IN_PROGRESS",
+            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
+            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
+            "checks-node-agentic-agents:IN_PROGRESS",
+            "checks-node-agentic-gateway-core:IN_PROGRESS",
+            "checks-node-agentic-gateway-methods:IN_PROGRESS",
+            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
+            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
+            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
+            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
+            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
+            "checks-node-auto-reply-reply-session:IN_PROGRESS",
+            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-fast-bundled-protocol:FAILURE",
-            "checks-node-agentic-gateway-methods:FAILURE"
-          ]
+          "pending": [
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "Security High (channel-runtime-boundary):IN_PROGRESS",
+            "Security High (network-ssrf-boundary):IN_PROGRESS",
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-core-fast:IN_PROGRESS",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
+            "checks-node-core-src-security:IN_PROGRESS",
+            "checks-node-core-runtime-infra-state:IN_PROGRESS",
+            "checks-node-core-runtime-infra-process:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-core-runtime-shared:IN_PROGRESS",
+            "checks-node-core-runtime-cron-core:IN_PROGRESS",
+            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
+            "checks-node-core-runtime-cron-service:IN_PROGRESS",
+            "checks-node-agentic-control-plane-agent-chat:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-runtime:IN_PROGRESS",
+            "checks-node-agentic-cli:IN_PROGRESS",
+            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-shared:IN_PROGRESS",
+            "checks-node-agentic-commands-models:IN_PROGRESS",
+            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
+            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
+            "checks-node-agentic-agents:IN_PROGRESS",
+            "checks-node-agentic-gateway-core:IN_PROGRESS",
+            "checks-node-agentic-gateway-methods:IN_PROGRESS",
+            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
+            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
+            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
+            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
+            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
+            "checks-node-auto-reply-reply-session:IN_PROGRESS",
+            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "terminalBlockers": []
         }
-      },
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      }
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1900,
+    "total_ms": 4971,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 425
+        "ms": 512
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1264
+        "ms": 1707
       },
       {
         "name": "classify_commands",
@@ -139,7 +263,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 184
+        "ms": 2727
       },
       {
         "name": "append_ledger",
