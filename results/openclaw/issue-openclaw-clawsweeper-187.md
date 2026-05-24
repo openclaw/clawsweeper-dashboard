@@ -2,16 +2,16 @@
 repo: "openclaw/clawsweeper"
 cluster_id: "issue-openclaw-clawsweeper-187"
 mode: "autonomous"
-run_id: "26372341541"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26372341541"
-head_sha: "4954daa585f1ed92cc8808d87b446f47df095a65"
+run_id: "26374241280"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26374241280"
+head_sha: "ac80f70fc9068fab5b7176250b415cecf884c8db"
 workflow_conclusion: "success"
-result_status: "blocked"
-published_at: "2026-05-24T20:52:30.726Z"
+result_status: "planned"
+published_at: "2026-05-24T22:21:43.596Z"
 canonical: "https://github.com/openclaw/clawsweeper/issues/187"
 canonical_issue: "https://github.com/openclaw/clawsweeper/issues/187"
 canonical_pr: null
-actions_total: 4
+actions_total: 2
 fix_executed: 0
 fix_failed: 0
 fix_blocked: 1
@@ -25,23 +25,23 @@ needs_human_count: 0
 
 Repo: openclaw/clawsweeper
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/26372341541](https://github.com/openclaw/clawsweeper/actions/runs/26372341541)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/26374241280](https://github.com/openclaw/clawsweeper/actions/runs/26374241280)
 
 Workflow conclusion: success
 
-Worker result: blocked
+Worker result: planned
 
 Canonical: https://github.com/openclaw/clawsweeper/issues/187
 
 ## Summary
 
-Issue #187 is still valid on main: current label taxonomy, decision schema, and review prompt do not include `impact:other` or `merge-risk: 🚨 other`. A narrow new-fix PR artifact is provided, but local implementation and validation are blocked in this worker by a read-only checkout plus an environment below repo requirements: Node v20.20.0 and no `pnpm`, while package.json requires Node >=24 and validation uses pnpm.
+Issue #187 is still valid on main ac80f70fc9068fab5b7176250b415cecf884c8db. Current label taxonomy, schema, prompt guidance, and tests expose only the specific impact and merge-risk labels, so a narrow new-fix PR is appropriate. This worker could not edit or validate the branch because the checkout is read-only, so the result is a fix artifact for the executor rather than a claimed local patch.
 
 ## Impact
 
 | Metric | Count |
 | --- | ---: |
-| Worker actions | 4 |
+| Worker actions | 2 |
 | Fix executed | 0 |
 | Fix failed | 0 |
 | Fix blocked | 1 |
@@ -67,10 +67,8 @@ Issue #187 is still valid on main: current label taxonomy, decision schema, and 
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #187 | keep_canonical | planned | canonical | This is the only hydrated item and remains the canonical implementation request. |
-| cluster:issue-openclaw-clawsweeper-187 | fix_needed | planned |  | The requested taxonomy gap is real and can be fixed with a narrow source/schema/prompt/test/changelog change. |
-| cluster:issue-openclaw-clawsweeper-187 | build_fix_artifact | planned |  | A fix artifact is sufficient for the executor to create the requested PR in a writable environment. |
-| cluster:issue-openclaw-clawsweeper-187 | open_fix_pr | blocked |  | Implementation and PR creation must be replayed by the executor in a writable checkout with Node 24+ and pnpm available. |
+| #187 | fix_needed | planned | canonical | The issue requests a concrete taxonomy extension that is absent from current main and can be implemented narrowly without changing close, merge, or security behavior. |
+| cluster:issue-openclaw-clawsweeper-187 | build_fix_artifact | planned |  | No viable implementation PR is hydrated for this cluster and allow_fix_pr is true, so a new narrow fix PR is the canonical path. |
 
 ## Needs Human
 
