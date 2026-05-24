@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T00:30:34.690Z",
+  "generated_at": "2026-05-24T00:30:47.970Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-23T21:30:33.246Z",
+  "since": "2026-05-23T21:30:46.072Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    82926
+    82947
   ],
-  "comment_ids": [
-    4526922791
-  ],
-  "status_comment_id": 4526922898,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 20,
+  "commands_seen": 10,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,18 +31,106 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:82926:4526922791:2026-05-24T00:29:39Z:re_review",
-      "comment_id": "4526922791",
-      "comment_version_key": "4526922791:2026-05-24T00:29:39Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82926#issuecomment-4526922791",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:82947:4469521058:2026-05-24T00:30:42Z:clawsweeper_auto_repair",
+      "comment_id": "4469521058",
+      "comment_version_key": "4469521058:2026-05-24T00:30:42Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82947#issuecomment-4469521058",
       "repo": "openclaw/openclaw",
-      "issue_number": 82926,
+      "issue_number": 82947,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-17T05:50:35Z",
+      "comment_updated_at": "2026-05-24T00:30:42Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=6f4c910612bca6e3dbc237345bb228131fa04b42)",
+      "review_summary": "The PR adds Gmail watcher re-entry cleanup for the existing child process, renewal interval, and pending respawn timeout, plus regression tests for those lifecycle cases.\n\nReproducibility: yes. by source inspection: current main overwrites watcherProcess and renewInterval on repeated direct starts and leaves the respawn timeout untracked. I did not run a live repro because this review is read-only.",
+      "review_followup": "Contributor or maintainer action is needed because real re-entry proof remains the merge gate and the settle-ordering fix should be reviewed with that proof.",
+      "freeform_prompt": null,
+      "expected_head_sha": "6f4c910612bca6e3dbc237345bb228131fa04b42",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(hooks): clear Gmail watcher renewal interval on re-entry",
+        "body": "## Problem\n\n`startGmailWatcher()` in `src/hooks/gmail-watcher.ts` does not stop the existing watcher when called a second time (e.g., during a configuration reload). On re-entry:\n\n1. **Process leak**: The old `gog serve` child process keeps running because `watcherProcess` is overwritten without killing the old process.\n2. **Interval leak**: The old `setInterval` renewal timer keeps firing because `renewInterval` is overwritten without `clearInterval`.\n3. **Respawn timer leak**: When the process exits normally, `spawnGogServe` queues a 5-second `setTimeout` for respawn. This timer is not stored or cleared. If a re-entry happens during the 5-second window, the stale timer fires and spawns a duplicate process.\n\n## Fix\n\nAdd a comprehensive re-entry guard **before async setup work** (Tailscale, Gmail API watch start):\n\n1. Set `shuttingDown = true` so the old process's exit handler skips the respawn `setTimeout`.\n2. Cancel any pending respawn timeout (`clearTimeout(respawnTimeout)`).\n3. Clear the old renewal interval.\n4. Kill the old `gog serve` process with SIGTERM.\n5. Await its **exit event**. If it does not exit within 3 seconds, escalate to SIGKILL. The promise resolves **only on exit**, never on the SIGKILL send, ensuring `shuttingDown` stays `true` until the process is confirmed dead.\n6. Reset `shuttingDown = false` and spawn fresh.\n\n**Key design decisions:**\n- Guard runs **before** `startGmailWatch()` and Tailscale setup, not after, so the old process cannot exit and queue a respawn during async work.\n- `respawnTimeout` is a new module-level variable that stores the exit handler's 5-second `setTimeout` return value. The re-entry guard and `stopGmailWatcher` both clear it.\n- `resolve()` appears **only** in the `exit` handler, **not** in the SIGKILL timeout. No race between exit-handler cleanup and replacement spawn.\n- `shuttingDown` is always reset to `false` unconditionally before `spawnGogServe`, covering both the guard path and the no-guard path.\n\nProduction diff is +22 lines changed in `gmail-watcher.ts`, plus 128 lines of test coverage (7 tests total).\n\n## Real behavior proof\n\nBehavior addressed: Calling `startGmailWatcher()` twice without stopping leaked the old `gog serve` process, renewal interval, and respawn timeout. Three separate leak vectors: (1) old process kept running, (2) old renewal timer kept firing, (3) stale 5-second respawn timer spawned a duplicate after re-entry.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js v22.16.0, OpenClaw built from source (commit dc44fdf) at `/tmp/fix-82947`.\n\nExact steps or command run after this patch:\n```bash\nStep 1. Build OpenClaw from patched source\ncd /tmp/fix-82947\nCI=true pnpm install --frozen-lockfile\npnpm build\n\nStep 2. Verify respawnTimeout tracking in compiled production code\ngrep -n \"respawnTimeout\" dist/gmail-watcher-lvUqmZO6.js\n\nStep 3. Verify the full re-entry guard\ngrep -n -B2 -A8 \"oldProcess.kill\" dist/gmail-watcher-lvUqmZO6.js\n\nStep 4. Start the patched gateway\ntimeout 10 node openclaw.mjs gateway\n\nStep 5. Run Gmail watcher test suite (7 tests)\nnode scripts/run-vitest.mjs src/hooks/gmail-watcher.test.ts\n```\n\nEvidence after fix: terminal output copied below.\n\n**Compiled production code verification**\n\nThe `respawnTimeout` variable is tracked at all three lifecycle points:\n\n```console\n$ grep -n \"respawnTimeout\" dist/gmail-watcher-lvUqmZO6.js\n25:let respawnTimeout = null;\n94:respawnTimeout = setTimeout(() => {\n95:respawnTimeout = null;\n168:if (watcherProcess || renewInterval || respawnTimeout) {\n170:if (respawnTimeout) {\n171:clearTimeout(respawnTimeout);\n172:respawnTimeout = null;\n238:if (respawnTimeout) {\n239:clearTimeout(respawnTimeout);\n240:respawnTimeout = null;\n```\n\n- **Line 25**: Module-level declaration.\n- **Line 94**: Stored in exit handler (was previously a fire-and-forget `setTimeout`).\n- **Lines 168-172**: Cleared in re-entry guard (before async setup).\n- **Lines 238-240**: Cleared in `stopGmailWatcher`.\n\nThe SIGTERM + SIGKILL escalation with exit-only resolution:\n\n```console\n$ grep -n -B2 -A8 \"oldProcess.kill\" dist/gmail-watcher-lvUqmZO6.js\n183-watcherProcess = null;\n184:oldProcess.kill(\"SIGTERM\");\n185-await new Promise((resolve) => {\n186-const escalation = setTimeout(() => {\n187:oldProcess.kill(\"SIGKILL\");\n188-}, 3e3);\n189-oldProcess.on(\"exit\", () => {\n190-clearTimeout(escalation);\n191-resolve();\n192-});\n193-});\n```\n\n`resolve()` is at line 191 (exit handler only). The SIGKILL at line 187 escalates but does not resolve. `shuttingDown` stays `true` until exit is confirmed.\n\n**Live watcher lifecycle proof: mock gog process spawn, exit, respawn, and cleanup**\n\nThe full gmail watcher lifecycle was exercised in a real running gateway by configuring gmail hooks and providing a mock `gog` binary that exits after 2 seconds. This triggers the respawn timer (the core of the fix) in production compiled code.\n\n**Setup:**\n```bash\nStep 1. Create a mock gog binary that exits after 2s (triggers respawn)\ncat > /tmp/gog << 'EOF'\n#!/bin/bash\ncase \"$*\" in\n  *\"watch start\"*) echo \"watch registered\"; exit 0;;\n  *\"watch serve\"*)  echo \"mock gog serve starting\"; sleep 2; exit 1;;\n  *)                exit 0;;\nesac\nEOF\nchmod +x /tmp/gog\n\nStep 2. Configure gmail hooks in openclaw.json (hooks.enabled + hooks.gmail.account/topic/pushToken)\nStep 3. Start gateway with mock gog in PATH\ncd /tmp/fix-82947\nPATH=\"/tmp:$PATH\" timeout 20 node openclaw.mjs gateway\n```\n\n**Terminal output (full watcher lifecycle):**\n\n```console\n2026-05-21T21:25:01.868-07:00 [gateway] starting...\n2026-05-21T21:25:03.585-07:00 [gateway] ready\n2026-05-21T21:25:03.649-07:00 [gmail-watcher] watch started for test@gmail.com\n2026-05-21T21:25:03.650-07:00 [gmail-watcher] starting gog gmail watch serve --account test@gmail.com --bind 127.0.0.1 --port 18787 --path /gmail-pubsub --include-body --max-bytes 20000\n2026-05-21T21:25:03.654-07:00 [gmail-watcher] gmail watcher started for test@gmail.com (renew every 720m)\n2026-05-21T21:25:03.655-07:00 [hooks] gmail watcher started\n2026-05-21T21:25:03.659-07:00 [gmail-watcher] [gog] mock gog serve starting on port 8787\n2026-05-21T21:25:06.075-07:00 [gmail-watcher] [gog] mock gog serve exiting\n2026-05-21T21:25:06.076-07:00 [gmail-watcher] gog exited (code=1, signal=null); restarting in 5s\n2026-05-21T21:25:18.577-07:00 [gmail-watcher] starting gog gmail watch serve --account test@gmail.com --bind 127.0.0.1 --port 18787 --path /gmail-pubsub --include-body --max-bytes 20000\n2026-05-21T21:25:18.582-07:00 [gmail-watcher] [gog] mock gog serve starting on port 8787\n2026-05-21T21:25:20.583-07:00 [gmail-watcher] [gog] mock gog serve exiting\n2026-05-21T21:25:20.584-07:00 [gmail-watcher] gog exited (code=1, signal=null); restarting in 5s\n2026-05-21T21:25:22.266-07:00 [gateway] received SIGTERM; shutting down\n2026-05-21T21:25:22.309-07:00 [gmail-watcher] gmail watcher stopped\n2026-05-21T21:25:22.311-07:00 [shutdown] completed cleanly in 37ms\n```\n\n**Line-by-line analysis of the fix's behavior:**\n\n1. `[gmail-watcher] watch started for test@gmail.com`: `startGmailWatch` registered with Gmail API (mock gog exits 0).\n2. `[gmail-watcher] starting gog gmail watch serve ...`: `spawnGogServe` spawned the mock gog process.\n3. `[gmail-watcher] gmail watcher started for test@gmail.com (renew every 720m)`: Watcher fully initialized, `renewInterval` set.\n4. `[gmail-watcher] [gog] mock gog serve exiting`: Mock gog exits after 2 seconds.\n5. **`[gmail-watcher] gog exited (code=1, signal=null); restarting in 5s`**: The exit handler fires. **This is where `respawnTimeout` is stored** (line 94 in compiled code: `respawnTimeout = setTimeout(..., 5000)`). Before this fix, this `setTimeout` was fire-and-forget with no reference stored.\n6. `[gmail-watcher] starting gog gmail watch serve ...`: **The respawn timer fired**, spawning a new process. Proves `respawnTimeout` storage works.\n7. Second exit + second `restarting in 5s`: Cycle repeats.\n8. `[gateway] received SIGTERM; shutting down`: SIGTERM arrives during the 5-second respawn window.\n9. **`[gmail-watcher] gmail watcher stopped`**: `stopGmailWatcher` ran, which sets `shuttingDown = true` and calls `clearTimeout(respawnTimeout)` (lines 238-240 in compiled code). The pending respawn timer is cancelled, preventing a duplicate process from spawning after shutdown. Before this fix, this timeout would fire and spawn a process into a stopped gateway.\n\n**What this proves:**\n- The `respawnTimeout` variable correctly stores the `setTimeout` return value in the exit handler.\n- The respawn mechanism works: process exits, timer fires, new process spawns.\n- `stopGmailWatcher` correctly clears the pending respawn timer via `clearTimeout(respawnTimeout)`.\n- SIGTERM during a respawn window does not leak a duplicate process.\n\n**Vitest test suite (7 tests, supplemental)**\n\n```console\n$ node scripts/run-vitest.mjs src/hooks/gmail-watcher.test.ts\n ✓ |hooks| ../../src/hooks/gmail-watcher.test.ts (7 tests) 127ms\n Test Files  1 passed (1)\n      Tests  7 passed (7)\n```\n\nThe 7 tests cover all re-entry scenarios:\n\n1. **Kills existing process on re-entry**: Verifies `.kill(\"SIGTERM\")` on the old child.\n2. **Clears interval on re-entry**: Verifies timer count stays stable.\n3. **Only one renewal per tick**: One renewal after double start.\n4. **Cancels stale respawn timeout on re-entry**: Process exits (queuing 5s respawn), then re-entry happens, then 6 seconds pass. Verifies exactly 2 spawns (no duplicate from stale timer).\n5. **Does not let a stale cancelled startup clear newer watcher config**: Concurrent start race.\n6. **Starts gmail watcher**: Happy path.\n7. **Starts gmail watcher (restarts serve with updated config)**: Config change path.\n\nObserved result after fix: The mock gog lifecycle proof shows the full respawn cycle working in production compiled code: process spawn, process exit, `respawnTimeout` stored, respawn fires, second cycle, SIGTERM during respawn window, `stopGmailWatcher` clears the pending timeout and shuts down cleanly. The compiled bundle tracks `respawnTimeout` at all three lifecycle points (storage in exit handler, clearing in re-entry guard, clearing in stop). All 7 tests pass.\n\nWhat was not tested: Triggering the re-entry guard specifically (calling `startGmailWatcher` twice during a live session). The re-entry guard's process kill + timer cleanup was proven via Vitest mock in test 1, 2, and 4. The mock gog proof covers the respawn and stop paths.\n\n\n",
+        "branch": "fix/gmail-watcher-interval-leak",
+        "head_sha": "6f4c910612bca6e3dbc237345bb228131fa04b42",
+        "author": "sebtardif",
+        "labels": [
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/hooks/gmail-watcher.test.ts",
+            "additions": 160,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/gmail-watcher.ts",
+            "additions": 71,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82947",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82947.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "counts": {
+            "SUCCESS": 71,
+            "SKIPPED": 22,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-fast-bundled-protocol:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-fast-bundled-protocol:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE"
+          ]
+        }
+      },
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82947:4526671565:2026-05-23T22:19:26Z:re_review",
+      "comment_id": "4526671565",
+      "comment_version_key": "4526671565:2026-05-23T22:19:26Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82947#issuecomment-4526671565",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82947,
       "author": "SebTardif",
       "author_id": 1413412,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-24T00:29:39Z",
-      "comment_updated_at": "2026-05-24T00:29:39Z",
-      "status_comment_id": 4526922898,
+      "comment_created_at": "2026-05-23T22:19:26Z",
+      "comment_updated_at": "2026-05-23T22:19:26Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -59,192 +145,742 @@
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-24T00:30:35.277Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 82926
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-24T00:30:36.503Z",
-          "response_comment_id": "4526922898",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(install): verify node binary after auto-install and suppress ioctl errors",
-        "body": "## Problem\n\nThe Node.js auto-installer reports \"Node.js v22 installed\" without verifying the binary is actually available on PATH. On WSL2 Ubuntu 24.04, the NodeSource setup script produces ioctl errors (interactive terminal prompts in a non-interactive context), apt may fail silently, but the installer prints a success message and then immediately crashes with \"Node.js v22+ is required.\"\n\nTwo root causes:\n1. The NodeSource setup script (`bash \"$tmp\"`) runs without `DEBIAN_FRONTEND=noninteractive`, so it attempts interactive terminal operations that produce ioctl errors on WSL2\n2. The installer prints `ui_success \"Node.js v24 installed\"` unconditionally after the apt call, without verifying `node` is on PATH\n\n## Fix\n\n1. Pass `DEBIAN_FRONTEND=noninteractive` to the NodeSource setup script execution (both root and sudo paths)\n2. Run `activate_supported_node_on_path` and verify the active node meets the minimum version requirement (`node_is_at_least_required`) before printing the success message. If node is missing or too old, report the actual failure and exit instead of falsely reporting success.\n\nFixes #73837\n\n## Real behavior proof\nBehavior addressed: the Node.js auto-installer now verifies the node binary is actually on PATH and meets the minimum version after package installation before reporting success, and passes DEBIAN_FRONTEND=noninteractive to the NodeSource setup script to suppress ioctl errors on WSL2.\nReal environment tested: local source checkout of openclaw/openclaw at commit aaadf721e3 (current upstream/main) on Linux x86_64, Node v26.0.0, bash 5.2.37.\nExact steps or command run after this patch: extracted the `node_is_at_least_required`, `parse_node_version_components`, and `parse_node_version_components_for_binary` functions from the patched `scripts/install.sh` and exercised the post-install verification logic under three conditions: (1) node present and meets minimum, (2) node binary missing (empty PATH), (3) post-install guard sequence from `install_node()`.\nEvidence after fix: terminal output copied below.\n\n```console\n$ node -v\nv26.0.0\n\n$ bash -c '\nNODE_MIN_MAJOR=22; NODE_MIN_MINOR=14; NODE_MIN_VERSION=\"${NODE_MIN_MAJOR}.${NODE_MIN_MINOR}\"; NODE_DEFAULT_MAJOR=24\nparse_node_version_components_for_binary() {\n    local node_bin=\"${1:-node}\"\n    if ! command -v \"$node_bin\" &> /dev/null && [[ ! -x \"$node_bin\" ]]; then return 1; fi\n    local version major minor\n    version=\"$(\"$node_bin\" -v 2>/dev/null || true)\"\n    major=\"${version#v}\"; major=\"${major%%.*}\"\n    minor=\"${version#v}\"; minor=\"${minor#*.}\"; minor=\"${minor%%.*}\"\n    if [[ ! \"$major\" =~ ^[0-9]+$ ]]; then return 1; fi\n    echo \"$major $minor\"\n}\nparse_node_version_components() {\n    if ! command -v node &> /dev/null; then return 1; fi\n    parse_node_version_components_for_binary node\n}\nnode_is_at_least_required() {\n    local version_components major minor\n    version_components=\"$(parse_node_version_components || true)\"\n    read -r major minor <<< \"$version_components\"\n    if [[ ! \"$major\" =~ ^[0-9]+$ || ! \"$minor\" =~ ^[0-9]+$ ]]; then return 1; fi\n    if [[ \"$major\" -gt \"$NODE_MIN_MAJOR\" ]]; then return 0; fi\n    if [[ \"$major\" -eq \"$NODE_MIN_MAJOR\" && \"$minor\" -ge \"$NODE_MIN_MINOR\" ]]; then return 0; fi\n    return 1\n}\necho \"=== Test 1: Current node meets requirement ===\"\necho \"Node version: $(node -v)\"\necho \"Min required: v${NODE_MIN_VERSION}\"\nif node_is_at_least_required; then\n    echo \"PASS: node_is_at_least_required returned 0 (success)\"\nelse\n    echo \"FAIL: node_is_at_least_required returned 1\"\nfi\necho \"\"\necho \"=== Test 2: Simulate missing node binary (empty PATH) ===\"\nOLD_PATH=\"$PATH\"; PATH=\"/nonexistent\"\nif node_is_at_least_required; then\n    echo \"FAIL: should have returned 1 for missing node\"\nelse\n    active_version=\"$(node -v 2>/dev/null || echo \"not found\")\"\n    echo \"PASS: node_is_at_least_required returned 1 (node binary: ${active_version})\"\n    echo \"Would print: Node.js v${NODE_MIN_VERSION}+ required but found ${active_version} after install\"\nfi\nPATH=\"$OLD_PATH\"\necho \"\"\necho \"=== Test 3: Post-install guard logic (patched version) ===\"\necho \"Simulating install_node() post-install sequence...\"\nif node_is_at_least_required; then\n    echo \"Post-install check passed - would print: Node.js v${NODE_DEFAULT_MAJOR} installed\"\nelse\n    echo \"Post-install check FAILED - would exit 1 with error\"\nfi\n'\n=== Test 1: Current node meets requirement ===\nNode version: v26.0.0\nMin required: v22.14\nPASS: node_is_at_least_required returned 0 (success)\n\n=== Test 2: Simulate missing node binary (empty PATH) ===\nPASS: node_is_at_least_required returned 1 (node binary: not found)\nWould print: Node.js v22.14+ required but found not found after install\n\n=== Test 3: Post-install guard logic (patched version) ===\nSimulating install_node() post-install sequence...\nPost-install check passed - would print: Node.js v24 installed\n```\n\nDEBIAN_FRONTEND is now set in both NodeSource setup paths:\n```console\n$ grep -n \"DEBIAN_FRONTEND\" scripts/install.sh\n594:        env DEBIAN_FRONTEND=\"${DEBIAN_FRONTEND:-noninteractive}\" NEEDRESTART_MODE=\"${NEEDRESTART_MODE:-a}\" apt-get \"$@\"\n596:        sudo env DEBIAN_FRONTEND=\"${DEBIAN_FRONTEND:-noninteractive}\" NEEDRESTART_MODE=\"${NEEDRESTART_MODE:-a}\" apt-get \"$@\"\n1633:                run_quiet_step \"Configuring NodeSource repository\" env DEBIAN_FRONTEND=noninteractive bash \"$tmp\"\n1636:                run_quiet_step \"Configuring NodeSource repository\" sudo DEBIAN_FRONTEND=noninteractive bash \"$tmp\"\n2774:        export DEBIAN_FRONTEND=\"${DEBIAN_FRONTEND:-noninteractive}\"\n```\n\nLines 1633 and 1636 are the new additions. Lines 594 and 596 show the existing pattern in `apt_get()` that this fix follows.\n\nObserved result after fix: the post-install guard correctly detects a valid node (Test 1: v26.0.0 >= v22.14, returns 0), correctly catches a missing node binary (Test 2: PATH emptied, returns 1 with \"not found\"), and the install_node() guard sequence works end-to-end (Test 3: passes with current node). The success message is now gated behind `node_is_at_least_required`, and DEBIAN_FRONTEND=noninteractive is passed to the NodeSource setup script on both root and sudo paths.\nWhat was not tested: actual WSL2 Ubuntu 24.04 reproduction of the ioctl error (Node.js is already installed on this machine). Could not test a real failed install scenario where apt succeeds but the binary is not on PATH. The fix uses the same `node_is_at_least_required` helper and `DEBIAN_FRONTEND` pattern already used elsewhere in the script.\n",
-        "branch": "fix/install-node-verify",
-        "head_sha": "705842d6d587c068baa7427d7450c9da88ea5ec5",
+        "title": "fix(hooks): clear Gmail watcher renewal interval on re-entry",
+        "body": "## Problem\n\n`startGmailWatcher()` in `src/hooks/gmail-watcher.ts` does not stop the existing watcher when called a second time (e.g., during a configuration reload). On re-entry:\n\n1. **Process leak**: The old `gog serve` child process keeps running because `watcherProcess` is overwritten without killing the old process.\n2. **Interval leak**: The old `setInterval` renewal timer keeps firing because `renewInterval` is overwritten without `clearInterval`.\n3. **Respawn timer leak**: When the process exits normally, `spawnGogServe` queues a 5-second `setTimeout` for respawn. This timer is not stored or cleared. If a re-entry happens during the 5-second window, the stale timer fires and spawns a duplicate process.\n\n## Fix\n\nAdd a comprehensive re-entry guard **before async setup work** (Tailscale, Gmail API watch start):\n\n1. Set `shuttingDown = true` so the old process's exit handler skips the respawn `setTimeout`.\n2. Cancel any pending respawn timeout (`clearTimeout(respawnTimeout)`).\n3. Clear the old renewal interval.\n4. Kill the old `gog serve` process with SIGTERM.\n5. Await its **exit event**. If it does not exit within 3 seconds, escalate to SIGKILL. The promise resolves **only on exit**, never on the SIGKILL send, ensuring `shuttingDown` stays `true` until the process is confirmed dead.\n6. Reset `shuttingDown = false` and spawn fresh.\n\n**Key design decisions:**\n- Guard runs **before** `startGmailWatch()` and Tailscale setup, not after, so the old process cannot exit and queue a respawn during async work.\n- `respawnTimeout` is a new module-level variable that stores the exit handler's 5-second `setTimeout` return value. The re-entry guard and `stopGmailWatcher` both clear it.\n- `resolve()` appears **only** in the `exit` handler, **not** in the SIGKILL timeout. No race between exit-handler cleanup and replacement spawn.\n- `shuttingDown` is always reset to `false` unconditionally before `spawnGogServe`, covering both the guard path and the no-guard path.\n\nProduction diff is +22 lines changed in `gmail-watcher.ts`, plus 128 lines of test coverage (7 tests total).\n\n## Real behavior proof\n\nBehavior addressed: Calling `startGmailWatcher()` twice without stopping leaked the old `gog serve` process, renewal interval, and respawn timeout. Three separate leak vectors: (1) old process kept running, (2) old renewal timer kept firing, (3) stale 5-second respawn timer spawned a duplicate after re-entry.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js v22.16.0, OpenClaw built from source (commit dc44fdf) at `/tmp/fix-82947`.\n\nExact steps or command run after this patch:\n```bash\nStep 1. Build OpenClaw from patched source\ncd /tmp/fix-82947\nCI=true pnpm install --frozen-lockfile\npnpm build\n\nStep 2. Verify respawnTimeout tracking in compiled production code\ngrep -n \"respawnTimeout\" dist/gmail-watcher-lvUqmZO6.js\n\nStep 3. Verify the full re-entry guard\ngrep -n -B2 -A8 \"oldProcess.kill\" dist/gmail-watcher-lvUqmZO6.js\n\nStep 4. Start the patched gateway\ntimeout 10 node openclaw.mjs gateway\n\nStep 5. Run Gmail watcher test suite (7 tests)\nnode scripts/run-vitest.mjs src/hooks/gmail-watcher.test.ts\n```\n\nEvidence after fix: terminal output copied below.\n\n**Compiled production code verification**\n\nThe `respawnTimeout` variable is tracked at all three lifecycle points:\n\n```console\n$ grep -n \"respawnTimeout\" dist/gmail-watcher-lvUqmZO6.js\n25:let respawnTimeout = null;\n94:respawnTimeout = setTimeout(() => {\n95:respawnTimeout = null;\n168:if (watcherProcess || renewInterval || respawnTimeout) {\n170:if (respawnTimeout) {\n171:clearTimeout(respawnTimeout);\n172:respawnTimeout = null;\n238:if (respawnTimeout) {\n239:clearTimeout(respawnTimeout);\n240:respawnTimeout = null;\n```\n\n- **Line 25**: Module-level declaration.\n- **Line 94**: Stored in exit handler (was previously a fire-and-forget `setTimeout`).\n- **Lines 168-172**: Cleared in re-entry guard (before async setup).\n- **Lines 238-240**: Cleared in `stopGmailWatcher`.\n\nThe SIGTERM + SIGKILL escalation with exit-only resolution:\n\n```console\n$ grep -n -B2 -A8 \"oldProcess.kill\" dist/gmail-watcher-lvUqmZO6.js\n183-watcherProcess = null;\n184:oldProcess.kill(\"SIGTERM\");\n185-await new Promise((resolve) => {\n186-const escalation = setTimeout(() => {\n187:oldProcess.kill(\"SIGKILL\");\n188-}, 3e3);\n189-oldProcess.on(\"exit\", () => {\n190-clearTimeout(escalation);\n191-resolve();\n192-});\n193-});\n```\n\n`resolve()` is at line 191 (exit handler only). The SIGKILL at line 187 escalates but does not resolve. `shuttingDown` stays `true` until exit is confirmed.\n\n**Live watcher lifecycle proof: mock gog process spawn, exit, respawn, and cleanup**\n\nThe full gmail watcher lifecycle was exercised in a real running gateway by configuring gmail hooks and providing a mock `gog` binary that exits after 2 seconds. This triggers the respawn timer (the core of the fix) in production compiled code.\n\n**Setup:**\n```bash\nStep 1. Create a mock gog binary that exits after 2s (triggers respawn)\ncat > /tmp/gog << 'EOF'\n#!/bin/bash\ncase \"$*\" in\n  *\"watch start\"*) echo \"watch registered\"; exit 0;;\n  *\"watch serve\"*)  echo \"mock gog serve starting\"; sleep 2; exit 1;;\n  *)                exit 0;;\nesac\nEOF\nchmod +x /tmp/gog\n\nStep 2. Configure gmail hooks in openclaw.json (hooks.enabled + hooks.gmail.account/topic/pushToken)\nStep 3. Start gateway with mock gog in PATH\ncd /tmp/fix-82947\nPATH=\"/tmp:$PATH\" timeout 20 node openclaw.mjs gateway\n```\n\n**Terminal output (full watcher lifecycle):**\n\n```console\n2026-05-21T21:25:01.868-07:00 [gateway] starting...\n2026-05-21T21:25:03.585-07:00 [gateway] ready\n2026-05-21T21:25:03.649-07:00 [gmail-watcher] watch started for test@gmail.com\n2026-05-21T21:25:03.650-07:00 [gmail-watcher] starting gog gmail watch serve --account test@gmail.com --bind 127.0.0.1 --port 18787 --path /gmail-pubsub --include-body --max-bytes 20000\n2026-05-21T21:25:03.654-07:00 [gmail-watcher] gmail watcher started for test@gmail.com (renew every 720m)\n2026-05-21T21:25:03.655-07:00 [hooks] gmail watcher started\n2026-05-21T21:25:03.659-07:00 [gmail-watcher] [gog] mock gog serve starting on port 8787\n2026-05-21T21:25:06.075-07:00 [gmail-watcher] [gog] mock gog serve exiting\n2026-05-21T21:25:06.076-07:00 [gmail-watcher] gog exited (code=1, signal=null); restarting in 5s\n2026-05-21T21:25:18.577-07:00 [gmail-watcher] starting gog gmail watch serve --account test@gmail.com --bind 127.0.0.1 --port 18787 --path /gmail-pubsub --include-body --max-bytes 20000\n2026-05-21T21:25:18.582-07:00 [gmail-watcher] [gog] mock gog serve starting on port 8787\n2026-05-21T21:25:20.583-07:00 [gmail-watcher] [gog] mock gog serve exiting\n2026-05-21T21:25:20.584-07:00 [gmail-watcher] gog exited (code=1, signal=null); restarting in 5s\n2026-05-21T21:25:22.266-07:00 [gateway] received SIGTERM; shutting down\n2026-05-21T21:25:22.309-07:00 [gmail-watcher] gmail watcher stopped\n2026-05-21T21:25:22.311-07:00 [shutdown] completed cleanly in 37ms\n```\n\n**Line-by-line analysis of the fix's behavior:**\n\n1. `[gmail-watcher] watch started for test@gmail.com`: `startGmailWatch` registered with Gmail API (mock gog exits 0).\n2. `[gmail-watcher] starting gog gmail watch serve ...`: `spawnGogServe` spawned the mock gog process.\n3. `[gmail-watcher] gmail watcher started for test@gmail.com (renew every 720m)`: Watcher fully initialized, `renewInterval` set.\n4. `[gmail-watcher] [gog] mock gog serve exiting`: Mock gog exits after 2 seconds.\n5. **`[gmail-watcher] gog exited (code=1, signal=null); restarting in 5s`**: The exit handler fires. **This is where `respawnTimeout` is stored** (line 94 in compiled code: `respawnTimeout = setTimeout(..., 5000)`). Before this fix, this `setTimeout` was fire-and-forget with no reference stored.\n6. `[gmail-watcher] starting gog gmail watch serve ...`: **The respawn timer fired**, spawning a new process. Proves `respawnTimeout` storage works.\n7. Second exit + second `restarting in 5s`: Cycle repeats.\n8. `[gateway] received SIGTERM; shutting down`: SIGTERM arrives during the 5-second respawn window.\n9. **`[gmail-watcher] gmail watcher stopped`**: `stopGmailWatcher` ran, which sets `shuttingDown = true` and calls `clearTimeout(respawnTimeout)` (lines 238-240 in compiled code). The pending respawn timer is cancelled, preventing a duplicate process from spawning after shutdown. Before this fix, this timeout would fire and spawn a process into a stopped gateway.\n\n**What this proves:**\n- The `respawnTimeout` variable correctly stores the `setTimeout` return value in the exit handler.\n- The respawn mechanism works: process exits, timer fires, new process spawns.\n- `stopGmailWatcher` correctly clears the pending respawn timer via `clearTimeout(respawnTimeout)`.\n- SIGTERM during a respawn window does not leak a duplicate process.\n\n**Vitest test suite (7 tests, supplemental)**\n\n```console\n$ node scripts/run-vitest.mjs src/hooks/gmail-watcher.test.ts\n ✓ |hooks| ../../src/hooks/gmail-watcher.test.ts (7 tests) 127ms\n Test Files  1 passed (1)\n      Tests  7 passed (7)\n```\n\nThe 7 tests cover all re-entry scenarios:\n\n1. **Kills existing process on re-entry**: Verifies `.kill(\"SIGTERM\")` on the old child.\n2. **Clears interval on re-entry**: Verifies timer count stays stable.\n3. **Only one renewal per tick**: One renewal after double start.\n4. **Cancels stale respawn timeout on re-entry**: Process exits (queuing 5s respawn), then re-entry happens, then 6 seconds pass. Verifies exactly 2 spawns (no duplicate from stale timer).\n5. **Does not let a stale cancelled startup clear newer watcher config**: Concurrent start race.\n6. **Starts gmail watcher**: Happy path.\n7. **Starts gmail watcher (restarts serve with updated config)**: Config change path.\n\nObserved result after fix: The mock gog lifecycle proof shows the full respawn cycle working in production compiled code: process spawn, process exit, `respawnTimeout` stored, respawn fires, second cycle, SIGTERM during respawn window, `stopGmailWatcher` clears the pending timeout and shuts down cleanly. The compiled bundle tracks `respawnTimeout` at all three lifecycle points (storage in exit handler, clearing in re-entry guard, clearing in stop). All 7 tests pass.\n\nWhat was not tested: Triggering the re-entry guard specifically (calling `startGmailWatcher` twice during a live session). The re-entry guard's process kill + timer cleanup was proven via Vitest mock in test 1, 2, and 4. The mock gog proof covers the respawn and stop paths.\n\n\n",
+        "branch": "fix/gmail-watcher-interval-leak",
+        "head_sha": "6f4c910612bca6e3dbc237345bb228131fa04b42",
         "author": "sebtardif",
         "labels": [
-          "scripts",
-          "size: XS",
+          "size: M",
           "proof: supplied",
           "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 availability",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "scripts/install.sh",
-            "additions": 10,
-            "deletions": 3,
+            "path": "src/hooks/gmail-watcher.test.ts",
+            "additions": 160,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "test/scripts/install-sh.test.ts",
-            "additions": 13,
-            "deletions": 1,
+            "path": "src/hooks/gmail-watcher.ts",
+            "additions": 71,
+            "deletions": 20,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-82926",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82926.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82947",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82947.md",
         "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 77,
+          "total": 96,
           "counts": {
-            "SUCCESS": 23,
-            "IN_PROGRESS": 46,
-            "SKIPPED": 8
+            "SUCCESS": 71,
+            "SKIPPED": 22,
+            "FAILURE": 2,
+            "NEUTRAL": 1
           },
           "blockers": [
-            "linux-docker:IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "checks-node-core-src-security:IN_PROGRESS",
-            "checks-node-core-ui:IN_PROGRESS",
-            "checks-node-core-runtime-infra-state:IN_PROGRESS",
-            "checks-node-core-runtime-infra-process:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-shared:IN_PROGRESS",
-            "checks-node-core-runtime-cron-core:IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-core-runtime-cron-service:IN_PROGRESS",
-            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-shared:IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS",
-            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
-            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
-            "checks-node-agentic-agents:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
-            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-session:IN_PROGRESS",
-            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+            "checks-fast-bundled-protocol:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE"
           ],
-          "pending": [
-            "linux-docker:IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "checks-node-core-src-security:IN_PROGRESS",
-            "checks-node-core-ui:IN_PROGRESS",
-            "checks-node-core-runtime-infra-state:IN_PROGRESS",
-            "checks-node-core-runtime-infra-process:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-shared:IN_PROGRESS",
-            "checks-node-core-runtime-cron-core:IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-core-runtime-cron-service:IN_PROGRESS",
-            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-shared:IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS",
-            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
-            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
-            "checks-node-agentic-agents:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
-            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-session:IN_PROGRESS",
-            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": []
+          "pending": [],
+          "terminalBlockers": [
+            "checks-fast-bundled-protocol:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE"
+          ]
         }
-      }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82947:4523019549:2026-05-22T22:13:18Z:re_review",
+      "comment_id": "4523019549",
+      "comment_version_key": "4523019549:2026-05-22T22:13:18Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82947#issuecomment-4523019549",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82947,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T22:13:18Z",
+      "comment_updated_at": "2026-05-22T22:13:18Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(hooks): clear Gmail watcher renewal interval on re-entry",
+        "body": "## Problem\n\n`startGmailWatcher()` in `src/hooks/gmail-watcher.ts` does not stop the existing watcher when called a second time (e.g., during a configuration reload). On re-entry:\n\n1. **Process leak**: The old `gog serve` child process keeps running because `watcherProcess` is overwritten without killing the old process.\n2. **Interval leak**: The old `setInterval` renewal timer keeps firing because `renewInterval` is overwritten without `clearInterval`.\n3. **Respawn timer leak**: When the process exits normally, `spawnGogServe` queues a 5-second `setTimeout` for respawn. This timer is not stored or cleared. If a re-entry happens during the 5-second window, the stale timer fires and spawns a duplicate process.\n\n## Fix\n\nAdd a comprehensive re-entry guard **before async setup work** (Tailscale, Gmail API watch start):\n\n1. Set `shuttingDown = true` so the old process's exit handler skips the respawn `setTimeout`.\n2. Cancel any pending respawn timeout (`clearTimeout(respawnTimeout)`).\n3. Clear the old renewal interval.\n4. Kill the old `gog serve` process with SIGTERM.\n5. Await its **exit event**. If it does not exit within 3 seconds, escalate to SIGKILL. The promise resolves **only on exit**, never on the SIGKILL send, ensuring `shuttingDown` stays `true` until the process is confirmed dead.\n6. Reset `shuttingDown = false` and spawn fresh.\n\n**Key design decisions:**\n- Guard runs **before** `startGmailWatch()` and Tailscale setup, not after, so the old process cannot exit and queue a respawn during async work.\n- `respawnTimeout` is a new module-level variable that stores the exit handler's 5-second `setTimeout` return value. The re-entry guard and `stopGmailWatcher` both clear it.\n- `resolve()` appears **only** in the `exit` handler, **not** in the SIGKILL timeout. No race between exit-handler cleanup and replacement spawn.\n- `shuttingDown` is always reset to `false` unconditionally before `spawnGogServe`, covering both the guard path and the no-guard path.\n\nProduction diff is +22 lines changed in `gmail-watcher.ts`, plus 128 lines of test coverage (7 tests total).\n\n## Real behavior proof\n\nBehavior addressed: Calling `startGmailWatcher()` twice without stopping leaked the old `gog serve` process, renewal interval, and respawn timeout. Three separate leak vectors: (1) old process kept running, (2) old renewal timer kept firing, (3) stale 5-second respawn timer spawned a duplicate after re-entry.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js v22.16.0, OpenClaw built from source (commit dc44fdf) at `/tmp/fix-82947`.\n\nExact steps or command run after this patch:\n```bash\nStep 1. Build OpenClaw from patched source\ncd /tmp/fix-82947\nCI=true pnpm install --frozen-lockfile\npnpm build\n\nStep 2. Verify respawnTimeout tracking in compiled production code\ngrep -n \"respawnTimeout\" dist/gmail-watcher-lvUqmZO6.js\n\nStep 3. Verify the full re-entry guard\ngrep -n -B2 -A8 \"oldProcess.kill\" dist/gmail-watcher-lvUqmZO6.js\n\nStep 4. Start the patched gateway\ntimeout 10 node openclaw.mjs gateway\n\nStep 5. Run Gmail watcher test suite (7 tests)\nnode scripts/run-vitest.mjs src/hooks/gmail-watcher.test.ts\n```\n\nEvidence after fix: terminal output copied below.\n\n**Compiled production code verification**\n\nThe `respawnTimeout` variable is tracked at all three lifecycle points:\n\n```console\n$ grep -n \"respawnTimeout\" dist/gmail-watcher-lvUqmZO6.js\n25:let respawnTimeout = null;\n94:respawnTimeout = setTimeout(() => {\n95:respawnTimeout = null;\n168:if (watcherProcess || renewInterval || respawnTimeout) {\n170:if (respawnTimeout) {\n171:clearTimeout(respawnTimeout);\n172:respawnTimeout = null;\n238:if (respawnTimeout) {\n239:clearTimeout(respawnTimeout);\n240:respawnTimeout = null;\n```\n\n- **Line 25**: Module-level declaration.\n- **Line 94**: Stored in exit handler (was previously a fire-and-forget `setTimeout`).\n- **Lines 168-172**: Cleared in re-entry guard (before async setup).\n- **Lines 238-240**: Cleared in `stopGmailWatcher`.\n\nThe SIGTERM + SIGKILL escalation with exit-only resolution:\n\n```console\n$ grep -n -B2 -A8 \"oldProcess.kill\" dist/gmail-watcher-lvUqmZO6.js\n183-watcherProcess = null;\n184:oldProcess.kill(\"SIGTERM\");\n185-await new Promise((resolve) => {\n186-const escalation = setTimeout(() => {\n187:oldProcess.kill(\"SIGKILL\");\n188-}, 3e3);\n189-oldProcess.on(\"exit\", () => {\n190-clearTimeout(escalation);\n191-resolve();\n192-});\n193-});\n```\n\n`resolve()` is at line 191 (exit handler only). The SIGKILL at line 187 escalates but does not resolve. `shuttingDown` stays `true` until exit is confirmed.\n\n**Live watcher lifecycle proof: mock gog process spawn, exit, respawn, and cleanup**\n\nThe full gmail watcher lifecycle was exercised in a real running gateway by configuring gmail hooks and providing a mock `gog` binary that exits after 2 seconds. This triggers the respawn timer (the core of the fix) in production compiled code.\n\n**Setup:**\n```bash\nStep 1. Create a mock gog binary that exits after 2s (triggers respawn)\ncat > /tmp/gog << 'EOF'\n#!/bin/bash\ncase \"$*\" in\n  *\"watch start\"*) echo \"watch registered\"; exit 0;;\n  *\"watch serve\"*)  echo \"mock gog serve starting\"; sleep 2; exit 1;;\n  *)                exit 0;;\nesac\nEOF\nchmod +x /tmp/gog\n\nStep 2. Configure gmail hooks in openclaw.json (hooks.enabled + hooks.gmail.account/topic/pushToken)\nStep 3. Start gateway with mock gog in PATH\ncd /tmp/fix-82947\nPATH=\"/tmp:$PATH\" timeout 20 node openclaw.mjs gateway\n```\n\n**Terminal output (full watcher lifecycle):**\n\n```console\n2026-05-21T21:25:01.868-07:00 [gateway] starting...\n2026-05-21T21:25:03.585-07:00 [gateway] ready\n2026-05-21T21:25:03.649-07:00 [gmail-watcher] watch started for test@gmail.com\n2026-05-21T21:25:03.650-07:00 [gmail-watcher] starting gog gmail watch serve --account test@gmail.com --bind 127.0.0.1 --port 18787 --path /gmail-pubsub --include-body --max-bytes 20000\n2026-05-21T21:25:03.654-07:00 [gmail-watcher] gmail watcher started for test@gmail.com (renew every 720m)\n2026-05-21T21:25:03.655-07:00 [hooks] gmail watcher started\n2026-05-21T21:25:03.659-07:00 [gmail-watcher] [gog] mock gog serve starting on port 8787\n2026-05-21T21:25:06.075-07:00 [gmail-watcher] [gog] mock gog serve exiting\n2026-05-21T21:25:06.076-07:00 [gmail-watcher] gog exited (code=1, signal=null); restarting in 5s\n2026-05-21T21:25:18.577-07:00 [gmail-watcher] starting gog gmail watch serve --account test@gmail.com --bind 127.0.0.1 --port 18787 --path /gmail-pubsub --include-body --max-bytes 20000\n2026-05-21T21:25:18.582-07:00 [gmail-watcher] [gog] mock gog serve starting on port 8787\n2026-05-21T21:25:20.583-07:00 [gmail-watcher] [gog] mock gog serve exiting\n2026-05-21T21:25:20.584-07:00 [gmail-watcher] gog exited (code=1, signal=null); restarting in 5s\n2026-05-21T21:25:22.266-07:00 [gateway] received SIGTERM; shutting down\n2026-05-21T21:25:22.309-07:00 [gmail-watcher] gmail watcher stopped\n2026-05-21T21:25:22.311-07:00 [shutdown] completed cleanly in 37ms\n```\n\n**Line-by-line analysis of the fix's behavior:**\n\n1. `[gmail-watcher] watch started for test@gmail.com`: `startGmailWatch` registered with Gmail API (mock gog exits 0).\n2. `[gmail-watcher] starting gog gmail watch serve ...`: `spawnGogServe` spawned the mock gog process.\n3. `[gmail-watcher] gmail watcher started for test@gmail.com (renew every 720m)`: Watcher fully initialized, `renewInterval` set.\n4. `[gmail-watcher] [gog] mock gog serve exiting`: Mock gog exits after 2 seconds.\n5. **`[gmail-watcher] gog exited (code=1, signal=null); restarting in 5s`**: The exit handler fires. **This is where `respawnTimeout` is stored** (line 94 in compiled code: `respawnTimeout = setTimeout(..., 5000)`). Before this fix, this `setTimeout` was fire-and-forget with no reference stored.\n6. `[gmail-watcher] starting gog gmail watch serve ...`: **The respawn timer fired**, spawning a new process. Proves `respawnTimeout` storage works.\n7. Second exit + second `restarting in 5s`: Cycle repeats.\n8. `[gateway] received SIGTERM; shutting down`: SIGTERM arrives during the 5-second respawn window.\n9. **`[gmail-watcher] gmail watcher stopped`**: `stopGmailWatcher` ran, which sets `shuttingDown = true` and calls `clearTimeout(respawnTimeout)` (lines 238-240 in compiled code). The pending respawn timer is cancelled, preventing a duplicate process from spawning after shutdown. Before this fix, this timeout would fire and spawn a process into a stopped gateway.\n\n**What this proves:**\n- The `respawnTimeout` variable correctly stores the `setTimeout` return value in the exit handler.\n- The respawn mechanism works: process exits, timer fires, new process spawns.\n- `stopGmailWatcher` correctly clears the pending respawn timer via `clearTimeout(respawnTimeout)`.\n- SIGTERM during a respawn window does not leak a duplicate process.\n\n**Vitest test suite (7 tests, supplemental)**\n\n```console\n$ node scripts/run-vitest.mjs src/hooks/gmail-watcher.test.ts\n ✓ |hooks| ../../src/hooks/gmail-watcher.test.ts (7 tests) 127ms\n Test Files  1 passed (1)\n      Tests  7 passed (7)\n```\n\nThe 7 tests cover all re-entry scenarios:\n\n1. **Kills existing process on re-entry**: Verifies `.kill(\"SIGTERM\")` on the old child.\n2. **Clears interval on re-entry**: Verifies timer count stays stable.\n3. **Only one renewal per tick**: One renewal after double start.\n4. **Cancels stale respawn timeout on re-entry**: Process exits (queuing 5s respawn), then re-entry happens, then 6 seconds pass. Verifies exactly 2 spawns (no duplicate from stale timer).\n5. **Does not let a stale cancelled startup clear newer watcher config**: Concurrent start race.\n6. **Starts gmail watcher**: Happy path.\n7. **Starts gmail watcher (restarts serve with updated config)**: Config change path.\n\nObserved result after fix: The mock gog lifecycle proof shows the full respawn cycle working in production compiled code: process spawn, process exit, `respawnTimeout` stored, respawn fires, second cycle, SIGTERM during respawn window, `stopGmailWatcher` clears the pending timeout and shuts down cleanly. The compiled bundle tracks `respawnTimeout` at all three lifecycle points (storage in exit handler, clearing in re-entry guard, clearing in stop). All 7 tests pass.\n\nWhat was not tested: Triggering the re-entry guard specifically (calling `startGmailWatcher` twice during a live session). The re-entry guard's process kill + timer cleanup was proven via Vitest mock in test 1, 2, and 4. The mock gog proof covers the respawn and stop paths.\n\n\n",
+        "branch": "fix/gmail-watcher-interval-leak",
+        "head_sha": "6f4c910612bca6e3dbc237345bb228131fa04b42",
+        "author": "sebtardif",
+        "labels": [
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/hooks/gmail-watcher.test.ts",
+            "additions": 160,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/gmail-watcher.ts",
+            "additions": 71,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82947",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82947.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "counts": {
+            "SUCCESS": 71,
+            "SKIPPED": 22,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-fast-bundled-protocol:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-fast-bundled-protocol:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82947:4514976672:2026-05-22T04:31:02Z:re_review",
+      "comment_id": "4514976672",
+      "comment_version_key": "4514976672:2026-05-22T04:31:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82947#issuecomment-4514976672",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82947,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T04:31:02Z",
+      "comment_updated_at": "2026-05-22T04:31:02Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82947:4512888118:2026-05-21T21:22:01Z:re_review",
+      "comment_id": "4512888118",
+      "comment_version_key": "4512888118:2026-05-21T21:22:01Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82947#issuecomment-4512888118",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82947,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-21T21:22:01Z",
+      "comment_updated_at": "2026-05-21T21:22:01Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(hooks): clear Gmail watcher renewal interval on re-entry",
+        "body": "## Problem\n\n`startGmailWatcher()` in `src/hooks/gmail-watcher.ts` does not stop the existing watcher when called a second time (e.g., during a configuration reload). On re-entry:\n\n1. **Process leak**: The old `gog serve` child process keeps running because `watcherProcess` is overwritten without killing the old process.\n2. **Interval leak**: The old `setInterval` renewal timer keeps firing because `renewInterval` is overwritten without `clearInterval`.\n3. **Respawn timer leak**: When the process exits normally, `spawnGogServe` queues a 5-second `setTimeout` for respawn. This timer is not stored or cleared. If a re-entry happens during the 5-second window, the stale timer fires and spawns a duplicate process.\n\n## Fix\n\nAdd a comprehensive re-entry guard **before async setup work** (Tailscale, Gmail API watch start):\n\n1. Set `shuttingDown = true` so the old process's exit handler skips the respawn `setTimeout`.\n2. Cancel any pending respawn timeout (`clearTimeout(respawnTimeout)`).\n3. Clear the old renewal interval.\n4. Kill the old `gog serve` process with SIGTERM.\n5. Await its **exit event**. If it does not exit within 3 seconds, escalate to SIGKILL. The promise resolves **only on exit**, never on the SIGKILL send, ensuring `shuttingDown` stays `true` until the process is confirmed dead.\n6. Reset `shuttingDown = false` and spawn fresh.\n\n**Key design decisions:**\n- Guard runs **before** `startGmailWatch()` and Tailscale setup, not after, so the old process cannot exit and queue a respawn during async work.\n- `respawnTimeout` is a new module-level variable that stores the exit handler's 5-second `setTimeout` return value. The re-entry guard and `stopGmailWatcher` both clear it.\n- `resolve()` appears **only** in the `exit` handler, **not** in the SIGKILL timeout. No race between exit-handler cleanup and replacement spawn.\n- `shuttingDown` is always reset to `false` unconditionally before `spawnGogServe`, covering both the guard path and the no-guard path.\n\nProduction diff is +22 lines changed in `gmail-watcher.ts`, plus 128 lines of test coverage (7 tests total).\n\n## Real behavior proof\n\nBehavior addressed: Calling `startGmailWatcher()` twice without stopping leaked the old `gog serve` process, renewal interval, and respawn timeout. Three separate leak vectors: (1) old process kept running, (2) old renewal timer kept firing, (3) stale 5-second respawn timer spawned a duplicate after re-entry.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js v22.16.0, OpenClaw built from source (commit dc44fdf) at `/tmp/fix-82947`.\n\nExact steps or command run after this patch:\n```bash\nStep 1. Build OpenClaw from patched source\ncd /tmp/fix-82947\nCI=true pnpm install --frozen-lockfile\npnpm build\n\nStep 2. Verify respawnTimeout tracking in compiled production code\ngrep -n \"respawnTimeout\" dist/gmail-watcher-lvUqmZO6.js\n\nStep 3. Verify the full re-entry guard\ngrep -n -B2 -A8 \"oldProcess.kill\" dist/gmail-watcher-lvUqmZO6.js\n\nStep 4. Start the patched gateway\ntimeout 10 node openclaw.mjs gateway\n\nStep 5. Run Gmail watcher test suite (7 tests)\nnode scripts/run-vitest.mjs src/hooks/gmail-watcher.test.ts\n```\n\nEvidence after fix: terminal output copied below.\n\n**Compiled production code verification**\n\nThe `respawnTimeout` variable is tracked at all three lifecycle points:\n\n```console\n$ grep -n \"respawnTimeout\" dist/gmail-watcher-lvUqmZO6.js\n25:let respawnTimeout = null;\n94:respawnTimeout = setTimeout(() => {\n95:respawnTimeout = null;\n168:if (watcherProcess || renewInterval || respawnTimeout) {\n170:if (respawnTimeout) {\n171:clearTimeout(respawnTimeout);\n172:respawnTimeout = null;\n238:if (respawnTimeout) {\n239:clearTimeout(respawnTimeout);\n240:respawnTimeout = null;\n```\n\n- **Line 25**: Module-level declaration.\n- **Line 94**: Stored in exit handler (was previously a fire-and-forget `setTimeout`).\n- **Lines 168-172**: Cleared in re-entry guard (before async setup).\n- **Lines 238-240**: Cleared in `stopGmailWatcher`.\n\nThe SIGTERM + SIGKILL escalation with exit-only resolution:\n\n```console\n$ grep -n -B2 -A8 \"oldProcess.kill\" dist/gmail-watcher-lvUqmZO6.js\n183-watcherProcess = null;\n184:oldProcess.kill(\"SIGTERM\");\n185-await new Promise((resolve) => {\n186-const escalation = setTimeout(() => {\n187:oldProcess.kill(\"SIGKILL\");\n188-}, 3e3);\n189-oldProcess.on(\"exit\", () => {\n190-clearTimeout(escalation);\n191-resolve();\n192-});\n193-});\n```\n\n`resolve()` is at line 191 (exit handler only). The SIGKILL at line 187 escalates but does not resolve. `shuttingDown` stays `true` until exit is confirmed.\n\n**Live watcher lifecycle proof: mock gog process spawn, exit, respawn, and cleanup**\n\nThe full gmail watcher lifecycle was exercised in a real running gateway by configuring gmail hooks and providing a mock `gog` binary that exits after 2 seconds. This triggers the respawn timer (the core of the fix) in production compiled code.\n\n**Setup:**\n```bash\nStep 1. Create a mock gog binary that exits after 2s (triggers respawn)\ncat > /tmp/gog << 'EOF'\n#!/bin/bash\ncase \"$*\" in\n  *\"watch start\"*) echo \"watch registered\"; exit 0;;\n  *\"watch serve\"*)  echo \"mock gog serve starting\"; sleep 2; exit 1;;\n  *)                exit 0;;\nesac\nEOF\nchmod +x /tmp/gog\n\nStep 2. Configure gmail hooks in openclaw.json (hooks.enabled + hooks.gmail.account/topic/pushToken)\nStep 3. Start gateway with mock gog in PATH\ncd /tmp/fix-82947\nPATH=\"/tmp:$PATH\" timeout 20 node openclaw.mjs gateway\n```\n\n**Terminal output (full watcher lifecycle):**\n\n```console\n2026-05-21T21:25:01.868-07:00 [gateway] starting...\n2026-05-21T21:25:03.585-07:00 [gateway] ready\n2026-05-21T21:25:03.649-07:00 [gmail-watcher] watch started for test@gmail.com\n2026-05-21T21:25:03.650-07:00 [gmail-watcher] starting gog gmail watch serve --account test@gmail.com --bind 127.0.0.1 --port 18787 --path /gmail-pubsub --include-body --max-bytes 20000\n2026-05-21T21:25:03.654-07:00 [gmail-watcher] gmail watcher started for test@gmail.com (renew every 720m)\n2026-05-21T21:25:03.655-07:00 [hooks] gmail watcher started\n2026-05-21T21:25:03.659-07:00 [gmail-watcher] [gog] mock gog serve starting on port 8787\n2026-05-21T21:25:06.075-07:00 [gmail-watcher] [gog] mock gog serve exiting\n2026-05-21T21:25:06.076-07:00 [gmail-watcher] gog exited (code=1, signal=null); restarting in 5s\n2026-05-21T21:25:18.577-07:00 [gmail-watcher] starting gog gmail watch serve --account test@gmail.com --bind 127.0.0.1 --port 18787 --path /gmail-pubsub --include-body --max-bytes 20000\n2026-05-21T21:25:18.582-07:00 [gmail-watcher] [gog] mock gog serve starting on port 8787\n2026-05-21T21:25:20.583-07:00 [gmail-watcher] [gog] mock gog serve exiting\n2026-05-21T21:25:20.584-07:00 [gmail-watcher] gog exited (code=1, signal=null); restarting in 5s\n2026-05-21T21:25:22.266-07:00 [gateway] received SIGTERM; shutting down\n2026-05-21T21:25:22.309-07:00 [gmail-watcher] gmail watcher stopped\n2026-05-21T21:25:22.311-07:00 [shutdown] completed cleanly in 37ms\n```\n\n**Line-by-line analysis of the fix's behavior:**\n\n1. `[gmail-watcher] watch started for test@gmail.com`: `startGmailWatch` registered with Gmail API (mock gog exits 0).\n2. `[gmail-watcher] starting gog gmail watch serve ...`: `spawnGogServe` spawned the mock gog process.\n3. `[gmail-watcher] gmail watcher started for test@gmail.com (renew every 720m)`: Watcher fully initialized, `renewInterval` set.\n4. `[gmail-watcher] [gog] mock gog serve exiting`: Mock gog exits after 2 seconds.\n5. **`[gmail-watcher] gog exited (code=1, signal=null); restarting in 5s`**: The exit handler fires. **This is where `respawnTimeout` is stored** (line 94 in compiled code: `respawnTimeout = setTimeout(..., 5000)`). Before this fix, this `setTimeout` was fire-and-forget with no reference stored.\n6. `[gmail-watcher] starting gog gmail watch serve ...`: **The respawn timer fired**, spawning a new process. Proves `respawnTimeout` storage works.\n7. Second exit + second `restarting in 5s`: Cycle repeats.\n8. `[gateway] received SIGTERM; shutting down`: SIGTERM arrives during the 5-second respawn window.\n9. **`[gmail-watcher] gmail watcher stopped`**: `stopGmailWatcher` ran, which sets `shuttingDown = true` and calls `clearTimeout(respawnTimeout)` (lines 238-240 in compiled code). The pending respawn timer is cancelled, preventing a duplicate process from spawning after shutdown. Before this fix, this timeout would fire and spawn a process into a stopped gateway.\n\n**What this proves:**\n- The `respawnTimeout` variable correctly stores the `setTimeout` return value in the exit handler.\n- The respawn mechanism works: process exits, timer fires, new process spawns.\n- `stopGmailWatcher` correctly clears the pending respawn timer via `clearTimeout(respawnTimeout)`.\n- SIGTERM during a respawn window does not leak a duplicate process.\n\n**Vitest test suite (7 tests, supplemental)**\n\n```console\n$ node scripts/run-vitest.mjs src/hooks/gmail-watcher.test.ts\n ✓ |hooks| ../../src/hooks/gmail-watcher.test.ts (7 tests) 127ms\n Test Files  1 passed (1)\n      Tests  7 passed (7)\n```\n\nThe 7 tests cover all re-entry scenarios:\n\n1. **Kills existing process on re-entry**: Verifies `.kill(\"SIGTERM\")` on the old child.\n2. **Clears interval on re-entry**: Verifies timer count stays stable.\n3. **Only one renewal per tick**: One renewal after double start.\n4. **Cancels stale respawn timeout on re-entry**: Process exits (queuing 5s respawn), then re-entry happens, then 6 seconds pass. Verifies exactly 2 spawns (no duplicate from stale timer).\n5. **Does not let a stale cancelled startup clear newer watcher config**: Concurrent start race.\n6. **Starts gmail watcher**: Happy path.\n7. **Starts gmail watcher (restarts serve with updated config)**: Config change path.\n\nObserved result after fix: The mock gog lifecycle proof shows the full respawn cycle working in production compiled code: process spawn, process exit, `respawnTimeout` stored, respawn fires, second cycle, SIGTERM during respawn window, `stopGmailWatcher` clears the pending timeout and shuts down cleanly. The compiled bundle tracks `respawnTimeout` at all three lifecycle points (storage in exit handler, clearing in re-entry guard, clearing in stop). All 7 tests pass.\n\nWhat was not tested: Triggering the re-entry guard specifically (calling `startGmailWatcher` twice during a live session). The re-entry guard's process kill + timer cleanup was proven via Vitest mock in test 1, 2, and 4. The mock gog proof covers the respawn and stop paths.\n\n\n",
+        "branch": "fix/gmail-watcher-interval-leak",
+        "head_sha": "6f4c910612bca6e3dbc237345bb228131fa04b42",
+        "author": "sebtardif",
+        "labels": [
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/hooks/gmail-watcher.test.ts",
+            "additions": 160,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/gmail-watcher.ts",
+            "additions": 71,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82947",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82947.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "counts": {
+            "SUCCESS": 71,
+            "SKIPPED": 22,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-fast-bundled-protocol:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-fast-bundled-protocol:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82947:4512669419:2026-05-21T20:51:40Z:re_review",
+      "comment_id": "4512669419",
+      "comment_version_key": "4512669419:2026-05-21T20:51:40Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82947#issuecomment-4512669419",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82947,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-21T20:51:40Z",
+      "comment_updated_at": "2026-05-21T20:51:40Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(hooks): clear Gmail watcher renewal interval on re-entry",
+        "body": "## Problem\n\n`startGmailWatcher()` in `src/hooks/gmail-watcher.ts` does not stop the existing watcher when called a second time (e.g., during a configuration reload). On re-entry:\n\n1. **Process leak**: The old `gog serve` child process keeps running because `watcherProcess` is overwritten without killing the old process.\n2. **Interval leak**: The old `setInterval` renewal timer keeps firing because `renewInterval` is overwritten without `clearInterval`.\n3. **Respawn timer leak**: When the process exits normally, `spawnGogServe` queues a 5-second `setTimeout` for respawn. This timer is not stored or cleared. If a re-entry happens during the 5-second window, the stale timer fires and spawns a duplicate process.\n\n## Fix\n\nAdd a comprehensive re-entry guard **before async setup work** (Tailscale, Gmail API watch start):\n\n1. Set `shuttingDown = true` so the old process's exit handler skips the respawn `setTimeout`.\n2. Cancel any pending respawn timeout (`clearTimeout(respawnTimeout)`).\n3. Clear the old renewal interval.\n4. Kill the old `gog serve` process with SIGTERM.\n5. Await its **exit event**. If it does not exit within 3 seconds, escalate to SIGKILL. The promise resolves **only on exit**, never on the SIGKILL send, ensuring `shuttingDown` stays `true` until the process is confirmed dead.\n6. Reset `shuttingDown = false` and spawn fresh.\n\n**Key design decisions:**\n- Guard runs **before** `startGmailWatch()` and Tailscale setup, not after, so the old process cannot exit and queue a respawn during async work.\n- `respawnTimeout` is a new module-level variable that stores the exit handler's 5-second `setTimeout` return value. The re-entry guard and `stopGmailWatcher` both clear it.\n- `resolve()` appears **only** in the `exit` handler, **not** in the SIGKILL timeout. No race between exit-handler cleanup and replacement spawn.\n- `shuttingDown` is always reset to `false` unconditionally before `spawnGogServe`, covering both the guard path and the no-guard path.\n\nProduction diff is +22 lines changed in `gmail-watcher.ts`, plus 128 lines of test coverage (7 tests total).\n\n## Real behavior proof\n\nBehavior addressed: Calling `startGmailWatcher()` twice without stopping leaked the old `gog serve` process, renewal interval, and respawn timeout. Three separate leak vectors: (1) old process kept running, (2) old renewal timer kept firing, (3) stale 5-second respawn timer spawned a duplicate after re-entry.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js v22.16.0, OpenClaw built from source (commit dc44fdf) at `/tmp/fix-82947`.\n\nExact steps or command run after this patch:\n```bash\nStep 1. Build OpenClaw from patched source\ncd /tmp/fix-82947\nCI=true pnpm install --frozen-lockfile\npnpm build\n\nStep 2. Verify respawnTimeout tracking in compiled production code\ngrep -n \"respawnTimeout\" dist/gmail-watcher-lvUqmZO6.js\n\nStep 3. Verify the full re-entry guard\ngrep -n -B2 -A8 \"oldProcess.kill\" dist/gmail-watcher-lvUqmZO6.js\n\nStep 4. Start the patched gateway\ntimeout 10 node openclaw.mjs gateway\n\nStep 5. Run Gmail watcher test suite (7 tests)\nnode scripts/run-vitest.mjs src/hooks/gmail-watcher.test.ts\n```\n\nEvidence after fix: terminal output copied below.\n\n**Compiled production code verification**\n\nThe `respawnTimeout` variable is tracked at all three lifecycle points:\n\n```console\n$ grep -n \"respawnTimeout\" dist/gmail-watcher-lvUqmZO6.js\n25:let respawnTimeout = null;\n94:respawnTimeout = setTimeout(() => {\n95:respawnTimeout = null;\n168:if (watcherProcess || renewInterval || respawnTimeout) {\n170:if (respawnTimeout) {\n171:clearTimeout(respawnTimeout);\n172:respawnTimeout = null;\n238:if (respawnTimeout) {\n239:clearTimeout(respawnTimeout);\n240:respawnTimeout = null;\n```\n\n- **Line 25**: Module-level declaration.\n- **Line 94**: Stored in exit handler (was previously a fire-and-forget `setTimeout`).\n- **Lines 168-172**: Cleared in re-entry guard (before async setup).\n- **Lines 238-240**: Cleared in `stopGmailWatcher`.\n\nThe SIGTERM + SIGKILL escalation with exit-only resolution:\n\n```console\n$ grep -n -B2 -A8 \"oldProcess.kill\" dist/gmail-watcher-lvUqmZO6.js\n183-watcherProcess = null;\n184:oldProcess.kill(\"SIGTERM\");\n185-await new Promise((resolve) => {\n186-const escalation = setTimeout(() => {\n187:oldProcess.kill(\"SIGKILL\");\n188-}, 3e3);\n189-oldProcess.on(\"exit\", () => {\n190-clearTimeout(escalation);\n191-resolve();\n192-});\n193-});\n```\n\n`resolve()` is at line 191 (exit handler only). The SIGKILL at line 187 escalates but does not resolve. `shuttingDown` stays `true` until exit is confirmed.\n\n**Live watcher lifecycle proof: mock gog process spawn, exit, respawn, and cleanup**\n\nThe full gmail watcher lifecycle was exercised in a real running gateway by configuring gmail hooks and providing a mock `gog` binary that exits after 2 seconds. This triggers the respawn timer (the core of the fix) in production compiled code.\n\n**Setup:**\n```bash\nStep 1. Create a mock gog binary that exits after 2s (triggers respawn)\ncat > /tmp/gog << 'EOF'\n#!/bin/bash\ncase \"$*\" in\n  *\"watch start\"*) echo \"watch registered\"; exit 0;;\n  *\"watch serve\"*)  echo \"mock gog serve starting\"; sleep 2; exit 1;;\n  *)                exit 0;;\nesac\nEOF\nchmod +x /tmp/gog\n\nStep 2. Configure gmail hooks in openclaw.json (hooks.enabled + hooks.gmail.account/topic/pushToken)\nStep 3. Start gateway with mock gog in PATH\ncd /tmp/fix-82947\nPATH=\"/tmp:$PATH\" timeout 20 node openclaw.mjs gateway\n```\n\n**Terminal output (full watcher lifecycle):**\n\n```console\n2026-05-21T21:25:01.868-07:00 [gateway] starting...\n2026-05-21T21:25:03.585-07:00 [gateway] ready\n2026-05-21T21:25:03.649-07:00 [gmail-watcher] watch started for test@gmail.com\n2026-05-21T21:25:03.650-07:00 [gmail-watcher] starting gog gmail watch serve --account test@gmail.com --bind 127.0.0.1 --port 18787 --path /gmail-pubsub --include-body --max-bytes 20000\n2026-05-21T21:25:03.654-07:00 [gmail-watcher] gmail watcher started for test@gmail.com (renew every 720m)\n2026-05-21T21:25:03.655-07:00 [hooks] gmail watcher started\n2026-05-21T21:25:03.659-07:00 [gmail-watcher] [gog] mock gog serve starting on port 8787\n2026-05-21T21:25:06.075-07:00 [gmail-watcher] [gog] mock gog serve exiting\n2026-05-21T21:25:06.076-07:00 [gmail-watcher] gog exited (code=1, signal=null); restarting in 5s\n2026-05-21T21:25:18.577-07:00 [gmail-watcher] starting gog gmail watch serve --account test@gmail.com --bind 127.0.0.1 --port 18787 --path /gmail-pubsub --include-body --max-bytes 20000\n2026-05-21T21:25:18.582-07:00 [gmail-watcher] [gog] mock gog serve starting on port 8787\n2026-05-21T21:25:20.583-07:00 [gmail-watcher] [gog] mock gog serve exiting\n2026-05-21T21:25:20.584-07:00 [gmail-watcher] gog exited (code=1, signal=null); restarting in 5s\n2026-05-21T21:25:22.266-07:00 [gateway] received SIGTERM; shutting down\n2026-05-21T21:25:22.309-07:00 [gmail-watcher] gmail watcher stopped\n2026-05-21T21:25:22.311-07:00 [shutdown] completed cleanly in 37ms\n```\n\n**Line-by-line analysis of the fix's behavior:**\n\n1. `[gmail-watcher] watch started for test@gmail.com`: `startGmailWatch` registered with Gmail API (mock gog exits 0).\n2. `[gmail-watcher] starting gog gmail watch serve ...`: `spawnGogServe` spawned the mock gog process.\n3. `[gmail-watcher] gmail watcher started for test@gmail.com (renew every 720m)`: Watcher fully initialized, `renewInterval` set.\n4. `[gmail-watcher] [gog] mock gog serve exiting`: Mock gog exits after 2 seconds.\n5. **`[gmail-watcher] gog exited (code=1, signal=null); restarting in 5s`**: The exit handler fires. **This is where `respawnTimeout` is stored** (line 94 in compiled code: `respawnTimeout = setTimeout(..., 5000)`). Before this fix, this `setTimeout` was fire-and-forget with no reference stored.\n6. `[gmail-watcher] starting gog gmail watch serve ...`: **The respawn timer fired**, spawning a new process. Proves `respawnTimeout` storage works.\n7. Second exit + second `restarting in 5s`: Cycle repeats.\n8. `[gateway] received SIGTERM; shutting down`: SIGTERM arrives during the 5-second respawn window.\n9. **`[gmail-watcher] gmail watcher stopped`**: `stopGmailWatcher` ran, which sets `shuttingDown = true` and calls `clearTimeout(respawnTimeout)` (lines 238-240 in compiled code). The pending respawn timer is cancelled, preventing a duplicate process from spawning after shutdown. Before this fix, this timeout would fire and spawn a process into a stopped gateway.\n\n**What this proves:**\n- The `respawnTimeout` variable correctly stores the `setTimeout` return value in the exit handler.\n- The respawn mechanism works: process exits, timer fires, new process spawns.\n- `stopGmailWatcher` correctly clears the pending respawn timer via `clearTimeout(respawnTimeout)`.\n- SIGTERM during a respawn window does not leak a duplicate process.\n\n**Vitest test suite (7 tests, supplemental)**\n\n```console\n$ node scripts/run-vitest.mjs src/hooks/gmail-watcher.test.ts\n ✓ |hooks| ../../src/hooks/gmail-watcher.test.ts (7 tests) 127ms\n Test Files  1 passed (1)\n      Tests  7 passed (7)\n```\n\nThe 7 tests cover all re-entry scenarios:\n\n1. **Kills existing process on re-entry**: Verifies `.kill(\"SIGTERM\")` on the old child.\n2. **Clears interval on re-entry**: Verifies timer count stays stable.\n3. **Only one renewal per tick**: One renewal after double start.\n4. **Cancels stale respawn timeout on re-entry**: Process exits (queuing 5s respawn), then re-entry happens, then 6 seconds pass. Verifies exactly 2 spawns (no duplicate from stale timer).\n5. **Does not let a stale cancelled startup clear newer watcher config**: Concurrent start race.\n6. **Starts gmail watcher**: Happy path.\n7. **Starts gmail watcher (restarts serve with updated config)**: Config change path.\n\nObserved result after fix: The mock gog lifecycle proof shows the full respawn cycle working in production compiled code: process spawn, process exit, `respawnTimeout` stored, respawn fires, second cycle, SIGTERM during respawn window, `stopGmailWatcher` clears the pending timeout and shuts down cleanly. The compiled bundle tracks `respawnTimeout` at all three lifecycle points (storage in exit handler, clearing in re-entry guard, clearing in stop). All 7 tests pass.\n\nWhat was not tested: Triggering the re-entry guard specifically (calling `startGmailWatcher` twice during a live session). The re-entry guard's process kill + timer cleanup was proven via Vitest mock in test 1, 2, and 4. The mock gog proof covers the respawn and stop paths.\n\n\n",
+        "branch": "fix/gmail-watcher-interval-leak",
+        "head_sha": "6f4c910612bca6e3dbc237345bb228131fa04b42",
+        "author": "sebtardif",
+        "labels": [
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/hooks/gmail-watcher.test.ts",
+            "additions": 160,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/gmail-watcher.ts",
+            "additions": 71,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82947",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82947.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "counts": {
+            "SUCCESS": 71,
+            "SKIPPED": 22,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-fast-bundled-protocol:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-fast-bundled-protocol:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82947:4512555955:2026-05-21T20:36:28Z:re_review",
+      "comment_id": "4512555955",
+      "comment_version_key": "4512555955:2026-05-21T20:36:28Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82947#issuecomment-4512555955",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82947,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-21T20:36:28Z",
+      "comment_updated_at": "2026-05-21T20:36:28Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(hooks): clear Gmail watcher renewal interval on re-entry",
+        "body": "## Problem\n\n`startGmailWatcher()` in `src/hooks/gmail-watcher.ts` does not stop the existing watcher when called a second time (e.g., during a configuration reload). On re-entry:\n\n1. **Process leak**: The old `gog serve` child process keeps running because `watcherProcess` is overwritten without killing the old process.\n2. **Interval leak**: The old `setInterval` renewal timer keeps firing because `renewInterval` is overwritten without `clearInterval`.\n3. **Respawn timer leak**: When the process exits normally, `spawnGogServe` queues a 5-second `setTimeout` for respawn. This timer is not stored or cleared. If a re-entry happens during the 5-second window, the stale timer fires and spawns a duplicate process.\n\n## Fix\n\nAdd a comprehensive re-entry guard **before async setup work** (Tailscale, Gmail API watch start):\n\n1. Set `shuttingDown = true` so the old process's exit handler skips the respawn `setTimeout`.\n2. Cancel any pending respawn timeout (`clearTimeout(respawnTimeout)`).\n3. Clear the old renewal interval.\n4. Kill the old `gog serve` process with SIGTERM.\n5. Await its **exit event**. If it does not exit within 3 seconds, escalate to SIGKILL. The promise resolves **only on exit**, never on the SIGKILL send, ensuring `shuttingDown` stays `true` until the process is confirmed dead.\n6. Reset `shuttingDown = false` and spawn fresh.\n\n**Key design decisions:**\n- Guard runs **before** `startGmailWatch()` and Tailscale setup, not after, so the old process cannot exit and queue a respawn during async work.\n- `respawnTimeout` is a new module-level variable that stores the exit handler's 5-second `setTimeout` return value. The re-entry guard and `stopGmailWatcher` both clear it.\n- `resolve()` appears **only** in the `exit` handler, **not** in the SIGKILL timeout. No race between exit-handler cleanup and replacement spawn.\n- `shuttingDown` is always reset to `false` unconditionally before `spawnGogServe`, covering both the guard path and the no-guard path.\n\nProduction diff is +22 lines changed in `gmail-watcher.ts`, plus 128 lines of test coverage (7 tests total).\n\n## Real behavior proof\n\nBehavior addressed: Calling `startGmailWatcher()` twice without stopping leaked the old `gog serve` process, renewal interval, and respawn timeout. Three separate leak vectors: (1) old process kept running, (2) old renewal timer kept firing, (3) stale 5-second respawn timer spawned a duplicate after re-entry.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js v22.16.0, OpenClaw built from source (commit dc44fdf) at `/tmp/fix-82947`.\n\nExact steps or command run after this patch:\n```bash\nStep 1. Build OpenClaw from patched source\ncd /tmp/fix-82947\nCI=true pnpm install --frozen-lockfile\npnpm build\n\nStep 2. Verify respawnTimeout tracking in compiled production code\ngrep -n \"respawnTimeout\" dist/gmail-watcher-lvUqmZO6.js\n\nStep 3. Verify the full re-entry guard\ngrep -n -B2 -A8 \"oldProcess.kill\" dist/gmail-watcher-lvUqmZO6.js\n\nStep 4. Start the patched gateway\ntimeout 10 node openclaw.mjs gateway\n\nStep 5. Run Gmail watcher test suite (7 tests)\nnode scripts/run-vitest.mjs src/hooks/gmail-watcher.test.ts\n```\n\nEvidence after fix: terminal output copied below.\n\n**Compiled production code verification**\n\nThe `respawnTimeout` variable is tracked at all three lifecycle points:\n\n```console\n$ grep -n \"respawnTimeout\" dist/gmail-watcher-lvUqmZO6.js\n25:let respawnTimeout = null;\n94:respawnTimeout = setTimeout(() => {\n95:respawnTimeout = null;\n168:if (watcherProcess || renewInterval || respawnTimeout) {\n170:if (respawnTimeout) {\n171:clearTimeout(respawnTimeout);\n172:respawnTimeout = null;\n238:if (respawnTimeout) {\n239:clearTimeout(respawnTimeout);\n240:respawnTimeout = null;\n```\n\n- **Line 25**: Module-level declaration.\n- **Line 94**: Stored in exit handler (was previously a fire-and-forget `setTimeout`).\n- **Lines 168-172**: Cleared in re-entry guard (before async setup).\n- **Lines 238-240**: Cleared in `stopGmailWatcher`.\n\nThe SIGTERM + SIGKILL escalation with exit-only resolution:\n\n```console\n$ grep -n -B2 -A8 \"oldProcess.kill\" dist/gmail-watcher-lvUqmZO6.js\n183-watcherProcess = null;\n184:oldProcess.kill(\"SIGTERM\");\n185-await new Promise((resolve) => {\n186-const escalation = setTimeout(() => {\n187:oldProcess.kill(\"SIGKILL\");\n188-}, 3e3);\n189-oldProcess.on(\"exit\", () => {\n190-clearTimeout(escalation);\n191-resolve();\n192-});\n193-});\n```\n\n`resolve()` is at line 191 (exit handler only). The SIGKILL at line 187 escalates but does not resolve. `shuttingDown` stays `true` until exit is confirmed.\n\n**Live watcher lifecycle proof: mock gog process spawn, exit, respawn, and cleanup**\n\nThe full gmail watcher lifecycle was exercised in a real running gateway by configuring gmail hooks and providing a mock `gog` binary that exits after 2 seconds. This triggers the respawn timer (the core of the fix) in production compiled code.\n\n**Setup:**\n```bash\nStep 1. Create a mock gog binary that exits after 2s (triggers respawn)\ncat > /tmp/gog << 'EOF'\n#!/bin/bash\ncase \"$*\" in\n  *\"watch start\"*) echo \"watch registered\"; exit 0;;\n  *\"watch serve\"*)  echo \"mock gog serve starting\"; sleep 2; exit 1;;\n  *)                exit 0;;\nesac\nEOF\nchmod +x /tmp/gog\n\nStep 2. Configure gmail hooks in openclaw.json (hooks.enabled + hooks.gmail.account/topic/pushToken)\nStep 3. Start gateway with mock gog in PATH\ncd /tmp/fix-82947\nPATH=\"/tmp:$PATH\" timeout 20 node openclaw.mjs gateway\n```\n\n**Terminal output (full watcher lifecycle):**\n\n```console\n2026-05-21T21:25:01.868-07:00 [gateway] starting...\n2026-05-21T21:25:03.585-07:00 [gateway] ready\n2026-05-21T21:25:03.649-07:00 [gmail-watcher] watch started for test@gmail.com\n2026-05-21T21:25:03.650-07:00 [gmail-watcher] starting gog gmail watch serve --account test@gmail.com --bind 127.0.0.1 --port 18787 --path /gmail-pubsub --include-body --max-bytes 20000\n2026-05-21T21:25:03.654-07:00 [gmail-watcher] gmail watcher started for test@gmail.com (renew every 720m)\n2026-05-21T21:25:03.655-07:00 [hooks] gmail watcher started\n2026-05-21T21:25:03.659-07:00 [gmail-watcher] [gog] mock gog serve starting on port 8787\n2026-05-21T21:25:06.075-07:00 [gmail-watcher] [gog] mock gog serve exiting\n2026-05-21T21:25:06.076-07:00 [gmail-watcher] gog exited (code=1, signal=null); restarting in 5s\n2026-05-21T21:25:18.577-07:00 [gmail-watcher] starting gog gmail watch serve --account test@gmail.com --bind 127.0.0.1 --port 18787 --path /gmail-pubsub --include-body --max-bytes 20000\n2026-05-21T21:25:18.582-07:00 [gmail-watcher] [gog] mock gog serve starting on port 8787\n2026-05-21T21:25:20.583-07:00 [gmail-watcher] [gog] mock gog serve exiting\n2026-05-21T21:25:20.584-07:00 [gmail-watcher] gog exited (code=1, signal=null); restarting in 5s\n2026-05-21T21:25:22.266-07:00 [gateway] received SIGTERM; shutting down\n2026-05-21T21:25:22.309-07:00 [gmail-watcher] gmail watcher stopped\n2026-05-21T21:25:22.311-07:00 [shutdown] completed cleanly in 37ms\n```\n\n**Line-by-line analysis of the fix's behavior:**\n\n1. `[gmail-watcher] watch started for test@gmail.com`: `startGmailWatch` registered with Gmail API (mock gog exits 0).\n2. `[gmail-watcher] starting gog gmail watch serve ...`: `spawnGogServe` spawned the mock gog process.\n3. `[gmail-watcher] gmail watcher started for test@gmail.com (renew every 720m)`: Watcher fully initialized, `renewInterval` set.\n4. `[gmail-watcher] [gog] mock gog serve exiting`: Mock gog exits after 2 seconds.\n5. **`[gmail-watcher] gog exited (code=1, signal=null); restarting in 5s`**: The exit handler fires. **This is where `respawnTimeout` is stored** (line 94 in compiled code: `respawnTimeout = setTimeout(..., 5000)`). Before this fix, this `setTimeout` was fire-and-forget with no reference stored.\n6. `[gmail-watcher] starting gog gmail watch serve ...`: **The respawn timer fired**, spawning a new process. Proves `respawnTimeout` storage works.\n7. Second exit + second `restarting in 5s`: Cycle repeats.\n8. `[gateway] received SIGTERM; shutting down`: SIGTERM arrives during the 5-second respawn window.\n9. **`[gmail-watcher] gmail watcher stopped`**: `stopGmailWatcher` ran, which sets `shuttingDown = true` and calls `clearTimeout(respawnTimeout)` (lines 238-240 in compiled code). The pending respawn timer is cancelled, preventing a duplicate process from spawning after shutdown. Before this fix, this timeout would fire and spawn a process into a stopped gateway.\n\n**What this proves:**\n- The `respawnTimeout` variable correctly stores the `setTimeout` return value in the exit handler.\n- The respawn mechanism works: process exits, timer fires, new process spawns.\n- `stopGmailWatcher` correctly clears the pending respawn timer via `clearTimeout(respawnTimeout)`.\n- SIGTERM during a respawn window does not leak a duplicate process.\n\n**Vitest test suite (7 tests, supplemental)**\n\n```console\n$ node scripts/run-vitest.mjs src/hooks/gmail-watcher.test.ts\n ✓ |hooks| ../../src/hooks/gmail-watcher.test.ts (7 tests) 127ms\n Test Files  1 passed (1)\n      Tests  7 passed (7)\n```\n\nThe 7 tests cover all re-entry scenarios:\n\n1. **Kills existing process on re-entry**: Verifies `.kill(\"SIGTERM\")` on the old child.\n2. **Clears interval on re-entry**: Verifies timer count stays stable.\n3. **Only one renewal per tick**: One renewal after double start.\n4. **Cancels stale respawn timeout on re-entry**: Process exits (queuing 5s respawn), then re-entry happens, then 6 seconds pass. Verifies exactly 2 spawns (no duplicate from stale timer).\n5. **Does not let a stale cancelled startup clear newer watcher config**: Concurrent start race.\n6. **Starts gmail watcher**: Happy path.\n7. **Starts gmail watcher (restarts serve with updated config)**: Config change path.\n\nObserved result after fix: The mock gog lifecycle proof shows the full respawn cycle working in production compiled code: process spawn, process exit, `respawnTimeout` stored, respawn fires, second cycle, SIGTERM during respawn window, `stopGmailWatcher` clears the pending timeout and shuts down cleanly. The compiled bundle tracks `respawnTimeout` at all three lifecycle points (storage in exit handler, clearing in re-entry guard, clearing in stop). All 7 tests pass.\n\nWhat was not tested: Triggering the re-entry guard specifically (calling `startGmailWatcher` twice during a live session). The re-entry guard's process kill + timer cleanup was proven via Vitest mock in test 1, 2, and 4. The mock gog proof covers the respawn and stop paths.\n\n\n",
+        "branch": "fix/gmail-watcher-interval-leak",
+        "head_sha": "6f4c910612bca6e3dbc237345bb228131fa04b42",
+        "author": "sebtardif",
+        "labels": [
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/hooks/gmail-watcher.test.ts",
+            "additions": 160,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/gmail-watcher.ts",
+            "additions": 71,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82947",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82947.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "counts": {
+            "SUCCESS": 71,
+            "SKIPPED": 22,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-fast-bundled-protocol:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-fast-bundled-protocol:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82947:4512352586:2026-05-21T20:07:26Z:re_review",
+      "comment_id": "4512352586",
+      "comment_version_key": "4512352586:2026-05-21T20:07:26Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82947#issuecomment-4512352586",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82947,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-21T20:07:26Z",
+      "comment_updated_at": "2026-05-21T20:07:26Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(hooks): clear Gmail watcher renewal interval on re-entry",
+        "body": "## Problem\n\n`startGmailWatcher()` in `src/hooks/gmail-watcher.ts` does not stop the existing watcher when called a second time (e.g., during a configuration reload). On re-entry:\n\n1. **Process leak**: The old `gog serve` child process keeps running because `watcherProcess` is overwritten without killing the old process.\n2. **Interval leak**: The old `setInterval` renewal timer keeps firing because `renewInterval` is overwritten without `clearInterval`.\n3. **Respawn timer leak**: When the process exits normally, `spawnGogServe` queues a 5-second `setTimeout` for respawn. This timer is not stored or cleared. If a re-entry happens during the 5-second window, the stale timer fires and spawns a duplicate process.\n\n## Fix\n\nAdd a comprehensive re-entry guard **before async setup work** (Tailscale, Gmail API watch start):\n\n1. Set `shuttingDown = true` so the old process's exit handler skips the respawn `setTimeout`.\n2. Cancel any pending respawn timeout (`clearTimeout(respawnTimeout)`).\n3. Clear the old renewal interval.\n4. Kill the old `gog serve` process with SIGTERM.\n5. Await its **exit event**. If it does not exit within 3 seconds, escalate to SIGKILL. The promise resolves **only on exit**, never on the SIGKILL send, ensuring `shuttingDown` stays `true` until the process is confirmed dead.\n6. Reset `shuttingDown = false` and spawn fresh.\n\n**Key design decisions:**\n- Guard runs **before** `startGmailWatch()` and Tailscale setup, not after, so the old process cannot exit and queue a respawn during async work.\n- `respawnTimeout` is a new module-level variable that stores the exit handler's 5-second `setTimeout` return value. The re-entry guard and `stopGmailWatcher` both clear it.\n- `resolve()` appears **only** in the `exit` handler, **not** in the SIGKILL timeout. No race between exit-handler cleanup and replacement spawn.\n- `shuttingDown` is always reset to `false` unconditionally before `spawnGogServe`, covering both the guard path and the no-guard path.\n\nProduction diff is +22 lines changed in `gmail-watcher.ts`, plus 128 lines of test coverage (7 tests total).\n\n## Real behavior proof\n\nBehavior addressed: Calling `startGmailWatcher()` twice without stopping leaked the old `gog serve` process, renewal interval, and respawn timeout. Three separate leak vectors: (1) old process kept running, (2) old renewal timer kept firing, (3) stale 5-second respawn timer spawned a duplicate after re-entry.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js v22.16.0, OpenClaw built from source (commit dc44fdf) at `/tmp/fix-82947`.\n\nExact steps or command run after this patch:\n```bash\nStep 1. Build OpenClaw from patched source\ncd /tmp/fix-82947\nCI=true pnpm install --frozen-lockfile\npnpm build\n\nStep 2. Verify respawnTimeout tracking in compiled production code\ngrep -n \"respawnTimeout\" dist/gmail-watcher-lvUqmZO6.js\n\nStep 3. Verify the full re-entry guard\ngrep -n -B2 -A8 \"oldProcess.kill\" dist/gmail-watcher-lvUqmZO6.js\n\nStep 4. Start the patched gateway\ntimeout 10 node openclaw.mjs gateway\n\nStep 5. Run Gmail watcher test suite (7 tests)\nnode scripts/run-vitest.mjs src/hooks/gmail-watcher.test.ts\n```\n\nEvidence after fix: terminal output copied below.\n\n**Compiled production code verification**\n\nThe `respawnTimeout` variable is tracked at all three lifecycle points:\n\n```console\n$ grep -n \"respawnTimeout\" dist/gmail-watcher-lvUqmZO6.js\n25:let respawnTimeout = null;\n94:respawnTimeout = setTimeout(() => {\n95:respawnTimeout = null;\n168:if (watcherProcess || renewInterval || respawnTimeout) {\n170:if (respawnTimeout) {\n171:clearTimeout(respawnTimeout);\n172:respawnTimeout = null;\n238:if (respawnTimeout) {\n239:clearTimeout(respawnTimeout);\n240:respawnTimeout = null;\n```\n\n- **Line 25**: Module-level declaration.\n- **Line 94**: Stored in exit handler (was previously a fire-and-forget `setTimeout`).\n- **Lines 168-172**: Cleared in re-entry guard (before async setup).\n- **Lines 238-240**: Cleared in `stopGmailWatcher`.\n\nThe SIGTERM + SIGKILL escalation with exit-only resolution:\n\n```console\n$ grep -n -B2 -A8 \"oldProcess.kill\" dist/gmail-watcher-lvUqmZO6.js\n183-watcherProcess = null;\n184:oldProcess.kill(\"SIGTERM\");\n185-await new Promise((resolve) => {\n186-const escalation = setTimeout(() => {\n187:oldProcess.kill(\"SIGKILL\");\n188-}, 3e3);\n189-oldProcess.on(\"exit\", () => {\n190-clearTimeout(escalation);\n191-resolve();\n192-});\n193-});\n```\n\n`resolve()` is at line 191 (exit handler only). The SIGKILL at line 187 escalates but does not resolve. `shuttingDown` stays `true` until exit is confirmed.\n\n**Live watcher lifecycle proof: mock gog process spawn, exit, respawn, and cleanup**\n\nThe full gmail watcher lifecycle was exercised in a real running gateway by configuring gmail hooks and providing a mock `gog` binary that exits after 2 seconds. This triggers the respawn timer (the core of the fix) in production compiled code.\n\n**Setup:**\n```bash\nStep 1. Create a mock gog binary that exits after 2s (triggers respawn)\ncat > /tmp/gog << 'EOF'\n#!/bin/bash\ncase \"$*\" in\n  *\"watch start\"*) echo \"watch registered\"; exit 0;;\n  *\"watch serve\"*)  echo \"mock gog serve starting\"; sleep 2; exit 1;;\n  *)                exit 0;;\nesac\nEOF\nchmod +x /tmp/gog\n\nStep 2. Configure gmail hooks in openclaw.json (hooks.enabled + hooks.gmail.account/topic/pushToken)\nStep 3. Start gateway with mock gog in PATH\ncd /tmp/fix-82947\nPATH=\"/tmp:$PATH\" timeout 20 node openclaw.mjs gateway\n```\n\n**Terminal output (full watcher lifecycle):**\n\n```console\n2026-05-21T21:25:01.868-07:00 [gateway] starting...\n2026-05-21T21:25:03.585-07:00 [gateway] ready\n2026-05-21T21:25:03.649-07:00 [gmail-watcher] watch started for test@gmail.com\n2026-05-21T21:25:03.650-07:00 [gmail-watcher] starting gog gmail watch serve --account test@gmail.com --bind 127.0.0.1 --port 18787 --path /gmail-pubsub --include-body --max-bytes 20000\n2026-05-21T21:25:03.654-07:00 [gmail-watcher] gmail watcher started for test@gmail.com (renew every 720m)\n2026-05-21T21:25:03.655-07:00 [hooks] gmail watcher started\n2026-05-21T21:25:03.659-07:00 [gmail-watcher] [gog] mock gog serve starting on port 8787\n2026-05-21T21:25:06.075-07:00 [gmail-watcher] [gog] mock gog serve exiting\n2026-05-21T21:25:06.076-07:00 [gmail-watcher] gog exited (code=1, signal=null); restarting in 5s\n2026-05-21T21:25:18.577-07:00 [gmail-watcher] starting gog gmail watch serve --account test@gmail.com --bind 127.0.0.1 --port 18787 --path /gmail-pubsub --include-body --max-bytes 20000\n2026-05-21T21:25:18.582-07:00 [gmail-watcher] [gog] mock gog serve starting on port 8787\n2026-05-21T21:25:20.583-07:00 [gmail-watcher] [gog] mock gog serve exiting\n2026-05-21T21:25:20.584-07:00 [gmail-watcher] gog exited (code=1, signal=null); restarting in 5s\n2026-05-21T21:25:22.266-07:00 [gateway] received SIGTERM; shutting down\n2026-05-21T21:25:22.309-07:00 [gmail-watcher] gmail watcher stopped\n2026-05-21T21:25:22.311-07:00 [shutdown] completed cleanly in 37ms\n```\n\n**Line-by-line analysis of the fix's behavior:**\n\n1. `[gmail-watcher] watch started for test@gmail.com`: `startGmailWatch` registered with Gmail API (mock gog exits 0).\n2. `[gmail-watcher] starting gog gmail watch serve ...`: `spawnGogServe` spawned the mock gog process.\n3. `[gmail-watcher] gmail watcher started for test@gmail.com (renew every 720m)`: Watcher fully initialized, `renewInterval` set.\n4. `[gmail-watcher] [gog] mock gog serve exiting`: Mock gog exits after 2 seconds.\n5. **`[gmail-watcher] gog exited (code=1, signal=null); restarting in 5s`**: The exit handler fires. **This is where `respawnTimeout` is stored** (line 94 in compiled code: `respawnTimeout = setTimeout(..., 5000)`). Before this fix, this `setTimeout` was fire-and-forget with no reference stored.\n6. `[gmail-watcher] starting gog gmail watch serve ...`: **The respawn timer fired**, spawning a new process. Proves `respawnTimeout` storage works.\n7. Second exit + second `restarting in 5s`: Cycle repeats.\n8. `[gateway] received SIGTERM; shutting down`: SIGTERM arrives during the 5-second respawn window.\n9. **`[gmail-watcher] gmail watcher stopped`**: `stopGmailWatcher` ran, which sets `shuttingDown = true` and calls `clearTimeout(respawnTimeout)` (lines 238-240 in compiled code). The pending respawn timer is cancelled, preventing a duplicate process from spawning after shutdown. Before this fix, this timeout would fire and spawn a process into a stopped gateway.\n\n**What this proves:**\n- The `respawnTimeout` variable correctly stores the `setTimeout` return value in the exit handler.\n- The respawn mechanism works: process exits, timer fires, new process spawns.\n- `stopGmailWatcher` correctly clears the pending respawn timer via `clearTimeout(respawnTimeout)`.\n- SIGTERM during a respawn window does not leak a duplicate process.\n\n**Vitest test suite (7 tests, supplemental)**\n\n```console\n$ node scripts/run-vitest.mjs src/hooks/gmail-watcher.test.ts\n ✓ |hooks| ../../src/hooks/gmail-watcher.test.ts (7 tests) 127ms\n Test Files  1 passed (1)\n      Tests  7 passed (7)\n```\n\nThe 7 tests cover all re-entry scenarios:\n\n1. **Kills existing process on re-entry**: Verifies `.kill(\"SIGTERM\")` on the old child.\n2. **Clears interval on re-entry**: Verifies timer count stays stable.\n3. **Only one renewal per tick**: One renewal after double start.\n4. **Cancels stale respawn timeout on re-entry**: Process exits (queuing 5s respawn), then re-entry happens, then 6 seconds pass. Verifies exactly 2 spawns (no duplicate from stale timer).\n5. **Does not let a stale cancelled startup clear newer watcher config**: Concurrent start race.\n6. **Starts gmail watcher**: Happy path.\n7. **Starts gmail watcher (restarts serve with updated config)**: Config change path.\n\nObserved result after fix: The mock gog lifecycle proof shows the full respawn cycle working in production compiled code: process spawn, process exit, `respawnTimeout` stored, respawn fires, second cycle, SIGTERM during respawn window, `stopGmailWatcher` clears the pending timeout and shuts down cleanly. The compiled bundle tracks `respawnTimeout` at all three lifecycle points (storage in exit handler, clearing in re-entry guard, clearing in stop). All 7 tests pass.\n\nWhat was not tested: Triggering the re-entry guard specifically (calling `startGmailWatcher` twice during a live session). The re-entry guard's process kill + timer cleanup was proven via Vitest mock in test 1, 2, and 4. The mock gog proof covers the respawn and stop paths.\n\n\n",
+        "branch": "fix/gmail-watcher-interval-leak",
+        "head_sha": "6f4c910612bca6e3dbc237345bb228131fa04b42",
+        "author": "sebtardif",
+        "labels": [
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/hooks/gmail-watcher.test.ts",
+            "additions": 160,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/gmail-watcher.ts",
+            "additions": 71,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82947",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82947.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "counts": {
+            "SUCCESS": 71,
+            "SKIPPED": 22,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-fast-bundled-protocol:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-fast-bundled-protocol:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82947:4512196766:2026-05-21T19:45:54Z:re_review",
+      "comment_id": "4512196766",
+      "comment_version_key": "4512196766:2026-05-21T19:45:54Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82947#issuecomment-4512196766",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82947,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-21T19:45:54Z",
+      "comment_updated_at": "2026-05-21T19:45:54Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(hooks): clear Gmail watcher renewal interval on re-entry",
+        "body": "## Problem\n\n`startGmailWatcher()` in `src/hooks/gmail-watcher.ts` does not stop the existing watcher when called a second time (e.g., during a configuration reload). On re-entry:\n\n1. **Process leak**: The old `gog serve` child process keeps running because `watcherProcess` is overwritten without killing the old process.\n2. **Interval leak**: The old `setInterval` renewal timer keeps firing because `renewInterval` is overwritten without `clearInterval`.\n3. **Respawn timer leak**: When the process exits normally, `spawnGogServe` queues a 5-second `setTimeout` for respawn. This timer is not stored or cleared. If a re-entry happens during the 5-second window, the stale timer fires and spawns a duplicate process.\n\n## Fix\n\nAdd a comprehensive re-entry guard **before async setup work** (Tailscale, Gmail API watch start):\n\n1. Set `shuttingDown = true` so the old process's exit handler skips the respawn `setTimeout`.\n2. Cancel any pending respawn timeout (`clearTimeout(respawnTimeout)`).\n3. Clear the old renewal interval.\n4. Kill the old `gog serve` process with SIGTERM.\n5. Await its **exit event**. If it does not exit within 3 seconds, escalate to SIGKILL. The promise resolves **only on exit**, never on the SIGKILL send, ensuring `shuttingDown` stays `true` until the process is confirmed dead.\n6. Reset `shuttingDown = false` and spawn fresh.\n\n**Key design decisions:**\n- Guard runs **before** `startGmailWatch()` and Tailscale setup, not after, so the old process cannot exit and queue a respawn during async work.\n- `respawnTimeout` is a new module-level variable that stores the exit handler's 5-second `setTimeout` return value. The re-entry guard and `stopGmailWatcher` both clear it.\n- `resolve()` appears **only** in the `exit` handler, **not** in the SIGKILL timeout. No race between exit-handler cleanup and replacement spawn.\n- `shuttingDown` is always reset to `false` unconditionally before `spawnGogServe`, covering both the guard path and the no-guard path.\n\nProduction diff is +22 lines changed in `gmail-watcher.ts`, plus 128 lines of test coverage (7 tests total).\n\n## Real behavior proof\n\nBehavior addressed: Calling `startGmailWatcher()` twice without stopping leaked the old `gog serve` process, renewal interval, and respawn timeout. Three separate leak vectors: (1) old process kept running, (2) old renewal timer kept firing, (3) stale 5-second respawn timer spawned a duplicate after re-entry.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js v22.16.0, OpenClaw built from source (commit dc44fdf) at `/tmp/fix-82947`.\n\nExact steps or command run after this patch:\n```bash\nStep 1. Build OpenClaw from patched source\ncd /tmp/fix-82947\nCI=true pnpm install --frozen-lockfile\npnpm build\n\nStep 2. Verify respawnTimeout tracking in compiled production code\ngrep -n \"respawnTimeout\" dist/gmail-watcher-lvUqmZO6.js\n\nStep 3. Verify the full re-entry guard\ngrep -n -B2 -A8 \"oldProcess.kill\" dist/gmail-watcher-lvUqmZO6.js\n\nStep 4. Start the patched gateway\ntimeout 10 node openclaw.mjs gateway\n\nStep 5. Run Gmail watcher test suite (7 tests)\nnode scripts/run-vitest.mjs src/hooks/gmail-watcher.test.ts\n```\n\nEvidence after fix: terminal output copied below.\n\n**Compiled production code verification**\n\nThe `respawnTimeout` variable is tracked at all three lifecycle points:\n\n```console\n$ grep -n \"respawnTimeout\" dist/gmail-watcher-lvUqmZO6.js\n25:let respawnTimeout = null;\n94:respawnTimeout = setTimeout(() => {\n95:respawnTimeout = null;\n168:if (watcherProcess || renewInterval || respawnTimeout) {\n170:if (respawnTimeout) {\n171:clearTimeout(respawnTimeout);\n172:respawnTimeout = null;\n238:if (respawnTimeout) {\n239:clearTimeout(respawnTimeout);\n240:respawnTimeout = null;\n```\n\n- **Line 25**: Module-level declaration.\n- **Line 94**: Stored in exit handler (was previously a fire-and-forget `setTimeout`).\n- **Lines 168-172**: Cleared in re-entry guard (before async setup).\n- **Lines 238-240**: Cleared in `stopGmailWatcher`.\n\nThe SIGTERM + SIGKILL escalation with exit-only resolution:\n\n```console\n$ grep -n -B2 -A8 \"oldProcess.kill\" dist/gmail-watcher-lvUqmZO6.js\n183-watcherProcess = null;\n184:oldProcess.kill(\"SIGTERM\");\n185-await new Promise((resolve) => {\n186-const escalation = setTimeout(() => {\n187:oldProcess.kill(\"SIGKILL\");\n188-}, 3e3);\n189-oldProcess.on(\"exit\", () => {\n190-clearTimeout(escalation);\n191-resolve();\n192-});\n193-});\n```\n\n`resolve()` is at line 191 (exit handler only). The SIGKILL at line 187 escalates but does not resolve. `shuttingDown` stays `true` until exit is confirmed.\n\n**Live watcher lifecycle proof: mock gog process spawn, exit, respawn, and cleanup**\n\nThe full gmail watcher lifecycle was exercised in a real running gateway by configuring gmail hooks and providing a mock `gog` binary that exits after 2 seconds. This triggers the respawn timer (the core of the fix) in production compiled code.\n\n**Setup:**\n```bash\nStep 1. Create a mock gog binary that exits after 2s (triggers respawn)\ncat > /tmp/gog << 'EOF'\n#!/bin/bash\ncase \"$*\" in\n  *\"watch start\"*) echo \"watch registered\"; exit 0;;\n  *\"watch serve\"*)  echo \"mock gog serve starting\"; sleep 2; exit 1;;\n  *)                exit 0;;\nesac\nEOF\nchmod +x /tmp/gog\n\nStep 2. Configure gmail hooks in openclaw.json (hooks.enabled + hooks.gmail.account/topic/pushToken)\nStep 3. Start gateway with mock gog in PATH\ncd /tmp/fix-82947\nPATH=\"/tmp:$PATH\" timeout 20 node openclaw.mjs gateway\n```\n\n**Terminal output (full watcher lifecycle):**\n\n```console\n2026-05-21T21:25:01.868-07:00 [gateway] starting...\n2026-05-21T21:25:03.585-07:00 [gateway] ready\n2026-05-21T21:25:03.649-07:00 [gmail-watcher] watch started for test@gmail.com\n2026-05-21T21:25:03.650-07:00 [gmail-watcher] starting gog gmail watch serve --account test@gmail.com --bind 127.0.0.1 --port 18787 --path /gmail-pubsub --include-body --max-bytes 20000\n2026-05-21T21:25:03.654-07:00 [gmail-watcher] gmail watcher started for test@gmail.com (renew every 720m)\n2026-05-21T21:25:03.655-07:00 [hooks] gmail watcher started\n2026-05-21T21:25:03.659-07:00 [gmail-watcher] [gog] mock gog serve starting on port 8787\n2026-05-21T21:25:06.075-07:00 [gmail-watcher] [gog] mock gog serve exiting\n2026-05-21T21:25:06.076-07:00 [gmail-watcher] gog exited (code=1, signal=null); restarting in 5s\n2026-05-21T21:25:18.577-07:00 [gmail-watcher] starting gog gmail watch serve --account test@gmail.com --bind 127.0.0.1 --port 18787 --path /gmail-pubsub --include-body --max-bytes 20000\n2026-05-21T21:25:18.582-07:00 [gmail-watcher] [gog] mock gog serve starting on port 8787\n2026-05-21T21:25:20.583-07:00 [gmail-watcher] [gog] mock gog serve exiting\n2026-05-21T21:25:20.584-07:00 [gmail-watcher] gog exited (code=1, signal=null); restarting in 5s\n2026-05-21T21:25:22.266-07:00 [gateway] received SIGTERM; shutting down\n2026-05-21T21:25:22.309-07:00 [gmail-watcher] gmail watcher stopped\n2026-05-21T21:25:22.311-07:00 [shutdown] completed cleanly in 37ms\n```\n\n**Line-by-line analysis of the fix's behavior:**\n\n1. `[gmail-watcher] watch started for test@gmail.com`: `startGmailWatch` registered with Gmail API (mock gog exits 0).\n2. `[gmail-watcher] starting gog gmail watch serve ...`: `spawnGogServe` spawned the mock gog process.\n3. `[gmail-watcher] gmail watcher started for test@gmail.com (renew every 720m)`: Watcher fully initialized, `renewInterval` set.\n4. `[gmail-watcher] [gog] mock gog serve exiting`: Mock gog exits after 2 seconds.\n5. **`[gmail-watcher] gog exited (code=1, signal=null); restarting in 5s`**: The exit handler fires. **This is where `respawnTimeout` is stored** (line 94 in compiled code: `respawnTimeout = setTimeout(..., 5000)`). Before this fix, this `setTimeout` was fire-and-forget with no reference stored.\n6. `[gmail-watcher] starting gog gmail watch serve ...`: **The respawn timer fired**, spawning a new process. Proves `respawnTimeout` storage works.\n7. Second exit + second `restarting in 5s`: Cycle repeats.\n8. `[gateway] received SIGTERM; shutting down`: SIGTERM arrives during the 5-second respawn window.\n9. **`[gmail-watcher] gmail watcher stopped`**: `stopGmailWatcher` ran, which sets `shuttingDown = true` and calls `clearTimeout(respawnTimeout)` (lines 238-240 in compiled code). The pending respawn timer is cancelled, preventing a duplicate process from spawning after shutdown. Before this fix, this timeout would fire and spawn a process into a stopped gateway.\n\n**What this proves:**\n- The `respawnTimeout` variable correctly stores the `setTimeout` return value in the exit handler.\n- The respawn mechanism works: process exits, timer fires, new process spawns.\n- `stopGmailWatcher` correctly clears the pending respawn timer via `clearTimeout(respawnTimeout)`.\n- SIGTERM during a respawn window does not leak a duplicate process.\n\n**Vitest test suite (7 tests, supplemental)**\n\n```console\n$ node scripts/run-vitest.mjs src/hooks/gmail-watcher.test.ts\n ✓ |hooks| ../../src/hooks/gmail-watcher.test.ts (7 tests) 127ms\n Test Files  1 passed (1)\n      Tests  7 passed (7)\n```\n\nThe 7 tests cover all re-entry scenarios:\n\n1. **Kills existing process on re-entry**: Verifies `.kill(\"SIGTERM\")` on the old child.\n2. **Clears interval on re-entry**: Verifies timer count stays stable.\n3. **Only one renewal per tick**: One renewal after double start.\n4. **Cancels stale respawn timeout on re-entry**: Process exits (queuing 5s respawn), then re-entry happens, then 6 seconds pass. Verifies exactly 2 spawns (no duplicate from stale timer).\n5. **Does not let a stale cancelled startup clear newer watcher config**: Concurrent start race.\n6. **Starts gmail watcher**: Happy path.\n7. **Starts gmail watcher (restarts serve with updated config)**: Config change path.\n\nObserved result after fix: The mock gog lifecycle proof shows the full respawn cycle working in production compiled code: process spawn, process exit, `respawnTimeout` stored, respawn fires, second cycle, SIGTERM during respawn window, `stopGmailWatcher` clears the pending timeout and shuts down cleanly. The compiled bundle tracks `respawnTimeout` at all three lifecycle points (storage in exit handler, clearing in re-entry guard, clearing in stop). All 7 tests pass.\n\nWhat was not tested: Triggering the re-entry guard specifically (calling `startGmailWatcher` twice during a live session). The re-entry guard's process kill + timer cleanup was proven via Vitest mock in test 1, 2, and 4. The mock gog proof covers the respawn and stop paths.\n\n\n",
+        "branch": "fix/gmail-watcher-interval-leak",
+        "head_sha": "6f4c910612bca6e3dbc237345bb228131fa04b42",
+        "author": "sebtardif",
+        "labels": [
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/hooks/gmail-watcher.test.ts",
+            "additions": 160,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/gmail-watcher.ts",
+            "additions": 71,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82947",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82947.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "counts": {
+            "SUCCESS": 71,
+            "SKIPPED": 22,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-fast-bundled-protocol:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-fast-bundled-protocol:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82947:4511432733:2026-05-21T18:26:14Z:re_review",
+      "comment_id": "4511432733",
+      "comment_version_key": "4511432733:2026-05-21T18:26:14Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82947#issuecomment-4511432733",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82947,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-21T18:26:14Z",
+      "comment_updated_at": "2026-05-21T18:26:14Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(hooks): clear Gmail watcher renewal interval on re-entry",
+        "body": "## Problem\n\n`startGmailWatcher()` in `src/hooks/gmail-watcher.ts` does not stop the existing watcher when called a second time (e.g., during a configuration reload). On re-entry:\n\n1. **Process leak**: The old `gog serve` child process keeps running because `watcherProcess` is overwritten without killing the old process.\n2. **Interval leak**: The old `setInterval` renewal timer keeps firing because `renewInterval` is overwritten without `clearInterval`.\n3. **Respawn timer leak**: When the process exits normally, `spawnGogServe` queues a 5-second `setTimeout` for respawn. This timer is not stored or cleared. If a re-entry happens during the 5-second window, the stale timer fires and spawns a duplicate process.\n\n## Fix\n\nAdd a comprehensive re-entry guard **before async setup work** (Tailscale, Gmail API watch start):\n\n1. Set `shuttingDown = true` so the old process's exit handler skips the respawn `setTimeout`.\n2. Cancel any pending respawn timeout (`clearTimeout(respawnTimeout)`).\n3. Clear the old renewal interval.\n4. Kill the old `gog serve` process with SIGTERM.\n5. Await its **exit event**. If it does not exit within 3 seconds, escalate to SIGKILL. The promise resolves **only on exit**, never on the SIGKILL send, ensuring `shuttingDown` stays `true` until the process is confirmed dead.\n6. Reset `shuttingDown = false` and spawn fresh.\n\n**Key design decisions:**\n- Guard runs **before** `startGmailWatch()` and Tailscale setup, not after, so the old process cannot exit and queue a respawn during async work.\n- `respawnTimeout` is a new module-level variable that stores the exit handler's 5-second `setTimeout` return value. The re-entry guard and `stopGmailWatcher` both clear it.\n- `resolve()` appears **only** in the `exit` handler, **not** in the SIGKILL timeout. No race between exit-handler cleanup and replacement spawn.\n- `shuttingDown` is always reset to `false` unconditionally before `spawnGogServe`, covering both the guard path and the no-guard path.\n\nProduction diff is +22 lines changed in `gmail-watcher.ts`, plus 128 lines of test coverage (7 tests total).\n\n## Real behavior proof\n\nBehavior addressed: Calling `startGmailWatcher()` twice without stopping leaked the old `gog serve` process, renewal interval, and respawn timeout. Three separate leak vectors: (1) old process kept running, (2) old renewal timer kept firing, (3) stale 5-second respawn timer spawned a duplicate after re-entry.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js v22.16.0, OpenClaw built from source (commit dc44fdf) at `/tmp/fix-82947`.\n\nExact steps or command run after this patch:\n```bash\nStep 1. Build OpenClaw from patched source\ncd /tmp/fix-82947\nCI=true pnpm install --frozen-lockfile\npnpm build\n\nStep 2. Verify respawnTimeout tracking in compiled production code\ngrep -n \"respawnTimeout\" dist/gmail-watcher-lvUqmZO6.js\n\nStep 3. Verify the full re-entry guard\ngrep -n -B2 -A8 \"oldProcess.kill\" dist/gmail-watcher-lvUqmZO6.js\n\nStep 4. Start the patched gateway\ntimeout 10 node openclaw.mjs gateway\n\nStep 5. Run Gmail watcher test suite (7 tests)\nnode scripts/run-vitest.mjs src/hooks/gmail-watcher.test.ts\n```\n\nEvidence after fix: terminal output copied below.\n\n**Compiled production code verification**\n\nThe `respawnTimeout` variable is tracked at all three lifecycle points:\n\n```console\n$ grep -n \"respawnTimeout\" dist/gmail-watcher-lvUqmZO6.js\n25:let respawnTimeout = null;\n94:respawnTimeout = setTimeout(() => {\n95:respawnTimeout = null;\n168:if (watcherProcess || renewInterval || respawnTimeout) {\n170:if (respawnTimeout) {\n171:clearTimeout(respawnTimeout);\n172:respawnTimeout = null;\n238:if (respawnTimeout) {\n239:clearTimeout(respawnTimeout);\n240:respawnTimeout = null;\n```\n\n- **Line 25**: Module-level declaration.\n- **Line 94**: Stored in exit handler (was previously a fire-and-forget `setTimeout`).\n- **Lines 168-172**: Cleared in re-entry guard (before async setup).\n- **Lines 238-240**: Cleared in `stopGmailWatcher`.\n\nThe SIGTERM + SIGKILL escalation with exit-only resolution:\n\n```console\n$ grep -n -B2 -A8 \"oldProcess.kill\" dist/gmail-watcher-lvUqmZO6.js\n183-watcherProcess = null;\n184:oldProcess.kill(\"SIGTERM\");\n185-await new Promise((resolve) => {\n186-const escalation = setTimeout(() => {\n187:oldProcess.kill(\"SIGKILL\");\n188-}, 3e3);\n189-oldProcess.on(\"exit\", () => {\n190-clearTimeout(escalation);\n191-resolve();\n192-});\n193-});\n```\n\n`resolve()` is at line 191 (exit handler only). The SIGKILL at line 187 escalates but does not resolve. `shuttingDown` stays `true` until exit is confirmed.\n\n**Live watcher lifecycle proof: mock gog process spawn, exit, respawn, and cleanup**\n\nThe full gmail watcher lifecycle was exercised in a real running gateway by configuring gmail hooks and providing a mock `gog` binary that exits after 2 seconds. This triggers the respawn timer (the core of the fix) in production compiled code.\n\n**Setup:**\n```bash\nStep 1. Create a mock gog binary that exits after 2s (triggers respawn)\ncat > /tmp/gog << 'EOF'\n#!/bin/bash\ncase \"$*\" in\n  *\"watch start\"*) echo \"watch registered\"; exit 0;;\n  *\"watch serve\"*)  echo \"mock gog serve starting\"; sleep 2; exit 1;;\n  *)                exit 0;;\nesac\nEOF\nchmod +x /tmp/gog\n\nStep 2. Configure gmail hooks in openclaw.json (hooks.enabled + hooks.gmail.account/topic/pushToken)\nStep 3. Start gateway with mock gog in PATH\ncd /tmp/fix-82947\nPATH=\"/tmp:$PATH\" timeout 20 node openclaw.mjs gateway\n```\n\n**Terminal output (full watcher lifecycle):**\n\n```console\n2026-05-21T21:25:01.868-07:00 [gateway] starting...\n2026-05-21T21:25:03.585-07:00 [gateway] ready\n2026-05-21T21:25:03.649-07:00 [gmail-watcher] watch started for test@gmail.com\n2026-05-21T21:25:03.650-07:00 [gmail-watcher] starting gog gmail watch serve --account test@gmail.com --bind 127.0.0.1 --port 18787 --path /gmail-pubsub --include-body --max-bytes 20000\n2026-05-21T21:25:03.654-07:00 [gmail-watcher] gmail watcher started for test@gmail.com (renew every 720m)\n2026-05-21T21:25:03.655-07:00 [hooks] gmail watcher started\n2026-05-21T21:25:03.659-07:00 [gmail-watcher] [gog] mock gog serve starting on port 8787\n2026-05-21T21:25:06.075-07:00 [gmail-watcher] [gog] mock gog serve exiting\n2026-05-21T21:25:06.076-07:00 [gmail-watcher] gog exited (code=1, signal=null); restarting in 5s\n2026-05-21T21:25:18.577-07:00 [gmail-watcher] starting gog gmail watch serve --account test@gmail.com --bind 127.0.0.1 --port 18787 --path /gmail-pubsub --include-body --max-bytes 20000\n2026-05-21T21:25:18.582-07:00 [gmail-watcher] [gog] mock gog serve starting on port 8787\n2026-05-21T21:25:20.583-07:00 [gmail-watcher] [gog] mock gog serve exiting\n2026-05-21T21:25:20.584-07:00 [gmail-watcher] gog exited (code=1, signal=null); restarting in 5s\n2026-05-21T21:25:22.266-07:00 [gateway] received SIGTERM; shutting down\n2026-05-21T21:25:22.309-07:00 [gmail-watcher] gmail watcher stopped\n2026-05-21T21:25:22.311-07:00 [shutdown] completed cleanly in 37ms\n```\n\n**Line-by-line analysis of the fix's behavior:**\n\n1. `[gmail-watcher] watch started for test@gmail.com`: `startGmailWatch` registered with Gmail API (mock gog exits 0).\n2. `[gmail-watcher] starting gog gmail watch serve ...`: `spawnGogServe` spawned the mock gog process.\n3. `[gmail-watcher] gmail watcher started for test@gmail.com (renew every 720m)`: Watcher fully initialized, `renewInterval` set.\n4. `[gmail-watcher] [gog] mock gog serve exiting`: Mock gog exits after 2 seconds.\n5. **`[gmail-watcher] gog exited (code=1, signal=null); restarting in 5s`**: The exit handler fires. **This is where `respawnTimeout` is stored** (line 94 in compiled code: `respawnTimeout = setTimeout(..., 5000)`). Before this fix, this `setTimeout` was fire-and-forget with no reference stored.\n6. `[gmail-watcher] starting gog gmail watch serve ...`: **The respawn timer fired**, spawning a new process. Proves `respawnTimeout` storage works.\n7. Second exit + second `restarting in 5s`: Cycle repeats.\n8. `[gateway] received SIGTERM; shutting down`: SIGTERM arrives during the 5-second respawn window.\n9. **`[gmail-watcher] gmail watcher stopped`**: `stopGmailWatcher` ran, which sets `shuttingDown = true` and calls `clearTimeout(respawnTimeout)` (lines 238-240 in compiled code). The pending respawn timer is cancelled, preventing a duplicate process from spawning after shutdown. Before this fix, this timeout would fire and spawn a process into a stopped gateway.\n\n**What this proves:**\n- The `respawnTimeout` variable correctly stores the `setTimeout` return value in the exit handler.\n- The respawn mechanism works: process exits, timer fires, new process spawns.\n- `stopGmailWatcher` correctly clears the pending respawn timer via `clearTimeout(respawnTimeout)`.\n- SIGTERM during a respawn window does not leak a duplicate process.\n\n**Vitest test suite (7 tests, supplemental)**\n\n```console\n$ node scripts/run-vitest.mjs src/hooks/gmail-watcher.test.ts\n ✓ |hooks| ../../src/hooks/gmail-watcher.test.ts (7 tests) 127ms\n Test Files  1 passed (1)\n      Tests  7 passed (7)\n```\n\nThe 7 tests cover all re-entry scenarios:\n\n1. **Kills existing process on re-entry**: Verifies `.kill(\"SIGTERM\")` on the old child.\n2. **Clears interval on re-entry**: Verifies timer count stays stable.\n3. **Only one renewal per tick**: One renewal after double start.\n4. **Cancels stale respawn timeout on re-entry**: Process exits (queuing 5s respawn), then re-entry happens, then 6 seconds pass. Verifies exactly 2 spawns (no duplicate from stale timer).\n5. **Does not let a stale cancelled startup clear newer watcher config**: Concurrent start race.\n6. **Starts gmail watcher**: Happy path.\n7. **Starts gmail watcher (restarts serve with updated config)**: Config change path.\n\nObserved result after fix: The mock gog lifecycle proof shows the full respawn cycle working in production compiled code: process spawn, process exit, `respawnTimeout` stored, respawn fires, second cycle, SIGTERM during respawn window, `stopGmailWatcher` clears the pending timeout and shuts down cleanly. The compiled bundle tracks `respawnTimeout` at all three lifecycle points (storage in exit handler, clearing in re-entry guard, clearing in stop). All 7 tests pass.\n\nWhat was not tested: Triggering the re-entry guard specifically (calling `startGmailWatcher` twice during a live session). The re-entry guard's process kill + timer cleanup was proven via Vitest mock in test 1, 2, and 4. The mock gog proof covers the respawn and stop paths.\n\n\n",
+        "branch": "fix/gmail-watcher-interval-leak",
+        "head_sha": "6f4c910612bca6e3dbc237345bb228131fa04b42",
+        "author": "sebtardif",
+        "labels": [
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/hooks/gmail-watcher.test.ts",
+            "additions": 160,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/gmail-watcher.ts",
+            "additions": 71,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82947",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82947.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "counts": {
+            "SUCCESS": 71,
+            "SKIPPED": 22,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-fast-bundled-protocol:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-fast-bundled-protocol:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3720,
+    "total_ms": 3260,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 497
+        "ms": 406
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 932
+        "ms": 1474
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 5
       },
       {
         "name": "execute_commands",
-        "ms": 2265
+        "ms": 1352
       },
       {
         "name": "append_ledger",
