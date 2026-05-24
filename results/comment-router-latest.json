@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T06:37:27.966Z",
+  "generated_at": "2026-05-24T06:37:30.557Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T03:37:25.384Z",
+  "since": "2026-05-24T03:37:30.012Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     85917
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4527618032
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 3,
@@ -40,130 +42,8 @@
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-24T03:47:45Z",
-      "comment_updated_at": "2026-05-24T06:37:17Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto merge",
-      "intent": "clawsweeper_auto_merge",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=b27254d5ea601c65d06a44ffc5be2df36b7d9c58)",
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": "b27254d5ea601c65d06a44ffc5be2df36b7d9c58",
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "merge",
-          "status": "executed",
-          "reason": "merged by ClawSweeper automerge",
-          "merged_at": "2026-05-24T06:37:22Z",
-          "merge_commit_sha": "501f2cbfe4afb0d770cbaa51e6da587b01abd765",
-          "merge_method": "squash",
-          "prepared_head_sha": "733680b1bc814400e586b30d8d15459c5d6827e5",
-          "commit_subject": "fix(update): avoid broad tag fetches for dev updates (#84737)",
-          "summary_lines": [
-            "The PR changes dev-channel git updates to fetch branches with `--no-tags`, adds targeted fetching for explicit dev tag refs, updates update-runner tests, and adds a changelog entry.",
-            "Reproducibility: yes. Current main source shows dev updates still run a broad tag fetch, and the PR body sup ... al local bare-remote moved-tag reproducer showing that command fails before the branch update can continue."
-          ],
-          "fixup_lines": [
-            "PR branch already contained follow-up commit before automerge: fix(update): avoid broad tag fetches for dev updates"
-          ],
-          "transient_wait_ms": 0,
-          "transient_observations": [],
-          "completed_at": "2026-05-24T06:37:23.686Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-24T06:37:24.710Z",
-          "response_comment_id": "4503969350",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): register chat abort controller before attachment prep",
-        "body": "## Summary\n\nFixes #84176. `chat.abort` sent right after `chat.send` returned `aborted:false` because the abort controller was only registered after the awaited attachment preparation, leaving a window where the run had no entry in `chatAbortControllers`.\n\nThe fix mirrors the agent RPC early-registration pattern (`src/gateway/server-methods/agent.ts:1746`):\n\n- Register the abort controller before attachment prep so a concurrent `chat.abort` immediately observes the active run.\n- Clean it up via `activeRunAbort.cleanup()` if attachment prep throws, and persist a terminal `chat:<runId>` error dedupe entry so duplicate senders that already received `status:\"in_flight\"` (and later retries with the same idempotencyKey) see the cached failure instead of spawning a fresh run.\n- After prep, check `activeRunAbort.controller.signal.aborted` — if `chat.abort` already fired, `abortChatRunById` has cleared the entry and broadcast `aborted`, so the handler skips dispatch and acknowledges with `status: \"aborted\"` instead of falsely emitting a `started` ack.\n- Cache the aborted outcome under `chat:<runId>` so retries with the same `idempotencyKey` see the cached aborted result rather than spawning a new run (mirrors the existing `started`/`ok`/`error` dedupe writes).\n\nThe pre-existing `\"duplicate attachment send wins parsing race\"` test gets stricter expectations as a consequence: with early registration the first send always wins (`started`) and any duplicate before it finishes always sees `in_flight`, which matches idempotency semantics. Two new regression tests cover (a) abort-during-attachment-prep and (b) duplicate-in_flight then prep-failure.\n\n## Real behavior proof\n\nBehavior addressed: prior to this fix, `chat.send` only inserted the abort controller into `context.chatAbortControllers` after `await gateway.chat_send.prepare_attachments`. A `chat.abort` arriving while prep was still pending called `chatAbortControllers.get(runId)`, found nothing, and returned `{ ok: true, aborted: false, runIds: [] }` even though the chat run was still active.\n\nReal environment tested: local OpenClaw source checkout on Ubuntu 22.04, Node v24.15.0, with the production `chatHandlers[\"chat.send\"]` and `chatHandlers[\"chat.abort\"]` driven directly through `node --import tsx` against a real `Map` for `chatAbortControllers`/`dedupe`, real `AbortController`, and a deferred model-catalog mock that suspends chat.send mid attachment prep so chat.abort can race with it.\n\nExact steps or command run after this patch: `node --import tsx /tmp/probe-handler-84176.mjs` — the script imports the live `chatHandlers` map, fires `chat.send` with an image attachment, waits until the handler has registered the abort controller (early registration is the fix), fires `chat.abort` for the same runId, then releases the catalog so chat.send finishes and prints the resulting handler responses plus the cached dedupe entry.\n\nEvidence after fix:\n\n```json\n{\n  \"registeredBeforeAbort\": true,\n  \"registeredAfterAbort\": false,\n  \"abortResponse\": {\n    \"ok\": true,\n    \"payload\": {\n      \"ok\": true,\n      \"aborted\": true,\n      \"runIds\": [\n        \"probe-run-84176\"\n      ]\n    }\n  },\n  \"sendResponse\": {\n    \"ok\": true,\n    \"payload\": {\n      \"runId\": \"probe-run-84176\",\n      \"status\": \"aborted\",\n      \"stopReason\": \"rpc\"\n    }\n  },\n  \"cachedChatRunDedupe\": {\n    \"ok\": true,\n    \"payload\": {\n      \"runId\": \"probe-run-84176\",\n      \"status\": \"aborted\",\n      \"stopReason\": \"rpc\"\n    }\n  }\n}\n```\n\nObserved result after fix, driven through the real handlers:\n\n- `chat.send` registered the abort controller before attachment prep finished, so `chat.abort` for the same runId returned `{ ok: true, aborted: true, runIds: [<runId>] }` instead of the buggy `aborted: false`.\n- After abort, `chatAbortControllers` no longer held the entry (cleared by `abortChatRunById`).\n- The suspended `chat.send`, once the catalog resolved and prep finished, detected `signal.aborted` and responded with `status: \"aborted\", stopReason: \"rpc\"` instead of falsely emitting `started` and dispatching the run.\n- The aborted outcome was cached under `chat:<runId>` so a retry with the same `idempotencyKey` returns the cached aborted ack instead of starting a new run.\n\nWhat was not tested: no full end-to-end gateway WS roundtrip against a live model provider; the new regression tests in `src/gateway/server.chat.gateway-server-chat-b.test.ts` exercise the same handler entry points with a real `Map` for `chatAbortControllers`/`dedupe` and a deferred catalog mock.\n\n## Verification\n\n- `node scripts/run-vitest.mjs src/gateway/` — 223 files / 2585 tests passed, including the two new regression tests (`chat.abort during attachment prep finds the active run (regression for #84176)` and `chat.send attachment-prep failure caches the error so a duplicate that already saw in_flight does not retry into a fresh run`).\n- `node scripts/run-vitest.mjs src/gateway/server.chat.gateway-server-chat-b.test.ts src/gateway/chat-abort.test.ts src/gateway/server-methods/chat.abort-authorization.test.ts` — the three test files ClawSweeper named in its review of #84176 all pass.\n- `node scripts/run-oxlint.mjs src/gateway/server-methods/chat.ts src/gateway/server.chat.gateway-server-chat-b.test.ts` — clean.\n- `node scripts/run-tsgo.mjs` — clean.\n- Auto Review (extra-high recall, 5 angles + verifier + sweep): one HIGH finding fixed (aborted-path missing `chat:<runId>` dedupe write); one LOW finding fixed (test used `.find()` without count assertion).\n- ClawSweeper P2 follow-up (`chat.ts:2481`): the second commit adds the prep-failure dedupe write and its regression test.\n",
-        "branch": "fix/chat-abort-race-pre-attachment",
-        "head_sha": "b27254d5ea601c65d06a44ffc5be2df36b7d9c58",
-        "author": "willamhou",
-        "labels": [
-          "app: web-ui",
-          "gateway",
-          "size: M",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "merge-risk: 🚨 security-boundary",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/gateway/server-methods/chat.ts",
-            "additions": 73,
-            "deletions": 26,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.chat.gateway-server-chat-b.test.ts",
-            "additions": 279,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85917",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85917.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 72,
-            "IN_PROGRESS": 1,
-            "SKIPPED": 27,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "Scan changed paths (precise):IN_PROGRESS"
-          ],
-          "pending": [
-            "Scan changed paths (precise):IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
-        }
-      },
-      "reason": "automerge already enabled for this PR"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84737:4503815117:2026-05-21T00:48:17Z:re_review",
-      "comment_id": "4503815117",
-      "comment_version_key": "4503815117:2026-05-21T00:48:17Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84737#issuecomment-4503815117",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84737,
-      "author": "rubencu",
-      "author_id": 4742789,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-21T00:48:17Z",
-      "comment_updated_at": "2026-05-21T00:48:17Z",
+      "comment_created_at": "2026-05-24T06:35:30Z",
+      "comment_updated_at": "2026-05-24T06:35:30Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -181,110 +61,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(update): avoid broad tag fetches for dev updates",
-        "body": "## Summary\n\n- Problem: `openclaw update --channel dev` could fail before updating `main` when a release tag on the remote conflicted with an existing local tag.\n- Solution: make dev updates fetch branches/remotes with `--no-tags`, while keeping release-channel tag fetching unchanged.\n- What changed: explicit dev tag targets now fetch only the requested tag from configured remotes before resolving it.\n- What did NOT change (scope boundary): stable/beta updates remain tag-driven and still fetch tags broadly.\n\n## Motivation\n\n- This fixes the observed beta-to-dev switch failure where an unrelated moved beta tag blocked a dev update that should track git `main`.\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor required for the fix\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all touched areas)\n\n- [ ] Gateway / orchestration\n- [ ] Skills / tool execution\n- [ ] Auth / tokens\n- [ ] Memory / storage\n- [ ] Integrations\n- [ ] API / contracts\n- [x] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- Closes #\n- Related #\n- [x] This PR fixes a bug or regression\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: `openclaw update --channel dev` no longer performs a broad tag fetch that can fail on unrelated moved release tags before updating from `main`.\n- Real environment tested: Local bare git remote plus clean checkout reproducer, using real `git fetch` and `git rebase` commands with a moved conflicting `v2026.5.19-beta.2` tag.\n- Exact steps or command run after this patch: Created a local bare remote, cloned it, moved the remote beta tag, confirmed current-main-style `git fetch --all --prune --tags` fails, then confirmed PR-style `git fetch --all --prune --no-tags` followed by `git rebase origin/main` succeeds.\n- Evidence after fix (screenshot, recording, terminal capture, console output, redacted runtime log, linked artifact, or copied live output):\n\n```text\nproof_root=<temp-redacted>\n\nold dev broad tag fetch (current main behavior):\nexit=1\nFrom <temp-redacted>/remote\n   c39fe2e..63b8b7c  main              -> origin/main\n ! [rejected]        v2026.5.19-beta.2 -> v2026.5.19-beta.2  (would clobber existing tag)\n\nreset checkout to before proof fetch:\nclean_status=0\n\nnew dev fetch + rebase (PR behavior):\nlocal_tag_before=c39fe2e\nremote_tag_after=63b8b7c\nlocal_tag_after_no_tags_fetch=c39fe2e\nhead_matches_origin_main_after_rebase=yes\n\nrelease-channel broad tag fetch remains tag-sensitive:\nexit=1\nFrom <temp-redacted>/remote\n ! [rejected]        v2026.5.19-beta.2 -> v2026.5.19-beta.2  (would clobber existing tag)\n```\n\nSupplemental focused test proof:\n\n```text\nnode scripts/run-vitest.mjs src/infra/update-runner.test.ts\nTest Files 1 passed (1)\nTests 46 passed (46)\n```\n\n- Observed result after fix: The real git reproducer shows the old broad tag fetch fails with the same `would clobber existing tag` class of error, while the PR-style dev fetch avoids tag mutation and the checkout rebases to `origin/main`. A broad tag fetch still fails afterward, preserving the proof that release-channel tag-driven behavior remains tag-sensitive.\n- What was not tested: A live openclaw-prod update was not run from this agent.\n- Before evidence (optional but encouraged): User-reported failure showed `openclaw update --channel dev` rejected `v2026.5.19-beta.2` during broad tag fetch with `would clobber existing tag`.\n\n## Root Cause (if applicable)\n\n- Root cause: Dev updates used the same broad tag-fetch behavior as release-channel updates even though dev is branch/main based.\n- Missing detection / guardrail: Tests covered dev update fetch failures but did not assert that dev avoids broad tag fetching.\n- Contributing context (if known): Switching from beta to dev can leave local release tags around, and Git rejects clobbering changed tags unless forced.\n\n## Regression Test Plan (if applicable)\n\n- Coverage level that should have caught this:\n  - [x] Unit test\n  - [ ] Seam / integration test\n  - [ ] End-to-end test\n  - [ ] Existing coverage already sufficient\n- Target test or file: `src/infra/update-runner.test.ts`\n- Scenario the test should lock in: Dev updates fetch with `--no-tags`; explicit dev tag targets fetch only the requested tag; failed targeted tag fetches do not fall back to stale local tags.\n- Why this is the smallest reliable guardrail: The update runner already injects the git command runner, so these tests verify the exact command contract without needing a mutable remote fixture.\n- Existing test that already covers this (if any): Existing dev update tests covered fetch sequencing but not the tag-fetch mode.\n- If no new test is added, why not: N/A\n\n## User-visible / Behavior Changes\n\n`openclaw update --channel dev` now ignores unrelated remote tags during the normal branch update path. Explicit dev tag targets still fetch the requested tag.\n\n## Diagram (if applicable)\n\n```text\nBefore:\nopenclaw update --channel dev -> git fetch --all --prune --tags -> unrelated tag conflict -> update fails\n\nAfter:\nopenclaw update --channel dev -> git fetch --all --prune --no-tags -> rebase main -> update continues\n```\n\n## Security Impact (required)\n\n- New permissions/capabilities? (`Yes/No`) No\n- Secrets/tokens handling changed? (`Yes/No`) No\n- New/changed network calls? (`Yes/No`) No\n- Command/tool execution surface changed? (`Yes/No`) Yes\n- Data access scope changed? (`Yes/No`) No\n- If any `Yes`, explain risk + mitigation: The git fetch command changes for dev updates only. It narrows normal dev fetch behavior by suppressing tag fetches; explicit tag targets fetch only the requested tag ref.\n\n## Repro + Verification\n\n### Environment\n\n- OS: Linux worktree\n- Runtime/container: Node via repo test wrapper; local git bare remote proof\n- Model/provider: N/A\n- Integration/channel (if any): update CLI git mode\n- Relevant config (redacted): N/A\n\n### Steps\n\n1. Create a local bare git remote and clone it.\n2. Create local tag `v2026.5.19-beta.2`, then move the remote tag to a newer commit.\n3. Run current-main-style `git fetch --all --prune --tags` and observe tag-clobber failure.\n4. Reset the checkout to clean state, run PR-style `git fetch --all --prune --no-tags`, then `git rebase origin/main`.\n5. Run `node scripts/run-vitest.mjs src/infra/update-runner.test.ts`.\n\n### Expected\n\n- Current-main-style broad tag fetch fails on the moved tag.\n- PR-style dev fetch does not mutate/fetch the moved tag and branch rebase succeeds.\n- Stable/beta paths continue to use tag fetching.\n- Explicit dev tag targets do not use a stale local tag after targeted tag fetch failure.\n\n### Actual\n\n- Real git proof: broad tag fetch failed with `would clobber existing tag`; PR-style dev fetch plus rebase succeeded with `head_matches_origin_main_after_rebase=yes`.\n- `src/infra/update-runner.test.ts` passed 46/46.\n\n## Evidence\n\nAttach at least one:\n\n- [x] Failing test/log before + passing after\n- [x] Trace/log snippets\n- [ ] Screenshot/recording\n- [ ] Perf numbers (if relevant)\n\n## Human Verification (required)\n\nWhat you personally verified (not just CI), and how:\n\n- Verified scenarios: real local bare-remote moved-tag reproduction, targeted update-runner tests, `git diff --check`, and `codex review --base origin/main` after rebase.\n- Edge cases checked: default dev update fetch mode, explicit dev tag target, failed targeted tag fetch with a stale local tag candidate, release-channel broad tag sensitivity.\n- What you did **not** verify: live update on openclaw-prod.\n\n## Review Conversations\n\n- [x] I replied to or resolved every bot review conversation I addressed in this PR.\n- [ ] I left unresolved only the conversations that still need reviewer or maintainer judgment.\n\n## Compatibility / Migration\n\n- Backward compatible? (`Yes/No`) Yes\n- Config/env changes? (`Yes/No`) No\n- Migration needed? (`Yes/No`) No\n- If yes, exact upgrade steps: N/A\n\n## Risks and Mitigations\n\n- Risk: Explicit dev tag targets could otherwise resolve stale local tags after a failed targeted fetch.\n  - Mitigation: The targeted tag fetch is forced for the requested ref and local tag resolution is skipped when all configured remote fetches fail.",
-        "branch": "codex/dev-update-no-tags",
-        "head_sha": "733680b1bc814400e586b30d8d15459c5d6827e5",
-        "author": "rubencu",
-        "labels": [
-          "size: S",
-          "clawsweeper:automerge",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "status: 🚀 automerge armed"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/update-runner.test.ts",
-            "additions": 108,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/update-runner.ts",
-            "additions": 55,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": "automerge-openclaw-openclaw-84737",
-        "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84737.md",
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84737",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84737.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 95,
-          "counts": {
-            "SUCCESS": 73,
-            "SKIPPED": 21,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "live_worker_capacity_before_dispatch": {
-    "repo": "openclaw/clawsweeper",
-    "workflow": "repair-cluster-worker.yml",
-    "run_name_prefix": "automerge repair",
-    "active": 1,
-    "requested": 1,
-    "max_live_workers": 22,
-    "available": 21,
-    "active_runs": [
-      {
-        "databaseId": 26353819075,
-        "status": "in_progress",
-        "conclusion": null,
-        "createdAt": "2026-05-24T06:17:47Z",
-        "updatedAt": "2026-05-24T06:18:59Z",
-        "url": "https://github.com/openclaw/clawsweeper/actions/runs/26353819075",
-        "displayTitle": "automerge repair jobs/openclaw/inbox/automerge-openclaw-openclaw-84737.md"
-      }
-    ]
-  },
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3029,
+    "total_ms": 1765,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 389
+        "ms": 532
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2178
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 5
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 434
+        "ms": 1221
       },
       {
         "name": "append_ledger",
-        "ms": 2
+        "ms": 0
       }
     ]
   }
