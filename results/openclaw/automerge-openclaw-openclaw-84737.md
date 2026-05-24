@@ -2,21 +2,21 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-84737"
 mode: "autonomous"
-run_id: "26199872831"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26199872831"
-head_sha: "3477775b50d9fb1d14c3fc2453e6d865507eb961"
+run_id: "26353819075"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26353819075"
+head_sha: "9efa568da0927a8817ae5a24cf02d7716f681940"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-21T01:30:05.522Z"
+published_at: "2026-05-24T06:40:20.114Z"
 canonical: "#84737"
 canonical_issue: null
 canonical_pr: "#84737"
 actions_total: 1
 fix_executed: 0
 fix_failed: 0
-fix_blocked: 1
+fix_blocked: 0
 apply_executed: 0
-apply_blocked: 0
+apply_blocked: 1
 apply_skipped: 0
 needs_human_count: 0
 ---
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/26199872831](https://github.com/openclaw/clawsweeper/actions/runs/26199872831)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/26353819075](https://github.com/openclaw/clawsweeper/actions/runs/26353819075)
 
 Workflow conclusion: success
 
@@ -44,9 +44,9 @@ Make PR #84737 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 | Worker actions | 1 |
 | Fix executed | 0 |
 | Fix failed | 0 |
-| Fix blocked | 1 |
+| Fix blocked | 0 |
 | Applied executions | 0 |
-| Apply blocked | 0 |
+| Apply blocked | 1 |
 | Apply skipped | 0 |
 | Needs human | 0 |
 
@@ -54,14 +54,13 @@ Make PR #84737 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | blocked | https://github.com/openclaw/openclaw/pull/84737 |  | source PR #84737 is paused by clawsweeper:human-review; refusing to mutate the PR branch |
-| automerge_repair_outcome_comment | updated | #84737 |  |  |
+| repair_contributor_branch | pushed | https://github.com/openclaw/openclaw/pull/84737 |  |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| #84737 | merge_canonical | blocked | fix_pr | job does not allow merge |
 
 ## Worker Action Matrix
 
