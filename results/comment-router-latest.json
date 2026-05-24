@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T09:38:38.017Z",
+  "generated_at": "2026-05-24T09:39:14.226Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T06:38:35.978Z",
+  "since": "2026-05-24T06:39:11.915Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    85972
+    85988
   ],
   "comment_ids": [
-    4527987352
+    4527988583
   ],
-  "status_comment_id": 4527987447,
+  "status_comment_id": 4527988695,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:85972:4527987352:2026-05-24T09:37:40Z:re_review",
-      "comment_id": "4527987352",
-      "comment_version_key": "4527987352:2026-05-24T09:37:40Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/85972#issuecomment-4527987352",
+      "idempotency_key": "comment-router:openclaw/openclaw:85988:4527988583:2026-05-24T09:38:15Z:re_review",
+      "comment_id": "4527988583",
+      "comment_version_key": "4527988583:2026-05-24T09:38:15Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85988#issuecomment-4527988583",
       "repo": "openclaw/openclaw",
-      "issue_number": 85972,
-      "author": "quengh",
-      "author_id": 3940773,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-24T09:37:40Z",
-      "comment_updated_at": "2026-05-24T09:37:40Z",
-      "status_comment_id": 4527987447,
+      "issue_number": 85988,
+      "author": "TurboTheTurtle",
+      "author_id": 35905412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-24T09:38:15Z",
+      "comment_updated_at": "2026-05-24T09:38:15Z",
+      "status_comment_id": 4527988695,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -65,154 +65,56 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-05-24T09:38:38.706Z",
+          "dispatched_at": "2026-05-24T09:39:15.022Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 85972
+          "item_number": 85988
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-05-24T09:38:40.072Z",
-          "response_comment_id": "4527987447",
+          "commented_at": "2026-05-24T09:39:16.403Z",
+          "response_comment_id": "4527988695",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(memory): idle-evict cached MemoryIndexManager instances in long-running gateway (v2 with in-flight protection)",
-        "body": "## Context\n\nThis is a revised version of #85910, which was auto-closed by ClawSweeper\nwithin minutes of opening, without any human reviewer input. The bot gave\ntwo reasons:\n\n1. **Claimed duplicate of #40389.** This is incorrect. #40389 (merged\n   2026-03-09) fixes *CLI one-shot exit hangs* by calling teardown in CLI\n   `finally`. This PR fixes the *complementary long-running daemon path*\n   where cached managers need to be evicted during normal daemon runtime,\n   not just at process shutdown. The two fixes are non-overlapping and\n   both necessary — see \"Why this is not a duplicate of #40389\" below.\n\n2. **Legitimate technical concern: in-flight protection.**\n   > \"the proposed default idle sweeper can close a cached memory index\n   > manager while an in-flight operation is still using it, so it should\n   > not merge as-is. The patch needs active-use protection and config\n   > help/docs alignment before it is the safest implementation.\"\n\n   This PR addresses concern (2) directly — see \"In-flight protection\"\n   section below.\n\n## Problem (same as #85910, retained for reviewers)\n\nIn long-running gateway daemons, `MemoryIndexManager` instances are cached\nin the module-level `INDEX_CACHE` indefinitely. Each instance owns a\nchokidar `FSWatcher`; with `sync.watch=true` (default) recursively watching\nthe memory directory, this leaks `FSEventWrap` native handles and file\ndescriptors for every memory/*.md file the watcher has touched.\n\nIn a production daemon we measured:\n\n- 11h uptime → 612 `FSEventWrap` native handles accumulated\n- RSS grew ~150 MB/h, +1.6 GB over 11h from baseline\n- `lsof` showed 488 `memory/*.md` file descriptors held by chokidar's\n  `awaitWriteFinish`\n\nRelated: #71335.\n\n## Fix\n\nSame approach as #85910 — idle-TTL eviction on `ManagedCache`, wired into\ngateway startup as a periodic sidecar:\n\n- `ManagedCache.lastAccessAt` is refreshed on every cache hit and on\n  initial set.\n- `closeIdleManagedCacheEntries` walks `lastAccessAt`, closes stale\n  entries, and isolates `close()` errors so one bad entry does not stop\n  the rest.\n- `closeIdleMemoryIndexManagers` (in `manager.ts`) layers in the\n  embedding-probe-cache cleanup that the manager would otherwise miss.\n- `scheduleMemoryIndexIdleEvict` (in `server-startup-post-attach.ts`)\n  registers a gateway-lifetime sidecar that calls the idle sweep every\n  `idleEvictScanMs` (default 5 min) evicting managers idle for\n  `idleEvictMs` (default 15 min). Both intervals are configurable via\n  `agents.defaults.memorySearch.sync.idleEvictMs` /\n  `idleEvictScanMs`; setting either to `0` disables the sweep.\n\n## In-flight protection (new in v2)\n\n`ManagedCache` now tracks an `inflightCount` map keyed the same way as\n`cache` / `lastAccessAt`:\n\n- `acquireManagedCacheKey(cache, key)` increments the count, refreshes\n  `lastAccessAt`, and returns an idempotent `release()` function.\n- `isManagedCacheKeyBusy(cache, key)` reports whether the count is > 0.\n- `closeIdleManagedCacheEntries` now consults `isManagedCacheKeyBusy`\n  during both the survey loop and immediately before `close()`. Busy\n  entries are skipped, counted, and surfaced via the new `onSkipBusy`\n  callback and `skippedBusy` return field.\n- `closeManagedCacheEntries` (full teardown) clears `inflightCount`\n  alongside `cache` and `lastAccessAt` to keep test runs reproducible.\n\nIn `MemoryIndexManager`, a protected `withBusy(fn)` helper wraps the\nacquire/release pair in try/finally. Two long-running entry points use\nit today:\n\n- `sync(...)` — wraps `runSyncWithReadonlyRecovery` (which covers batch\n  reindex, targeted session sync, full sync). The refcount is released\n  in the same `.finally()` that nulls `this.syncing`, so they unwind\n  together.\n- `search(...)` — the public entry point now calls `searchInternal` via\n  `withBusy`. This protects the embedding/vector/FTS work plus the\n  inline `sync({ reason: \"search\", force: true })` bootstrap that runs\n  on the first call after process start.\n\n`close()` and `closeMemoryIndexManagersForAgent` clear any residual\n`inflightCount` entry alongside the cache slot. The `release()` returned\nby `acquireManagedCacheKey` is idempotent, so a release that fires after\n`close()` is a no-op.\n\nThe sidecar log now mentions deferred entries when present:\n\n```\nmemory index manager idle eviction: evicted 3 (deferred 1 busy) (remaining 5)\n```\n\nThis means: even if a batch reindex spans an idle window\n(e.g. `lastAccessAt` ages past `idleMs` while the batch is running),\nthe manager will not be evicted until the batch completes and the\nrelease callback fires. On the next scan the refcount-protected refresh\nof `lastAccessAt` will have happened in `release()`, so the entry gets a\nfull idle window before becoming eligible again.\n\n## Validation\n\nSame monkey-patched validation as #85910:\n\n- With the fix: 8h gateway uptime, RSS 2031 MB → 1859 MB (zero growth)\n- Without the fix: 11h, RSS +1.6 GB (~150 MB/h)\n- Memory fd count returns to 0 between memory_search invocations\n\nThe in-flight protection has not been live-soaked in production yet —\nthe original monkey-patch lacked it, and our production workload's batch\nreindexes are short relative to the 15 min idle threshold so we never\nhit the race in practice. The protection is unit-tested with:\n\n1. Mock acquire/release during scan: verifies the busy entry is skipped\n   (`skippedBusy` increments, `evicted` stays at 0).\n2. After release fires (which refreshes `lastAccessAt`), the next scan\n   is a no-op; ageing the entry once more and scanning again evicts it\n   cleanly.\n3. Mixed scan: one busy stale entry + one idle stale entry → exactly the\n   idle one is closed.\n\n## Tests\n\n- `extensions/memory-core/src/memory/manager-cache.test.ts` — +6 new\n  tests for `acquireManagedCacheKey` / `isManagedCacheKeyBusy` / busy\n  deferral / refcount / lastAccessAt refresh / inflightCount cleanup.\n  17 tests pass (was 11).\n- `extensions/memory-core/src/memory/manager.idle-gc.test.ts` — +2 new\n  tests for in-flight protection at the manager-level entry point;\n  existing `returns zero` test now also asserts `skippedBusy === 0`.\n  7 tests pass (was 5).\n- All other extension-memory tests (711 total) still pass.\n- `src/gateway/server-startup-post-attach.test.ts` (41 tests) still\n  passes.\n- `src/agents/memory-search.test.ts` (27 tests) still passes.\n- `pnpm run lint`, `pnpm run tsgo:core`, `pnpm run tsgo:extensions`,\n  `pnpm run tsgo:test`, and `pnpm run build` all green.\n\n## Risk / Compatibility\n\n- Default 15 min idle threshold unchanged from #85910 — conservative\n  enough to comfortably outlive typical bursts of `memory_search` calls\n  within a session.\n- Active-use protection is enabled by default (no opt-out flag); safer\n  default per ClawSweeper's recommendation. Disabling the sweep\n  entirely (`idleEvictMs=0` or `idleEvictScanMs=0`) still works as in\n  #85910.\n- `INDEX_CACHE` size only shrinks when no in-flight operations\n  reference the manager. Worst-case dwell is now `idleMs + scanMs + max\n  in-flight op duration` (was `idleMs + scanMs`).\n- Behavior for short-lived CLI invocations is unchanged\n  (`closeAllMemoryIndexManagers` is still the exit path, and it clears\n  `inflightCount` along with the rest of the cache).\n- Public `MemoryPluginRuntime.closeIdleMemorySearchManagers` return\n  type grows a new field `skippedBusy: number`. Existing callers that\n  only read `evicted`/`remaining` continue to work; structural typing\n  in TypeScript handles the additive change cleanly. The fallback path\n  in `extensions/memory-core/index.ts` returns the new field as well.\n\n## Why this is not a duplicate of #40389\n\n|  | #40389 | This PR |\n|---|---|---|\n| Trigger | Process exit (CLI `finally`) | Periodic sidecar on gateway lifetime |\n| Frequency | Once per process | Every `idleEvictScanMs` (default 5 min) |\n| Scope | Close *all* cached managers | Close idle managers only |\n| Protection | N/A (process is exiting) | `isManagedCacheKeyBusy` skip + `withBusy` wrap |\n| Surface | CLI one-shot hangs on exit | Daemon FD/RSS growth during normal operation |\n\nThey are complementary: #40389 covers process shutdown; this PR covers\nthe continuous lifecycle of long-running daemons that never reach that\nshutdown path until restart.\n\n## Out of scope\n\n- Does NOT change `sync.watch` default value (#71335 will handle that\n  separately).\n- Does NOT refactor the watcher to be singleton-per-workspace (much\n  larger change).\n- Does NOT introduce an opt-out for active-use protection — it's a\n  safety net that should always be on; the only configurable knob is\n  whether the sweep itself runs.\n\nRefs #71335.\n",
-        "branch": "fix/memory-index-manager-idle-evict-v2",
-        "head_sha": "c0f4549eaf7a97cc675f6d6a8632b218c220d214",
-        "author": "quengh",
+        "title": "Recover DeepSeek DSML tool calls",
+        "body": "Fixes #85918.\n\n## Summary\n- recover complete DeepSeek DSML `tool_calls` / `tool_call` / `function_calls` text blocks on the OpenAI completions stream into synthetic `toolCall` blocks\n- keep the existing native `choiceDelta.tool_calls` path unchanged\n- only execute complete `invoke` markup when the name is valid and parameters or JSON body parse into object arguments; malformed DSML remains non-executable and filtered from visible output; recovered DSML tool use is preserved across a later empty stop chunk\n\n## Real behavior proof\n- **Behavior or issue addressed:** Foundry/DeepSeek DSML tool markup that previously surfaced as assistant text is recovered into an executable OpenClaw `toolCall`, while malformed DSML remains non-executable.\n- **Real environment tested:** Local OpenClaw source checkout on macOS, Node.js v24.15.0, using the patched `processOpenAICompletionsStream` runtime path via `node --import tsx --input-type=module`.\n- **Exact steps or command run after the patch:** Ran a live Node command against the patched OpenClaw stream processor with the issue's observed DSML payload: `<｜DSML｜tool_calls><｜DSML｜invoke name=\"session_status\"><｜DSML｜parameter name=\"sessionKey\" string=\"true\">current</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜tool_calls>`.\n- **Evidence after fix:** Terminal output from the patched runtime command:\n\n```json\n{\n  \"stopReason\": \"toolUse\",\n  \"content\": [\n    {\n      \"type\": \"toolCall\",\n      \"id\": \"call_deepseek_dsml_1\",\n      \"name\": \"session_status\",\n      \"arguments\": {\n        \"sessionKey\": \"current\"\n      },\n      \"partialArgs\": \"{\\\"sessionKey\\\":\\\"current\\\"}\"\n    }\n  ],\n  \"events\": [\n    {\n      \"type\": \"toolcall_start\"\n    },\n    {\n      \"type\": \"toolcall_delta\",\n      \"delta\": \"{\\\"sessionKey\\\":\\\"current\\\"}\"\n    }\n  ]\n}\ncontainsDsml=false\n```\n\n- **Observed result after fix:** The observed DSML text no longer becomes assistant-visible text; it is surfaced as a `toolCall` named `session_status` with `{ \"sessionKey\": \"current\" }`, and the emitted event/output JSON contains no `DSML` text.\n- **What was not tested:** I did not re-run a credentialed Microsoft Foundry request; the after-fix proof exercises the same patched OpenAI completions stream path with the real observed provider payload.\n\n## Validation\n- `node scripts/run-vitest.mjs src/agents/openai-transport-stream.test.ts -t \"DeepSeek DSML\"` -> 2 files passed, 14 tests passed\n- `node scripts/run-vitest.mjs src/agents/openai-transport-stream.test.ts -t \"tool calls\"` -> 2 files passed, 16 tests passed\n- `node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo`\n- `node_modules/.bin/oxfmt --check --threads=1 src/agents/openai-transport-stream.ts src/agents/openai-transport-stream.test.ts`\n- `git diff --check`\n\nPlease preserve author attribution if this PR is squashed or reworked:\n`Co-authored-by: Andy Ye <35905412+TurboTheTurtle@users.noreply.github.com>`",
+        "branch": "fix/deepseek-dsml-tool-recovery-85918",
+        "head_sha": "1fa81dd70f7e03de7b7c1e971fb1a2445e60d6d0",
+        "author": "turbotheturtle",
         "labels": [
-          "gateway",
-          "extensions: memory-core",
           "agents",
-          "size: XL",
-          "triage: needs-real-behavior-proof",
+          "size: M",
+          "proof: supplied",
           "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "extensions/memory-core/index.ts",
-            "additions": 11,
+            "path": "src/agents/openai-transport-stream.test.ts",
+            "additions": 204,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/memory-core/manager-runtime.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/index.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager-cache.test.ts",
-            "additions": 480,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager-cache.ts",
-            "additions": 231,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager-runtime.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager.idle-gc.test.ts",
-            "additions": 315,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager.ts",
-            "additions": 145,
-            "deletions": 35,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/search-manager.ts",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/runtime-provider.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/memory-search.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/memory-search.ts",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/schema.labels.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/types.tools.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/zod-schema.agent-runtime.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-startup-post-attach.test.ts",
-            "additions": 9,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-startup-post-attach.ts",
-            "additions": 103,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/memory-state.ts",
-            "additions": 20,
-            "deletions": 0,
+            "path": "src/agents/openai-transport-stream.ts",
+            "additions": 198,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85972",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85972.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85988",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85988.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
@@ -220,93 +122,61 @@
         "checks": {
           "total": 96,
           "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 50,
-            "IN_PROGRESS": 25,
-            "SKIPPED": 19,
+            "SUCCESS": 63,
+            "IN_PROGRESS": 11,
+            "SKIPPED": 21,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:FAILURE",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
             "build-artifacts:IN_PROGRESS",
-            "Critical Quality (config-boundary):IN_PROGRESS",
             "checks-node-core-fast:IN_PROGRESS",
             "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-runtime-infra-state:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
             "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
             "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor:IN_PROGRESS",
             "checks-node-agentic-commands-models:IN_PROGRESS",
             "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
             "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
             "check-guards:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "Critical Quality (memory-runtime-boundary):IN_PROGRESS"
+            "check-additional-boundaries-a:IN_PROGRESS"
           ],
           "pending": [
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
             "build-artifacts:IN_PROGRESS",
-            "Critical Quality (config-boundary):IN_PROGRESS",
             "checks-node-core-fast:IN_PROGRESS",
             "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-runtime-infra-state:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
             "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
             "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor:IN_PROGRESS",
             "checks-node-agentic-commands-models:IN_PROGRESS",
             "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
             "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
             "check-guards:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "Critical Quality (memory-runtime-boundary):IN_PROGRESS"
+            "check-additional-boundaries-a:IN_PROGRESS"
           ],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
+          "terminalBlockers": []
         }
       }
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4635,
+    "total_ms": 5057,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 525
+        "ms": 528
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1501
+        "ms": 1768
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 2584
+        "ms": 2736
       },
       {
         "name": "append_ledger",
