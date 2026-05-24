@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T05:41:13.519Z",
+  "generated_at": "2026-05-24T05:41:42.532Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T02:41:13.077Z",
+  "since": "2026-05-24T02:41:40.730Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    85904
+    85896
   ],
-  "comment_ids": [
-    4527517348
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 0,
+  "scanned_comments": 9,
+  "commands_seen": 3,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,17 +31,126 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:85904:4527517348:2026-05-24T05:39:14Z:re_review",
-      "comment_id": "4527517348",
-      "comment_version_key": "4527517348:2026-05-24T05:39:14Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/85904#issuecomment-4527517348",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:85896:4527118161:2026-05-24T05:41:34Z:clawsweeper_needs_human",
+      "comment_id": "4527118161",
+      "comment_version_key": "4527118161:2026-05-24T05:41:34Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85896#issuecomment-4527118161",
       "repo": "openclaw/openclaw",
-      "issue_number": 85904,
-      "author": "guanbear",
-      "author_id": 11829005,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-24T05:39:14Z",
-      "comment_updated_at": "2026-05-24T05:39:14Z",
+      "issue_number": 85896,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-24T02:12:01Z",
+      "comment_updated_at": "2026-05-24T05:41:34Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=1c8a66cfe3f47e9dd2a17eaa2c0e93295a9c9d32)",
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": "1c8a66cfe3f47e9dd2a17eaa2c0e93295a9c9d32",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): retry transient errors before next natural cron slot (#85888)",
+        "body": "## Summary\n\n- Recurring cron error path used `Math.max(naturalNext, backoffNext)` for the next scheduled run. For daily schedules (e.g. `0 5 * * *`), `naturalNext` is ~24h ahead and always dominated the short backoff, so retries for transient provider errors were effectively suppressed.\n- This matches the symptom in #85888: scheduled jobs hitting MiniMax `overloaded_error` (503) during 05:00-07:30 Asia/Shanghai never re-fired the same day, while manual reruns at 08:30+ (after the busy window) succeeded because they bypassed the broken scheduler path.\n- While retry budget is available and the error is classified retryable via `resolveCronExecutionRetryHint`, schedule at `backoffNext`. Once `consecutiveErrors > retryConfig.maxAttempts` or the error is permanent, fall back to `max(naturalNext, backoffNext)` so high-frequency recurring schedules cannot bypass the configured backoff after retry-budget exhaustion. When croner cannot resolve the natural next slot for a cron schedule, the retry path clears `nextRunAtMs` to preserve the unresolved-next-run guard from #66019.\n\nCloses #85888\n\n## Files\n\n- `src/cron/service/timer.ts` — split recurring error path into \"within retry budget\" (use `backoffNext`, preserve unresolved-next-run guard) vs. \"exhausted / permanent\" (use `max(naturalNext, backoffNext)`).\n- `src/cron/service/timer.regression.test.ts` — four regressions: (1) same-day backoff retry on retryable daily-cron error, (2) high-frequency `every-1s` preserves backoff floor, (3) cron unresolved-next-run guard, (4) exhausted budget falls back to natural slot.\n- `docs/gateway/configuration-reference.md`, `docs/automation/cron-jobs.md`, `src/config/schema.help.ts`, `src/config/types.cron.ts` — align `cron.retry` contract surfaces with the new recurring-job behavior.\n\n## Real behavior proof\n\n**Behavior or issue addressed:** Scheduled recurring cron jobs that hit a retryable provider error (e.g. MiniMax `overloaded_error` 503) on an infrequent schedule (#85888 reporter: daily `0 5 * * *` Asia/Shanghai during 05:00-07:30 CST) had their next run pushed to the next natural slot (~24h away) instead of being retried with backoff, so the failure was effectively swallowed for that day while manual reruns at 08:30+ succeeded. After this patch, while the error is in `cron.retry.retryOn` and `consecutiveErrors` is still within `cron.retry.maxAttempts`, the next run is scheduled at the configured backoff slot rather than the natural cron/`every` slot; once retries are exhausted the job falls back to `max(naturalNext, backoffNext)` so high-frequency schedules cannot bypass backoff.\n\n**Real environment tested:** Fresh DigitalOcean Fedora 43 Cloud Edition droplet (`fedora-s-1vcpu-2gb-nyc1`, redacted IP), kernel `6.17.1-300.fc43.x86_64`, `node v22.22.2`, `pnpm 9.15.9`. Patched OpenClaw checkout at PR head `1c8a66cfe3f47e9dd2a17eaa2c0e93295a9c9d32`. Real `node:fs/promises` writes under `/tmp/cron-proof-85888-<redacted>/jobs.json`. Real production `applyJobResult`, real `createCronServiceState`, real `computeJobNextRunAtMs`, real `resolveCronExecutionRetryHint` – none of the scheduler code under test is mocked. The `proof-85888.mts` script is executed via the project's own `tsx` (`./node_modules/.bin/tsx`) directly from the patched repo, outside the vitest test harness.\n\n**Exact steps or command run after this patch:** Provision the droplet, install Node 22 + pnpm 9, clone the PR head, install deps, then run two captures against the patched code — vitest against the four new `#85888` regressions, then a direct `tsx` invocation of `proof-85888.mts` that exercises the production `applyJobResult` outside the test harness on real fs.\n\n```\ndnf install -y nodejs npm git\nnpm install -g pnpm@9\ngit clone --branch fix/cron-error-backoff-min-bound-85888 --depth 1 https://github.com/yetval/openclaw.git\ncd openclaw\npnpm install --no-frozen-lockfile\nnode scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts -t \"85888\" --reporter=verbose\n./node_modules/.bin/tsx proof-85888.mts\n```\n\n**Evidence after fix:** Redacted live terminal output from the Fedora 43 droplet on PR head `1c8a66cfe3`. Token, IP, and tmp paths redacted in-place; everything else is the actual stdout from the patched scheduler running on real Linux. Two captures: vitest runner output for the new regressions (real fs via `setupCronRegressionFixtures` + real Node 22 + real Linux), and a direct `tsx`-invoked `proof-85888.mts` runtime script that imports the production `applyJobResult` and writes a real `jobs.json` to `/tmp`.\n\n```\nRUN  v4.1.7 /root/openclaw\n\n ✓ src/cron/service/timer.regression.test.ts > cron service timer regressions\n   > schedules backoff retry within the same day when daily cron fails on a retryable error (#85888) 318ms\n ✓ src/cron/service/timer.regression.test.ts > cron service timer regressions\n   > preserves backoff floor for high-frequency recurring jobs whose natural next is sooner than backoff (#85888) 5ms\n ✓ src/cron/service/timer.regression.test.ts > cron service timer regressions\n   > clears schedule on retryable cron error when next-run is unresolved (#85888) 6ms\n ✓ src/cron/service/timer.regression.test.ts > cron service timer regressions\n   > falls back to the next natural cron slot once retry budget is exhausted (#85888) 7ms\n\n Test Files  1 passed (1)\n      Tests  4 passed (43, 39 skipped)\n   Duration  14.07s\n```\n\nDirect runtime proof (`proof-85888.mts` — real `applyJobResult` invoked outside the test harness, real fs writes under `/tmp`, real `createCronServiceState`, no mocks of the scheduler under test):\n\n```\n===== Scenario 1: daily cron (Asia/Shanghai) MiniMax overload =====\n  endedAt:         2026-05-24T05:02:44.264Z\n  naturalNext:     2026-05-24T21:00:00.000Z (delta from endedAt: 15.95h)\n[warn] cron: job run returned error status {\"jobId\":\"memory-distill\",\"error\":\"FailoverError: The AI service is temporarily overloaded (overloaded_error). status=503\"}\n[info] cron: applying error backoff {\"jobId\":\"memory-distill\",\"consecutiveErrors\":1,\"backoffMs\":30000,\"nextRunAtMs\":1779598994264,\"retryable\":true,\"retryCategory\":\"overloaded\",\"retryBudgetAvailable\":true,\"maxAttempts\":3,\"scheduledMode\":\"backoff\"}\n  -> nextRunAtMs:  2026-05-24T05:03:14.264Z\n  -> delta:        0.01h\n  -> same-day?     YES (fixed)\n  -> consecutive:  1\n\n===== Scenario 2: high-frequency every-1s preserves backoff floor =====\n  endedAt:         2026-05-24T12:00:00.200Z\n  naturalNext:     2026-05-24T12:00:01.000Z (+800ms)\n[warn] cron: job run returned error status {\"jobId\":\"tick\",\"error\":\"FailoverError: ... overloaded_error ... status=503\"}\n[info] cron: applying error backoff {\"jobId\":\"tick\",\"consecutiveErrors\":1,\"backoffMs\":30000,\"nextRunAtMs\":1779624030200,\"retryable\":true,\"retryCategory\":\"overloaded\",\"retryBudgetAvailable\":true,\"maxAttempts\":3,\"scheduledMode\":\"backoff\"}\n  -> nextRunAtMs:  2026-05-24T12:00:30.200Z\n  -> delay (ms):   30000\n  -> floor ok?     YES (backoff respected)\n\n===== Scenario 3: exhausted retry budget falls back =====\n  endedAt:         2026-05-24T05:02:00.000Z\n  naturalNext:     2026-05-24T21:00:00.000Z\n  consecutive in:  99\n[warn] cron: job run returned error status {\"jobId\":\"memory-distill-exhausted\",\"error\":\"FailoverError: ... overloaded_error ... status=503\"}\n[info] cron: applying error backoff {\"jobId\":\"memory-distill-exhausted\",\"consecutiveErrors\":100,\"backoffMs\":300000,\"nextRunAtMs\":1779656400000,\"retryable\":true,\"retryCategory\":\"overloaded\",\"retryBudgetAvailable\":false,\"maxAttempts\":3,\"scheduledMode\":\"natural_floor\"}\n  -> nextRunAtMs:  2026-05-24T21:00:00.000Z\n  -> falls back?   YES (natural slot)\n  -> enabled?      true\n\n===== fs writes =====\n  tmpDir:         /tmp/cron-proof-85888-<redacted>\n  jobs.json size: 11\n```\n\n**Observed result after fix:**\n\n- Scenario 1 is the exact reporter failure mode (`0 5 * * *` `Asia/Shanghai`, `overloaded_error` 503): on current `main` the runtime would push `nextRunAtMs` to `2026-05-24T21:00:00.000Z` (15.95h away, next-day in `Asia/Shanghai`); on this PR head it lands at `2026-05-24T05:03:14.264Z` (30s after endedAt). Same-day retry achieved. `scheduledMode=backoff`, `retryBudgetAvailable=true`.\n- Scenario 2 is the prior ClawSweeper P1 concern about high-frequency schedules: with `every-1s` cadence and a 30s backoff, the patched runtime respects the backoff floor and schedules at `endedAt + 30000ms` instead of the +800ms natural slot. Retry-storm protection preserved. `scheduledMode=backoff`.\n- Scenario 3 is the prior ClawSweeper P2 concern about exhausted retry budget: once `consecutiveErrors > maxAttempts`, `scheduledMode` flips to `natural_floor` and `nextRunAtMs` resolves to the next natural cron slot (`max(naturalNext, backoffNext)` semantics), so a high-frequency schedule cannot bypass backoff after the retry budget is gone. `retryBudgetAvailable=false`.\n- All three scenarios emit a real `cron: applying error backoff` log line on a real Node 22 process with real fs writes (`/tmp/cron-proof-85888-<redacted>/jobs.json`).\n\n**What was not tested:** End-to-end flight against the live MiniMax `minimax-portal / MiniMax-M2.7` provider on the issue reporter's tenant. I do not have credentials for that tenant. The retryable-error contract is exercised here by passing the exact `FailoverError: The AI service is temporarily overloaded (overloaded_error). status=503` text the issue logs show; the upstream `resolveCronExecutionRetryHint` and `resolveFailoverReasonFromError` classifiers are production code and are not mocked in the proof above, so the patched scheduling decision is being made on the same `retryable`/`overloaded` classification path that production code would take when MiniMax returns the same error.\n\n## Test plan\n\n- [x] `node scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts -t \"85888\"` — 4/4 PR regressions pass on Fedora 43 / Node 22\n- [x] Direct `tsx proof-85888.mts` against the patched scheduler — three scenarios match expected behavior\n- [ ] Full cron suite + `cron/retry-hint.test.ts` + `cron/service.jobs.test.ts` in CI\n",
+        "branch": "fix/cron-error-backoff-min-bound-85888",
+        "head_sha": "1c8a66cfe3f47e9dd2a17eaa2c0e93295a9c9d32",
+        "author": "yetval",
+        "labels": [
+          "docs",
+          "gateway",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "docs/automation/cron-jobs.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/configuration-reference.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.help.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.cron.ts",
+            "additions": 15,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.regression.test.ts",
+            "additions": 163,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.ts",
+            "additions": 50,
+            "deletions": 22,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85896",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85896.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "SUCCESS": 74,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "target is not open"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:85896:4527407758:2026-05-24T04:39:52Z:re_review",
+      "comment_id": "4527407758",
+      "comment_version_key": "4527407758:2026-05-24T04:39:52Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85896#issuecomment-4527407758",
+      "repo": "openclaw/openclaw",
+      "issue_number": 85896,
+      "author": "yetval",
+      "author_id": 102706514,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-24T04:39:52Z",
+      "comment_updated_at": "2026-05-24T04:39:52Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -61,28 +168,225 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): retry transient errors before next natural cron slot (#85888)",
+        "body": "## Summary\n\n- Recurring cron error path used `Math.max(naturalNext, backoffNext)` for the next scheduled run. For daily schedules (e.g. `0 5 * * *`), `naturalNext` is ~24h ahead and always dominated the short backoff, so retries for transient provider errors were effectively suppressed.\n- This matches the symptom in #85888: scheduled jobs hitting MiniMax `overloaded_error` (503) during 05:00-07:30 Asia/Shanghai never re-fired the same day, while manual reruns at 08:30+ (after the busy window) succeeded because they bypassed the broken scheduler path.\n- While retry budget is available and the error is classified retryable via `resolveCronExecutionRetryHint`, schedule at `backoffNext`. Once `consecutiveErrors > retryConfig.maxAttempts` or the error is permanent, fall back to `max(naturalNext, backoffNext)` so high-frequency recurring schedules cannot bypass the configured backoff after retry-budget exhaustion. When croner cannot resolve the natural next slot for a cron schedule, the retry path clears `nextRunAtMs` to preserve the unresolved-next-run guard from #66019.\n\nCloses #85888\n\n## Files\n\n- `src/cron/service/timer.ts` — split recurring error path into \"within retry budget\" (use `backoffNext`, preserve unresolved-next-run guard) vs. \"exhausted / permanent\" (use `max(naturalNext, backoffNext)`).\n- `src/cron/service/timer.regression.test.ts` — four regressions: (1) same-day backoff retry on retryable daily-cron error, (2) high-frequency `every-1s` preserves backoff floor, (3) cron unresolved-next-run guard, (4) exhausted budget falls back to natural slot.\n- `docs/gateway/configuration-reference.md`, `docs/automation/cron-jobs.md`, `src/config/schema.help.ts`, `src/config/types.cron.ts` — align `cron.retry` contract surfaces with the new recurring-job behavior.\n\n## Real behavior proof\n\n**Behavior or issue addressed:** Scheduled recurring cron jobs that hit a retryable provider error (e.g. MiniMax `overloaded_error` 503) on an infrequent schedule (#85888 reporter: daily `0 5 * * *` Asia/Shanghai during 05:00-07:30 CST) had their next run pushed to the next natural slot (~24h away) instead of being retried with backoff, so the failure was effectively swallowed for that day while manual reruns at 08:30+ succeeded. After this patch, while the error is in `cron.retry.retryOn` and `consecutiveErrors` is still within `cron.retry.maxAttempts`, the next run is scheduled at the configured backoff slot rather than the natural cron/`every` slot; once retries are exhausted the job falls back to `max(naturalNext, backoffNext)` so high-frequency schedules cannot bypass backoff.\n\n**Real environment tested:** Fresh DigitalOcean Fedora 43 Cloud Edition droplet (`fedora-s-1vcpu-2gb-nyc1`, redacted IP), kernel `6.17.1-300.fc43.x86_64`, `node v22.22.2`, `pnpm 9.15.9`. Patched OpenClaw checkout at PR head `1c8a66cfe3f47e9dd2a17eaa2c0e93295a9c9d32`. Real `node:fs/promises` writes under `/tmp/cron-proof-85888-<redacted>/jobs.json`. Real production `applyJobResult`, real `createCronServiceState`, real `computeJobNextRunAtMs`, real `resolveCronExecutionRetryHint` – none of the scheduler code under test is mocked. The `proof-85888.mts` script is executed via the project's own `tsx` (`./node_modules/.bin/tsx`) directly from the patched repo, outside the vitest test harness.\n\n**Exact steps or command run after this patch:** Provision the droplet, install Node 22 + pnpm 9, clone the PR head, install deps, then run two captures against the patched code — vitest against the four new `#85888` regressions, then a direct `tsx` invocation of `proof-85888.mts` that exercises the production `applyJobResult` outside the test harness on real fs.\n\n```\ndnf install -y nodejs npm git\nnpm install -g pnpm@9\ngit clone --branch fix/cron-error-backoff-min-bound-85888 --depth 1 https://github.com/yetval/openclaw.git\ncd openclaw\npnpm install --no-frozen-lockfile\nnode scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts -t \"85888\" --reporter=verbose\n./node_modules/.bin/tsx proof-85888.mts\n```\n\n**Evidence after fix:** Redacted live terminal output from the Fedora 43 droplet on PR head `1c8a66cfe3`. Token, IP, and tmp paths redacted in-place; everything else is the actual stdout from the patched scheduler running on real Linux. Two captures: vitest runner output for the new regressions (real fs via `setupCronRegressionFixtures` + real Node 22 + real Linux), and a direct `tsx`-invoked `proof-85888.mts` runtime script that imports the production `applyJobResult` and writes a real `jobs.json` to `/tmp`.\n\n```\nRUN  v4.1.7 /root/openclaw\n\n ✓ src/cron/service/timer.regression.test.ts > cron service timer regressions\n   > schedules backoff retry within the same day when daily cron fails on a retryable error (#85888) 318ms\n ✓ src/cron/service/timer.regression.test.ts > cron service timer regressions\n   > preserves backoff floor for high-frequency recurring jobs whose natural next is sooner than backoff (#85888) 5ms\n ✓ src/cron/service/timer.regression.test.ts > cron service timer regressions\n   > clears schedule on retryable cron error when next-run is unresolved (#85888) 6ms\n ✓ src/cron/service/timer.regression.test.ts > cron service timer regressions\n   > falls back to the next natural cron slot once retry budget is exhausted (#85888) 7ms\n\n Test Files  1 passed (1)\n      Tests  4 passed (43, 39 skipped)\n   Duration  14.07s\n```\n\nDirect runtime proof (`proof-85888.mts` — real `applyJobResult` invoked outside the test harness, real fs writes under `/tmp`, real `createCronServiceState`, no mocks of the scheduler under test):\n\n```\n===== Scenario 1: daily cron (Asia/Shanghai) MiniMax overload =====\n  endedAt:         2026-05-24T05:02:44.264Z\n  naturalNext:     2026-05-24T21:00:00.000Z (delta from endedAt: 15.95h)\n[warn] cron: job run returned error status {\"jobId\":\"memory-distill\",\"error\":\"FailoverError: The AI service is temporarily overloaded (overloaded_error). status=503\"}\n[info] cron: applying error backoff {\"jobId\":\"memory-distill\",\"consecutiveErrors\":1,\"backoffMs\":30000,\"nextRunAtMs\":1779598994264,\"retryable\":true,\"retryCategory\":\"overloaded\",\"retryBudgetAvailable\":true,\"maxAttempts\":3,\"scheduledMode\":\"backoff\"}\n  -> nextRunAtMs:  2026-05-24T05:03:14.264Z\n  -> delta:        0.01h\n  -> same-day?     YES (fixed)\n  -> consecutive:  1\n\n===== Scenario 2: high-frequency every-1s preserves backoff floor =====\n  endedAt:         2026-05-24T12:00:00.200Z\n  naturalNext:     2026-05-24T12:00:01.000Z (+800ms)\n[warn] cron: job run returned error status {\"jobId\":\"tick\",\"error\":\"FailoverError: ... overloaded_error ... status=503\"}\n[info] cron: applying error backoff {\"jobId\":\"tick\",\"consecutiveErrors\":1,\"backoffMs\":30000,\"nextRunAtMs\":1779624030200,\"retryable\":true,\"retryCategory\":\"overloaded\",\"retryBudgetAvailable\":true,\"maxAttempts\":3,\"scheduledMode\":\"backoff\"}\n  -> nextRunAtMs:  2026-05-24T12:00:30.200Z\n  -> delay (ms):   30000\n  -> floor ok?     YES (backoff respected)\n\n===== Scenario 3: exhausted retry budget falls back =====\n  endedAt:         2026-05-24T05:02:00.000Z\n  naturalNext:     2026-05-24T21:00:00.000Z\n  consecutive in:  99\n[warn] cron: job run returned error status {\"jobId\":\"memory-distill-exhausted\",\"error\":\"FailoverError: ... overloaded_error ... status=503\"}\n[info] cron: applying error backoff {\"jobId\":\"memory-distill-exhausted\",\"consecutiveErrors\":100,\"backoffMs\":300000,\"nextRunAtMs\":1779656400000,\"retryable\":true,\"retryCategory\":\"overloaded\",\"retryBudgetAvailable\":false,\"maxAttempts\":3,\"scheduledMode\":\"natural_floor\"}\n  -> nextRunAtMs:  2026-05-24T21:00:00.000Z\n  -> falls back?   YES (natural slot)\n  -> enabled?      true\n\n===== fs writes =====\n  tmpDir:         /tmp/cron-proof-85888-<redacted>\n  jobs.json size: 11\n```\n\n**Observed result after fix:**\n\n- Scenario 1 is the exact reporter failure mode (`0 5 * * *` `Asia/Shanghai`, `overloaded_error` 503): on current `main` the runtime would push `nextRunAtMs` to `2026-05-24T21:00:00.000Z` (15.95h away, next-day in `Asia/Shanghai`); on this PR head it lands at `2026-05-24T05:03:14.264Z` (30s after endedAt). Same-day retry achieved. `scheduledMode=backoff`, `retryBudgetAvailable=true`.\n- Scenario 2 is the prior ClawSweeper P1 concern about high-frequency schedules: with `every-1s` cadence and a 30s backoff, the patched runtime respects the backoff floor and schedules at `endedAt + 30000ms` instead of the +800ms natural slot. Retry-storm protection preserved. `scheduledMode=backoff`.\n- Scenario 3 is the prior ClawSweeper P2 concern about exhausted retry budget: once `consecutiveErrors > maxAttempts`, `scheduledMode` flips to `natural_floor` and `nextRunAtMs` resolves to the next natural cron slot (`max(naturalNext, backoffNext)` semantics), so a high-frequency schedule cannot bypass backoff after the retry budget is gone. `retryBudgetAvailable=false`.\n- All three scenarios emit a real `cron: applying error backoff` log line on a real Node 22 process with real fs writes (`/tmp/cron-proof-85888-<redacted>/jobs.json`).\n\n**What was not tested:** End-to-end flight against the live MiniMax `minimax-portal / MiniMax-M2.7` provider on the issue reporter's tenant. I do not have credentials for that tenant. The retryable-error contract is exercised here by passing the exact `FailoverError: The AI service is temporarily overloaded (overloaded_error). status=503` text the issue logs show; the upstream `resolveCronExecutionRetryHint` and `resolveFailoverReasonFromError` classifiers are production code and are not mocked in the proof above, so the patched scheduling decision is being made on the same `retryable`/`overloaded` classification path that production code would take when MiniMax returns the same error.\n\n## Test plan\n\n- [x] `node scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts -t \"85888\"` — 4/4 PR regressions pass on Fedora 43 / Node 22\n- [x] Direct `tsx proof-85888.mts` against the patched scheduler — three scenarios match expected behavior\n- [ ] Full cron suite + `cron/retry-hint.test.ts` + `cron/service.jobs.test.ts` in CI\n",
+        "branch": "fix/cron-error-backoff-min-bound-85888",
+        "head_sha": "1c8a66cfe3f47e9dd2a17eaa2c0e93295a9c9d32",
+        "author": "yetval",
+        "labels": [
+          "docs",
+          "gateway",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "docs/automation/cron-jobs.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/configuration-reference.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.help.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.cron.ts",
+            "additions": 15,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.regression.test.ts",
+            "additions": 163,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.ts",
+            "additions": 50,
+            "deletions": 22,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85896",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85896.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "SUCCESS": 74,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:85896:4527384825:2026-05-24T04:28:43Z:re_review",
+      "comment_id": "4527384825",
+      "comment_version_key": "4527384825:2026-05-24T04:28:43Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85896#issuecomment-4527384825",
+      "repo": "openclaw/openclaw",
+      "issue_number": 85896,
+      "author": "yetval",
+      "author_id": 102706514,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-24T04:28:43Z",
+      "comment_updated_at": "2026-05-24T04:28:43Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-24T05:41:43.814Z",
+          "response_comment_id": "4527384899",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): retry transient errors before next natural cron slot (#85888)",
+        "body": "## Summary\n\n- Recurring cron error path used `Math.max(naturalNext, backoffNext)` for the next scheduled run. For daily schedules (e.g. `0 5 * * *`), `naturalNext` is ~24h ahead and always dominated the short backoff, so retries for transient provider errors were effectively suppressed.\n- This matches the symptom in #85888: scheduled jobs hitting MiniMax `overloaded_error` (503) during 05:00-07:30 Asia/Shanghai never re-fired the same day, while manual reruns at 08:30+ (after the busy window) succeeded because they bypassed the broken scheduler path.\n- While retry budget is available and the error is classified retryable via `resolveCronExecutionRetryHint`, schedule at `backoffNext`. Once `consecutiveErrors > retryConfig.maxAttempts` or the error is permanent, fall back to `max(naturalNext, backoffNext)` so high-frequency recurring schedules cannot bypass the configured backoff after retry-budget exhaustion. When croner cannot resolve the natural next slot for a cron schedule, the retry path clears `nextRunAtMs` to preserve the unresolved-next-run guard from #66019.\n\nCloses #85888\n\n## Files\n\n- `src/cron/service/timer.ts` — split recurring error path into \"within retry budget\" (use `backoffNext`, preserve unresolved-next-run guard) vs. \"exhausted / permanent\" (use `max(naturalNext, backoffNext)`).\n- `src/cron/service/timer.regression.test.ts` — four regressions: (1) same-day backoff retry on retryable daily-cron error, (2) high-frequency `every-1s` preserves backoff floor, (3) cron unresolved-next-run guard, (4) exhausted budget falls back to natural slot.\n- `docs/gateway/configuration-reference.md`, `docs/automation/cron-jobs.md`, `src/config/schema.help.ts`, `src/config/types.cron.ts` — align `cron.retry` contract surfaces with the new recurring-job behavior.\n\n## Real behavior proof\n\n**Behavior or issue addressed:** Scheduled recurring cron jobs that hit a retryable provider error (e.g. MiniMax `overloaded_error` 503) on an infrequent schedule (#85888 reporter: daily `0 5 * * *` Asia/Shanghai during 05:00-07:30 CST) had their next run pushed to the next natural slot (~24h away) instead of being retried with backoff, so the failure was effectively swallowed for that day while manual reruns at 08:30+ succeeded. After this patch, while the error is in `cron.retry.retryOn` and `consecutiveErrors` is still within `cron.retry.maxAttempts`, the next run is scheduled at the configured backoff slot rather than the natural cron/`every` slot; once retries are exhausted the job falls back to `max(naturalNext, backoffNext)` so high-frequency schedules cannot bypass backoff.\n\n**Real environment tested:** Fresh DigitalOcean Fedora 43 Cloud Edition droplet (`fedora-s-1vcpu-2gb-nyc1`, redacted IP), kernel `6.17.1-300.fc43.x86_64`, `node v22.22.2`, `pnpm 9.15.9`. Patched OpenClaw checkout at PR head `1c8a66cfe3f47e9dd2a17eaa2c0e93295a9c9d32`. Real `node:fs/promises` writes under `/tmp/cron-proof-85888-<redacted>/jobs.json`. Real production `applyJobResult`, real `createCronServiceState`, real `computeJobNextRunAtMs`, real `resolveCronExecutionRetryHint` – none of the scheduler code under test is mocked. The `proof-85888.mts` script is executed via the project's own `tsx` (`./node_modules/.bin/tsx`) directly from the patched repo, outside the vitest test harness.\n\n**Exact steps or command run after this patch:** Provision the droplet, install Node 22 + pnpm 9, clone the PR head, install deps, then run two captures against the patched code — vitest against the four new `#85888` regressions, then a direct `tsx` invocation of `proof-85888.mts` that exercises the production `applyJobResult` outside the test harness on real fs.\n\n```\ndnf install -y nodejs npm git\nnpm install -g pnpm@9\ngit clone --branch fix/cron-error-backoff-min-bound-85888 --depth 1 https://github.com/yetval/openclaw.git\ncd openclaw\npnpm install --no-frozen-lockfile\nnode scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts -t \"85888\" --reporter=verbose\n./node_modules/.bin/tsx proof-85888.mts\n```\n\n**Evidence after fix:** Redacted live terminal output from the Fedora 43 droplet on PR head `1c8a66cfe3`. Token, IP, and tmp paths redacted in-place; everything else is the actual stdout from the patched scheduler running on real Linux. Two captures: vitest runner output for the new regressions (real fs via `setupCronRegressionFixtures` + real Node 22 + real Linux), and a direct `tsx`-invoked `proof-85888.mts` runtime script that imports the production `applyJobResult` and writes a real `jobs.json` to `/tmp`.\n\n```\nRUN  v4.1.7 /root/openclaw\n\n ✓ src/cron/service/timer.regression.test.ts > cron service timer regressions\n   > schedules backoff retry within the same day when daily cron fails on a retryable error (#85888) 318ms\n ✓ src/cron/service/timer.regression.test.ts > cron service timer regressions\n   > preserves backoff floor for high-frequency recurring jobs whose natural next is sooner than backoff (#85888) 5ms\n ✓ src/cron/service/timer.regression.test.ts > cron service timer regressions\n   > clears schedule on retryable cron error when next-run is unresolved (#85888) 6ms\n ✓ src/cron/service/timer.regression.test.ts > cron service timer regressions\n   > falls back to the next natural cron slot once retry budget is exhausted (#85888) 7ms\n\n Test Files  1 passed (1)\n      Tests  4 passed (43, 39 skipped)\n   Duration  14.07s\n```\n\nDirect runtime proof (`proof-85888.mts` — real `applyJobResult` invoked outside the test harness, real fs writes under `/tmp`, real `createCronServiceState`, no mocks of the scheduler under test):\n\n```\n===== Scenario 1: daily cron (Asia/Shanghai) MiniMax overload =====\n  endedAt:         2026-05-24T05:02:44.264Z\n  naturalNext:     2026-05-24T21:00:00.000Z (delta from endedAt: 15.95h)\n[warn] cron: job run returned error status {\"jobId\":\"memory-distill\",\"error\":\"FailoverError: The AI service is temporarily overloaded (overloaded_error). status=503\"}\n[info] cron: applying error backoff {\"jobId\":\"memory-distill\",\"consecutiveErrors\":1,\"backoffMs\":30000,\"nextRunAtMs\":1779598994264,\"retryable\":true,\"retryCategory\":\"overloaded\",\"retryBudgetAvailable\":true,\"maxAttempts\":3,\"scheduledMode\":\"backoff\"}\n  -> nextRunAtMs:  2026-05-24T05:03:14.264Z\n  -> delta:        0.01h\n  -> same-day?     YES (fixed)\n  -> consecutive:  1\n\n===== Scenario 2: high-frequency every-1s preserves backoff floor =====\n  endedAt:         2026-05-24T12:00:00.200Z\n  naturalNext:     2026-05-24T12:00:01.000Z (+800ms)\n[warn] cron: job run returned error status {\"jobId\":\"tick\",\"error\":\"FailoverError: ... overloaded_error ... status=503\"}\n[info] cron: applying error backoff {\"jobId\":\"tick\",\"consecutiveErrors\":1,\"backoffMs\":30000,\"nextRunAtMs\":1779624030200,\"retryable\":true,\"retryCategory\":\"overloaded\",\"retryBudgetAvailable\":true,\"maxAttempts\":3,\"scheduledMode\":\"backoff\"}\n  -> nextRunAtMs:  2026-05-24T12:00:30.200Z\n  -> delay (ms):   30000\n  -> floor ok?     YES (backoff respected)\n\n===== Scenario 3: exhausted retry budget falls back =====\n  endedAt:         2026-05-24T05:02:00.000Z\n  naturalNext:     2026-05-24T21:00:00.000Z\n  consecutive in:  99\n[warn] cron: job run returned error status {\"jobId\":\"memory-distill-exhausted\",\"error\":\"FailoverError: ... overloaded_error ... status=503\"}\n[info] cron: applying error backoff {\"jobId\":\"memory-distill-exhausted\",\"consecutiveErrors\":100,\"backoffMs\":300000,\"nextRunAtMs\":1779656400000,\"retryable\":true,\"retryCategory\":\"overloaded\",\"retryBudgetAvailable\":false,\"maxAttempts\":3,\"scheduledMode\":\"natural_floor\"}\n  -> nextRunAtMs:  2026-05-24T21:00:00.000Z\n  -> falls back?   YES (natural slot)\n  -> enabled?      true\n\n===== fs writes =====\n  tmpDir:         /tmp/cron-proof-85888-<redacted>\n  jobs.json size: 11\n```\n\n**Observed result after fix:**\n\n- Scenario 1 is the exact reporter failure mode (`0 5 * * *` `Asia/Shanghai`, `overloaded_error` 503): on current `main` the runtime would push `nextRunAtMs` to `2026-05-24T21:00:00.000Z` (15.95h away, next-day in `Asia/Shanghai`); on this PR head it lands at `2026-05-24T05:03:14.264Z` (30s after endedAt). Same-day retry achieved. `scheduledMode=backoff`, `retryBudgetAvailable=true`.\n- Scenario 2 is the prior ClawSweeper P1 concern about high-frequency schedules: with `every-1s` cadence and a 30s backoff, the patched runtime respects the backoff floor and schedules at `endedAt + 30000ms` instead of the +800ms natural slot. Retry-storm protection preserved. `scheduledMode=backoff`.\n- Scenario 3 is the prior ClawSweeper P2 concern about exhausted retry budget: once `consecutiveErrors > maxAttempts`, `scheduledMode` flips to `natural_floor` and `nextRunAtMs` resolves to the next natural cron slot (`max(naturalNext, backoffNext)` semantics), so a high-frequency schedule cannot bypass backoff after the retry budget is gone. `retryBudgetAvailable=false`.\n- All three scenarios emit a real `cron: applying error backoff` log line on a real Node 22 process with real fs writes (`/tmp/cron-proof-85888-<redacted>/jobs.json`).\n\n**What was not tested:** End-to-end flight against the live MiniMax `minimax-portal / MiniMax-M2.7` provider on the issue reporter's tenant. I do not have credentials for that tenant. The retryable-error contract is exercised here by passing the exact `FailoverError: The AI service is temporarily overloaded (overloaded_error). status=503` text the issue logs show; the upstream `resolveCronExecutionRetryHint` and `resolveFailoverReasonFromError` classifiers are production code and are not mocked in the proof above, so the patched scheduling decision is being made on the same `retryable`/`overloaded` classification path that production code would take when MiniMax returns the same error.\n\n## Test plan\n\n- [x] `node scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts -t \"85888\"` — 4/4 PR regressions pass on Fedora 43 / Node 22\n- [x] Direct `tsx proof-85888.mts` against the patched scheduler — three scenarios match expected behavior\n- [ ] Full cron suite + `cron/retry-hint.test.ts` + `cron/service.jobs.test.ts` in CI\n",
+        "branch": "fix/cron-error-backoff-min-bound-85888",
+        "head_sha": "1c8a66cfe3f47e9dd2a17eaa2c0e93295a9c9d32",
+        "author": "yetval",
+        "labels": [
+          "docs",
+          "gateway",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "docs/automation/cron-jobs.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/configuration-reference.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.help.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.cron.ts",
+            "additions": 15,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.regression.test.ts",
+            "additions": 163,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.ts",
+            "additions": 50,
+            "deletions": 22,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85896",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85896.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "SUCCESS": 74,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "re-review requires an open issue or PR"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1384,
+    "total_ms": 3535,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 429
+        "ms": 316
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1470
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 941
+        "ms": 1722
       },
       {
         "name": "append_ledger",
