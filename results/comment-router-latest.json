@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-24T03:27:09.213Z",
+  "generated_at": "2026-05-24T03:27:16.582Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T00:27:07.917Z",
+  "since": "2026-05-24T00:27:14.649Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    85708
+    85896
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4527270820
+  ],
+  "status_comment_id": 4527270926,
   "max_autoclose_targets": 8,
-  "scanned_comments": 7,
-  "commands_seen": 3,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:85708:4526988667:2026-05-24T01:02:28Z:maintainer_approve_automerge",
-      "comment_id": "4526988667",
-      "comment_version_key": "4526988667:2026-05-24T01:02:28Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/85708#issuecomment-4526988667",
+      "idempotency_key": "comment-router:openclaw/openclaw:85896:4527270820:2026-05-24T03:26:21Z:re_review",
+      "comment_id": "4527270820",
+      "comment_version_key": "4527270820:2026-05-24T03:26:21Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85896#issuecomment-4527270820",
       "repo": "openclaw/openclaw",
-      "issue_number": 85708,
-      "author": "Takhoffman",
-      "author_id": 781889,
+      "issue_number": 85896,
+      "author": "yetval",
+      "author_id": 102706514,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-24T01:02:28Z",
-      "comment_updated_at": "2026-05-24T01:02:28Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-05-24T03:26:21Z",
+      "comment_updated_at": "2026-05-24T03:26:21Z",
+      "status_comment_id": 4527270926,
       "trigger": "mention",
       "command": "approve",
       "intent": "maintainer_approve_automerge",
@@ -57,276 +59,121 @@
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "write",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): honor restart drain budget for embedded runs",
-        "body": "Problem\n\nGateway restarts currently treat active embedded runs differently from active task runs: embedded runs hit a hidden 30s abort grace even when the restart drain budget is configured longer, or explicitly unbounded. That can interrupt legitimate long embedded runs even though operators configured the gateway to wait.\n\nWhy this is not superseded by #71465\n\nThis is a replacement for #85630, which was closed as duplicate/superseded by #71465. #71465 is related, but it did not remove the embedded-run-specific cap that remains on current `main`.\n\n#71465 established the restart drain path and made the general deferral budget visible, but current `main` still has `RESTART_ACTIVE_EMBEDDED_RUN_ABORT_GRACE_MS = 30_000` and still routes active embedded runs through `resolveActiveRunDrainWaitMs()`. That means embedded runs are still capped at 30 seconds even when the operator-visible restart drain budget is longer or explicitly unbounded. This PR is the focused follow-up for that remaining hidden embedded-run cap.\n\nChange and value\n\nThis PR makes active embedded runs use the same restart drain budget as active task runs. It also threads a SIGUSR1 restart intent through the scheduled restart path so a restart that already waited through the pre-restart deferral timeout is treated as forced by the run loop instead of spending the same budget a second time.\n\nWho is affected\n\nOperators using `gateway.reload.deferralTimeoutMs`, restart `waitMs`, config reloads that require a gateway restart, or long-running embedded Pi runs during restart.\n\nWho is not affected\n\nThis does not change ordinary stop behavior, restart authorization, restart scheduling permissions, or public configuration shape. It only removes the hidden embedded-run cap so embedded runs follow the existing restart drain budget.\n\nWhy now\n\nThe documented deferral timeout is the restart budget users can see and configure. Keeping a separate hidden embedded-run cap makes the behavior harder to reason about and can discard work sooner than configured.\n\nImplementation\n\n- Removed the separate `RESTART_ACTIVE_EMBEDDED_RUN_ABORT_GRACE_MS` cap.\n- Pass `restartDrainTimeoutMs` directly to `waitForActiveEmbeddedRuns`.\n- Added in-memory SIGUSR1 restart intent plumbing for scheduled restarts.\n- Mark deferral-timeout restarts as `{ force: true }` so the run loop skips a second active-work drain after the deferral budget has already been exhausted.\n- Carry forced restart reasons into main-session restart recovery markers.\n- Clear the in-flight SIGUSR1 token when a file intent handles an authorized restart signal.\n\nMaintainer decision: restart drain contract\n\nThis PR recommends treating the configured restart drain budget as the single restart contract for both active task runs and active embedded runs.\n\nThe problem is that #71465 made restart deferral visible and configurable, but the current embedded-run path still applies a separate hidden 30s cap. That creates two conflicting contracts: operators see `gateway.reload.deferralTimeoutMs` or restart `waitMs`, while embedded runs can still be aborted earlier. It also makes `0` ambiguous: active tasks can wait indefinitely, but embedded runs cannot.\n\n| Approach | Pros | Cons |\n| --- | --- | --- |\n| Keep the hidden 30s embedded cap | Fast restart recovery; smallest behavior change. | Leaves the visible restart budget misleading; preserves the task/run mismatch; can abort legitimate long embedded work despite a longer or unbounded configured budget. |\n| Merge this PR as-is (recommended) | One operator-visible drain budget; embedded runs match active tasks; `0` has one meaning; no new config or docs surface; focused code and tests. | Restarts can wait indefinitely for embedded runs when the operator explicitly configured an unbounded wait. |\n| Add an explicit embedded-run watchdog | Keeps an availability escape hatch if maintainers want embedded runs bounded independently. | Adds a second public policy/setting to document and support; `waitMs: 0` no longer means fully unbounded for all active work; still needs a maintainer-chosen default. |\n| Split only the deferral-timeout force fix | Avoids double-spending the restart budget after a deferral timeout. | Leaves the hidden 30s embedded cap and the main operator-facing bug unresolved. |\n\nRecommended approach: merge #85708 as-is, subject to normal CI and maintainer review. The operator has already chosen the restart budget; if they choose a longer or unbounded wait, embedded runs should follow that same contract. If maintainers want a hard embedded-run watchdog, it should be a separate explicit product decision rather than an undocumented cap that silently overrides the visible restart budget.\n\nRisk, CI, and security disposition\n\n- Compatibility: This intentionally changes behavior for any setup that unknowingly depended on the hidden 30s embedded-run abort cap. That is the compatibility risk. The recommended resolution is to make the documented restart budget the source of truth; if maintainers want a separate embedded-run maximum, it should be explicit and tested rather than hidden.\n- Availability: With `waitMs: 0` or `gateway.reload.deferralTimeoutMs: 0`, an active embedded run can keep restart drain open indefinitely. This matches the existing unbounded-wait contract for active task runs and is acceptable when the operator explicitly configured an unbounded restart wait. The explicit watchdog option remains available if maintainers prefer a hard maximum.\n- CI: ClawSweeper's earlier pending-check note has been resolved for the current head. Current replacement head `c3020da0d065` has completed the visible GitHub workflow runs successfully: Workflow Sanity, OpenGrep - PR Diff, CodeQL, CodeQL Critical Quality, and CI. Future reruns should still be allowed to finish before merge.\n- Security: No additional security fix is needed from the ClawSweeper note. The diff changes in-process gateway restart control flow and tests only; it does not touch dependencies, lockfiles, CI definitions, secret handling, or package supply-chain surfaces.\n\n## Real behavior proof\n\n- Behavior or issue addressed: Active embedded runs now honor the configured restart drain budget instead of a hidden 30s cap, and deferral-timeout SIGUSR1 restarts skip a second drain.\n- Real environment tested: Local contributor worktree on replacement head `2c0889f7f1`; the branch was created from `origin/main` `55a0c9b1f4` and GitHub reports the PR mergeable against current base `4ec85762ab`.\n- Exact steps or command run after this patch:\n\n  ```sh\n  env OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.cli.config.ts src/cli/gateway-cli/run-loop.test.ts --reporter=verbose\n  env OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.infra.config.ts src/infra/restart.deferral-timeout.test.ts src/infra/infra-runtime.test.ts --reporter=verbose\n  env OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-reload-handlers.test.ts --reporter=verbose\n  pnpm exec oxfmt --check src/infra/restart.ts src/cli/gateway-cli/lifecycle.runtime.ts src/cli/gateway-cli/run-loop.ts src/cli/gateway-cli/run-loop.test.ts src/infra/restart.deferral-timeout.test.ts src/infra/infra-runtime.test.ts src/gateway/server-reload-handlers.ts src/gateway/server-reload-handlers.test.ts\n  git diff --check HEAD^..HEAD\n  node --import tsx /tmp/openclaw-restart-drain-proof.mjs\n  ```\n- Evidence after fix: Terminal transcript from `node --import tsx /tmp/openclaw-restart-drain-proof.mjs` exercised real `runGatewayLoop`, `ACTIVE_EMBEDDED_RUNS`, `emitGatewayRestart`, and `deferGatewayRestartUntilIdle` paths and printed this after-fix output:\n\n  ```json\n  {\n    \"exitCode\": 0,\n    \"startCount\": 3,\n    \"waitZero\": {\n      \"drainedWithoutAbort\": true,\n      \"close\": {\n        \"reason\": \"gateway restarting\",\n        \"restartExpectedMs\": 1500,\n        \"drainTimeoutMs\": 15000\n      }\n    },\n    \"deferralTimeout\": {\n      \"abortCount\": 1,\n      \"close\": {\n        \"reason\": \"gateway restarting\",\n        \"restartExpectedMs\": 1500,\n        \"drainTimeoutMs\": 0\n      }\n    },\n    \"eventKinds\": [\n      \"start\",\n      \"embedded.drained\",\n      \"close\",\n      \"start\",\n      \"embedded.abort\",\n      \"close\",\n      \"start\",\n      \"close\",\n      \"exit\"\n    ]\n  }\n  ```\n\n  Targeted exact-head checks also passed: CLI restart loop suite, 35 tests; infra restart suites, 34 tests; gateway reload suite, 11 tests; formatting check for all 8 changed files; `git diff --check HEAD^..HEAD`.\n- Observed result after fix: The proof showed an explicit unbounded restart wait draining an active embedded run without aborting it, and a deferral-timeout restart aborting once with `drainTimeoutMs: 0` instead of spending a second active-work drain budget.\n- What was not tested: No changed-path proof gap remains. #85630, which carried the same scoped diff before replacement, completed remote GCP/Crabbox validation, multi-lane review, Claude `--print`, Codex review, and GitHub CI before it was closed as superseded. Current replacement head `c3020da0d065` has completed the visible GitHub workflow runs successfully.\n\nReview gates\n\n- Same scoped diff as #85630.\n- #85630 completed multi-lane read-only review; accepted findings were fixed or explicitly classified.\n- #85630 completed Claude `--print` multi-lane review after increasing timeout to 20 minutes per lane; no blockers remained.\n- #85630 completed Codex review with no discrete actionable bugs.\n- Replacement head reran targeted local checks and real behavior proof after cherry-picking onto a fresh main worktree.\n- Current replacement head `c3020da0d065` completed visible GitHub workflow runs successfully: Workflow Sanity, OpenGrep - PR Diff, CodeQL, CodeQL Critical Quality, and CI.\n\nChangelog\n\nNo changelog entry added; leaving release-note/changelog ownership to maintainers.",
-        "branch": "fix/restart-embedded-drain-budget-v2",
-        "head_sha": "5dcf80fe1fbab41e7ceb89bc92466ecd85147139",
-        "author": "kaspre",
-        "labels": [
-          "gateway",
-          "cli",
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/lifecycle.runtime.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/run-loop.test.ts",
-            "additions": 163,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/run-loop.ts",
-            "additions": 19,
-            "deletions": 18,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-reload-handlers.test.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-reload-handlers.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/infra-runtime.test.ts",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/restart.deferral-timeout.test.ts",
-            "additions": 28,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/restart.ts",
-            "additions": 36,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85708",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85708.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "counts": {
-            "SUCCESS": 74,
-            "SKIPPED": 21,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-05-24T03:27:17.217Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 85896
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-24T03:27:18.462Z",
+          "response_comment_id": "4527270926",
+          "response_comment_mode": "updated"
         }
-      },
-      "reason": "PR is not open"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:85708:4525222669:2026-05-23T13:16:42Z:clawsweeper_needs_human",
-      "comment_id": "4525222669",
-      "comment_version_key": "4525222669:2026-05-23T13:16:42Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/85708#issuecomment-4525222669",
-      "repo": "openclaw/openclaw",
-      "issue_number": 85708,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-23T11:46:44Z",
-      "comment_updated_at": "2026-05-23T13:16:42Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "The remaining action is maintainer policy judgment on unbounded embedded-run restart waits, not an automation-repairable code defect.; Cleared: The diff changes gateway restart control flow and tests only; I found no dependency, CI, lockfile, secret-handling, or package-supply-chain concern. (sha=c3020da0d0652d72bf1f16e77d1a534d3fe26c4b)",
-      "review_summary": "The PR removes the hidden 30s active embedded-run restart cap, passes the configured restart drain budget to embedded runs, and carries forced SIGUSR1 deferral-timeout intent through restart handling with focused tests.\n\nReproducibility: yes. Source inspection on current main shows embedded runs are capped at 30s even when the documented restart drain budget is longer or unbounded; I did not run local tests because this review is read-only.",
-      "review_followup": "The remaining action is maintainer policy judgment on unbounded embedded-run restart waits, not an automation-repairable code defect.",
-      "freeform_prompt": null,
-      "expected_head_sha": "c3020da0d0652d72bf1f16e77d1a534d3fe26c4b",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:85708:4525341743:2026-05-23T12:26:22Z:freeform_assist",
-      "comment_id": "4525341743",
-      "comment_version_key": "4525341743:2026-05-23T12:26:22Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/85708#issuecomment-4525341743",
-      "repo": "openclaw/openclaw",
-      "issue_number": 85708,
-      "author": "Kaspre",
-      "author_id": 36520309,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-23T12:26:22Z",
-      "comment_updated_at": "2026-05-23T12:26:22Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-run por favor",
-      "intent": "freeform_assist",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": "re-run por favor",
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "ignored",
-      "actions": [],
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(gateway): honor restart drain budget for embedded runs",
-        "body": "Problem\n\nGateway restarts currently treat active embedded runs differently from active task runs: embedded runs hit a hidden 30s abort grace even when the restart drain budget is configured longer, or explicitly unbounded. That can interrupt legitimate long embedded runs even though operators configured the gateway to wait.\n\nWhy this is not superseded by #71465\n\nThis is a replacement for #85630, which was closed as duplicate/superseded by #71465. #71465 is related, but it did not remove the embedded-run-specific cap that remains on current `main`.\n\n#71465 established the restart drain path and made the general deferral budget visible, but current `main` still has `RESTART_ACTIVE_EMBEDDED_RUN_ABORT_GRACE_MS = 30_000` and still routes active embedded runs through `resolveActiveRunDrainWaitMs()`. That means embedded runs are still capped at 30 seconds even when the operator-visible restart drain budget is longer or explicitly unbounded. This PR is the focused follow-up for that remaining hidden embedded-run cap.\n\nChange and value\n\nThis PR makes active embedded runs use the same restart drain budget as active task runs. It also threads a SIGUSR1 restart intent through the scheduled restart path so a restart that already waited through the pre-restart deferral timeout is treated as forced by the run loop instead of spending the same budget a second time.\n\nWho is affected\n\nOperators using `gateway.reload.deferralTimeoutMs`, restart `waitMs`, config reloads that require a gateway restart, or long-running embedded Pi runs during restart.\n\nWho is not affected\n\nThis does not change ordinary stop behavior, restart authorization, restart scheduling permissions, or public configuration shape. It only removes the hidden embedded-run cap so embedded runs follow the existing restart drain budget.\n\nWhy now\n\nThe documented deferral timeout is the restart budget users can see and configure. Keeping a separate hidden embedded-run cap makes the behavior harder to reason about and can discard work sooner than configured.\n\nImplementation\n\n- Removed the separate `RESTART_ACTIVE_EMBEDDED_RUN_ABORT_GRACE_MS` cap.\n- Pass `restartDrainTimeoutMs` directly to `waitForActiveEmbeddedRuns`.\n- Added in-memory SIGUSR1 restart intent plumbing for scheduled restarts.\n- Mark deferral-timeout restarts as `{ force: true }` so the run loop skips a second active-work drain after the deferral budget has already been exhausted.\n- Carry forced restart reasons into main-session restart recovery markers.\n- Clear the in-flight SIGUSR1 token when a file intent handles an authorized restart signal.\n\nMaintainer decision: restart drain contract\n\nThis PR recommends treating the configured restart drain budget as the single restart contract for both active task runs and active embedded runs.\n\nThe problem is that #71465 made restart deferral visible and configurable, but the current embedded-run path still applies a separate hidden 30s cap. That creates two conflicting contracts: operators see `gateway.reload.deferralTimeoutMs` or restart `waitMs`, while embedded runs can still be aborted earlier. It also makes `0` ambiguous: active tasks can wait indefinitely, but embedded runs cannot.\n\n| Approach | Pros | Cons |\n| --- | --- | --- |\n| Keep the hidden 30s embedded cap | Fast restart recovery; smallest behavior change. | Leaves the visible restart budget misleading; preserves the task/run mismatch; can abort legitimate long embedded work despite a longer or unbounded configured budget. |\n| Merge this PR as-is (recommended) | One operator-visible drain budget; embedded runs match active tasks; `0` has one meaning; no new config or docs surface; focused code and tests. | Restarts can wait indefinitely for embedded runs when the operator explicitly configured an unbounded wait. |\n| Add an explicit embedded-run watchdog | Keeps an availability escape hatch if maintainers want embedded runs bounded independently. | Adds a second public policy/setting to document and support; `waitMs: 0` no longer means fully unbounded for all active work; still needs a maintainer-chosen default. |\n| Split only the deferral-timeout force fix | Avoids double-spending the restart budget after a deferral timeout. | Leaves the hidden 30s embedded cap and the main operator-facing bug unresolved. |\n\nRecommended approach: merge #85708 as-is, subject to normal CI and maintainer review. The operator has already chosen the restart budget; if they choose a longer or unbounded wait, embedded runs should follow that same contract. If maintainers want a hard embedded-run watchdog, it should be a separate explicit product decision rather than an undocumented cap that silently overrides the visible restart budget.\n\nRisk, CI, and security disposition\n\n- Compatibility: This intentionally changes behavior for any setup that unknowingly depended on the hidden 30s embedded-run abort cap. That is the compatibility risk. The recommended resolution is to make the documented restart budget the source of truth; if maintainers want a separate embedded-run maximum, it should be explicit and tested rather than hidden.\n- Availability: With `waitMs: 0` or `gateway.reload.deferralTimeoutMs: 0`, an active embedded run can keep restart drain open indefinitely. This matches the existing unbounded-wait contract for active task runs and is acceptable when the operator explicitly configured an unbounded restart wait. The explicit watchdog option remains available if maintainers prefer a hard maximum.\n- CI: ClawSweeper's earlier pending-check note has been resolved for the current head. Current replacement head `c3020da0d065` has completed the visible GitHub workflow runs successfully: Workflow Sanity, OpenGrep - PR Diff, CodeQL, CodeQL Critical Quality, and CI. Future reruns should still be allowed to finish before merge.\n- Security: No additional security fix is needed from the ClawSweeper note. The diff changes in-process gateway restart control flow and tests only; it does not touch dependencies, lockfiles, CI definitions, secret handling, or package supply-chain surfaces.\n\n## Real behavior proof\n\n- Behavior or issue addressed: Active embedded runs now honor the configured restart drain budget instead of a hidden 30s cap, and deferral-timeout SIGUSR1 restarts skip a second drain.\n- Real environment tested: Local contributor worktree on replacement head `2c0889f7f1`; the branch was created from `origin/main` `55a0c9b1f4` and GitHub reports the PR mergeable against current base `4ec85762ab`.\n- Exact steps or command run after this patch:\n\n  ```sh\n  env OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.cli.config.ts src/cli/gateway-cli/run-loop.test.ts --reporter=verbose\n  env OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.infra.config.ts src/infra/restart.deferral-timeout.test.ts src/infra/infra-runtime.test.ts --reporter=verbose\n  env OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-reload-handlers.test.ts --reporter=verbose\n  pnpm exec oxfmt --check src/infra/restart.ts src/cli/gateway-cli/lifecycle.runtime.ts src/cli/gateway-cli/run-loop.ts src/cli/gateway-cli/run-loop.test.ts src/infra/restart.deferral-timeout.test.ts src/infra/infra-runtime.test.ts src/gateway/server-reload-handlers.ts src/gateway/server-reload-handlers.test.ts\n  git diff --check HEAD^..HEAD\n  node --import tsx /tmp/openclaw-restart-drain-proof.mjs\n  ```\n- Evidence after fix: Terminal transcript from `node --import tsx /tmp/openclaw-restart-drain-proof.mjs` exercised real `runGatewayLoop`, `ACTIVE_EMBEDDED_RUNS`, `emitGatewayRestart`, and `deferGatewayRestartUntilIdle` paths and printed this after-fix output:\n\n  ```json\n  {\n    \"exitCode\": 0,\n    \"startCount\": 3,\n    \"waitZero\": {\n      \"drainedWithoutAbort\": true,\n      \"close\": {\n        \"reason\": \"gateway restarting\",\n        \"restartExpectedMs\": 1500,\n        \"drainTimeoutMs\": 15000\n      }\n    },\n    \"deferralTimeout\": {\n      \"abortCount\": 1,\n      \"close\": {\n        \"reason\": \"gateway restarting\",\n        \"restartExpectedMs\": 1500,\n        \"drainTimeoutMs\": 0\n      }\n    },\n    \"eventKinds\": [\n      \"start\",\n      \"embedded.drained\",\n      \"close\",\n      \"start\",\n      \"embedded.abort\",\n      \"close\",\n      \"start\",\n      \"close\",\n      \"exit\"\n    ]\n  }\n  ```\n\n  Targeted exact-head checks also passed: CLI restart loop suite, 35 tests; infra restart suites, 34 tests; gateway reload suite, 11 tests; formatting check for all 8 changed files; `git diff --check HEAD^..HEAD`.\n- Observed result after fix: The proof showed an explicit unbounded restart wait draining an active embedded run without aborting it, and a deferral-timeout restart aborting once with `drainTimeoutMs: 0` instead of spending a second active-work drain budget.\n- What was not tested: No changed-path proof gap remains. #85630, which carried the same scoped diff before replacement, completed remote GCP/Crabbox validation, multi-lane review, Claude `--print`, Codex review, and GitHub CI before it was closed as superseded. Current replacement head `c3020da0d065` has completed the visible GitHub workflow runs successfully.\n\nReview gates\n\n- Same scoped diff as #85630.\n- #85630 completed multi-lane read-only review; accepted findings were fixed or explicitly classified.\n- #85630 completed Claude `--print` multi-lane review after increasing timeout to 20 minutes per lane; no blockers remained.\n- #85630 completed Codex review with no discrete actionable bugs.\n- Replacement head reran targeted local checks and real behavior proof after cherry-picking onto a fresh main worktree.\n- Current replacement head `c3020da0d065` completed visible GitHub workflow runs successfully: Workflow Sanity, OpenGrep - PR Diff, CodeQL, CodeQL Critical Quality, and CI.\n\nChangelog\n\nNo changelog entry added; leaving release-note/changelog ownership to maintainers.",
-        "branch": "fix/restart-embedded-drain-budget-v2",
-        "head_sha": "5dcf80fe1fbab41e7ceb89bc92466ecd85147139",
-        "author": "kaspre",
+        "title": "fix(cron): retry transient errors before next natural cron slot (#85888)",
+        "body": "## Summary\n\n- Recurring cron error path used `Math.max(naturalNext, backoffNext)` for the next scheduled run. For daily schedules (e.g. `0 5 * * *`), `naturalNext` is ~24h ahead and always dominated the short backoff, so retries for transient provider errors were effectively suppressed.\n- This matches the symptom in #85888: scheduled jobs hitting MiniMax `overloaded_error` (503) during 05:00-07:30 Asia/Shanghai never re-fired the same day, while manual reruns at 08:30+ (after the busy window) succeeded because they bypassed the broken scheduler path.\n- While retry budget is available and the error is classified retryable via `resolveCronExecutionRetryHint`, schedule `min(naturalNext, backoffNext)`. Once `consecutiveErrors > retryConfig.maxAttempts` or the error is permanent, fall back to `naturalNext` through the existing `resolveCronNextRunWithLowerBound` guard. When croner cannot resolve the natural next slot for a cron schedule, the retry path also clears `nextRunAtMs` to preserve the unresolved-next-run guard from #66019.\n\nCloses #85888\n\n## Files\n\n- `src/cron/service/timer.ts` — split recurring error path into \"within retry budget\" (use `min(naturalNext, backoffNext)`, preserve unresolved-next-run guard) vs. \"exhausted / permanent\" (use natural slot via existing lower-bound resolver).\n- `src/cron/service/timer.regression.test.ts` — three regression tests: (1) backoff retry within same day on retryable daily-cron error, (2) clears schedule when next-run is unresolved during retry, (3) fallback to natural slot when retry budget exhausted.\n\n## Real behavior proof\n\nI am an external contributor and do not have a live OpenClaw + MiniMax setup to capture redacted runtime cron logs. The regression tests in `timer.regression.test.ts` exercise the exact `applyJobResult` failure path with the same `FailoverError: ... overloaded_error ... status=503` error text reported in the issue against a daily `0 5 * * *` schedule in `Asia/Shanghai`, and assert the next-run timestamp now lands within the same day instead of being pushed to the next natural slot. Source-level reasoning for the original misbehavior is documented in #85888's clawsweeper comment (timer.ts:1008 used `Math.max`, which always picked the ~24h-away naturalNext over the few-minute backoff for daily crons).\n\nRequesting maintainer review for a `proof:` override or guidance on capturing acceptable runtime evidence.\n\n## Test plan\n\n- [ ] `node scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts`\n- [ ] `node scripts/run-vitest.mjs src/cron/retry-hint.test.ts`\n- [ ] `node scripts/run-vitest.mjs src/cron/service.jobs.test.ts`\n- [ ] CI green on cron suite\n\n## Review responses\n\n- **ClawSweeper P1 (`timer.ts:1016-1019` unresolved-next-run guard):** Addressed in the second commit. When retry budget is available but croner returns `undefined` for `naturalNext` on a cron schedule, the retry path now clears `nextRunAtMs` and logs the same `cron: next run unresolved; clearing schedule to avoid a refire loop` warning instead of firing on bare backoff. Regression added.\n\n- **ClawSweeper P1 (`timer.ts:1028` backoff floor):** Addressed in the third commit. The retry-budget branch now uses `backoffNext` directly instead of `min(naturalNext, backoffNext)`, so high-frequency recurring schedules (e.g. every-1s) cannot bypass the configured backoff via a sooner natural slot. Daily-cron retry path from #85888 still works because `backoffNext` lands within the same day while `naturalNext` is ~24h away. New regression covers an every-1s job: `nextRunAtMs >= endedAt + everyMs`, proving the backoff floor is preserved.\n",
+        "branch": "fix/cron-error-backoff-min-bound-85888",
+        "head_sha": "2f652594d331f7fa41df074779c628a0d532e834",
+        "author": "yetval",
         "labels": [
+          "docs",
           "gateway",
-          "cli",
           "size: M",
-          "proof: supplied",
+          "triage: needs-real-behavior-proof",
           "P2",
-          "rating: 🐚 platinum hermit",
+          "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
           "merge-risk: 🚨 availability",
-          "status: 👀 ready for maintainer look"
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "CHANGELOG.md",
+            "path": "docs/automation/cron-jobs.md",
             "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/lifecycle.runtime.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/run-loop.test.ts",
-            "additions": 163,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/run-loop.ts",
-            "additions": 19,
-            "deletions": 18,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-reload-handlers.test.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-reload-handlers.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/infra-runtime.test.ts",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/restart.deferral-timeout.test.ts",
-            "additions": 28,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/infra/restart.ts",
-            "additions": 36,
-            "deletions": 5,
+            "path": "docs/gateway/configuration-reference.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.help.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.cron.ts",
+            "additions": 6,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.regression.test.ts",
+            "additions": 163,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.ts",
+            "additions": 50,
+            "deletions": 22,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85708",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85708.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85896",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85896.md",
         "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 96,
+          "total": 103,
           "counts": {
+            "FAILURE": 1,
             "SUCCESS": 74,
-            "SKIPPED": 21,
+            "SKIPPED": 27,
             "NEUTRAL": 1
           },
-          "blockers": [],
+          "blockers": [
+            "Real behavior proof:FAILURE"
+          ],
           "pending": [],
-          "terminalBlockers": []
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ]
         }
-      },
-      "reason": "author association CONTRIBUTOR and repository permission read are not allowed"
+      }
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1492,
+    "total_ms": 4270,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 293
+        "ms": 486
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 983
+        "ms": 1433
       },
       {
         "name": "classify_commands",
@@ -334,7 +181,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 184
+        "ms": 2325
       },
       {
         "name": "append_ledger",
