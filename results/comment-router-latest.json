@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-25T05:03:14.503Z",
+  "generated_at": "2026-05-25T05:03:17.382Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-25T02:03:14.150Z",
+  "since": "2026-05-25T02:03:15.162Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    80226
+    80383
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4416041223
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +31,117 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:80383:4416041223:2026-05-25T05:02:46Z:automerge",
+      "comment_id": "4416041223",
+      "comment_version_key": "4416041223:2026-05-25T05:02:46Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/80383#issuecomment-4416041223",
+      "repo": "openclaw/openclaw",
+      "issue_number": 80383,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-10T18:38:45Z",
+      "comment_updated_at": "2026-05-25T05:02:46Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "automerge",
+      "intent": "automerge",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": "The PR adds AbortSignal-aware cancellation to ACP SessionActorQueue, forwards manager abort signals into the queue, and adds focused queue regression tests.\n\nPR surface: Source +198, Tests +245. Total +443 across 3 files.\n\nReproducibility: yes. source inspection gives a high-confidence path: current main increments pending on enqueue and only decrements in onSettle, while withSessionActor can reject the caller before the queued actor starts. I did not run the live repro because this was a read-only review.",
+      "review_followup": "A narrow mechanical repair remains in the PR branch: fix or remove the new diagnostics map while preserving the cancellation behavior.",
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "ignored",
+      "actions": [],
+      "author_repository_permission": "none",
+      "target": {
+        "kind": "pull_request",
+        "title": "acp: cancel queued SessionActorQueue items on caller abort",
+        "body": "This PR is narrower than #52747 and targets a different failure mode:\nit makes already-enqueued `SessionActorQueue` items cancellable on\ncaller abort, so `pendingBySession` does not stay inflated when the\npredecessor tail never settles. Complementary to #52747's lane task\ntimeout work and #80239's Pi abort cleanup; does not add any config\nor runtime timeout behavior.\n\n## Summary\n\nWhen a caller's `AbortSignal` fires before its actor reaches the head\nof the per-key queue:\n\n- the queued slot is marked cancelled (per-call closure flag),\n- `pendingBySession` is decremented eagerly (idempotent, exactly once),\n- the wrapped task throws `AbortError` instead of running `op()` when\n  its turn arrives,\n- per-key serialization invariant is preserved (later same-key tasks\n  still wait for predecessor).\n\n`withSessionActor` now forwards its existing signal to\n`actorQueue.run(actorKey, op, { signal })` and the manager-side\nabort-handling is simplified. The existing diagnostic log line\n(`acp-manager: actor queue abort-before-start ...`) is preserved.\n\n## Why\n\nWithout caller-side cancellation, `withSessionActor` could reject the\ncaller's promise on abort-before-start but had no way to remove or\ncancel the already-enqueued item. If the predecessor tail did not\nsettle, the queued item could not reach `finally(onSettle)`, so\n`pendingBySession` could not decrement and liveness diagnostics\nreported `queued=N last=run:completed` for the actor key\nindefinitely.\n\nSandbox repro reproduces the stale state in a few lines using a\nnon-settling first task, a same-key enqueue, an abort-before-start\non the second caller, and a measurement of `pendingBySession`.\n\n## What changed\n\n- `src/acp/control-plane/session-actor-queue.ts`: `run()` accepts an\n  optional `signal: AbortSignal`. Per-call closure tracks `cancelled`,\n  `actorStarted`, `pendingDecremented` flags. Signal listener\n  decrements pending eagerly when actor has not started; the wrapped\n  task throws `AbortError` when the cancelled slot reaches the queue\n  head. Public Plugin SDK (`src/plugin-sdk/keyed-async-queue.ts`) is\n  not changed — cancellation is implemented one level up.\n- `src/acp/control-plane/manager.core.ts`: `withSessionActor` passes\n  its existing signal to `actorQueue.run(actorKey, op, { signal })`.\n  Manager-side `markAbortBeforeStart` call and the inline abort\n  listener are no longer needed on this path; the queue takes over.\n  Diagnostic log preserved verbatim.\n- `src/acp/control-plane/session-actor-queue.test.ts`: 7 new tests\n  covering signal-based cancellation, eager pending decrement,\n  idempotent decrement, per-key serialization preservation,\n  pre-aborted signal, queue still alive after cancelled item,\n  backwards-compatibility for callers without signal. Existing\n  diagnostic test preserved.\n\n## Verification\n\npnpm test src/acp/control-plane/session-actor-queue.test.ts\n✓ 8 passed\n\npnpm test src/acp/control-plane/session-actor-queue.test.ts\n          src/acp/control-plane/manager.test.ts\n✓ 64 passed\n\npnpm check:changed       ✓ EXIT 0\npnpm build               ✓ EXIT 0\npnpm exec oxfmt --check  ✓ clean\n\nLive runtime validation on macOS gateway:\n- Built from cherry-pick onto `v2026.5.6` tag\n- Restarted gateway with patched `dist/` (smoke run 4.6s, status ok)\n- Patched bundle contains `Aborted before start`, `pendingDecremented`,\n  `actor queue abort-before-start` markers — fix loaded in memory\n- 24h passive monitor observed no new\n  `queued=N last=run:completed` stale liveness warnings\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Caller abort-before-start for already-enqueued `SessionActorQueue` items no longer leaves `pendingBySession` inflated when the predecessor tail never settles.\n- **Real environment tested:** macOS live OpenClaw gateway setup, patched npm install built from cherry-pick onto `v2026.5.6`.\n- **Exact steps or command run after this patch:** Cherry-picked the source fix onto `v2026.5.6`, built, rsynced patched `dist/` into the live npm install, restarted the gateway, then ran a live smoke request against the restarted gateway process.\n- **Evidence after fix:** Live output/runtime evidence from the patched setup: gateway restarted with pid `18313`; smoke run completed in `4.6s` with `status ok`; no Codex schema errors were observed. Patched bundle `dist/manager-D7F0BwP2.js` contains the after-fix markers `Aborted before start`, `pendingDecremented`, and `actor queue abort-before-start`. A 24h passive monitor is still running and has observed `0` stale queue warnings so far.\n- **Observed result after fix:** The patched live gateway stayed up after restart, the smoke request succeeded, the patched queue cancellation markers were loaded in the running bundle, and passive monitoring has not seen new `queued=N last=run:completed` stale liveness warnings.\n- **What was not tested:** Cross-OS live gateway validation was not repeated for this PR; local validation covered tests, changed checks, build, and formatter.\n\n## Notes for reviewers\n\n- This is intentionally separate from #52747 because the failure\n  modes differ: #52747 targets a lane task that has *started but is\n  stuck*, while this PR targets a caller cancellation *before the\n  actor starts*. The two are complementary; either can be merged\n  without conflicting with the other's intent, though both touch\n  `session-actor-queue.ts` and `manager.core.ts` and will require a\n  rebase of the second-merged PR.\n- Public Plugin SDK is intentionally untouched. Backwards\n  compatibility: `run(actorKey, op)` without `options` behaves\n  identically to before.\n- An earlier deployment experiment confirmed that `dist`-only\n  patching across version lines is unsafe (Codex schema + Control\n  UI mismatch). The fix in this PR is targeted at the source level\n  and rebuilds cleanly on the same release line.\n- May address parts of #13744 (session lock timeout) by reducing\n  queue pressure that contributes to lock contention, though\n  #13744's primary scope is the lock itself.\n\n",
+        "branch": "fix/cancellable-actor-queue-item-on-abort",
+        "head_sha": "6fd8a48630ce1002be47aa5f572172b4b882318b",
+        "author": "helaskeutuja",
+        "labels": [
+          "stale",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/acp/control-plane/manager.core.ts",
+            "additions": 12,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/acp/control-plane/session-actor-queue.test.ts",
+            "additions": 245,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/acp/control-plane/session-actor-queue.ts",
+            "additions": 204,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-80383",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-80383.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 114,
+          "counts": {
+            "SUCCESS": 86,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
+    }
+  ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 648,
+    "total_ms": 2434,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 345
+        "ms": 510
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 1699
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 296
+        "ms": 215
       },
       {
         "name": "append_ledger",
