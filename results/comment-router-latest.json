@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-25T17:28:13.546Z",
+  "generated_at": "2026-05-25T17:28:35.783Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-25T14:28:09.558Z",
+  "since": "2026-05-25T14:28:33.031Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    86067
+    86261
   ],
   "comment_ids": [
-    4536019051
+    4536020808
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,17 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:86067:4536019051:2026-05-25T17:27:10Z:re_review",
-      "comment_id": "4536019051",
-      "comment_version_key": "4536019051:2026-05-25T17:27:10Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86067#issuecomment-4536019051",
+      "idempotency_key": "comment-router:openclaw/openclaw:86261:4536020808:2026-05-25T17:27:33Z:freeform_assist",
+      "comment_id": "4536020808",
+      "comment_version_key": "4536020808:2026-05-25T17:27:33Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86261#issuecomment-4536020808",
       "repo": "openclaw/openclaw",
-      "issue_number": 86067,
-      "author": "ubehera",
-      "author_id": 3691059,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-25T17:27:10Z",
-      "comment_updated_at": "2026-05-25T17:27:10Z",
+      "issue_number": 86261,
+      "author": "EnjouZeratul",
+      "author_id": 240405994,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-25T17:27:33Z",
+      "comment_updated_at": "2026-05-25T17:27:33Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review - updated with 3 new screenshots: (1) docker desktop showing sandbox container running, (2) `ls /workspace/skills/` showing plugin skills synced as real directories, (3) `head /workspace/skills/browser-automation/skill.md` showing skill.md readable from inside sandbox with no path-escape error",
@@ -59,50 +59,44 @@
       "freeform_prompt": "re-review - Updated with 3 new screenshots: (1) Docker Desktop showing sandbox container running, (2) `ls /workspace/skills/` showing plugin skills synced as real directories, (3) `head /workspace/skills/browser-automation/SKILL.md` showing SKILL.md readable from inside sandbox with no path-escape error",
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
+      "status": "ignored",
       "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): file-scoped prompt-window guard for same-session embedded races",
-        "body": "> **Update 2026-05-25**: An earlier revision of this PR also included a `waitForSessionEvents` drain in `installPromptSubmissionLockRelease`'s finally block (reported by @kesslerio against AlphaClaw). That commit has been moved to its own focused PR with honest framing — see the followup discussion on #85913. This PR is scoped strictly to the file-scoped prompt-window guard. The vanilla-openclaw same-lane race (a separate failure mode from the cross-lane race this PR addresses) is being fixed in #86584.\n\n## Summary\n\n- Adds a file-scoped prompt-window guard that serialises embedded-runner prompt windows on the same resolved session JSONL across concurrent lanes.\n- Introduces `releaseForSessionIdleWait()` for the post-prompt compaction window so it does not block other lanes' real prompt windows.\n- Routes every exit path through a turn-release `try/catch` and `try/finally` so the file-scoped queue is vacated on success, takeover, lock-timeout, fence-mismatch, and mid-flight release errors. A wedge in one lane never leaves later same-file waiters blocked.\n\nFixes #85913.\n\n## Background\n\n`createEmbeddedAttemptSessionLockController` releases the OS-level session write lock during provider streaming so long model calls don't hold the lock for minutes at a time. After streaming, `reacquireAfterPrompt()` reacquires the lock and `assertSessionFileFence()` checks an inode/size/mtime fingerprint to detect external mutation. If the file changed in an unowned way, the controller throws `EmbeddedAttemptSessionTakeoverError`.\n\nThe fence is a symptom-catcher, not a race preventer. The live-repro evidence on the issue shows the underlying race: two lanes on the same OpenClaw process can both resolve to the same JSONL (stuck-session recovery firing a fresh embedded run on a session UUID whose file resolution aliases to an already-active file). Both lanes release for prompt simultaneously, both stride into provider streams, the slower one's reacquire trips the fence after the provider call has already produced output, and the chain falls all the way to `Embedded agent failed before reply: All models failed`. The user sees a dropped reply.\n\n`RuntimeEnv` is module-scoped at `ownedSessionFileWrites` / `trustedSessionFileStates` — both keyed by `path.resolve(sessionFile)`. The fix extends that pattern with a third process-global map: a per-file queue of prompt turns.\n\n## What changed\n\n`src/agents/pi-embedded-runner/run/attempt.session-lock.ts`\n\n- New module-level `promptSessionFileTurnTails: Map<string, Promise<void>>` keyed by the same `resolveSessionFileFenceKey` the fence already uses.\n- `acquirePromptSessionFileTurn(sessionFileKey)` returns `{ awaitPrior, release }`. The first entrant on a file gets `awaitPrior: undefined` and falls through with no extra acquire/release. The second entrant gets the first's tail and waits on it before its own prompt window opens.\n- `performHeldLockReleaseForWindow(registerPromptHolder)` consolidates the held-lock release path. When `registerPromptHolder` is true and a prior turn exists, the entrant yields its OS lock, awaits the prior turn, reacquires fresh, and then continues with the existing fingerprint/snapshot/release sequence. Wrapped in `try/catch` so any exception between acquiring the turn and the controller taking ownership releases the turn slot before rethrowing.\n- `releaseForPrompt()` becomes a one-liner over `performHeldLockReleaseForWindow(true)`.\n- `releaseForSessionIdleWait()` (new public method) becomes a one-liner over `performHeldLockReleaseForWindow(false)`. Used for the post-prompt compaction window, which is not a provider-prompt window and must not serialise other lanes' prompts.\n- `reacquireAfterPrompt()` releases the turn in a `finally` block — the success path and every error branch (lock-timeout, takeover fence, any other exception) all vacate the slot. The no-op-early-return branch (`takeoverDetected || heldLock`) also releases the turn so a no-op entrant cannot strand the queue.\n- `resetEmbeddedAttemptSessionFilePromptGuardsForTest()` (new test helper) clears the module-level map so tests start from a clean slate.\n- Exported `releaseForSessionIdleWait` on the `EmbeddedAttemptSessionLockController` type.\n\n`src/agents/pi-embedded-runner/run/attempt.ts`\n\n- Line 4277: the post-prompt compaction wait uses `releaseForSessionIdleWait()` instead of `releaseForPrompt()`. This path was already a non-prompt release — the rename makes it not contend with real prompt windows on the same file. The matching post-compaction `withSessionWriteLock` reacquires the OS lock internally; no other behavior changes.\n\n`src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts`\n\n- `afterEach` clears the new queue alongside the existing `resetSessionWriteLockStateForTest()` cleanup.\n- Six existing multi-controller test bodies call `resetEmbeddedAttemptSessionFilePromptGuardsForTest()` between the first controller's `releaseForPrompt()` and the second controller's `releaseForPrompt()`. These tests were written before the file-scoped guard existed and use `releaseForPrompt()` as a \"drop the OS lock\" call without a paired `reacquireAfterPrompt()`. The reset preserves their existing assertions without forcing them to invent reacquire calls they don't need.\n- Five new test cases under the same `describe` block:\n  - Serialisation happy path — second same-file controller's `releaseForPrompt()` blocks until the first calls `reacquireAfterPrompt()`.\n  - **Cleanup-on-reacquire-failure** — first controller's `reacquireAfterPrompt()` rejects with a `SessionWriteLockTimeoutError`; the second controller's `releaseForPrompt()` still completes (the turn was released in the `finally`).\n  - **Cleanup-on-release-failure** — first controller's held-lock release rejects partway through `releaseForPrompt()`; the second controller's `releaseForPrompt()` still completes (the turn was released in the `catch` before re-throwing).\n  - Compaction-wait isolation — `releaseForSessionIdleWait()` does not block another lane's `releaseForPrompt()` on the same file.\n  - Cross-file isolation — controllers on different `sessionFile`s do not serialise.\n\n## Verification\n\n```sh\n# All acceptance-criteria tests from the issue's bot review:\nnode scripts/run-vitest.mjs \\\n  src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts \\\n  src/logging/diagnostic-stuck-session-recovery.runtime.test.ts \\\n  src/infra/heartbeat-runner.skips-busy-session-lane.test.ts \\\n  src/agents/model-fallback.test.ts \\\n  src/agents/failover-error.test.ts\n\n# Test Files  7 passed (7)\n#      Tests  306 passed (306)\n```\n\n`pnpm check:changed` exit 0 (typecheck, lint, runtime import cycles, repo guards).\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Two concurrent embedded attempts on the same resolved session JSONL no longer race during the provider-streaming window. The losing lane's reply was being dropped because the takeover fence fired mid-stream after the provider had already started producing output. With the file-scoped turn queue, the second entrant waits for the first to reacquire (or fail cleanly) before its own prompt window opens. Failure-path cleanup ensures one wedged prompt cannot block later prompts on the same file.\n\n- **Real environment tested:** Local OpenClaw source checkout (macOS 15.5, Node 22.19+) at the patched branch HEAD `65705d8c39`. The patched `createEmbeddedAttemptSessionLockController` runs in two real concurrent controllers against a shared session JSONL with the production `acquireSessionWriteLock` contract; per-microsecond timestamps and the lock-acquire/release event ledger are captured below. The acceptance-criteria test sweep from the issue's bot review runs against the same patched source.\n\n- **Exact steps or command run after this patch:**\n\n  ```sh\n  pnpm install\n  pnpm build\n  node scripts/run-vitest.mjs src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts\n\n  # Acceptance-criteria sweep from the issue's bot review:\n  node scripts/run-vitest.mjs \\\n    src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts \\\n    src/logging/diagnostic-stuck-session-recovery.runtime.test.ts \\\n    src/infra/heartbeat-runner.skips-busy-session-lane.test.ts \\\n    src/agents/model-fallback.test.ts \\\n    src/agents/failover-error.test.ts\n\n  # Drive the patched controller end-to-end against a shared session JSONL:\n  npx tsx /abs/path/to/pr-proof/run-session-takeover-guard-proof.mjs /abs/path/to/openclaw\n  ```\n\n- **Evidence after fix:**\n\n  **Before/after reproduction** — same scenario run against pre-patch (`5be62e779b`, the commit one before this fix) and post-patch (`65705d8c39`) source via the same `run-same-file-race-repro.mjs` script. Two real `EmbeddedAttemptSessionLockController` instances on a shared temp session JSONL; production `acquireSessionWriteLock` (no test mocks); external mutation injected mid-prompt to simulate the aliased-UUID concurrent lane from the live-repro evidence in #85913:\n\n  ```\n  PRE-PATCH (5be62e779b):\n    [   2.60ms] ctrl-A   prompt in flight (200ms hold)\n    [   9.47ms] ctrl-B   prompt in flight (200ms hold)\n    [ 111.70ms] external appending bytes outside the ownership chain\n    [ 209.67ms] ctrl-A   THREW on reacquire: TAKEOVER (EmbeddedAttemptSessionTakeoverError)\n    [ 210.98ms] ctrl-B   THREW on reacquire: TAKEOVER (EmbeddedAttemptSessionTakeoverError)\n    Result:  replies delivered 0 of 2  ·  takeover errors 2\n\n  POST-PATCH (65705d8c39):\n    [   2.64ms] ctrl-A   prompt in flight (200ms hold)\n    [ 111.53ms] external appending bytes outside the ownership chain\n    [ 209.33ms] ctrl-A   THREW on reacquire: TAKEOVER (EmbeddedAttemptSessionTakeoverError)\n    [ 210.89ms] ctrl-B   prompt in flight (200ms hold)\n    [ 415.45ms] ctrl-B   DELIVERED (reacquire succeeded)\n    Result:  replies delivered 1 of 2  ·  takeover errors 1\n  ```\n\n  Read the timestamps: on pre-patch, both controllers enter their mid-prompt sleep at ms 2 and 9 simultaneously (both have active fences capturing the same stale fingerprint), so when the external write hits at ms 111, both lanes observe the mutation when they reacquire at ms ~210. On post-patch, lane B's `prompt in flight` log line does not appear until ms 210 — which is the same moment lane A's reacquire throws. The file-scoped queue held lane B's `releaseForPrompt` until lane A's turn vacated; by then the file was stable, so lane B's release captured a fresh fingerprint and its reacquire succeeded at ms 415.\n\n  Lane A's takeover is the unavoidable case (a true external mutation during its prompt window — no coordination primitive can save it; the fence correctly fires as the safety net). Lane B is the cascade casualty the patch saves.\n\n  **Internal controller proof** — earlier in the proof pipeline, two real controllers driven through same-file contention with timestamped event ledger. Verbatim stdout from the run on this branch (`65705d8c39`):\n\n  ```\n  ============================================================\n  PR #86067 — file-scoped prompt-window guard proof\n  ============================================================\n\n  openclaw checkout: /Users/.../openclaw\n  source under test:  src/agents/pi-embedded-runner/run/attempt.session-lock.ts\n\n  ============================================================\n  Scenario A — same-file prompt windows serialise\n  ============================================================\n\n    [  509.55ms] setup                  two controllers on /tmp/proof-session.jsonl\n    [  509.59ms] first                  releaseForPrompt() — register turn-1\n    [  514.63ms] second                 releaseForPrompt() — should block on turn-1\n    [  514.69ms] observe                t+0.06ms: secondCompleted=false (expected: false)\n    [  514.70ms] first                  reacquireAfterPrompt() — release turn-1, second waiter unblocks\n    [  515.86ms] observe                t+1.23ms: secondCompleted=true (expected: true)\n\n    event ledger:\n      acquire(A-1)\n      acquire(A-2)\n      release(A-1)\n      release(A-2)\n      acquire(A-3)\n      acquire(A-4)\n      release(A-4)\n\n    Scenario A: PASS — second controller waited for first's reacquire\n\n  ============================================================\n  Scenario B — cleanup-on-failure: first's reacquire throws\n  ============================================================\n\n    [  516.19ms] setup                  two controllers; first's reacquire mocked to throw SessionWriteLockTimeoutError\n    [  516.21ms] first                  releaseForPrompt() — register turn-1\n    [  516.31ms] second                 releaseForPrompt() — should block on turn-1\n    [  516.37ms] observe                t+0.05ms: secondCompleted=false (expected: false)\n    [  516.38ms] first                  reacquireAfterPrompt() — throws SessionWriteLockTimeoutError\n    [  516.41ms] first                  threw: SessionWriteLockTimeoutError (OPENCLAW_SESSION_WRITE_LOCK_TIMEOUT)\n    [  516.42ms] observe                turn-1 must have been vacated in reacquire's finally\n    [  516.50ms] observe                t+0.18ms: secondCompleted=true (expected: true)\n\n    Scenario B: PASS — second waiter completed despite first's reacquire failure\n  ```\n\n  Scenario A's event ledger is the key observable: lock A-1 is the first controller's initial acquire, A-2 the second's initial acquire, A-3 is the first controller's reacquire-after-prompt (which fires the turn release on the queue), and A-4 is the second controller's reacquire-fresh after its prior-wait dance. Without the file-scoped guard, both A-1 and A-2 would release simultaneously and both controllers would stride into provider streams.\n\n  Scenario B's timestamps prove the cleanup-on-failure path is wired correctly: `secondCompleted` flips from `false` → `true` within 80 µs of the first controller's reacquire throwing. If `reacquireAfterPrompt`'s finally block weren't releasing the turn on the error path, this assertion would have timed out instead.\n\n  Targeted session-lock suite (74 tests including the 5 new file-scoped guard regressions):\n\n  ```\n  RUN  v4.1.7 /Users/.../openclaw\n   Test Files  2 passed (2)\n        Tests  74 passed (74)\n     Duration  919ms\n  ```\n\n  Full acceptance-criteria sweep (the five files the issue's bot review named):\n\n  ```\n  RUN  v4.1.7 /Users/.../openclaw\n   Test Files  7 passed (7)\n        Tests  306 passed (306)\n     Duration  46.34s\n  ```\n\n  The two regression tests that distinguish a correct fix from a half-fix are:\n\n  - `vacates the prompt turn so later waiters proceed when reacquireAfterPrompt throws` — drives the first controller's reacquire mock to reject with `SessionWriteLockTimeoutError`. Asserts that a second waiter blocked on the first's turn completes its `releaseForPrompt()` after the throw. If the cleanup is wired only on the success path, this test times out (the second waiter blocks forever on a turn promise that never resolves).\n  - `vacates the prompt turn when releaseForPrompt itself fails mid-flight` — drives the first controller's held-lock release to reject. The first `releaseForPrompt()` throws partway, but the `catch` in `performHeldLockReleaseForWindow` releases the turn before rethrowing. A second `releaseForPrompt()` then completes cleanly. If the cleanup is only in `reacquireAfterPrompt`, this test also times out.\n\n  Both of these are deterministic — they trigger the failure path via `vi.fn().mockRejectedValueOnce(...)`, not via timing.\n\n- **Observed result after fix:** Concurrent same-file prompt windows serialise instead of racing. Failed prompt windows (lock-timeout, takeover, release error) vacate the file-scoped queue so subsequent prompts on the same file proceed. The takeover fence remains in place as a defense-in-depth check against external mutation.\n\n- **What was not tested:** A live multi-agent gateway run that fires stuck-session recovery on an aliased session UUID. The unit tests cover the locking primitive directly through its public contract; the existing `heartbeat-runner.skips-busy-session-lane.test.ts` and `diagnostic-stuck-session-recovery.runtime.test.ts` continue to pass and exercise the surrounding flows. Verifying the end-to-end fix against the real 122-event/3-day takeover pattern from the issue would require running a patched gateway under that workload for the same window.\n\n- **Before evidence:** Without the file-scoped guard, two same-file controllers both call `releaseForPrompt()`, both stride into provider streams, and whichever reacquires second observes the other's writes and throws `EmbeddedAttemptSessionTakeoverError`. The chain falls through `model-fallback` → `failover-error` → `Embedded agent failed before reply: All models failed`. The live log slices in #85913 show 122 such events across 3 days on one local gateway, including the user-visible drop trace at `9dada894-1cb4-4610-a135-68d5ece67e51` on 2026-05-19 02:42:34.\n\n## Risk / compatibility\n\n- Public Plugin SDK surface: unchanged. `EmbeddedAttemptSessionLockController` is internal to `src/agents/pi-embedded-runner/run/` and not exposed through `openclaw/plugin-sdk/*`.\n- Backward compatibility: `releaseForPrompt()` keeps its prior signature; `releaseForSessionIdleWait()` is additive. The only production caller of `releaseForPrompt` is `installPromptSubmissionLockRelease` (`attempt.session-lock.ts:1014`), which already pairs it with `reacquireAfterPrompt` in a `try/finally` — that wrapper is what makes the file-scoped guard correct in production.\n- Single new module-level map (`promptSessionFileTurnTails`) sits alongside the existing `ownedSessionFileWrites` and `trustedSessionFileStates` singletons; same lifetime, same key scheme, same reset hook. No persistent state, no disk artefacts, no cross-process coordination.\n- Performance: no contention path is a single map lookup + an early continue. Contention path adds one extra `acquireLock + release` pair on the second entrant to yield the OS lock during the wait — this is necessary because the prior turn-holder must be able to reacquire after their provider call.\n\n## Security\n\n- New permissions/capabilities? No.\n- Secrets/tokens handling changed? No.\n- New/changed network calls? No.\n- Command/tool execution surface changed? No.\n- Data access scope changed? No. Touches in-process lock state and one new process-global map keyed by resolved session file paths.\n\n---\n\n*This PR is AI-assisted. Code authored with Claude.*\n",
-        "branch": "fix/session-takeover-file-scoped-prompt-guard",
-        "head_sha": "65705d8c39ea5cceffba8d7c9bbe23b6dee4ac9e",
-        "author": "ubehera",
+        "title": "fix(skills): sync plugin skills to sandbox workspace",
+        "body": "## Summary\n\nFixes #86190\n\nPlugin skills (`~/.openclaw/plugin-skills/`) are stored as symlinks pointing to real directories in installed packages. In sandbox mode, `syncSkillsToWorkspace` should copy skills into the sandbox workspace so the `read` tool can access them at `/workspace/skills/...`.\n\nHowever, `loadGeneratedPluginSkillRecords` did not populate `syncSourceDir`/`syncDirName` for plugin skills. As a result, sandboxed agents saw host-only symlink paths in `<available_skills>` that fail with:\n\n```\nPath escapes sandbox root: ~/.openclaw/plugin-skills/wiki-maintainer/SKILL.md\n```\n\n## Root Cause\n\n`loadContainedSkillRecords` was called without setting `syncSourceDir` for plugin skills, so:\n- `skill.filePath` pointed to symlink path (`~/.openclaw/plugin-skills/...`)\n- `syncSourceDir`/`syncDirName` were undefined\n- `syncSkillsToWorkspace` couldn't copy the skill to sandbox\n\n## Fix\n\nCreate `setSyncSourceForPluginSkill` helper that sets only `syncSourceDir`/`syncDirName` without modifying `baseDir`/`filePath`. This:\n1. Preserves symlink path as `baseDir` for display purposes\n2. Sets `syncSourceDir` to the real directory path for syncing\n3. Enables `syncSkillsToWorkspace` to copy from real path\n4. Skills appear as real directories in `/workspace/skills/`\n\n## Real Behavior Proof\n\n- **Behavior or issue addressed**: Plugin skills under `~/.openclaw/plugin-skills/` (symlinks) were not synced to the sandbox workspace by `syncSkillsToWorkspace`. Sandboxed agents could not load plugin-provided skills because the `read` tool rejected host-only symlink paths with \"Path escapes sandbox root\".\n\n- **Real environment tested**: Windows 11 + WSL2 + Docker Desktop, Node.js v24.15.0, OpenClaw 2026.5.22 built from source (commit 53bd8a5), Sandbox image: `openclaw-sandbox:bookworm-slim`, Sandbox mode: `agents.defaults.sandbox.mode=all`, Model: `tencent-coding-plan/glm-5`\n\n- **Exact steps or command run after the patch**:\n  1. Built sandbox Docker image: `bash scripts/sandbox-setup.sh`\n  2. Started gateway with sandbox mode: `node openclaw.mjs gateway`\n  3. Started TUI client: `node openclaw.mjs tui --local`\n  4. Sent request to trigger skill loading: \"Use the browser-automation skill to explain its purpose\"\n  5. Verified skills synced inside sandbox container: `docker exec openclaw-sbx-agent-main-f331f052 bash -c 'ls -la /workspace/skills/'`\n  6. Verified SKILL.md readable inside sandbox: `docker exec openclaw-sbx-agent-main-f331f052 bash -c 'head -30 /workspace/skills/browser-automation/SKILL.md'`\n\n- **Evidence after fix**:\n\n  **Screenshot 1 - Sandbox container running (Docker Desktop):**\n  <img width=\"947\" height=\"718\" alt=\"Docker Desktop showing sandbox container\" src=\"https://github.com/user-attachments/assets/d3542196-e4e9-43d3-9756-861737b1ec54\" />\n\n  Docker Desktop showing `openclaw-sandbox:bookworm-slim` container running.\n\n  **Screenshot 2 - Plugin skills synced to /workspace/skills/:**\n  <img width=\"1876\" height=\"709\" alt=\"Skills directory inside sandbox\" src=\"https://github.com/user-attachments/assets/c98dd09f-7fd5-495f-9d48-6ec992cd0937\" />\n\n  Shows `browser-automation` (plugin skill from symlink) successfully synced as real directory alongside other skills like `weather`, `github`, `notion`, etc.\n\n  **Screenshot 3 - SKILL.md readable from sandbox:**\n  <img width=\"1241\" height=\"705\" alt=\"SKILL.md content readable\" src=\"https://github.com/user-attachments/assets/e1acb482-3856-45ae-a5cf-7db13f813736\" />\n\n  Shows the skill content successfully read from `/workspace/skills/browser-automation/SKILL.md` inside the sandbox container - no \"Path escapes sandbox root\" error.\n\n- **Observed result after the fix**: \n  - Sandbox container started successfully with `openclaw-sandbox:bookworm-slim` image\n  - 60+ plugin skills synced to `/workspace/skills/` as real directories (not symlinks)\n  - SKILL.md files readable from inside sandbox container\n  - Agent successfully loaded and explained the `browser-automation` skill\n  - No \"Path escapes sandbox root\" errors in gateway logs\n\n- **What was not tested**: N/A - full end-to-end agent request completed successfully.\n\n## Unit Test Evidence\n\n```\nnpx vitest run src/agents/skills.plugin-skills-sandbox-sync.test.ts\n\n======================================================================\nIssue #86190: Plugin skills unreadable in sandbox\n======================================================================\n\n[Step 1] Setup - Create real plugin skill directory\n  Path: .../real-plugin-skill-2\n  Content: SKILL.md with name=wiki-maintainer\n\n[Step 2] Create symlink under ~/.openclaw/plugin-skills/\n  Symlink: .../plugin-skills/wiki-maintainer\n  Target:  .../real-plugin-skill-2\n  (This is how OpenClaw exposes plugin skills)\n\n[Step 3] Create target sandbox workspace\n  Path: .../target-1\n  (This becomes /workspace in the sandbox container)\n\n[Step 4] Run syncSkillsToWorkspace\n  - Key fix: setSyncSourceForPluginSkill enables sync\n  Sync completed successfully\n\n[Step 5] Verification\n  Target skills/: wiki-maintainer\n  wiki-maintainer/SKILL.md exists: true\n  Directory type: real directory (FIX WORKS!)\n\n======================================================================\nTEST PASSED - Fix verified\n======================================================================\n\n Test Files  2 passed (2)\n      Tests  6 passed (6)\n```\n\n## Test Plan\n\n- [x] New test: `skills.plugin-skills-sandbox-sync.test.ts` with step-by-step verification\n- [x] Gateway startup with sandbox mode - no path escape errors\n- [x] Sandbox container running with skills synced\n- [x] SKILL.md readable from inside sandbox container\n- [x] All existing sync tests pass\n- [x] All existing plugin-skills tests pass",
+        "branch": "fix/plugin-skills-sandbox-sync",
+        "head_sha": "53bd8a5b0d48ed06ca7268aef82358a70ae6f68c",
+        "author": "enjouzeratul",
         "labels": [
           "agents",
           "size: M",
           "proof: supplied",
           "P1",
           "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "status: 📣 needs proof",
+          "proof: 📸 screenshot"
         ],
         "files": [
           {
-            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts",
-            "additions": 226,
+            "path": "src/agents/skills.plugin-skills-sandbox-sync.test.ts",
+            "additions": 225,
             "deletions": 0,
-            "changeType": "MODIFIED"
+            "changeType": "ADDED"
           },
           {
-            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.ts",
-            "additions": 122,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
-            "additions": 1,
-            "deletions": 1,
+            "path": "src/agents/skills/workspace.ts",
+            "additions": 36,
+            "deletions": 5,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86067",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86067.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86261",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86261.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
@@ -111,33 +105,28 @@
           "total": 102,
           "counts": {
             "SUCCESS": 73,
-            "SKIPPED": 27,
-            "FAILURE": 1,
+            "SKIPPED": 28,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "checks-node-agentic-agents:FAILURE"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "checks-node-agentic-agents:FAILURE"
-          ]
+          "terminalBlockers": []
         }
       },
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "author association CONTRIBUTOR and repository permission read are not allowed"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 4300,
+    "total_ms": 3037,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 575
+        "ms": 627
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 3405
+        "ms": 2115
       },
       {
         "name": "classify_commands",
@@ -145,7 +134,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 313
+        "ms": 286
       },
       {
         "name": "append_ledger",
