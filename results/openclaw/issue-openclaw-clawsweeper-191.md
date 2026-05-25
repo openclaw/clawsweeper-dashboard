@@ -2,12 +2,12 @@
 repo: "openclaw/clawsweeper"
 cluster_id: "issue-openclaw-clawsweeper-191"
 mode: "autonomous"
-run_id: "26377610596"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26377610596"
+run_id: "26380890266"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26380890266"
 head_sha: "9b0b0b39173365a6d82cb4dbc59b21de3fd54270"
 workflow_conclusion: "success"
-result_status: "blocked"
-published_at: "2026-05-25T00:55:50.992Z"
+result_status: "planned"
+published_at: "2026-05-25T03:05:31.441Z"
 canonical: "https://github.com/openclaw/clawsweeper/issues/191"
 canonical_issue: "https://github.com/openclaw/clawsweeper/issues/191"
 canonical_pr: null
@@ -25,17 +25,17 @@ needs_human_count: 0
 
 Repo: openclaw/clawsweeper
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/26377610596](https://github.com/openclaw/clawsweeper/actions/runs/26377610596)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/26380890266](https://github.com/openclaw/clawsweeper/actions/runs/26380890266)
 
 Workflow conclusion: success
 
-Worker result: blocked
+Worker result: planned
 
 Canonical: https://github.com/openclaw/clawsweeper/issues/191
 
 ## Summary
 
-Issue #191 is the canonical open request. Current main has OpenClaw PR surface file stats, but it does not have the requested schema-validated config-surface decision field, OpenClaw-only prompt/context guidance, or deterministic Config Surface rendering near the PR report stats. A narrow fix artifact is ready, but opening the implementation PR is blocked in this run because the checkout is read-only.
+Issue #191 is an open, non-security, bounded ClawSweeper feature request. Current main lacks the requested generic reviewMetrics decision field, schema support, prompt guidance, report persistence/rendering, and tests, so the canonical path is a new narrow fix PR from clawsweeper/issue-openclaw-clawsweeper-191.
 
 ## Impact
 
@@ -67,9 +67,9 @@ Issue #191 is the canonical open request. Current main has OpenClaw PR surface f
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #191 | fix_needed | planned | canonical | The request is still valid and narrow enough for one implementation PR; no viable canonical PR exists in the preflight artifact. |
-| cluster:issue-openclaw-clawsweeper-191 | build_fix_artifact | planned |  | Fix PR creation is allowed by job frontmatter, and the issue is concrete enough for a narrow new_fix_pr artifact. |
-| cluster:issue-openclaw-clawsweeper-191 | open_fix_pr | blocked |  | Implementation is blocked only by the read-only worker checkout; the fix artifact is ready for a writable executor lane to apply on clawsweeper/issue-openclaw-clawsweeper-191. |
+| #191 | fix_needed | planned | canonical | The request is still valid on latest main and is narrow enough for one implementation PR. |
+| cluster:issue-openclaw-clawsweeper-191 | build_fix_artifact | planned |  | Build a new-fix-PR artifact for the executor; no existing canonical PR is hydrated or viable. |
+| cluster:issue-openclaw-clawsweeper-191 | open_fix_pr | planned |  | The executor should open or update the single implementation PR after applying and validating the narrow fix artifact. |
 
 ## Needs Human
 
