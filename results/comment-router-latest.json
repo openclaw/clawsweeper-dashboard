@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-25T17:44:41.385Z",
+  "generated_at": "2026-05-25T17:45:14.623Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-25T14:44:39.170Z",
+  "since": "2026-05-25T14:45:10.871Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     86584
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4535997399
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -109,135 +111,34 @@
         "checks": {
           "total": 102,
           "counts": {
-            "CANCELLED": 1,
-            "SUCCESS": 71,
+            "SUCCESS": 72,
             "SKIPPED": 28,
             "FAILURE": 1,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:CANCELLED",
             "checks-node-agentic-agents:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
             "checks-node-agentic-agents:FAILURE"
           ]
         }
       },
       "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:86584:4536019149:2026-05-25T17:27:11Z:re_review",
-      "comment_id": "4536019149",
-      "comment_version_key": "4536019149:2026-05-25T17:27:11Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86584#issuecomment-4536019149",
-      "repo": "openclaw/openclaw",
-      "issue_number": 86584,
-      "author": "ubehera",
-      "author_id": 3691059,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-25T17:27:11Z",
-      "comment_updated_at": "2026-05-25T17:27:11Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): refresh fence fingerprint before external-hook write lock (#86572)",
-        "body": "## Summary\n\nFixes `EmbeddedAttemptSessionTakeoverError` in vanilla openclaw caused by pi's stream iteration writing via direct `appendFileSync` between `releaseForPrompt` and the next external-hook lock acquisition. The fence's `fenceFingerprint` lags behind successive rapid writes, so when `beforeToolCall` fires between two writes, `assertSessionFileFence` sees current fingerprint ≠ captured fingerprint and incorrectly trips.\n\nCloses #86572.\n\n## Root cause\n\n`_handleAgentEvent` → `sessionManager.appendMessage` → `_persist` uses synchronous `appendFileSync` directly. OpenClaw normally catches these writes via the `onMessagePersisted` callback, which calls `sessionLockController.refreshAfterOwnedSessionWrite()` and updates `fenceFingerprint`. But when pi fires two streaming events in quick succession:\n\n1. Write N fires (file: F0 → F1). `onMessagePersisted` for N is queued but has not run.\n2. Write N+1 fires (file: F1 → F2). `onMessagePersisted` for N is still queued; F2 is the on-disk state.\n3. `beforeToolCall` fires between writes. `installSessionExternalHookWriteLock` wraps it with `withSessionWriteLock` → `assertSessionFileFence` reads current fingerprint = F2, compares against `fenceFingerprint` = F0 (still pre-prompt-release), and trips.\n\nThe existing `waitBeforeLock` in `installSessionExternalHookWriteLock` drains `_agentEventQueue`, but vanilla pi does not populate that queue, so the drain is a no-op and the stale `fenceFingerprint` problem persists.\n\n## Fix\n\nThread a `refreshBeforeLock` callback through `installSessionExternalHookWriteLock`'s shared `waitBeforeLock` closure:\n\n```ts\nconst waitBeforeLock = async () => {\n  await waitForSessionEventQueue(session);\n  params.refreshBeforeLock?.();  // NEW: synchronously snap current fingerprint\n};\n```\n\nAt the `installSessionExternalHookWriteLock` call site in `runEmbeddedAttempt`:\n\n```ts\ninstallSessionExternalHookWriteLock({\n  session: activeSession,\n  withSessionWriteLock: (operation) => sessionLockController.withSessionWriteLock(operation),\n  refreshBeforeLock: () => sessionLockController.refreshAfterOwnedSessionWrite(),\n});\n```\n\n`refreshAfterOwnedSessionWrite()` reads `readSessionFileFingerprintSync` on this controller's `sessionFile` and updates `fenceFingerprint`/`fenceSnapshot`. It does NOT touch the process-global `ownedSessionFileWrites` map, so it cannot misclassify an external mutation as owned. Genuine external writes between the snap and `withSessionWriteLock` still trip the fence correctly.\n\nI/O cost: one `statSync` per external hook invocation (tool-call boundary, not per streaming token). Local NVMe ~0.05ms.\n\n## Why this approach over alternatives\n\nConsidered three candidates from the architectural review:\n\n- **Candidate A** — Remove the redundant `withOwnedSessionTranscriptWrites` from `installPromptSubmissionLockRelease`. Pure cleanup, no correctness impact, doesn't fix the bug.\n- **Candidate B** — Publish a single fingerprint snapshot at the end of `promptActiveSession`'s callback. Covers the post-prompt-completion case only. Doesn't help the mid-prompt tool-call case where the fence trips during pi's event iteration.\n- **Candidate C** — Hook into pi's `_handleAgentEvent` listener. Covers both cases but adds an async `fs.stat` per streaming event (hot path) and introduces a race between publish-N and fence-check-N+1.\n\nThis PR is a fourth approach: snap the fingerprint at the lock-acquisition boundary, where the fence check happens. One `statSync` per tool-call boundary, no per-token cost, no new race window, no weakening of takeover detection.\n\n## Real behavior proof\n\n- **Behavior addressed:** Eliminates spurious `EmbeddedAttemptSessionTakeoverError` on the lane's own pi-driven writes when an external hook fires between rapid successive writes. The takeover fence still trips on genuine external mutations.\n\n- **Real environment tested:** Local OpenClaw source checkout (macOS 15.5, Node 22.19+) at the patched branch HEAD `91ba92c9ab`, branched off `3eb06e305e` (current upstream main). The new regression tests exercise the production `installSessionExternalHookWriteLock` + `EmbeddedAttemptSessionLockController` machinery against real temp session JSONL files via `fs.appendFile`.\n\n- **Exact steps or command run after this patch:**\n\n  ```sh\n  pnpm install\n  node scripts/run-vitest.mjs src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts\n  ```\n\n- **Evidence after fix:**\n\n  **(a) Bug repro harness** — `run-refresh-before-hook-lock-proof.mjs` loads the patched controller from source and drives both scenarios against a real temp session JSONL on disk. Verbatim stdout:\n\n  ```\n  ============================================================\nPR #86584 — refresh-before-hook-lock proof (Issue #86572)\n============================================================\n\nopenclaw checkout: /Users/umank/code/openclaw\nsource under test: src/agents/pi-embedded-runner/run/attempt.session-lock.ts\n                   installSessionExternalHookWriteLock(params)\n                   + new params.refreshBeforeLock?: () => void\n\n-------- Scenario A — WITHOUT refreshBeforeLock (pre-fix behavior) --------\n  [   0.07ms] setup      refreshBeforeLock OMITTED (pre-fix behavior)\n  [   0.13ms] lifecycle  releaseForPrompt() — capture fenceFingerprint F0\n  [   0.45ms] pi-write   appendFileSync direct to session JSONL (F0 → F1)\n  [   0.56ms] hook       beforeToolCall() — wrapped by installSessionExternalHookWriteLock\n  [   1.54ms] hook       RESULT: TAKEOVER (EmbeddedAttemptSessionTakeoverError: session file changed while embedded prompt lock was released: /var/folders/hw/b1qn975s06qg...)\n  [   1.57ms] state      controller.hasSessionTakeover() = true\n\n-------- Scenario B — WITH refreshBeforeLock (fix applied) --------\n  [   0.02ms] setup      refreshBeforeLock WIRED (fix applied)\n  [   0.03ms] lifecycle  releaseForPrompt() — capture fenceFingerprint F0\n  [   0.17ms] pi-write   appendFileSync direct to session JSONL (F0 → F1)\n  [   0.26ms] hook       beforeToolCall() — wrapped by installSessionExternalHookWriteLock\n  [   0.48ms] hook       RESULT: hook fired successfully (hookOutcome.fired=true)\n  [   0.49ms] state      controller.hasSessionTakeover() = false\n\n============================================================\nSummary\n============================================================\n  Scenario A (no fix):    hook fired=false, threw=TAKEOVER (EmbeddedAttemptSessionTakeoverError: session file changed while embedded prompt lock was released: /var/folders/hw/b1qn975s06qg...)\n  Scenario B (with fix):  hook fired=true, threw=no\n\n  RESULT: PASS\n    Pre-fix: external hook throws EmbeddedAttemptSessionTakeoverError\n             because assertSessionFileFence sees the pi-style write as\n             external mutation. The lane's own beforeToolCall is lost.\n\n    Post-fix: external hook fires cleanly. The shared waitBeforeLock\n              closure called refreshAfterOwnedSessionWrite() before\n              withSessionWriteLock acquired the lock, snapping F1\n              into the fence. Subsequent assertSessionFileFence sees\n              current == fenceFingerprint, no trip.\n============================================================\n  ```\n\n  Both scenarios run against the same `EmbeddedAttemptSessionLockController` factory and the same `installSessionExternalHookWriteLock` — the only difference is whether `refreshBeforeLock` is wired. Without it, the beforeToolCall hook throws `EmbeddedAttemptSessionTakeoverError` and the lane's tool call is lost. With it, the hook fires cleanly. The harness is at `/Users/umank/code/openclaw-tickets/proof/run-refresh-before-hook-lock-proof.mjs`.\n\n  **(b) Test suite** — 76 cases including 4 new regressions:\n\n  ```\n   Test Files  2 passed (2)\n        Tests  76 passed (76)\n  ```\n\n  Bug-repro test verified to FAIL without the production-code wiring (verbatim error from running with `refreshBeforeLock` removed from the test's `installSessionExternalHookWriteLock` call):\n\n  ```\n  EmbeddedAttemptSessionTakeoverError: session file changed while embedded\n  prompt lock was released: /var/folders/.../session.jsonl\n   ❯ assertSessionFileFence ../../src/agents/pi-embedded-runner/run/attempt.session-lock.ts:727:11\n   ❯ Object.withSessionWriteLock ../../src/agents/pi-embedded-runner/run/attempt.session-lock.ts:832:9\n   ❯ Object.lockedExternalHook [as beforeToolCall] ../../src/agents/pi-embedded-runner/run/attempt.session-lock.ts:116:12\n  ```\n\n  This is the same error class @cby2k reproduces deterministically on session UUID `4f181fe9-…` in their gateway-fallback path (see #85913).\n\n- **Observed result after fix:** All four new regression tests pass:\n  - The bug-repro test (`does not trip takeover when pi-style writes happen before beforeToolCall fires`) — beforeToolCall succeeds, no takeover.\n  - The multi-turn test (`allows multiple prompt turns with pi-style direct writes per turn`) — three iterations, no false takeovers, spy called 3 times.\n  - The cross-file isolation test (`does not classify a different session file's writes as owned by this controller`) — file-B writes don't advance file-A's fence; genuine file-A external writes still trip.\n  - The abort/error path test (`does not hang when reacquireAfterPrompt rejects after a pi-style direct write`) — genuine external write still trips reacquire; cleanup terminates cleanly.\n\n- **What was not tested:** A live gateway-fallback reproduction against the patched build on real workload. The local repro that @cby2k has (session `4f181fe9-…`) is the most direct validation target; the patched build is being prepared on the user's GB10 node for that confirmation. The test suite covers the structural invariants at the unit level.\n\n- **Before evidence:** Without `refreshBeforeLock`, the bug-repro test's `beforeToolCall` call throws `EmbeddedAttemptSessionTakeoverError` (verbatim trace shown above). With it, the same test passes.\n\n## Compatibility / Risk\n\n- `refreshBeforeLock` is an **optional** parameter on `installSessionExternalHookWriteLock`. Callers that don't pass it (existing tests, future call sites) keep current behavior — `waitBeforeLock` does only the queue drain.\n- No new lock acquisition; the refresh is `statSync` only.\n- Does not weaken takeover detection — only updates the in-memory `fenceFingerprint` to the current on-disk state, does not touch `ownedSessionFileWrites`. Genuine external writes between the snap and `withSessionWriteLock`'s fence check still trip.\n- Public API: extends the type of `installSessionExternalHookWriteLock`'s params. Single internal call site in `runEmbeddedAttempt`. No external consumers in `extensions/` (verified by grep).\n\n## Related\n\n- Issue #86572 — root cause analysis and acceptance criteria\n- #85913 — original `EmbeddedAttemptSessionTakeoverError` tracking issue; cby2k's deterministic repro\n- #86067 — file-scoped prompt-window guard (cross-lane race) — independent fix; this PR addresses the same-lane race separately\n- #35568 (vLLM, unrelated repo but cited for the architectural-review verification methodology)\n\n---\n\n*This PR is AI-assisted. Code authored with Claude.*\n",
-        "branch": "fix/session-takeover-refresh-before-hook-lock",
-        "head_sha": "91ba92c9abbe025b0ea954ea4a4143b315d98e0e",
-        "author": "ubehera",
-        "labels": [
-          "agents",
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts",
-            "additions": 138,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.ts",
-            "additions": 21,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86584",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86584.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "CANCELLED": 1,
-            "SUCCESS": 71,
-            "SKIPPED": 28,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-agentic-agents:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-agentic-agents:FAILURE"
-          ]
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2477,
+    "total_ms": 4046,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 379
+        "ms": 1554
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1822
+        "ms": 2187
       },
       {
         "name": "classify_commands",
@@ -245,7 +146,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 263
+        "ms": 294
       },
       {
         "name": "append_ledger",
