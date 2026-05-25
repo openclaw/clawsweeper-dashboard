@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-25T07:09:51.709Z",
+  "generated_at": "2026-05-25T07:10:02.701Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-25T04:09:51.290Z",
+  "since": "2026-05-25T04:10:00.660Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    86362
+    86361
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 4,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,214 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86361:4532204558:2026-05-25T07:09:54Z:clawsweeper_needs_human",
+      "comment_id": "4532204558",
+      "comment_version_key": "4532204558:2026-05-25T07:09:54Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86361#issuecomment-4532204558",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86361,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-25T06:55:22Z",
+      "comment_updated_at": "2026-05-25T07:09:54Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=060958c4cccd211933424837cff127248844e642)",
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": "060958c4cccd211933424837cff127248844e642",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(auto-reply): per-model runtime policy in memory-flush gates",
+        "body": "## Summary\r\n\r\n`runMemoryFlushIfNeeded` and `runPreflightCompactionIfNeeded` in `src/auto-reply/reply/agent-runner-memory.ts` gate the embedded memory-flush dispatch on `isCliProvider(run.provider, cfg)`. That helper only inspects `agents.defaults.cliBackends` keys — it never resolves the per-model `agents.defaults.models[<key>].agentRuntime.id` policy that `resolveCliRuntimeExecutionProvider` and `maybeCompactAgentHarnessSession` already honor.\r\n\r\nA session with `run.provider = \"anthropic\"` and `agents.defaults.models[\"anthropic/<model>\"].agentRuntime.id = \"claude-cli\"` reports \"not CLI\" at the gate and dispatches `runEmbeddedPiAgent` directly, even though every other dispatch path for the same session correctly routes through the `claude` CLI subprocess. The embedded harness then submits whatever Anthropic-prefixed auth profile it picks to `/v1/messages`. When the profile is a Claude Code OAuth subscription token (`sk-ant-oat01-…`) — common in user configs because `openclaw auth login --provider anthropic` stores subscription tokens under `provider: anthropic, type: token` — Anthropic rejects with `404 model_not_found` by design (subscription tokens are only valid through the `claude` CLI subprocess). The 404 cascades through every anthropic auth profile into a 40-minute cooldown, and the agent stops replying on the affected lane until the cooldown ages out.\r\n\r\nThis change resolves `resolveAgentHarnessPolicy().runtime` and combines the result with `isCliRuntimeAliasForProvider` in both gates, matching the contract that `resolveCliRuntimeExecutionProvider` and `maybeCompactAgentHarnessSession` already use.\r\n\r\n**Scope note on the preflight change.** The `runPreflightCompactionIfNeeded` gate has the same defective `isCliProvider`-only check, but its downstream call into `maybeCompactAgentHarnessSession` (at `src/agents/harness/selection.ts:471`) already short-circuits via `isCliRuntimeAliasForProvider` for CLI-routed sessions today. That means the preflight bypass is currently protected by the downstream gate, not the local one. This PR fixes the local gate too as defense-in-depth: the defect class is identical, the fix is mechanically identical, and a future refactor of the downstream protection would otherwise re-expose the bypass silently. Reviewers preferring strict-scope can request the preflight change be split into its own PR — happy to do it that way.\r\n\r\n## Real behavior proof\r\n\r\nBehavior addressed: Slack DM lane wedged with `404 status code (no body)` on `anthropic/claude-opus-4-7[1m]` after a long claude-cli turn, with all anthropic auth profiles cooled down for 40 minutes despite the model being pinned to the `claude-cli` runtime via `agents.defaults.models[\"anthropic/<model>\"].agentRuntime.id`.\r\n\r\nReal environment tested: production gateway on Proxmox LXC (openclaw v2026.5.20, node v24.13.0) running live Slack DMs for a single user across 8 agents. Config has `agents.defaults.cliBackends.claude-cli.command = /usr/local/bin/claude` and `agents.defaults.models[\"anthropic/claude-opus-4-7[1m]\"].agentRuntime.id = \"claude-cli\"`.\r\n\r\nExact steps or command run after this patch:\r\n- Patched the production `dist/model-runtime-aliases-*.js` with a temporary `[DBG-CLI-RESOLVE]` log line on every call to `resolveCliRuntimeExecutionProvider` so the dispatch resolver could be observed live.\r\n- Bundle-patched the live `dist/agent-runner.runtime-*.js` (the compiled `agent-runner-memory.ts` equivalent of this PR) on the production gateway and restarted via `systemctl --user restart openclaw-gateway`.\r\n- Drove a fresh Slack DM thread for ~50 minutes through Dobby (the `main` agent on opus-4-7[1m]) until the chat UI reported `100% context used 1.3M / 1M` — the exact precondition for the previous wedge.\r\n- Continued sending user messages on the same thread after the 100% reading.\r\n- `node scripts/run-vitest.mjs src/auto-reply/reply/agent-runner-memory.test.ts` — 28/28 passing (26 existing + 2 new regression tests + a non-CLI-runtime negative test + a non-anthropic CLI-alias test added in response to adversarial review).\r\n- Regression-capability proof: `git stash` the source change, re-run the 4 new tests → all fail loudly with `runEmbeddedPiAgent` mock unexpectedly called. `git stash pop` → all pass.\r\n- `pnpm tsgo:core` — clean.\r\n- `pnpm check:changed` — clean on all lanes except a pre-existing `src/plugins/document-extractors.runtime.test.ts:53` TS2554 on `origin/main` (unrelated; reproducible without this branch).\r\n\r\nEvidence after fix:\r\n- Pre-fix production failure signature (run `a96335a9-…`): `[agent/embedded] embedded run agent end isError=true model=claude-opus-4-7[1m] provider=anthropic error=404 status code (no body)` followed by `auth profile failure state updated profile=sha256:… reason=model_not_found windowType=cooldown` against three separate auth profile hashes within 5 seconds, then `FailoverError: No available auth profile for anthropic` across the fallback chain. Zero `[DBG-CLI-RESOLVE]` entries in the 53 seconds preceding the embedded run — confirming the failing run bypassed `resolveCliRuntimeExecutionProvider` entirely. SessionId rotated from the slack thread's stored `03f422f8-…` to a brand-new `52a6e154-…`, which matches the post-flush `incrementCompactionCount` rotation produced inside `runMemoryFlushIfNeeded`.\r\n- Post-fix production verification, same gateway: `100% context used 1.3M / 1M` reported by the chat UI, user message sent. Gateway log shows three `[DBG-CLI-RESOLVE] result=\"claude-cli\"` lines (preflight gate, memory-flush gate, model-fallback assertion) followed immediately by `[agent/cli-backend] cli exec: provider=claude-cli model=claude-opus-4-7[1m] trigger=user useResume=true session=present resumeSession=4a30bca18050 reuse=reusable`. No `[agent/embedded]` events. No `auth profile failure` events. Claude-cli session resumed and a 277,173ms / 1912-rawLine assistant turn completed cleanly, followed by additional user turns continuing to dispatch through the CLI subprocess.\r\n- Multi-agent fleet trace during the same window: `main` (opus-4-7[1m]), `forge`, `architect`, `researcher`, `gabe`, `gabe-voice`, `scribe` all observed dispatching through `[agent/cli-backend]` for their cron heartbeats — every dispatch preceded by a `[DBG-CLI-RESOLVE] … result=\"claude-cli\"` line — confirming the same gate fix protects every agent, not just the one used for the verification.\r\n- Regression-capability proof in the test suite: the two new regression tests fail with `AssertionError: expected runEmbeddedPiAgentMock not to be called` when the source change is reverted; both pass when the source change is applied.\r\n\r\nObserved result after fix: legitimate cron and slack-DM turns continue to resolve to `claude-cli` via the existing dispatch path; the memory-flush and preflight-compaction gates now early-return for sessions whose per-model runtime policy pins them to a CLI runtime, so the embedded harness can no longer be invoked with OAuth subscription tokens through this code path. No 404 cascade has occurred on the production gateway since the fix was applied, including across the 1.3M-context boundary that previously wedged the lane.\r\n\r\n<img width=\"1985\" height=\"1188\" alt=\"7\" src=\"https://github.com/user-attachments/assets/5ae1e496-f11f-4eb4-8d4d-209b5e5ef44a\" />\r\n\r\n\r\nWhat was not tested:\r\n- The `codex` / `codex-cli` paths in `resolveAgentHarnessPolicy`. The fix's added check is `isCliRuntimeAliasForProvider`, which evaluates against the static `CLI_RUNTIME_BY_PROVIDER` map. Codex entries are `cli: false` in that map, so they never trip the new gate condition — but no codex-routed lane was available for live verification on the test gateway. The new tests cover anthropic + google CLI-alias positive cases and the `pi` runtime negative case to bound the behavior.\r\n- The `runEmbeddedPiAgent` paths in `src/commitments/runtime.ts`, `src/hooks/llm-slug-generator.ts`, `src/crestodian/assistant.ts`, and `src/talk/agent-consult-runtime.ts`. These use synthetic sessionKeys (`temp:…`, `commitments:…`) and do not currently route through the slack-DM autoreply path that triggered the production failure. They are out of scope for this PR but share the broader pattern of calling `runEmbeddedPiAgent` without first consulting `resolveCliRuntimeExecutionProvider`; flagging as a separate audit item.\r\n\r\nCompanion misconfiguration worth flagging (not in scope for this PR, addressed separately on the affected gateway): when `auth.profiles` stores OAuth subscription tokens (`sk-ant-oat01-…`) under `{ provider: \"anthropic\", type: \"token\" }` rather than `{ provider: \"claude-cli\", type: \"oauth\" }`, the embedded harness — when reached — will pick those profiles and submit subscription tokens to `/v1/messages`, which 404s deterministically. The right user-facing fix is reclassification of those profiles (via `openclaw config patch` against the central `openclaw.json auth.profiles` and the per-agent `auth-profiles.json` credential records, since both layers exist). This PR's gate fix prevents the embedded harness from reaching those profiles for CLI-routed models regardless of how the profiles are typed, eliminating the cascade as a side effect of the configuration issue.\r\n\r\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\r\n",
+        "branch": "fix/memory-flush-honor-cli-runtime-policy",
+        "head_sha": "060958c4cccd211933424837cff127248844e642",
+        "author": "potterdigital",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 session-state",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/agent-runner-memory.test.ts",
+            "additions": 103,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-memory.ts",
+            "additions": 46,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86361",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86361.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "SUCCESS": 71,
+            "CANCELLED": 1,
+            "SKIPPED": 28,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ]
+        }
+      },
+      "reason": "target is not open"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86361:4532213117:2026-05-25T06:57:02Z:re_review",
+      "comment_id": "4532213117",
+      "comment_version_key": "4532213117:2026-05-25T06:57:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86361#issuecomment-4532213117",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86361,
+      "author": "potterdigital",
+      "author_id": 197414865,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-25T06:57:02Z",
+      "comment_updated_at": "2026-05-25T06:57:02Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(auto-reply): per-model runtime policy in memory-flush gates",
+        "body": "## Summary\r\n\r\n`runMemoryFlushIfNeeded` and `runPreflightCompactionIfNeeded` in `src/auto-reply/reply/agent-runner-memory.ts` gate the embedded memory-flush dispatch on `isCliProvider(run.provider, cfg)`. That helper only inspects `agents.defaults.cliBackends` keys — it never resolves the per-model `agents.defaults.models[<key>].agentRuntime.id` policy that `resolveCliRuntimeExecutionProvider` and `maybeCompactAgentHarnessSession` already honor.\r\n\r\nA session with `run.provider = \"anthropic\"` and `agents.defaults.models[\"anthropic/<model>\"].agentRuntime.id = \"claude-cli\"` reports \"not CLI\" at the gate and dispatches `runEmbeddedPiAgent` directly, even though every other dispatch path for the same session correctly routes through the `claude` CLI subprocess. The embedded harness then submits whatever Anthropic-prefixed auth profile it picks to `/v1/messages`. When the profile is a Claude Code OAuth subscription token (`sk-ant-oat01-…`) — common in user configs because `openclaw auth login --provider anthropic` stores subscription tokens under `provider: anthropic, type: token` — Anthropic rejects with `404 model_not_found` by design (subscription tokens are only valid through the `claude` CLI subprocess). The 404 cascades through every anthropic auth profile into a 40-minute cooldown, and the agent stops replying on the affected lane until the cooldown ages out.\r\n\r\nThis change resolves `resolveAgentHarnessPolicy().runtime` and combines the result with `isCliRuntimeAliasForProvider` in both gates, matching the contract that `resolveCliRuntimeExecutionProvider` and `maybeCompactAgentHarnessSession` already use.\r\n\r\n**Scope note on the preflight change.** The `runPreflightCompactionIfNeeded` gate has the same defective `isCliProvider`-only check, but its downstream call into `maybeCompactAgentHarnessSession` (at `src/agents/harness/selection.ts:471`) already short-circuits via `isCliRuntimeAliasForProvider` for CLI-routed sessions today. That means the preflight bypass is currently protected by the downstream gate, not the local one. This PR fixes the local gate too as defense-in-depth: the defect class is identical, the fix is mechanically identical, and a future refactor of the downstream protection would otherwise re-expose the bypass silently. Reviewers preferring strict-scope can request the preflight change be split into its own PR — happy to do it that way.\r\n\r\n## Real behavior proof\r\n\r\nBehavior addressed: Slack DM lane wedged with `404 status code (no body)` on `anthropic/claude-opus-4-7[1m]` after a long claude-cli turn, with all anthropic auth profiles cooled down for 40 minutes despite the model being pinned to the `claude-cli` runtime via `agents.defaults.models[\"anthropic/<model>\"].agentRuntime.id`.\r\n\r\nReal environment tested: production gateway on Proxmox LXC (openclaw v2026.5.20, node v24.13.0) running live Slack DMs for a single user across 8 agents. Config has `agents.defaults.cliBackends.claude-cli.command = /usr/local/bin/claude` and `agents.defaults.models[\"anthropic/claude-opus-4-7[1m]\"].agentRuntime.id = \"claude-cli\"`.\r\n\r\nExact steps or command run after this patch:\r\n- Patched the production `dist/model-runtime-aliases-*.js` with a temporary `[DBG-CLI-RESOLVE]` log line on every call to `resolveCliRuntimeExecutionProvider` so the dispatch resolver could be observed live.\r\n- Bundle-patched the live `dist/agent-runner.runtime-*.js` (the compiled `agent-runner-memory.ts` equivalent of this PR) on the production gateway and restarted via `systemctl --user restart openclaw-gateway`.\r\n- Drove a fresh Slack DM thread for ~50 minutes through Dobby (the `main` agent on opus-4-7[1m]) until the chat UI reported `100% context used 1.3M / 1M` — the exact precondition for the previous wedge.\r\n- Continued sending user messages on the same thread after the 100% reading.\r\n- `node scripts/run-vitest.mjs src/auto-reply/reply/agent-runner-memory.test.ts` — 28/28 passing (26 existing + 2 new regression tests + a non-CLI-runtime negative test + a non-anthropic CLI-alias test added in response to adversarial review).\r\n- Regression-capability proof: `git stash` the source change, re-run the 4 new tests → all fail loudly with `runEmbeddedPiAgent` mock unexpectedly called. `git stash pop` → all pass.\r\n- `pnpm tsgo:core` — clean.\r\n- `pnpm check:changed` — clean on all lanes except a pre-existing `src/plugins/document-extractors.runtime.test.ts:53` TS2554 on `origin/main` (unrelated; reproducible without this branch).\r\n\r\nEvidence after fix:\r\n- Pre-fix production failure signature (run `a96335a9-…`): `[agent/embedded] embedded run agent end isError=true model=claude-opus-4-7[1m] provider=anthropic error=404 status code (no body)` followed by `auth profile failure state updated profile=sha256:… reason=model_not_found windowType=cooldown` against three separate auth profile hashes within 5 seconds, then `FailoverError: No available auth profile for anthropic` across the fallback chain. Zero `[DBG-CLI-RESOLVE]` entries in the 53 seconds preceding the embedded run — confirming the failing run bypassed `resolveCliRuntimeExecutionProvider` entirely. SessionId rotated from the slack thread's stored `03f422f8-…` to a brand-new `52a6e154-…`, which matches the post-flush `incrementCompactionCount` rotation produced inside `runMemoryFlushIfNeeded`.\r\n- Post-fix production verification, same gateway: `100% context used 1.3M / 1M` reported by the chat UI, user message sent. Gateway log shows three `[DBG-CLI-RESOLVE] result=\"claude-cli\"` lines (preflight gate, memory-flush gate, model-fallback assertion) followed immediately by `[agent/cli-backend] cli exec: provider=claude-cli model=claude-opus-4-7[1m] trigger=user useResume=true session=present resumeSession=4a30bca18050 reuse=reusable`. No `[agent/embedded]` events. No `auth profile failure` events. Claude-cli session resumed and a 277,173ms / 1912-rawLine assistant turn completed cleanly, followed by additional user turns continuing to dispatch through the CLI subprocess.\r\n- Multi-agent fleet trace during the same window: `main` (opus-4-7[1m]), `forge`, `architect`, `researcher`, `gabe`, `gabe-voice`, `scribe` all observed dispatching through `[agent/cli-backend]` for their cron heartbeats — every dispatch preceded by a `[DBG-CLI-RESOLVE] … result=\"claude-cli\"` line — confirming the same gate fix protects every agent, not just the one used for the verification.\r\n- Regression-capability proof in the test suite: the two new regression tests fail with `AssertionError: expected runEmbeddedPiAgentMock not to be called` when the source change is reverted; both pass when the source change is applied.\r\n\r\nObserved result after fix: legitimate cron and slack-DM turns continue to resolve to `claude-cli` via the existing dispatch path; the memory-flush and preflight-compaction gates now early-return for sessions whose per-model runtime policy pins them to a CLI runtime, so the embedded harness can no longer be invoked with OAuth subscription tokens through this code path. No 404 cascade has occurred on the production gateway since the fix was applied, including across the 1.3M-context boundary that previously wedged the lane.\r\n\r\n<img width=\"1985\" height=\"1188\" alt=\"7\" src=\"https://github.com/user-attachments/assets/5ae1e496-f11f-4eb4-8d4d-209b5e5ef44a\" />\r\n\r\n\r\nWhat was not tested:\r\n- The `codex` / `codex-cli` paths in `resolveAgentHarnessPolicy`. The fix's added check is `isCliRuntimeAliasForProvider`, which evaluates against the static `CLI_RUNTIME_BY_PROVIDER` map. Codex entries are `cli: false` in that map, so they never trip the new gate condition — but no codex-routed lane was available for live verification on the test gateway. The new tests cover anthropic + google CLI-alias positive cases and the `pi` runtime negative case to bound the behavior.\r\n- The `runEmbeddedPiAgent` paths in `src/commitments/runtime.ts`, `src/hooks/llm-slug-generator.ts`, `src/crestodian/assistant.ts`, and `src/talk/agent-consult-runtime.ts`. These use synthetic sessionKeys (`temp:…`, `commitments:…`) and do not currently route through the slack-DM autoreply path that triggered the production failure. They are out of scope for this PR but share the broader pattern of calling `runEmbeddedPiAgent` without first consulting `resolveCliRuntimeExecutionProvider`; flagging as a separate audit item.\r\n\r\nCompanion misconfiguration worth flagging (not in scope for this PR, addressed separately on the affected gateway): when `auth.profiles` stores OAuth subscription tokens (`sk-ant-oat01-…`) under `{ provider: \"anthropic\", type: \"token\" }` rather than `{ provider: \"claude-cli\", type: \"oauth\" }`, the embedded harness — when reached — will pick those profiles and submit subscription tokens to `/v1/messages`, which 404s deterministically. The right user-facing fix is reclassification of those profiles (via `openclaw config patch` against the central `openclaw.json auth.profiles` and the per-agent `auth-profiles.json` credential records, since both layers exist). This PR's gate fix prevents the embedded harness from reaching those profiles for CLI-routed models regardless of how the profiles are typed, eliminating the cascade as a side effect of the configuration issue.\r\n\r\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\r\n",
+        "branch": "fix/memory-flush-honor-cli-runtime-policy",
+        "head_sha": "060958c4cccd211933424837cff127248844e642",
+        "author": "potterdigital",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 session-state",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/agent-runner-memory.test.ts",
+            "additions": 103,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-memory.ts",
+            "additions": 46,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86361",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86361.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "SUCCESS": 71,
+            "CANCELLED": 1,
+            "SKIPPED": 28,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 756,
+    "total_ms": 2234,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 412
+        "ms": 300
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1728
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 337
+        "ms": 186
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
