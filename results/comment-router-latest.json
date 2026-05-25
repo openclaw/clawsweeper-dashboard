@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-25T16:27:28.326Z",
+  "generated_at": "2026-05-25T16:27:33.450Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-25T13:27:26.580Z",
+  "since": "2026-05-25T13:27:31.505Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    82955
+    82918
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 31,
-  "commands_seen": 15,
+  "scanned_comments": 15,
+  "commands_seen": 7,
   "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,63 +31,61 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:82955:4469539303:2026-05-25T16:27:23Z:automerge",
-      "comment_id": "4469539303",
-      "comment_version_key": "4469539303:2026-05-25T16:27:23Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82955#issuecomment-4469539303",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:82918:4469429160:2026-05-25T16:27:29Z:clawsweeper_needs_human",
+      "comment_id": "4469429160",
+      "comment_version_key": "4469429160:2026-05-25T16:27:29Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82918#issuecomment-4469429160",
       "repo": "openclaw/openclaw",
-      "issue_number": 82955,
+      "issue_number": 82918,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-17T06:02:07Z",
-      "comment_updated_at": "2026-05-25T16:27:23Z",
+      "comment_created_at": "2026-05-17T05:16:41Z",
+      "comment_updated_at": "2026-05-25T16:27:29Z",
       "status_comment_id": null,
-      "trigger": "mention",
-      "command": "automerge",
-      "intent": "automerge",
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": "The PR adds non-empty/shebang validation and download-failure guards before executing Homebrew and NodeSource remote setup scripts, plus a shell harness for malformed download fixtures.\n\nPR surface: Other +307. Total +307 across 2 files.\n\nReproducibility: yes. Current-main source shows downloaded Homebrew and NodeSource scripts are executed without structural validation, and the PR body supplies a concrete harness for malformed and partial downloads; I did not run the harness in this read-only review.",
-      "review_followup": "A narrow automated repair can stabilize the binary fixture; maintainers still own the final fail-closed installer policy decision.",
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "The remaining action is maintainer judgment on hosted-installer compatibility and whether the supplied Linux proof is enough before merge.; Cleared: The diff adds shell temp-file buffering and a shell helper only; I found no new dependency, workflow permission, credential handling, package-resolution, or privileged-download concern. (sha=e5f038aa3cc6936550a619b23f3d4435370bd846)",
+      "review_summary": "The PR adds an early stdin pipe-buffer guard to `scripts/install.sh` and a standalone shell invocation harness for piped, direct, command-string, process-substitution, and `/dev/null` stdin modes.\n\nPR surface: Other +172. Total +172 across 2 files.\n\nReproducibility: no. I did not establish a fresh live current-main reproduction of the exact WSL2 hang. The path is source-reproducible from current docs plus installer code, and the linked issue supplies repeated logs showing script-stream corruption around `warn_shell_path_missing_dir`.",
+      "review_followup": "The remaining action is maintainer judgment on hosted-installer compatibility and whether the supplied Linux proof is enough before merge.",
       "freeform_prompt": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "e5f038aa3cc6936550a619b23f3d4435370bd846",
       "finding_id": null,
-      "status": "ignored",
+      "status": "skipped",
       "actions": [],
-      "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix(install): validate downloaded scripts before execution",
-        "body": "## Problem\n\nFour code paths in `scripts/install.sh` download remote scripts via `download_file` and execute them with `bash \"$tmp\"` without any validation. While HTTPS/TLS1.2 protects the transport, truncated downloads, HTML error pages (e.g., CDN 403 responses), and empty responses would be silently executed as bash scripts.\n\nAffected paths:\n1. `run_remote_bash` (Homebrew installer from `raw.githubusercontent.com`)\n2. NodeSource apt/deb setup script (`deb.nodesource.com/setup_*.x`)\n3. NodeSource dnf/rpm setup script (`rpm.nodesource.com/setup_*.x`)\n4. NodeSource yum/rpm setup script (`rpm.nodesource.com/setup_*.x`)\n\nContrast with `bootstrap_gum_temp` which verifies downloaded content with SHA256 checksums.\n\n## Fix\n\n### Layer 1: Download failure guards\n\nEvery download-then-execute path now aborts immediately when `download_file` (or its `run_quiet_step` wrapper) fails:\n\n- `run_remote_bash`: `download_file \"$url\" \"$tmp\" || return 1`\n- All three NodeSource paths: `run_quiet_step ... download_file ... || return 1`\n\nWithout these guards, `run_quiet_step`'s `if \"$@\"` wrapper suppresses `set -e`, so a failed `download_file` that left a partial file on disk would fall through to validation and execution. This addresses the [P2] finding from ClawSweeper review.\n\n### Layer 2: Structural validation\n\nExtract a reusable `validate_downloaded_script()` function and apply it to all four download-then-execute paths. The validation:\n1. Rejects empty files (`[[ ! -s \"$file\" ]]`)\n2. Rejects files that don't start with a shebang (`#!`) using raw byte check (`od -An -tx1 -N2`)\n3. Sanitizes the first-line diagnostic before logging: strips control characters (bytes 0x00-0x1F, 0x7F, 0x80-0x9F) via `LC_ALL=C tr -d` and escapes backslashes so untrusted downloaded content cannot inject terminal escape sequences through `ui_error`'s `echo -e` path.\n\nA full SHA256 checksum pin is impractical because these setup scripts update frequently and a pinned hash would break the installer on every release.\n\n## Real behavior proof\n\nBehavior addressed: `run_remote_bash()` and three NodeSource paths executed downloaded content unconditionally. Two separate failure modes: (1) `download_file` failure was not checked, so a failed curl/wget leaving a partial shebang-prefixed file would pass validation and reach `/bin/bash`; (2) no structural validation existed, so HTML error pages, empty files, and binary blobs would be executed as scripts.\n\nReal environment tested: macOS (bash 3.2) and Linux (Ubuntu 24.04, WSL2, bash 5.x). The real patched functions were extracted from `scripts/install.sh` and exercised against local HTTP/HTTPS fixtures.\n\nExact steps or command run after this patch:\n```bash\nbash scripts/test-install-validation.sh\n```\n\nEvidence after fix:\n```console\n$ bash scripts/test-install-validation.sh\n-- GREEN: validation rejects bad downloads --\n  PASS  empty file  -> rejected\n  PASS  HTML error   -> rejected\n  PASS  JSON error   -> rejected\n  PASS  binary blob  -> rejected\n  PASS  C1 escape    -> rejected\n  PASS  NUL prefix   -> rejected (raw byte check caught NUL before #!)\n  PASS  C1 diagnostic -> C1 bytes stripped from error output\n  PASS  valid script (#!bash)     -> accepted\n  PASS  valid script (#!env bash) -> accepted\n  PASS  partial download (valid shebang) -> accepted by validation alone\n  PASS  failed download (partial) -> pipeline rejected before validation\n\n-- RED: no validation lets bad downloads through --\n  PASS  empty file  -> accepted (DANGEROUS without validation)\n  PASS  HTML error   -> accepted (DANGEROUS without validation)\n  PASS  JSON error   -> accepted (DANGEROUS without validation)\n  PASS  binary blob  -> accepted (DANGEROUS without validation)\n\nResults: 15 passed, 0 failed\nAll checks passed\n```\n\nThe two new partial-download tests (lines 10-11 in GREEN) prove the download_file failure guard is essential:\n- Test 10: `partial.sh` has a valid `#!/bin/bash` shebang, so `validate_downloaded_script` alone ACCEPTS it\n- Test 11: The full pipeline with a failing downloader REJECTS before reaching validation, because `download_file ... || return 1` exits early\n\nObserved result after fix: All 15 harness tests pass. Download failure guards prevent partial files from reaching validation. Structural validation catches HTML errors, empty files, binary blobs, C1 escape attacks, and NUL-prefixed files. The first-line diagnostic is sanitized against terminal injection.\n\nWhat was not tested: Live download from `raw.githubusercontent.com` returning an actual CDN error page (structural validation is tested against local HTTP and HTTPS servers instead).\n",
-        "branch": "fix/install-validate-remote-script",
-        "head_sha": "c64ec03af9fe917aa861bbfd516065376096b022",
+        "title": "fix(install): add pipe guard to prevent stdin stealing in curl | bash",
+        "body": "## Problem\n\nWhen invoked via `curl -fsSL https://openclaw.ai/install.sh | bash`, bash reads the script incrementally from stdin. Interactive prompts (gum, read) and child processes that also read stdin steal bytes from the script stream, causing:\n\n1. Truncated function names: `warn_shell_path_missing_di` instead of `warn_shell_path_missing_dir`\n2. \"command not found\" errors for the truncated names\n3. Indefinite hangs (the script stream is corrupted, bash blocks waiting for more input)\n\nReported on WSL2 Ubuntu 24.04 with 3/3 reproduction rate.\n\n## Fix\n\nAdd a pipe guard at the top of `install.sh` that detects piped execution via empty `BASH_SOURCE[0]` (piped scripts have no source file), buffers the remaining stdin to a temp file using `cat`, and re-executes from the file via `exec`. This frees stdin for interactive prompts and child processes.\n\nThe guard:\n- **Does not fire** for direct execution (`bash install.sh`) or process substitution (`bash <(curl ...)`) because `BASH_SOURCE` is set\n- **Does not fire** for CI/Docker with non-tty stdin when running from a file\n- **Cleans up** the temp file immediately after re-execution starts\n- Uses `_OPENCLAW_PIPE_BUFFERED` env var to prevent infinite re-execution loops\n\nFixes #73814\n\n## Real behavior proof\nBehavior addressed: the installer now buffers itself to a temp file when piped via curl, preventing child processes from consuming stdin bytes that corrupt the script stream.\nReal environment tested: Linux x86_64, OpenClaw 2026.5.12 installed, Node v26.0.0, bash 5.2. Tested both piped execution (`cat install.sh | bash -s -- --install-method npm`) and direct execution (`bash install.sh --install-method npm < /dev/null`).\nExact steps or command run after this patch: (1) verified pipe guard pattern with a minimal test script that includes a deliberate stdin steal (`head -c 50 < /dev/stdin`); (2) ran full installer in piped mode; (3) ran full installer in direct mode with non-tty stdin; (4) confirmed both complete successfully without truncation.\nEvidence after fix: terminal output copied below.\n\nPipe guard pattern verification (minimal test script with deliberate stdin steal):\n```\n$ cat /tmp/pipe-test-steal.sh | bash\nBefore stdin steal\nAfter stdin steal\nFunction executed correctly\nScript completed\n```\nWithout the guard, the `head -c 50` would consume 50 bytes of the script stream, truncating the function definition. With the guard, the script runs from a temp file so stdin stealing has no effect.\n\nFull installer in piped mode (script runs from temp file):\n```\n$ cat scripts/install.sh | bash -s -- --install-method npm 2>&1 | tail -10\n✓ OpenClaw installed\n\n[3/3] Finalizing setup\n· Running doctor to migrate settings\n· Running doctor\n✓ Doctor complete\n\n🦞 OpenClaw installed successfully (2026.5.12)!\n```\nNote: error source shows `/tmp/tmp.uuj4JcpyzQ: line 2988` confirming the guard buffered to temp file.\n\nFull installer in direct mode (BASH_SOURCE is set, guard does not fire):\n```\n$ bash scripts/install.sh --install-method npm < /dev/null 2>&1 | tail -10\n✓ Doctor complete\n\n🦞 OpenClaw installed successfully (2026.5.12)!\n```\nNote: error source shows `scripts/install.sh: line 3000` confirming guard did not fire.\n\nObserved result after fix: piped execution completes successfully without truncated function names or hangs. Direct execution is unaffected. The pipe guard adds negligible overhead (one mktemp + cat + exec).\nWhat was not tested: macOS bash 3.2 (BASH_SOURCE behavior may differ in very old bash versions). WSL2 Ubuntu 24.04 (the reporter's environment) was not tested directly, but the fix is bash-level and platform-independent.\n",
+        "branch": "fix/install-pipe-guard",
+        "head_sha": "e5f038aa3cc6936550a619b23f3d4435370bd846",
         "author": "sebtardif",
         "labels": [
           "scripts",
-          "size: M",
+          "size: S",
           "proof: supplied",
           "proof: sufficient",
           "P2",
           "rating: 🐚 platinum hermit",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 security-boundary",
           "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
             "path": "scripts/install.sh",
-            "additions": 39,
-            "deletions": 4,
+            "additions": 23,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "scripts/test-install-validation.sh",
-            "additions": 272,
+            "path": "scripts/test-install-pipe-guard.sh",
+            "additions": 149,
             "deletions": 0,
             "changeType": "ADDED"
           }
@@ -95,110 +93,42 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-82955",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82955.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82918",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82918.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 88,
+          "total": 84,
           "counts": {
-            "SKIPPED": 13,
-            "SUCCESS": 71,
-            "FAILURE": 4
+            "CANCELLED": 2,
+            "SKIPPED": 16,
+            "SUCCESS": 66
           },
           "blockers": [
-            "checks-node-agentic-agents:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
+            "Real behavior proof:CANCELLED"
           ],
           "pending": [],
           "terminalBlockers": [
-            "checks-node-agentic-agents:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
+            "Real behavior proof:CANCELLED"
           ]
         }
       },
-      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     },
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:82955:4534609561:2026-05-25T13:23:42Z:re_review",
-      "comment_id": "4534609561",
-      "comment_version_key": "4534609561:2026-05-25T13:23:42Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82955#issuecomment-4534609561",
+      "idempotency_key": "comment-router:openclaw/openclaw:82918:4526250436:2026-05-23T18:51:09Z:re_review",
+      "comment_id": "4526250436",
+      "comment_version_key": "4526250436:2026-05-23T18:51:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82918#issuecomment-4526250436",
       "repo": "openclaw/openclaw",
-      "issue_number": 82955,
+      "issue_number": 82918,
       "author": "SebTardif",
       "author_id": 1413412,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-25T13:23:42Z",
-      "comment_updated_at": "2026-05-25T13:23:42Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:82955:4529812560:2026-05-24T20:00:43Z:re_review",
-      "comment_id": "4529812560",
-      "comment_version_key": "4529812560:2026-05-24T20:00:43Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82955#issuecomment-4529812560",
-      "repo": "openclaw/openclaw",
-      "issue_number": 82955,
-      "author": "SebTardif",
-      "author_id": 1413412,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-24T20:00:43Z",
-      "comment_updated_at": "2026-05-24T20:00:43Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:82955:4529419462:2026-05-24T17:02:50Z:re_review",
-      "comment_id": "4529419462",
-      "comment_version_key": "4529419462:2026-05-24T17:02:50Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82955#issuecomment-4529419462",
-      "repo": "openclaw/openclaw",
-      "issue_number": 82955,
-      "author": "SebTardif",
-      "author_id": 1413412,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-24T17:02:50Z",
-      "comment_updated_at": "2026-05-24T17:02:50Z",
+      "comment_created_at": "2026-05-23T18:51:09Z",
+      "comment_updated_at": "2026-05-23T18:51:09Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -219,32 +149,31 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(install): validate downloaded scripts before execution",
-        "body": "## Problem\n\nFour code paths in `scripts/install.sh` download remote scripts via `download_file` and execute them with `bash \"$tmp\"` without any validation. While HTTPS/TLS1.2 protects the transport, truncated downloads, HTML error pages (e.g., CDN 403 responses), and empty responses would be silently executed as bash scripts.\n\nAffected paths:\n1. `run_remote_bash` (Homebrew installer from `raw.githubusercontent.com`)\n2. NodeSource apt/deb setup script (`deb.nodesource.com/setup_*.x`)\n3. NodeSource dnf/rpm setup script (`rpm.nodesource.com/setup_*.x`)\n4. NodeSource yum/rpm setup script (`rpm.nodesource.com/setup_*.x`)\n\nContrast with `bootstrap_gum_temp` which verifies downloaded content with SHA256 checksums.\n\n## Fix\n\n### Layer 1: Download failure guards\n\nEvery download-then-execute path now aborts immediately when `download_file` (or its `run_quiet_step` wrapper) fails:\n\n- `run_remote_bash`: `download_file \"$url\" \"$tmp\" || return 1`\n- All three NodeSource paths: `run_quiet_step ... download_file ... || return 1`\n\nWithout these guards, `run_quiet_step`'s `if \"$@\"` wrapper suppresses `set -e`, so a failed `download_file` that left a partial file on disk would fall through to validation and execution. This addresses the [P2] finding from ClawSweeper review.\n\n### Layer 2: Structural validation\n\nExtract a reusable `validate_downloaded_script()` function and apply it to all four download-then-execute paths. The validation:\n1. Rejects empty files (`[[ ! -s \"$file\" ]]`)\n2. Rejects files that don't start with a shebang (`#!`) using raw byte check (`od -An -tx1 -N2`)\n3. Sanitizes the first-line diagnostic before logging: strips control characters (bytes 0x00-0x1F, 0x7F, 0x80-0x9F) via `LC_ALL=C tr -d` and escapes backslashes so untrusted downloaded content cannot inject terminal escape sequences through `ui_error`'s `echo -e` path.\n\nA full SHA256 checksum pin is impractical because these setup scripts update frequently and a pinned hash would break the installer on every release.\n\n## Real behavior proof\n\nBehavior addressed: `run_remote_bash()` and three NodeSource paths executed downloaded content unconditionally. Two separate failure modes: (1) `download_file` failure was not checked, so a failed curl/wget leaving a partial shebang-prefixed file would pass validation and reach `/bin/bash`; (2) no structural validation existed, so HTML error pages, empty files, and binary blobs would be executed as scripts.\n\nReal environment tested: macOS (bash 3.2) and Linux (Ubuntu 24.04, WSL2, bash 5.x). The real patched functions were extracted from `scripts/install.sh` and exercised against local HTTP/HTTPS fixtures.\n\nExact steps or command run after this patch:\n```bash\nbash scripts/test-install-validation.sh\n```\n\nEvidence after fix:\n```console\n$ bash scripts/test-install-validation.sh\n-- GREEN: validation rejects bad downloads --\n  PASS  empty file  -> rejected\n  PASS  HTML error   -> rejected\n  PASS  JSON error   -> rejected\n  PASS  binary blob  -> rejected\n  PASS  C1 escape    -> rejected\n  PASS  NUL prefix   -> rejected (raw byte check caught NUL before #!)\n  PASS  C1 diagnostic -> C1 bytes stripped from error output\n  PASS  valid script (#!bash)     -> accepted\n  PASS  valid script (#!env bash) -> accepted\n  PASS  partial download (valid shebang) -> accepted by validation alone\n  PASS  failed download (partial) -> pipeline rejected before validation\n\n-- RED: no validation lets bad downloads through --\n  PASS  empty file  -> accepted (DANGEROUS without validation)\n  PASS  HTML error   -> accepted (DANGEROUS without validation)\n  PASS  JSON error   -> accepted (DANGEROUS without validation)\n  PASS  binary blob  -> accepted (DANGEROUS without validation)\n\nResults: 15 passed, 0 failed\nAll checks passed\n```\n\nThe two new partial-download tests (lines 10-11 in GREEN) prove the download_file failure guard is essential:\n- Test 10: `partial.sh` has a valid `#!/bin/bash` shebang, so `validate_downloaded_script` alone ACCEPTS it\n- Test 11: The full pipeline with a failing downloader REJECTS before reaching validation, because `download_file ... || return 1` exits early\n\nObserved result after fix: All 15 harness tests pass. Download failure guards prevent partial files from reaching validation. Structural validation catches HTML errors, empty files, binary blobs, C1 escape attacks, and NUL-prefixed files. The first-line diagnostic is sanitized against terminal injection.\n\nWhat was not tested: Live download from `raw.githubusercontent.com` returning an actual CDN error page (structural validation is tested against local HTTP and HTTPS servers instead).\n",
-        "branch": "fix/install-validate-remote-script",
-        "head_sha": "c64ec03af9fe917aa861bbfd516065376096b022",
+        "title": "fix(install): add pipe guard to prevent stdin stealing in curl | bash",
+        "body": "## Problem\n\nWhen invoked via `curl -fsSL https://openclaw.ai/install.sh | bash`, bash reads the script incrementally from stdin. Interactive prompts (gum, read) and child processes that also read stdin steal bytes from the script stream, causing:\n\n1. Truncated function names: `warn_shell_path_missing_di` instead of `warn_shell_path_missing_dir`\n2. \"command not found\" errors for the truncated names\n3. Indefinite hangs (the script stream is corrupted, bash blocks waiting for more input)\n\nReported on WSL2 Ubuntu 24.04 with 3/3 reproduction rate.\n\n## Fix\n\nAdd a pipe guard at the top of `install.sh` that detects piped execution via empty `BASH_SOURCE[0]` (piped scripts have no source file), buffers the remaining stdin to a temp file using `cat`, and re-executes from the file via `exec`. This frees stdin for interactive prompts and child processes.\n\nThe guard:\n- **Does not fire** for direct execution (`bash install.sh`) or process substitution (`bash <(curl ...)`) because `BASH_SOURCE` is set\n- **Does not fire** for CI/Docker with non-tty stdin when running from a file\n- **Cleans up** the temp file immediately after re-execution starts\n- Uses `_OPENCLAW_PIPE_BUFFERED` env var to prevent infinite re-execution loops\n\nFixes #73814\n\n## Real behavior proof\nBehavior addressed: the installer now buffers itself to a temp file when piped via curl, preventing child processes from consuming stdin bytes that corrupt the script stream.\nReal environment tested: Linux x86_64, OpenClaw 2026.5.12 installed, Node v26.0.0, bash 5.2. Tested both piped execution (`cat install.sh | bash -s -- --install-method npm`) and direct execution (`bash install.sh --install-method npm < /dev/null`).\nExact steps or command run after this patch: (1) verified pipe guard pattern with a minimal test script that includes a deliberate stdin steal (`head -c 50 < /dev/stdin`); (2) ran full installer in piped mode; (3) ran full installer in direct mode with non-tty stdin; (4) confirmed both complete successfully without truncation.\nEvidence after fix: terminal output copied below.\n\nPipe guard pattern verification (minimal test script with deliberate stdin steal):\n```\n$ cat /tmp/pipe-test-steal.sh | bash\nBefore stdin steal\nAfter stdin steal\nFunction executed correctly\nScript completed\n```\nWithout the guard, the `head -c 50` would consume 50 bytes of the script stream, truncating the function definition. With the guard, the script runs from a temp file so stdin stealing has no effect.\n\nFull installer in piped mode (script runs from temp file):\n```\n$ cat scripts/install.sh | bash -s -- --install-method npm 2>&1 | tail -10\n✓ OpenClaw installed\n\n[3/3] Finalizing setup\n· Running doctor to migrate settings\n· Running doctor\n✓ Doctor complete\n\n🦞 OpenClaw installed successfully (2026.5.12)!\n```\nNote: error source shows `/tmp/tmp.uuj4JcpyzQ: line 2988` confirming the guard buffered to temp file.\n\nFull installer in direct mode (BASH_SOURCE is set, guard does not fire):\n```\n$ bash scripts/install.sh --install-method npm < /dev/null 2>&1 | tail -10\n✓ Doctor complete\n\n🦞 OpenClaw installed successfully (2026.5.12)!\n```\nNote: error source shows `scripts/install.sh: line 3000` confirming guard did not fire.\n\nObserved result after fix: piped execution completes successfully without truncated function names or hangs. Direct execution is unaffected. The pipe guard adds negligible overhead (one mktemp + cat + exec).\nWhat was not tested: macOS bash 3.2 (BASH_SOURCE behavior may differ in very old bash versions). WSL2 Ubuntu 24.04 (the reporter's environment) was not tested directly, but the fix is bash-level and platform-independent.\n",
+        "branch": "fix/install-pipe-guard",
+        "head_sha": "e5f038aa3cc6936550a619b23f3d4435370bd846",
         "author": "sebtardif",
         "labels": [
           "scripts",
-          "size: M",
+          "size: S",
           "proof: supplied",
           "proof: sufficient",
           "P2",
           "rating: 🐚 platinum hermit",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 security-boundary",
           "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
             "path": "scripts/install.sh",
-            "additions": 39,
-            "deletions": 4,
+            "additions": 23,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "scripts/test-install-validation.sh",
-            "additions": 272,
+            "path": "scripts/test-install-pipe-guard.sh",
+            "additions": 149,
             "deletions": 0,
             "changeType": "ADDED"
           }
@@ -252,48 +181,42 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-82955",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82955.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82918",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82918.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 88,
+          "total": 84,
           "counts": {
-            "SKIPPED": 13,
-            "SUCCESS": 71,
-            "FAILURE": 4
+            "CANCELLED": 2,
+            "SKIPPED": 16,
+            "SUCCESS": 66
           },
           "blockers": [
-            "checks-node-agentic-agents:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
+            "Real behavior proof:CANCELLED"
           ],
           "pending": [],
           "terminalBlockers": [
-            "checks-node-agentic-agents:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
+            "Real behavior proof:CANCELLED"
           ]
         }
       },
       "reason": "matching ClawSweeper response comment already exists"
     },
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:82955:4523555622:2026-05-23T00:38:49Z:re_review",
-      "comment_id": "4523555622",
-      "comment_version_key": "4523555622:2026-05-23T00:38:49Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82955#issuecomment-4523555622",
+      "idempotency_key": "comment-router:openclaw/openclaw:82918:4524285411:2026-05-23T05:32:13Z:re_review",
+      "comment_id": "4524285411",
+      "comment_version_key": "4524285411:2026-05-23T05:32:13Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82918#issuecomment-4524285411",
       "repo": "openclaw/openclaw",
-      "issue_number": 82955,
+      "issue_number": 82918,
       "author": "SebTardif",
       "author_id": 1413412,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-23T00:38:49Z",
-      "comment_updated_at": "2026-05-23T00:38:49Z",
+      "comment_created_at": "2026-05-23T05:32:13Z",
+      "comment_updated_at": "2026-05-23T05:32:13Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -314,32 +237,31 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(install): validate downloaded scripts before execution",
-        "body": "## Problem\n\nFour code paths in `scripts/install.sh` download remote scripts via `download_file` and execute them with `bash \"$tmp\"` without any validation. While HTTPS/TLS1.2 protects the transport, truncated downloads, HTML error pages (e.g., CDN 403 responses), and empty responses would be silently executed as bash scripts.\n\nAffected paths:\n1. `run_remote_bash` (Homebrew installer from `raw.githubusercontent.com`)\n2. NodeSource apt/deb setup script (`deb.nodesource.com/setup_*.x`)\n3. NodeSource dnf/rpm setup script (`rpm.nodesource.com/setup_*.x`)\n4. NodeSource yum/rpm setup script (`rpm.nodesource.com/setup_*.x`)\n\nContrast with `bootstrap_gum_temp` which verifies downloaded content with SHA256 checksums.\n\n## Fix\n\n### Layer 1: Download failure guards\n\nEvery download-then-execute path now aborts immediately when `download_file` (or its `run_quiet_step` wrapper) fails:\n\n- `run_remote_bash`: `download_file \"$url\" \"$tmp\" || return 1`\n- All three NodeSource paths: `run_quiet_step ... download_file ... || return 1`\n\nWithout these guards, `run_quiet_step`'s `if \"$@\"` wrapper suppresses `set -e`, so a failed `download_file` that left a partial file on disk would fall through to validation and execution. This addresses the [P2] finding from ClawSweeper review.\n\n### Layer 2: Structural validation\n\nExtract a reusable `validate_downloaded_script()` function and apply it to all four download-then-execute paths. The validation:\n1. Rejects empty files (`[[ ! -s \"$file\" ]]`)\n2. Rejects files that don't start with a shebang (`#!`) using raw byte check (`od -An -tx1 -N2`)\n3. Sanitizes the first-line diagnostic before logging: strips control characters (bytes 0x00-0x1F, 0x7F, 0x80-0x9F) via `LC_ALL=C tr -d` and escapes backslashes so untrusted downloaded content cannot inject terminal escape sequences through `ui_error`'s `echo -e` path.\n\nA full SHA256 checksum pin is impractical because these setup scripts update frequently and a pinned hash would break the installer on every release.\n\n## Real behavior proof\n\nBehavior addressed: `run_remote_bash()` and three NodeSource paths executed downloaded content unconditionally. Two separate failure modes: (1) `download_file` failure was not checked, so a failed curl/wget leaving a partial shebang-prefixed file would pass validation and reach `/bin/bash`; (2) no structural validation existed, so HTML error pages, empty files, and binary blobs would be executed as scripts.\n\nReal environment tested: macOS (bash 3.2) and Linux (Ubuntu 24.04, WSL2, bash 5.x). The real patched functions were extracted from `scripts/install.sh` and exercised against local HTTP/HTTPS fixtures.\n\nExact steps or command run after this patch:\n```bash\nbash scripts/test-install-validation.sh\n```\n\nEvidence after fix:\n```console\n$ bash scripts/test-install-validation.sh\n-- GREEN: validation rejects bad downloads --\n  PASS  empty file  -> rejected\n  PASS  HTML error   -> rejected\n  PASS  JSON error   -> rejected\n  PASS  binary blob  -> rejected\n  PASS  C1 escape    -> rejected\n  PASS  NUL prefix   -> rejected (raw byte check caught NUL before #!)\n  PASS  C1 diagnostic -> C1 bytes stripped from error output\n  PASS  valid script (#!bash)     -> accepted\n  PASS  valid script (#!env bash) -> accepted\n  PASS  partial download (valid shebang) -> accepted by validation alone\n  PASS  failed download (partial) -> pipeline rejected before validation\n\n-- RED: no validation lets bad downloads through --\n  PASS  empty file  -> accepted (DANGEROUS without validation)\n  PASS  HTML error   -> accepted (DANGEROUS without validation)\n  PASS  JSON error   -> accepted (DANGEROUS without validation)\n  PASS  binary blob  -> accepted (DANGEROUS without validation)\n\nResults: 15 passed, 0 failed\nAll checks passed\n```\n\nThe two new partial-download tests (lines 10-11 in GREEN) prove the download_file failure guard is essential:\n- Test 10: `partial.sh` has a valid `#!/bin/bash` shebang, so `validate_downloaded_script` alone ACCEPTS it\n- Test 11: The full pipeline with a failing downloader REJECTS before reaching validation, because `download_file ... || return 1` exits early\n\nObserved result after fix: All 15 harness tests pass. Download failure guards prevent partial files from reaching validation. Structural validation catches HTML errors, empty files, binary blobs, C1 escape attacks, and NUL-prefixed files. The first-line diagnostic is sanitized against terminal injection.\n\nWhat was not tested: Live download from `raw.githubusercontent.com` returning an actual CDN error page (structural validation is tested against local HTTP and HTTPS servers instead).\n",
-        "branch": "fix/install-validate-remote-script",
-        "head_sha": "c64ec03af9fe917aa861bbfd516065376096b022",
+        "title": "fix(install): add pipe guard to prevent stdin stealing in curl | bash",
+        "body": "## Problem\n\nWhen invoked via `curl -fsSL https://openclaw.ai/install.sh | bash`, bash reads the script incrementally from stdin. Interactive prompts (gum, read) and child processes that also read stdin steal bytes from the script stream, causing:\n\n1. Truncated function names: `warn_shell_path_missing_di` instead of `warn_shell_path_missing_dir`\n2. \"command not found\" errors for the truncated names\n3. Indefinite hangs (the script stream is corrupted, bash blocks waiting for more input)\n\nReported on WSL2 Ubuntu 24.04 with 3/3 reproduction rate.\n\n## Fix\n\nAdd a pipe guard at the top of `install.sh` that detects piped execution via empty `BASH_SOURCE[0]` (piped scripts have no source file), buffers the remaining stdin to a temp file using `cat`, and re-executes from the file via `exec`. This frees stdin for interactive prompts and child processes.\n\nThe guard:\n- **Does not fire** for direct execution (`bash install.sh`) or process substitution (`bash <(curl ...)`) because `BASH_SOURCE` is set\n- **Does not fire** for CI/Docker with non-tty stdin when running from a file\n- **Cleans up** the temp file immediately after re-execution starts\n- Uses `_OPENCLAW_PIPE_BUFFERED` env var to prevent infinite re-execution loops\n\nFixes #73814\n\n## Real behavior proof\nBehavior addressed: the installer now buffers itself to a temp file when piped via curl, preventing child processes from consuming stdin bytes that corrupt the script stream.\nReal environment tested: Linux x86_64, OpenClaw 2026.5.12 installed, Node v26.0.0, bash 5.2. Tested both piped execution (`cat install.sh | bash -s -- --install-method npm`) and direct execution (`bash install.sh --install-method npm < /dev/null`).\nExact steps or command run after this patch: (1) verified pipe guard pattern with a minimal test script that includes a deliberate stdin steal (`head -c 50 < /dev/stdin`); (2) ran full installer in piped mode; (3) ran full installer in direct mode with non-tty stdin; (4) confirmed both complete successfully without truncation.\nEvidence after fix: terminal output copied below.\n\nPipe guard pattern verification (minimal test script with deliberate stdin steal):\n```\n$ cat /tmp/pipe-test-steal.sh | bash\nBefore stdin steal\nAfter stdin steal\nFunction executed correctly\nScript completed\n```\nWithout the guard, the `head -c 50` would consume 50 bytes of the script stream, truncating the function definition. With the guard, the script runs from a temp file so stdin stealing has no effect.\n\nFull installer in piped mode (script runs from temp file):\n```\n$ cat scripts/install.sh | bash -s -- --install-method npm 2>&1 | tail -10\n✓ OpenClaw installed\n\n[3/3] Finalizing setup\n· Running doctor to migrate settings\n· Running doctor\n✓ Doctor complete\n\n🦞 OpenClaw installed successfully (2026.5.12)!\n```\nNote: error source shows `/tmp/tmp.uuj4JcpyzQ: line 2988` confirming the guard buffered to temp file.\n\nFull installer in direct mode (BASH_SOURCE is set, guard does not fire):\n```\n$ bash scripts/install.sh --install-method npm < /dev/null 2>&1 | tail -10\n✓ Doctor complete\n\n🦞 OpenClaw installed successfully (2026.5.12)!\n```\nNote: error source shows `scripts/install.sh: line 3000` confirming guard did not fire.\n\nObserved result after fix: piped execution completes successfully without truncated function names or hangs. Direct execution is unaffected. The pipe guard adds negligible overhead (one mktemp + cat + exec).\nWhat was not tested: macOS bash 3.2 (BASH_SOURCE behavior may differ in very old bash versions). WSL2 Ubuntu 24.04 (the reporter's environment) was not tested directly, but the fix is bash-level and platform-independent.\n",
+        "branch": "fix/install-pipe-guard",
+        "head_sha": "e5f038aa3cc6936550a619b23f3d4435370bd846",
         "author": "sebtardif",
         "labels": [
           "scripts",
-          "size: M",
+          "size: S",
           "proof: supplied",
           "proof: sufficient",
           "P2",
           "rating: 🐚 platinum hermit",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 security-boundary",
           "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
             "path": "scripts/install.sh",
-            "additions": 39,
-            "deletions": 4,
+            "additions": 23,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "scripts/test-install-validation.sh",
-            "additions": 272,
+            "path": "scripts/test-install-pipe-guard.sh",
+            "additions": 149,
             "deletions": 0,
             "changeType": "ADDED"
           }
@@ -347,48 +269,42 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-82955",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82955.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82918",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82918.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 88,
+          "total": 84,
           "counts": {
-            "SKIPPED": 13,
-            "SUCCESS": 71,
-            "FAILURE": 4
+            "CANCELLED": 2,
+            "SKIPPED": 16,
+            "SUCCESS": 66
           },
           "blockers": [
-            "checks-node-agentic-agents:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
+            "Real behavior proof:CANCELLED"
           ],
           "pending": [],
           "terminalBlockers": [
-            "checks-node-agentic-agents:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
+            "Real behavior proof:CANCELLED"
           ]
         }
       },
       "reason": "matching ClawSweeper response comment already exists"
     },
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:82955:4523329370:2026-05-22T23:26:09Z:re_review",
-      "comment_id": "4523329370",
-      "comment_version_key": "4523329370:2026-05-22T23:26:09Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82955#issuecomment-4523329370",
+      "idempotency_key": "comment-router:openclaw/openclaw:82918:4523332277:2026-05-22T23:27:05Z:re_review",
+      "comment_id": "4523332277",
+      "comment_version_key": "4523332277:2026-05-22T23:27:05Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82918#issuecomment-4523332277",
       "repo": "openclaw/openclaw",
-      "issue_number": 82955,
+      "issue_number": 82918,
       "author": "SebTardif",
       "author_id": 1413412,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-22T23:26:09Z",
-      "comment_updated_at": "2026-05-22T23:26:09Z",
+      "comment_created_at": "2026-05-22T23:27:05Z",
+      "comment_updated_at": "2026-05-22T23:27:05Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -409,32 +325,31 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(install): validate downloaded scripts before execution",
-        "body": "## Problem\n\nFour code paths in `scripts/install.sh` download remote scripts via `download_file` and execute them with `bash \"$tmp\"` without any validation. While HTTPS/TLS1.2 protects the transport, truncated downloads, HTML error pages (e.g., CDN 403 responses), and empty responses would be silently executed as bash scripts.\n\nAffected paths:\n1. `run_remote_bash` (Homebrew installer from `raw.githubusercontent.com`)\n2. NodeSource apt/deb setup script (`deb.nodesource.com/setup_*.x`)\n3. NodeSource dnf/rpm setup script (`rpm.nodesource.com/setup_*.x`)\n4. NodeSource yum/rpm setup script (`rpm.nodesource.com/setup_*.x`)\n\nContrast with `bootstrap_gum_temp` which verifies downloaded content with SHA256 checksums.\n\n## Fix\n\n### Layer 1: Download failure guards\n\nEvery download-then-execute path now aborts immediately when `download_file` (or its `run_quiet_step` wrapper) fails:\n\n- `run_remote_bash`: `download_file \"$url\" \"$tmp\" || return 1`\n- All three NodeSource paths: `run_quiet_step ... download_file ... || return 1`\n\nWithout these guards, `run_quiet_step`'s `if \"$@\"` wrapper suppresses `set -e`, so a failed `download_file` that left a partial file on disk would fall through to validation and execution. This addresses the [P2] finding from ClawSweeper review.\n\n### Layer 2: Structural validation\n\nExtract a reusable `validate_downloaded_script()` function and apply it to all four download-then-execute paths. The validation:\n1. Rejects empty files (`[[ ! -s \"$file\" ]]`)\n2. Rejects files that don't start with a shebang (`#!`) using raw byte check (`od -An -tx1 -N2`)\n3. Sanitizes the first-line diagnostic before logging: strips control characters (bytes 0x00-0x1F, 0x7F, 0x80-0x9F) via `LC_ALL=C tr -d` and escapes backslashes so untrusted downloaded content cannot inject terminal escape sequences through `ui_error`'s `echo -e` path.\n\nA full SHA256 checksum pin is impractical because these setup scripts update frequently and a pinned hash would break the installer on every release.\n\n## Real behavior proof\n\nBehavior addressed: `run_remote_bash()` and three NodeSource paths executed downloaded content unconditionally. Two separate failure modes: (1) `download_file` failure was not checked, so a failed curl/wget leaving a partial shebang-prefixed file would pass validation and reach `/bin/bash`; (2) no structural validation existed, so HTML error pages, empty files, and binary blobs would be executed as scripts.\n\nReal environment tested: macOS (bash 3.2) and Linux (Ubuntu 24.04, WSL2, bash 5.x). The real patched functions were extracted from `scripts/install.sh` and exercised against local HTTP/HTTPS fixtures.\n\nExact steps or command run after this patch:\n```bash\nbash scripts/test-install-validation.sh\n```\n\nEvidence after fix:\n```console\n$ bash scripts/test-install-validation.sh\n-- GREEN: validation rejects bad downloads --\n  PASS  empty file  -> rejected\n  PASS  HTML error   -> rejected\n  PASS  JSON error   -> rejected\n  PASS  binary blob  -> rejected\n  PASS  C1 escape    -> rejected\n  PASS  NUL prefix   -> rejected (raw byte check caught NUL before #!)\n  PASS  C1 diagnostic -> C1 bytes stripped from error output\n  PASS  valid script (#!bash)     -> accepted\n  PASS  valid script (#!env bash) -> accepted\n  PASS  partial download (valid shebang) -> accepted by validation alone\n  PASS  failed download (partial) -> pipeline rejected before validation\n\n-- RED: no validation lets bad downloads through --\n  PASS  empty file  -> accepted (DANGEROUS without validation)\n  PASS  HTML error   -> accepted (DANGEROUS without validation)\n  PASS  JSON error   -> accepted (DANGEROUS without validation)\n  PASS  binary blob  -> accepted (DANGEROUS without validation)\n\nResults: 15 passed, 0 failed\nAll checks passed\n```\n\nThe two new partial-download tests (lines 10-11 in GREEN) prove the download_file failure guard is essential:\n- Test 10: `partial.sh` has a valid `#!/bin/bash` shebang, so `validate_downloaded_script` alone ACCEPTS it\n- Test 11: The full pipeline with a failing downloader REJECTS before reaching validation, because `download_file ... || return 1` exits early\n\nObserved result after fix: All 15 harness tests pass. Download failure guards prevent partial files from reaching validation. Structural validation catches HTML errors, empty files, binary blobs, C1 escape attacks, and NUL-prefixed files. The first-line diagnostic is sanitized against terminal injection.\n\nWhat was not tested: Live download from `raw.githubusercontent.com` returning an actual CDN error page (structural validation is tested against local HTTP and HTTPS servers instead).\n",
-        "branch": "fix/install-validate-remote-script",
-        "head_sha": "c64ec03af9fe917aa861bbfd516065376096b022",
+        "title": "fix(install): add pipe guard to prevent stdin stealing in curl | bash",
+        "body": "## Problem\n\nWhen invoked via `curl -fsSL https://openclaw.ai/install.sh | bash`, bash reads the script incrementally from stdin. Interactive prompts (gum, read) and child processes that also read stdin steal bytes from the script stream, causing:\n\n1. Truncated function names: `warn_shell_path_missing_di` instead of `warn_shell_path_missing_dir`\n2. \"command not found\" errors for the truncated names\n3. Indefinite hangs (the script stream is corrupted, bash blocks waiting for more input)\n\nReported on WSL2 Ubuntu 24.04 with 3/3 reproduction rate.\n\n## Fix\n\nAdd a pipe guard at the top of `install.sh` that detects piped execution via empty `BASH_SOURCE[0]` (piped scripts have no source file), buffers the remaining stdin to a temp file using `cat`, and re-executes from the file via `exec`. This frees stdin for interactive prompts and child processes.\n\nThe guard:\n- **Does not fire** for direct execution (`bash install.sh`) or process substitution (`bash <(curl ...)`) because `BASH_SOURCE` is set\n- **Does not fire** for CI/Docker with non-tty stdin when running from a file\n- **Cleans up** the temp file immediately after re-execution starts\n- Uses `_OPENCLAW_PIPE_BUFFERED` env var to prevent infinite re-execution loops\n\nFixes #73814\n\n## Real behavior proof\nBehavior addressed: the installer now buffers itself to a temp file when piped via curl, preventing child processes from consuming stdin bytes that corrupt the script stream.\nReal environment tested: Linux x86_64, OpenClaw 2026.5.12 installed, Node v26.0.0, bash 5.2. Tested both piped execution (`cat install.sh | bash -s -- --install-method npm`) and direct execution (`bash install.sh --install-method npm < /dev/null`).\nExact steps or command run after this patch: (1) verified pipe guard pattern with a minimal test script that includes a deliberate stdin steal (`head -c 50 < /dev/stdin`); (2) ran full installer in piped mode; (3) ran full installer in direct mode with non-tty stdin; (4) confirmed both complete successfully without truncation.\nEvidence after fix: terminal output copied below.\n\nPipe guard pattern verification (minimal test script with deliberate stdin steal):\n```\n$ cat /tmp/pipe-test-steal.sh | bash\nBefore stdin steal\nAfter stdin steal\nFunction executed correctly\nScript completed\n```\nWithout the guard, the `head -c 50` would consume 50 bytes of the script stream, truncating the function definition. With the guard, the script runs from a temp file so stdin stealing has no effect.\n\nFull installer in piped mode (script runs from temp file):\n```\n$ cat scripts/install.sh | bash -s -- --install-method npm 2>&1 | tail -10\n✓ OpenClaw installed\n\n[3/3] Finalizing setup\n· Running doctor to migrate settings\n· Running doctor\n✓ Doctor complete\n\n🦞 OpenClaw installed successfully (2026.5.12)!\n```\nNote: error source shows `/tmp/tmp.uuj4JcpyzQ: line 2988` confirming the guard buffered to temp file.\n\nFull installer in direct mode (BASH_SOURCE is set, guard does not fire):\n```\n$ bash scripts/install.sh --install-method npm < /dev/null 2>&1 | tail -10\n✓ Doctor complete\n\n🦞 OpenClaw installed successfully (2026.5.12)!\n```\nNote: error source shows `scripts/install.sh: line 3000` confirming guard did not fire.\n\nObserved result after fix: piped execution completes successfully without truncated function names or hangs. Direct execution is unaffected. The pipe guard adds negligible overhead (one mktemp + cat + exec).\nWhat was not tested: macOS bash 3.2 (BASH_SOURCE behavior may differ in very old bash versions). WSL2 Ubuntu 24.04 (the reporter's environment) was not tested directly, but the fix is bash-level and platform-independent.\n",
+        "branch": "fix/install-pipe-guard",
+        "head_sha": "e5f038aa3cc6936550a619b23f3d4435370bd846",
         "author": "sebtardif",
         "labels": [
           "scripts",
-          "size: M",
+          "size: S",
           "proof: supplied",
           "proof: sufficient",
           "P2",
           "rating: 🐚 platinum hermit",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 security-boundary",
           "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
             "path": "scripts/install.sh",
-            "additions": 39,
-            "deletions": 4,
+            "additions": 23,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "scripts/test-install-validation.sh",
-            "additions": 272,
+            "path": "scripts/test-install-pipe-guard.sh",
+            "additions": 149,
             "deletions": 0,
             "changeType": "ADDED"
           }
@@ -442,48 +357,218 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-82955",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82955.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82918",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82918.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 88,
+          "total": 84,
           "counts": {
-            "SKIPPED": 13,
-            "SUCCESS": 71,
-            "FAILURE": 4
+            "CANCELLED": 2,
+            "SKIPPED": 16,
+            "SUCCESS": 66
           },
           "blockers": [
-            "checks-node-agentic-agents:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
+            "Real behavior proof:CANCELLED"
           ],
           "pending": [],
           "terminalBlockers": [
-            "checks-node-agentic-agents:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
+            "Real behavior proof:CANCELLED"
           ]
         }
       },
       "reason": "matching ClawSweeper response comment already exists"
     },
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:82955:4519545701:2026-05-22T14:22:41Z:re_review",
-      "comment_id": "4519545701",
-      "comment_version_key": "4519545701:2026-05-22T14:22:41Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82955#issuecomment-4519545701",
+      "idempotency_key": "comment-router:openclaw/openclaw:82918:4520247901:2026-05-22T15:53:30Z:re_review",
+      "comment_id": "4520247901",
+      "comment_version_key": "4520247901:2026-05-22T15:53:30Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82918#issuecomment-4520247901",
       "repo": "openclaw/openclaw",
-      "issue_number": 82955,
+      "issue_number": 82918,
       "author": "SebTardif",
       "author_id": 1413412,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-22T14:22:41Z",
-      "comment_updated_at": "2026-05-22T14:22:41Z",
+      "comment_created_at": "2026-05-22T15:53:30Z",
+      "comment_updated_at": "2026-05-22T15:53:30Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(install): add pipe guard to prevent stdin stealing in curl | bash",
+        "body": "## Problem\n\nWhen invoked via `curl -fsSL https://openclaw.ai/install.sh | bash`, bash reads the script incrementally from stdin. Interactive prompts (gum, read) and child processes that also read stdin steal bytes from the script stream, causing:\n\n1. Truncated function names: `warn_shell_path_missing_di` instead of `warn_shell_path_missing_dir`\n2. \"command not found\" errors for the truncated names\n3. Indefinite hangs (the script stream is corrupted, bash blocks waiting for more input)\n\nReported on WSL2 Ubuntu 24.04 with 3/3 reproduction rate.\n\n## Fix\n\nAdd a pipe guard at the top of `install.sh` that detects piped execution via empty `BASH_SOURCE[0]` (piped scripts have no source file), buffers the remaining stdin to a temp file using `cat`, and re-executes from the file via `exec`. This frees stdin for interactive prompts and child processes.\n\nThe guard:\n- **Does not fire** for direct execution (`bash install.sh`) or process substitution (`bash <(curl ...)`) because `BASH_SOURCE` is set\n- **Does not fire** for CI/Docker with non-tty stdin when running from a file\n- **Cleans up** the temp file immediately after re-execution starts\n- Uses `_OPENCLAW_PIPE_BUFFERED` env var to prevent infinite re-execution loops\n\nFixes #73814\n\n## Real behavior proof\nBehavior addressed: the installer now buffers itself to a temp file when piped via curl, preventing child processes from consuming stdin bytes that corrupt the script stream.\nReal environment tested: Linux x86_64, OpenClaw 2026.5.12 installed, Node v26.0.0, bash 5.2. Tested both piped execution (`cat install.sh | bash -s -- --install-method npm`) and direct execution (`bash install.sh --install-method npm < /dev/null`).\nExact steps or command run after this patch: (1) verified pipe guard pattern with a minimal test script that includes a deliberate stdin steal (`head -c 50 < /dev/stdin`); (2) ran full installer in piped mode; (3) ran full installer in direct mode with non-tty stdin; (4) confirmed both complete successfully without truncation.\nEvidence after fix: terminal output copied below.\n\nPipe guard pattern verification (minimal test script with deliberate stdin steal):\n```\n$ cat /tmp/pipe-test-steal.sh | bash\nBefore stdin steal\nAfter stdin steal\nFunction executed correctly\nScript completed\n```\nWithout the guard, the `head -c 50` would consume 50 bytes of the script stream, truncating the function definition. With the guard, the script runs from a temp file so stdin stealing has no effect.\n\nFull installer in piped mode (script runs from temp file):\n```\n$ cat scripts/install.sh | bash -s -- --install-method npm 2>&1 | tail -10\n✓ OpenClaw installed\n\n[3/3] Finalizing setup\n· Running doctor to migrate settings\n· Running doctor\n✓ Doctor complete\n\n🦞 OpenClaw installed successfully (2026.5.12)!\n```\nNote: error source shows `/tmp/tmp.uuj4JcpyzQ: line 2988` confirming the guard buffered to temp file.\n\nFull installer in direct mode (BASH_SOURCE is set, guard does not fire):\n```\n$ bash scripts/install.sh --install-method npm < /dev/null 2>&1 | tail -10\n✓ Doctor complete\n\n🦞 OpenClaw installed successfully (2026.5.12)!\n```\nNote: error source shows `scripts/install.sh: line 3000` confirming guard did not fire.\n\nObserved result after fix: piped execution completes successfully without truncated function names or hangs. Direct execution is unaffected. The pipe guard adds negligible overhead (one mktemp + cat + exec).\nWhat was not tested: macOS bash 3.2 (BASH_SOURCE behavior may differ in very old bash versions). WSL2 Ubuntu 24.04 (the reporter's environment) was not tested directly, but the fix is bash-level and platform-independent.\n",
+        "branch": "fix/install-pipe-guard",
+        "head_sha": "e5f038aa3cc6936550a619b23f3d4435370bd846",
+        "author": "sebtardif",
+        "labels": [
+          "scripts",
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "scripts/install.sh",
+            "additions": 23,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/test-install-pipe-guard.sh",
+            "additions": 149,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82918",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82918.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 84,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 16,
+            "SUCCESS": 66
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82918:4519627834:2026-05-22T14:33:52Z:re_review",
+      "comment_id": "4519627834",
+      "comment_version_key": "4519627834:2026-05-22T14:33:52Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82918#issuecomment-4519627834",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82918,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T14:33:52Z",
+      "comment_updated_at": "2026-05-22T14:33:52Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(install): add pipe guard to prevent stdin stealing in curl | bash",
+        "body": "## Problem\n\nWhen invoked via `curl -fsSL https://openclaw.ai/install.sh | bash`, bash reads the script incrementally from stdin. Interactive prompts (gum, read) and child processes that also read stdin steal bytes from the script stream, causing:\n\n1. Truncated function names: `warn_shell_path_missing_di` instead of `warn_shell_path_missing_dir`\n2. \"command not found\" errors for the truncated names\n3. Indefinite hangs (the script stream is corrupted, bash blocks waiting for more input)\n\nReported on WSL2 Ubuntu 24.04 with 3/3 reproduction rate.\n\n## Fix\n\nAdd a pipe guard at the top of `install.sh` that detects piped execution via empty `BASH_SOURCE[0]` (piped scripts have no source file), buffers the remaining stdin to a temp file using `cat`, and re-executes from the file via `exec`. This frees stdin for interactive prompts and child processes.\n\nThe guard:\n- **Does not fire** for direct execution (`bash install.sh`) or process substitution (`bash <(curl ...)`) because `BASH_SOURCE` is set\n- **Does not fire** for CI/Docker with non-tty stdin when running from a file\n- **Cleans up** the temp file immediately after re-execution starts\n- Uses `_OPENCLAW_PIPE_BUFFERED` env var to prevent infinite re-execution loops\n\nFixes #73814\n\n## Real behavior proof\nBehavior addressed: the installer now buffers itself to a temp file when piped via curl, preventing child processes from consuming stdin bytes that corrupt the script stream.\nReal environment tested: Linux x86_64, OpenClaw 2026.5.12 installed, Node v26.0.0, bash 5.2. Tested both piped execution (`cat install.sh | bash -s -- --install-method npm`) and direct execution (`bash install.sh --install-method npm < /dev/null`).\nExact steps or command run after this patch: (1) verified pipe guard pattern with a minimal test script that includes a deliberate stdin steal (`head -c 50 < /dev/stdin`); (2) ran full installer in piped mode; (3) ran full installer in direct mode with non-tty stdin; (4) confirmed both complete successfully without truncation.\nEvidence after fix: terminal output copied below.\n\nPipe guard pattern verification (minimal test script with deliberate stdin steal):\n```\n$ cat /tmp/pipe-test-steal.sh | bash\nBefore stdin steal\nAfter stdin steal\nFunction executed correctly\nScript completed\n```\nWithout the guard, the `head -c 50` would consume 50 bytes of the script stream, truncating the function definition. With the guard, the script runs from a temp file so stdin stealing has no effect.\n\nFull installer in piped mode (script runs from temp file):\n```\n$ cat scripts/install.sh | bash -s -- --install-method npm 2>&1 | tail -10\n✓ OpenClaw installed\n\n[3/3] Finalizing setup\n· Running doctor to migrate settings\n· Running doctor\n✓ Doctor complete\n\n🦞 OpenClaw installed successfully (2026.5.12)!\n```\nNote: error source shows `/tmp/tmp.uuj4JcpyzQ: line 2988` confirming the guard buffered to temp file.\n\nFull installer in direct mode (BASH_SOURCE is set, guard does not fire):\n```\n$ bash scripts/install.sh --install-method npm < /dev/null 2>&1 | tail -10\n✓ Doctor complete\n\n🦞 OpenClaw installed successfully (2026.5.12)!\n```\nNote: error source shows `scripts/install.sh: line 3000` confirming guard did not fire.\n\nObserved result after fix: piped execution completes successfully without truncated function names or hangs. Direct execution is unaffected. The pipe guard adds negligible overhead (one mktemp + cat + exec).\nWhat was not tested: macOS bash 3.2 (BASH_SOURCE behavior may differ in very old bash versions). WSL2 Ubuntu 24.04 (the reporter's environment) was not tested directly, but the fix is bash-level and platform-independent.\n",
+        "branch": "fix/install-pipe-guard",
+        "head_sha": "e5f038aa3cc6936550a619b23f3d4435370bd846",
+        "author": "sebtardif",
+        "labels": [
+          "scripts",
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "scripts/install.sh",
+            "additions": 23,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/test-install-pipe-guard.sh",
+            "additions": 149,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82918",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82918.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 84,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 16,
+            "SUCCESS": 66
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82918:4519348231:2026-05-22T13:58:10Z:re_review",
+      "comment_id": "4519348231",
+      "comment_version_key": "4519348231:2026-05-22T13:58:10Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82918#issuecomment-4519348231",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82918,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T13:58:10Z",
+      "comment_updated_at": "2026-05-22T13:58:10Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -505,48 +590,47 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-05-25T16:27:30.656Z",
+          "dispatched_at": "2026-05-25T16:27:34.152Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 82955
+          "item_number": 82918
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-05-25T16:27:31.567Z",
-          "response_comment_id": "4535371806",
-          "response_comment_mode": "updated"
+          "commented_at": "2026-05-25T16:27:35.023Z",
+          "response_comment_id": null,
+          "response_comment_mode": "created"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(install): validate downloaded scripts before execution",
-        "body": "## Problem\n\nFour code paths in `scripts/install.sh` download remote scripts via `download_file` and execute them with `bash \"$tmp\"` without any validation. While HTTPS/TLS1.2 protects the transport, truncated downloads, HTML error pages (e.g., CDN 403 responses), and empty responses would be silently executed as bash scripts.\n\nAffected paths:\n1. `run_remote_bash` (Homebrew installer from `raw.githubusercontent.com`)\n2. NodeSource apt/deb setup script (`deb.nodesource.com/setup_*.x`)\n3. NodeSource dnf/rpm setup script (`rpm.nodesource.com/setup_*.x`)\n4. NodeSource yum/rpm setup script (`rpm.nodesource.com/setup_*.x`)\n\nContrast with `bootstrap_gum_temp` which verifies downloaded content with SHA256 checksums.\n\n## Fix\n\n### Layer 1: Download failure guards\n\nEvery download-then-execute path now aborts immediately when `download_file` (or its `run_quiet_step` wrapper) fails:\n\n- `run_remote_bash`: `download_file \"$url\" \"$tmp\" || return 1`\n- All three NodeSource paths: `run_quiet_step ... download_file ... || return 1`\n\nWithout these guards, `run_quiet_step`'s `if \"$@\"` wrapper suppresses `set -e`, so a failed `download_file` that left a partial file on disk would fall through to validation and execution. This addresses the [P2] finding from ClawSweeper review.\n\n### Layer 2: Structural validation\n\nExtract a reusable `validate_downloaded_script()` function and apply it to all four download-then-execute paths. The validation:\n1. Rejects empty files (`[[ ! -s \"$file\" ]]`)\n2. Rejects files that don't start with a shebang (`#!`) using raw byte check (`od -An -tx1 -N2`)\n3. Sanitizes the first-line diagnostic before logging: strips control characters (bytes 0x00-0x1F, 0x7F, 0x80-0x9F) via `LC_ALL=C tr -d` and escapes backslashes so untrusted downloaded content cannot inject terminal escape sequences through `ui_error`'s `echo -e` path.\n\nA full SHA256 checksum pin is impractical because these setup scripts update frequently and a pinned hash would break the installer on every release.\n\n## Real behavior proof\n\nBehavior addressed: `run_remote_bash()` and three NodeSource paths executed downloaded content unconditionally. Two separate failure modes: (1) `download_file` failure was not checked, so a failed curl/wget leaving a partial shebang-prefixed file would pass validation and reach `/bin/bash`; (2) no structural validation existed, so HTML error pages, empty files, and binary blobs would be executed as scripts.\n\nReal environment tested: macOS (bash 3.2) and Linux (Ubuntu 24.04, WSL2, bash 5.x). The real patched functions were extracted from `scripts/install.sh` and exercised against local HTTP/HTTPS fixtures.\n\nExact steps or command run after this patch:\n```bash\nbash scripts/test-install-validation.sh\n```\n\nEvidence after fix:\n```console\n$ bash scripts/test-install-validation.sh\n-- GREEN: validation rejects bad downloads --\n  PASS  empty file  -> rejected\n  PASS  HTML error   -> rejected\n  PASS  JSON error   -> rejected\n  PASS  binary blob  -> rejected\n  PASS  C1 escape    -> rejected\n  PASS  NUL prefix   -> rejected (raw byte check caught NUL before #!)\n  PASS  C1 diagnostic -> C1 bytes stripped from error output\n  PASS  valid script (#!bash)     -> accepted\n  PASS  valid script (#!env bash) -> accepted\n  PASS  partial download (valid shebang) -> accepted by validation alone\n  PASS  failed download (partial) -> pipeline rejected before validation\n\n-- RED: no validation lets bad downloads through --\n  PASS  empty file  -> accepted (DANGEROUS without validation)\n  PASS  HTML error   -> accepted (DANGEROUS without validation)\n  PASS  JSON error   -> accepted (DANGEROUS without validation)\n  PASS  binary blob  -> accepted (DANGEROUS without validation)\n\nResults: 15 passed, 0 failed\nAll checks passed\n```\n\nThe two new partial-download tests (lines 10-11 in GREEN) prove the download_file failure guard is essential:\n- Test 10: `partial.sh` has a valid `#!/bin/bash` shebang, so `validate_downloaded_script` alone ACCEPTS it\n- Test 11: The full pipeline with a failing downloader REJECTS before reaching validation, because `download_file ... || return 1` exits early\n\nObserved result after fix: All 15 harness tests pass. Download failure guards prevent partial files from reaching validation. Structural validation catches HTML errors, empty files, binary blobs, C1 escape attacks, and NUL-prefixed files. The first-line diagnostic is sanitized against terminal injection.\n\nWhat was not tested: Live download from `raw.githubusercontent.com` returning an actual CDN error page (structural validation is tested against local HTTP and HTTPS servers instead).\n",
-        "branch": "fix/install-validate-remote-script",
-        "head_sha": "c64ec03af9fe917aa861bbfd516065376096b022",
+        "title": "fix(install): add pipe guard to prevent stdin stealing in curl | bash",
+        "body": "## Problem\n\nWhen invoked via `curl -fsSL https://openclaw.ai/install.sh | bash`, bash reads the script incrementally from stdin. Interactive prompts (gum, read) and child processes that also read stdin steal bytes from the script stream, causing:\n\n1. Truncated function names: `warn_shell_path_missing_di` instead of `warn_shell_path_missing_dir`\n2. \"command not found\" errors for the truncated names\n3. Indefinite hangs (the script stream is corrupted, bash blocks waiting for more input)\n\nReported on WSL2 Ubuntu 24.04 with 3/3 reproduction rate.\n\n## Fix\n\nAdd a pipe guard at the top of `install.sh` that detects piped execution via empty `BASH_SOURCE[0]` (piped scripts have no source file), buffers the remaining stdin to a temp file using `cat`, and re-executes from the file via `exec`. This frees stdin for interactive prompts and child processes.\n\nThe guard:\n- **Does not fire** for direct execution (`bash install.sh`) or process substitution (`bash <(curl ...)`) because `BASH_SOURCE` is set\n- **Does not fire** for CI/Docker with non-tty stdin when running from a file\n- **Cleans up** the temp file immediately after re-execution starts\n- Uses `_OPENCLAW_PIPE_BUFFERED` env var to prevent infinite re-execution loops\n\nFixes #73814\n\n## Real behavior proof\nBehavior addressed: the installer now buffers itself to a temp file when piped via curl, preventing child processes from consuming stdin bytes that corrupt the script stream.\nReal environment tested: Linux x86_64, OpenClaw 2026.5.12 installed, Node v26.0.0, bash 5.2. Tested both piped execution (`cat install.sh | bash -s -- --install-method npm`) and direct execution (`bash install.sh --install-method npm < /dev/null`).\nExact steps or command run after this patch: (1) verified pipe guard pattern with a minimal test script that includes a deliberate stdin steal (`head -c 50 < /dev/stdin`); (2) ran full installer in piped mode; (3) ran full installer in direct mode with non-tty stdin; (4) confirmed both complete successfully without truncation.\nEvidence after fix: terminal output copied below.\n\nPipe guard pattern verification (minimal test script with deliberate stdin steal):\n```\n$ cat /tmp/pipe-test-steal.sh | bash\nBefore stdin steal\nAfter stdin steal\nFunction executed correctly\nScript completed\n```\nWithout the guard, the `head -c 50` would consume 50 bytes of the script stream, truncating the function definition. With the guard, the script runs from a temp file so stdin stealing has no effect.\n\nFull installer in piped mode (script runs from temp file):\n```\n$ cat scripts/install.sh | bash -s -- --install-method npm 2>&1 | tail -10\n✓ OpenClaw installed\n\n[3/3] Finalizing setup\n· Running doctor to migrate settings\n· Running doctor\n✓ Doctor complete\n\n🦞 OpenClaw installed successfully (2026.5.12)!\n```\nNote: error source shows `/tmp/tmp.uuj4JcpyzQ: line 2988` confirming the guard buffered to temp file.\n\nFull installer in direct mode (BASH_SOURCE is set, guard does not fire):\n```\n$ bash scripts/install.sh --install-method npm < /dev/null 2>&1 | tail -10\n✓ Doctor complete\n\n🦞 OpenClaw installed successfully (2026.5.12)!\n```\nNote: error source shows `scripts/install.sh: line 3000` confirming guard did not fire.\n\nObserved result after fix: piped execution completes successfully without truncated function names or hangs. Direct execution is unaffected. The pipe guard adds negligible overhead (one mktemp + cat + exec).\nWhat was not tested: macOS bash 3.2 (BASH_SOURCE behavior may differ in very old bash versions). WSL2 Ubuntu 24.04 (the reporter's environment) was not tested directly, but the fix is bash-level and platform-independent.\n",
+        "branch": "fix/install-pipe-guard",
+        "head_sha": "e5f038aa3cc6936550a619b23f3d4435370bd846",
         "author": "sebtardif",
         "labels": [
           "scripts",
-          "size: M",
+          "size: S",
           "proof: supplied",
           "proof: sufficient",
           "P2",
           "rating: 🐚 platinum hermit",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 security-boundary",
           "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
             "path": "scripts/install.sh",
-            "additions": 39,
-            "deletions": 4,
+            "additions": 23,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "scripts/test-install-validation.sh",
-            "additions": 272,
+            "path": "scripts/test-install-pipe-guard.sh",
+            "additions": 149,
             "deletions": 0,
             "changeType": "ADDED"
           }
@@ -554,18 +638,18 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-82955",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82955.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82918",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82918.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 88,
+          "total": 84,
           "counts": {
-            "SKIPPED": 13,
-            "SUCCESS": 71,
-            "FAILURE": 4
+            "CANCELLED": 2,
+            "SKIPPED": 16,
+            "SUCCESS": 66
           },
           "blockers": [
             "checks-node-agentic-agents:FAILURE",
@@ -1346,23 +1430,23 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5457,
+    "total_ms": 4038,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 300
+        "ms": 269
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1431
+        "ms": 1660
       },
       {
         "name": "classify_commands",
-        "ms": 6
+        "ms": 5
       },
       {
         "name": "execute_commands",
-        "ms": 3703
+        "ms": 2084
       },
       {
         "name": "append_ledger",
