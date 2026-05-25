@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-25T09:58:36.970Z",
+  "generated_at": "2026-05-25T09:58:41.205Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-25T06:58:36.757Z",
+  "since": "2026-05-25T06:58:38.549Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    86425
+    86427
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 2,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +29,115 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86427:4533296023:2026-05-25T09:58:32Z:clawsweeper_needs_human",
+      "comment_id": "4533296023",
+      "comment_version_key": "4533296023:2026-05-25T09:58:32Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86427#issuecomment-4533296023",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86427,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-25T09:50:52Z",
+      "comment_updated_at": "2026-05-25T09:58:32Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "No repair lane is needed; the patch is focused and can proceed through ordinary maintainer review and CI.; Cleared: The diff only changes in-process lock release and tests; it does not alter dependencies, secrets, CI, package resolution, or other supply-chain surfaces. (sha=1d1370b07a6f15a925e62428213b92711f87b0ce)",
+      "review_summary": "The PR adds an idempotent retained-lock dispose method, calls it from runEmbeddedAttempt teardown, and adds focused regression tests for skipped cleanup and no double release.\n\nPR surface: Source +32, Tests +39. Total +71 across 3 files.\n\nReproducibility: yes. from source inspection and the supplied harness output: current main can skip the cleanup lock handoff while the outer finally has no retained-lock release. I did not run the harness in this read-only review.",
+      "review_followup": "No repair lane is needed; the patch is focused and can proceed through ordinary maintainer review and CI.",
+      "freeform_prompt": null,
+      "expected_head_sha": "1d1370b07a6f15a925e62428213b92711f87b0ce",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): release embedded-attempt session lock on every exit path",
+        "body": "### Summary\n\n- **Problem**: During an embedded agent run the gateway holds a write lock on the session `.jsonl` file. If the run times out or a tool errors, the lock can be left held by the live gateway process — subsequent requests to that session block for the acquire timeout and then fail with `SessionWriteLockTimeoutError` (`OPENCLAW_SESSION_WRITE_LOCK_TIMEOUT`), and the retained session graph leaks memory. (#86014)\n- **Root Cause**: `createEmbeddedAttemptSessionLockController` acquires its coarse session lock (`heldLock`) **eagerly at creation** and the run releases it only inside the post-run cleanup block (`acquireForCleanup` → `cleanupEmbeddedAttemptResources`, which itself releases in a `finally`). That cleanup block is ordinary try-body code. The run's outer `finally` did **not** release the lock — it only emitted diagnostics and restored skill env. Normal timeout/abort/error paths funnel into `aborted`/`timedOut`/`promptError` flags and *do* reach the cleanup block, but an exception thrown in the ~post-prompt processing between the prompt teardown and the cleanup block (e.g. a tool/result step or the trajectory flush erroring) escapes straight to the outer `finally`, skipping the release. The lock then stays held by the live process (its PID is alive, so it is not stale) until the long compaction-scaled watchdog window elapses or a retry re-acquires it — effectively wedging the session. (The reporter's \"`maxHoldMs` grows unboundedly\" is a fixed value: the embedded-attempt lock's `maxHoldMs` is the compaction window + grace = `1020000`ms, matching the reported lock file; the observed `createdAt` refresh is the lock being re-acquired by retries.)\n- **Fix**: Give the lock controller an idempotent `dispose()` that releases `heldLock` if it is still retained, and call it from the run's outer `finally` so the lock is released on **every** exit path. On normal/aborted/timed-out runs the cleanup block still hands the lock to `acquireForCleanup` first, so `dispose()` is a no-op then (no double release); only the exception-skips-cleanup path now actually releases via `dispose()`.\n- **What changed**:\n  - `src/agents/pi-embedded-runner/run/attempt.session-lock.ts`: add `dispose(): Promise<void>` to `EmbeddedAttemptSessionLockController` (releases the retained `heldLock`, idempotent).\n  - `src/agents/pi-embedded-runner/run/attempt.ts`: capture a `releaseRetainedSessionLock` closure once the controller exists and invoke it in the run's outer `finally` (guarded so a release error is logged rather than masking the run's original error).\n  - `src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts`: regression coverage.\n- **What did NOT change (scope boundary)**:\n  - The happy-path lock handoff (`acquireForCleanup` → `cleanupEmbeddedAttemptResources`) and its flush behavior are unchanged; `dispose()` is a safety net.\n  - The session write-lock primitive, its watchdog/stale logic, and `maxHoldMs` derivation are unchanged. The separate \"an operation inside `withSessionWriteLock` never returns\" variant (its own `finally` cannot run) remains covered only by the watchdog and is out of scope.\n  - No config keys, protocol, or message-delivery behavior changed.\n\n### Reproduction\n\n1. An embedded attempt creates the session lock controller (eagerly acquiring the session write lock).\n2. Post-prompt processing throws (e.g. a tool/result step or trajectory flush errors) before the cleanup block runs `acquireForCleanup`.\n- Before: the exception escapes to the outer `finally`, which does not release the lock; the lock file persists held by the live process and the next request to that session fails with `SessionWriteLockTimeoutError`.\n- After: the outer `finally` calls the controller's `dispose()`, releasing the retained lock; the next request succeeds.\n\n### Real behavior proof\n\n- **Behavior addressed**: when an embedded attempt throws after eagerly acquiring the session lock but before the cleanup block, the run must still release the session write lock so later requests to the same session do not fail with `SessionWriteLockTimeoutError`.\n- **Real environment tested (Linux, Node 22)**: a standalone harness drives the **real** `acquireSessionWriteLock` and the **real** `createEmbeddedAttemptSessionLockController` against a temp session file, with the embedded-attempt `maxHoldMs` (1020000) the gateway uses. It runs an attempt that acquires the lock then throws during post-prompt processing, then issues a second `acquireSessionWriteLock` for the same session from the same live process — once without the fix (no `dispose()` in the finally) and once with it.\n- **Exact steps or command run after this patch**: `tsx /tmp/qmd86014/repro.mts`.\n- **Evidence after fix (verbatim harness output)**:\n\n```text\n--- BEFORE (pre-fix: outer finally does not release) (dispose in finally = false) ---\n  attempt threw: post-processing failure (e.g., trajectory flush)\n  lock file persists: true\n  subsequent acquire on same session: FAILED SessionWriteLockTimeoutError (isSessionWriteLockTimeoutError=true)\n\n--- AFTER (fix: outer finally calls controller.dispose()) (dispose in finally = true) ---\n  attempt threw: post-processing failure (e.g., trajectory flush)\n  lock file persists: false\n  subsequent acquire on same session: SUCCEEDED\n\nRESULT: PASS — BEFORE leaks the lock and the next request hits SessionWriteLockTimeoutError;\n         AFTER (controller.dispose() in the outer finally) releases it and the next request succeeds.\n```\n\n- **Observed result after fix**: the leaked lock is released on the exception path; the next request to the same session succeeds instead of failing with `SessionWriteLockTimeoutError` — the reporter's error (`session file locked (timeout 60000ms): pid=7 …/<session>.jsonl.lock`) is reproduced verbatim (same shape, differing only in timeout/pid) and removed by the fix.\n- **Regression tests**: `pnpm test src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts` (68 passed) including two new cases — `dispose()` releases the eagerly-held lock when cleanup is skipped (and is idempotent), and `dispose()` does not double-release a lock already handed to `acquireForCleanup`.\n- **What was not tested**: a full multi-process live gateway run with real cron `agentTurn` retries over time was not executed; the harness exercises the real lock primitive + real controller end to end and the unit tests cover the `dispose()` contract. The \"stalled operation inside `withSessionWriteLock` never returns\" variant is not addressed here (covered by the watchdog).\n\n### Risk / Mitigation\n\n- **Risk**: releasing in the outer `finally` could double-release a lock the cleanup block already released, or a release error could mask the run's original error.\n- **Mitigation**: `dispose()` is idempotent — the happy/aborted/timed-out paths transfer the lock out via `acquireForCleanup` (so the controller no longer retains it and `dispose()` is a no-op), proven by a no-double-release test. The outer-`finally` call is wrapped so a release failure is logged rather than thrown, mirroring the existing teardown logging. No behavior change on paths that already released the lock.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [x] Sessions / storage\n\n### Linked Issue/PR\n\nFixes #86014\n",
+        "branch": "fix/86014-embedded-session-lock-release",
+        "head_sha": "1d1370b07a6f15a925e62428213b92711f87b0ce",
+        "author": "openperf",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts",
+            "additions": 39,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.ts",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
+            "additions": 17,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86427",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86427.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "SUCCESS": 73,
+            "SKIPPED": 28,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 337,
+    "total_ms": 2998,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 207
+        "ms": 440
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2206
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 124
+        "ms": 335
       },
       {
         "name": "append_ledger",
