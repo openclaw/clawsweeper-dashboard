@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-25T13:27:45.186Z",
+  "generated_at": "2026-05-25T13:28:18.625Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-25T10:27:42.521Z",
+  "since": "2026-05-25T10:28:18.023Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4534630345
   ],
-  "status_comment_id": 4534630604,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-05-25T13:27:15Z",
       "comment_updated_at": "2026-05-25T13:27:15Z",
-      "status_comment_id": 4534630604,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -59,97 +59,30 @@
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-25T13:27:45.969Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 76386
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-25T13:27:47.043Z",
-          "response_comment_id": "4529410815",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(install): trap SIGINT so Ctrl+C exits cleanly during upgrade doctor",
-        "body": "## Problem\n\nWhen running `curl -fsSL https://openclaw.ai/install.sh | bash`, pressing Ctrl+C during `openclaw doctor` in the upgrade flow does not abort the installer. The SIGINT kills the doctor subprocess but the installer catches it as a regular failure, retries the npm install, continues past the prompt, and opens a browser to an unconfigured dashboard URL.\n\n## Fix\n\n1. **Add SIGINT/SIGTERM trap**: `abort_install_int`/`abort_install_term` handlers show a warning and exit 130/143\n2. **Propagate doctor exit code 130**: capture `openclaw doctor` exit code separately; if 130 (SIGINT), call `abort_install_int` instead of treating it as a regular failure\n3. **Conditional dashboard open**: `should_open_dashboard` is set to true ONLY when `run_doctor` succeeds (returns 0). A failed or interrupted doctor never triggers the browser open. The flag is also reset before the final interactive doctor so a failed final doctor does not inherit an earlier migration doctor success.\n\n## Real behavior proof\n\nBehavior addressed: pressing Ctrl+C (SIGINT) during the install/upgrade flow now exits the installer immediately with a clear message instead of retrying and continuing to open the dashboard. Doctor failure now prevents dashboard launch.\n\nReal environment tested: macOS 15.5 (Apple Silicon), bash (via Homebrew), Node v24.15.0, npm 11.14.1, OpenClaw 2026.5.22 installed. All tests run against the final head (927e31fb65).\n\nExact steps or command run after this patch:\n\n**Test 1: Real SIGINT during installer**\n```bash\ntimeout --signal=INT 5 bash scripts/install.sh --install-method npm < /dev/null 2>&1; echo \"EXIT=$?\"\n```\n\n**Test 2: Doctor failure gating dashboard**\n```bash\nexport OPENCLAW_INSTALL_SH_NO_RUN=1\nsource scripts/install.sh\n# Override run_doctor to simulate failure/success\n```\n\nEvidence after fix:\n\n**Test 1: Real SIGINT (final head 927e31fb65)**\n```console\n$ timeout --signal=INT 5 bash scripts/install.sh --install-method npm < /dev/null 2>&1; echo \"EXIT=$?\"\n\n  OpenClaw Installer\n  Your task has been queued; your dignity has been deprecated.\n\nDetected: macos\n\nInstall plan\nOS: macos\nInstall method: npm\nRequested version: latest\nDetected checkout: /redacted/openclaw\n\n[1/3] Preparing environment\nHomebrew already installed\nNode.js v24.15.0 found\nActive Node.js: v24.15.0 (/redacted/.nvm/versions/node/v24.15.0/bin/node)\nActive npm: 11.14.1 (/redacted/.nvm/versions/node/v24.15.0/bin/npm)\nUsing Node.js runtime at /redacted/.nvm/versions/node/v24.15.0/bin/node\n\n[2/3] Installing OpenClaw\nGit already installed\nInstalling OpenClaw v2026.5.22\n\n! Installation interrupted\nEXIT=124\n```\n\nSIGINT (delivered by `timeout --signal=INT` after 5 seconds) triggers `abort_install_int`. The installer prints \"Installation interrupted\" and exits immediately. No retry, no doctor, no dashboard.\n\n**Test 2: Doctor failure suppresses dashboard (final head 927e31fb65)**\n```console\n$ bash /tmp/test-doctor-gate.sh\n=== Test: doctor failure should NOT set should_open_dashboard ===\n\n! Doctor exited with status 1\nshould_open_dashboard=false\nPASS: dashboard NOT opened after failed doctor\n\n=== Test: doctor success SHOULD set should_open_dashboard ===\nDoctor complete\nshould_open_dashboard=true\nPASS: dashboard opened after successful doctor\n```\n\nThe patched installer sources with `OPENCLAW_INSTALL_SH_NO_RUN=1`, then exercises the upgrade path logic from `main()` line ~2987 with mock `run_doctor` returning failure (1) and success (0). Doctor failure sets `should_open_dashboard=false`; doctor success sets it to `true`. The `maybe_open_dashboard` function only runs when the flag is true.\n\nObserved result after fix: Ctrl+C (SIGINT) during any phase of the install triggers the `abort_install_int` trap, which cleans up temp files, prints \"Installation interrupted\", and exits with code 130. Doctor failure prevents dashboard launch. Doctor SIGINT (exit 130) also triggers the abort path. The installer no longer retries after SIGINT, no longer runs doctor after an interrupted install, and no longer opens the dashboard after a failed doctor.\n\nWhat was not tested: SIGTERM delivery (tested SIGINT only via `timeout --signal=INT`). The interactive doctor Ctrl+C path (exit code 130 propagation from `openclaw doctor`) was not tested because non-interactive mode runs doctor with `--non-interactive` and `</dev/null`. Live CDN `curl | bash` path was not tested (used local `bash scripts/install.sh` instead).\n",
-        "branch": "fix/install-ctrl-c-handling",
-        "head_sha": "927e31fb659060cff7a17a22c1f53a3c38faea15",
-        "author": "sebtardif",
-        "labels": [
-          "scripts",
-          "size: S",
-          "triage: refactor-only",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "scripts/install.sh",
-            "additions": 45,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-76386",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-76386.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 84,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 16,
-            "SUCCESS": 66
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      }
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5148,
+    "total_ms": 1929,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 591
+        "ms": 594
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2064
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 2477
+        "ms": 1327
       },
       {
         "name": "append_ledger",
