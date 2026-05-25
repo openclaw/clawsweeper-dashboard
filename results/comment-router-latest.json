@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-25T02:29:38.176Z",
+  "generated_at": "2026-05-25T02:30:10.634Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-24T23:29:36.211Z",
+  "since": "2026-05-24T23:30:10.091Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4531064190
   ],
-  "status_comment_id": 4531064314,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-05-25T02:29:04Z",
       "comment_updated_at": "2026-05-25T02:29:04Z",
-      "status_comment_id": 4531064314,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -59,126 +59,34 @@
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-25T02:29:39.243Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 86264
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-25T02:29:40.971Z",
-          "response_comment_id": "4531064314",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cli): cancel deferred maintenance on exit",
-        "body": "## Problem\n\nSome short-lived `openclaw agent --local` commands can finish their foreground work while background context-engine maintenance is still queued or running. In that state the command has no more user-visible work to do, but deferred maintenance can keep the Node process alive and make operators wait for an outer wrapper timeout.\n\n## Change and value\n\nThis PR adds a targeted CLI teardown step for full Commander-based CLI commands. After `program.parseAsync()` returns, the CLI cancels active deferred turn-maintenance runs, clears their queue lanes, and gives them a short best-effort drain before the rest of process cleanup continues.\n\nThe value is narrower than a global exit workaround: completed short-lived CLI commands can release known deferred context-engine work without calling `process.exit()` or changing routed fast-path commands.\n\n## Who is affected, and who is not\n\n- Affected: operators and scripts running short-lived full CLI commands, especially `openclaw agent --local`, where deferred context-engine maintenance can otherwise keep the process alive after command completion.\n- Not affected: routed fast-path commands such as the lightweight `status` path. Those do not enter the full Commander parse path and do not run this cancellation hook.\n- Not fixed here: cases where the agent command never resolves or its own timeout does not abort the run. That is a separate hang class and needs a separate PR.\n\n## Implementation\n\n- Adds `runtimeContext.abortSignal` for host-owned best-effort cancellation of background context-engine maintenance while keeping the public top-level `ContextEngine.maintain()` parameter shape stable.\n- Tracks active deferred turn-maintenance task/run ids so CLI shutdown can mark queued or active work as cancelled instead of letting stale workers overwrite terminal task state.\n- Clears and resets the affected turn-maintenance command lanes during CLI completion.\n- Fences runtime-owned transcript rewrite helpers after abort so a cancelled maintenance task cannot rewrite the transcript after CLI completion.\n- Clears and unreferences the long-running progress timer when shutdown cancellation fires, including the case where a plugin ignores the abort signal and never resolves.\n- Drops coalesced rerun requests once CLI shutdown cancellation starts.\n- Runs cancellation only after full CLI parsing was entered, so routed commands keep their existing lightweight behavior.\n\n## Real behavior proof\n\nBehavior or issue addressed: Completed short-lived CLI commands can be held open by queued or active deferred context-engine maintenance after user-visible work finishes.\n\nReal environment tested: Local OpenClaw source checkout at branch head `98802c0f63c0a4fcc8639b8dde535f3bed879207`, merge base `ec168fa2bdda15be7430f41cb7ef0b610b6e68bf`, latest fetched `origin/main` `4798264a2993412a26209d6f1abee9cd83b5c0e6`.\n\nEvidence after fix: Focused regression tests cover queued deferred maintenance cancellation, active maintenance abort, post-abort transcript rewrite blocking, progress-timer cleanup when a plugin ignores abort, rerun suppression during CLI shutdown, and CLI cleanup after full Commander parsing.\n\nObserved result after fix: The reviewed local patch is safe to apply as a scoped cleanup based on code review, regression coverage, typecheck, formatting, and merge checks. This PR remains draft because the end-to-end live `agent --local` result-plus-exit proof is still missing.\n\nWhat was not tested: A real end-to-end `agent --local` run that both emits a final result and then proves this deferred-maintenance cleanup lets the process exit without an outer timeout. The earlier live probe hit the separate \"agent promise never resolves / internal timeout does not hard-kill\" failure class first.\n\n## Verification\n\n- `env OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_TEST_PROJECTS_SERIAL=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=60000 timeout 240s node scripts/run-vitest.mjs run -c test/vitest/vitest.agents-pi-embedded.config.ts src/agents/pi-embedded-runner/context-engine-maintenance.test.ts --reporter=verbose` — 24/24 passed\n- `env OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_TEST_PROJECTS_SERIAL=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=60000 timeout 240s node scripts/run-vitest.mjs run -c test/vitest/vitest.cli.config.ts src/cli/run-main.exit.test.ts --reporter=verbose` — 89/89 passed\n- `./node_modules/.bin/oxfmt --check --threads=1 src/agents/pi-embedded-runner/context-engine-maintenance.ts src/agents/pi-embedded-runner/context-engine-maintenance.test.ts src/context-engine/types.ts src/cli/run-main.ts src/cli/run-main.exit.test.ts`\n- `git diff --check origin/main...HEAD`\n- `timeout 300s node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo`\n- `git merge-tree --write-tree origin/main HEAD` — clean merge tree `6a55a7e59f9676330a71bd3bf156c23c37ff3993`\n- `timeout 600s codex review --base ec168fa2bdda15be7430f41cb7ef0b610b6e68bf` — no discrete actionable correctness issues found\n- Read-only review lanes completed; accepted findings were fixed before the final `/review` gate.\n\n## Out of scope\n\nThe command-level hard-timeout problem is intentionally separate. A follow-up should handle the case where `agent --local --timeout N` does not cause the command promise to resolve and the process stays alive until an outer `timeout` wrapper kills it.\n\nAI-assisted: yes.",
-        "branch": "codex/cli-exit-deferred-maintenance",
-        "head_sha": "98802c0f63c0a4fcc8639b8dde535f3bed879207",
-        "author": "kaspre",
-        "labels": [
-          "cli",
-          "agents",
-          "size: L",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/pi-embedded-runner/context-engine-maintenance.test.ts",
-            "additions": 383,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/context-engine-maintenance.ts",
-            "additions": 170,
-            "deletions": 37,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/run-main.exit.test.ts",
-            "additions": 29,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/run-main.ts",
-            "additions": 16,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/context-engine/types.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86264",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86264.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 45,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 7,
-            "SKIPPED": 37
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
-        }
-      }
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5487,
+    "total_ms": 1464,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 668
+        "ms": 535
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1288
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 3516
+        "ms": 922
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
