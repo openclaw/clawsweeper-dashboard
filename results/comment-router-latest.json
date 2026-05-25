@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-25T16:45:10.007Z",
+  "generated_at": "2026-05-25T16:45:12.533Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-25T13:45:08.151Z",
+  "since": "2026-05-25T13:45:10.440Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,7 +14,10 @@
   "comment_ids": [
     4535793316
   ],
-  "status_comment_id": 4535793507,
+  "comment_ids": [
+    4469539303
+  ],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -42,117 +45,97 @@
       "author": "giodl73-repo",
       "author_id": 235387111,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-25T16:44:43Z",
-      "comment_updated_at": "2026-05-25T16:44:43Z",
-      "status_comment_id": 4535793507,
+      "comment_created_at": "2026-05-17T06:02:07Z",
+      "comment_updated_at": "2026-05-25T16:44:41Z",
+      "status_comment_id": null,
       "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "command": "automerge",
+      "intent": "automerge",
       "autoclose_message": null,
       "implementation_prompt": null,
       "trusted_bot": false,
       "trusted_bot_author": null,
       "automation_source": null,
       "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
+      "review_summary": "This PR adds non-empty/raw-shebang validation and download-failure guards before executing Homebrew and NodeSource setup scripts, plus a shell harness for malformed download fixtures.\n\nPR surface: Other +307. Total +307 across 2 files.\n\nReproducibility: yes. from source. Current main and v2026.5.22 show Homebrew and NodeSource downloads are executed as bash scripts without structural validation; I did not run the harness in this read-only review.",
+      "review_followup": "A narrow automated repair can stabilize the nondeterministic fixture; maintainer review is still needed for the fail-closed installer policy.",
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-25T16:45:10.626Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 86544
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-25T16:45:12.064Z",
-          "response_comment_id": "4535793507",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "write",
+      "status": "ignored",
+      "actions": [],
+      "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix(cli): show Gemini CLI runtime auth status",
-        "body": "## Summary\n- include CLI runtime auth providers in `models status` runtime-auth accounting\n- report canonical `google/*` routes using `google-gemini-cli` as runtime auth routes\n- add regression coverage for `GEMINI_API_KEY` plus Gemini CLI OAuth profile\n\nFixes #79585\n\n## Test plan\n- `node scripts/run-vitest.mjs src/commands/models/list.status.test.ts --reporter=dot`\n- `./node_modules/.bin/oxfmt --check src/commands/models/list.status-command.ts src/commands/models/list.status.test.ts`\n- `./node_modules/.bin/oxlint --tsconfig config/tsconfig/oxlint.core.json src/commands/models/list.status-command.ts src/commands/models/list.status.test.ts`\n- `git diff --check`",
-        "branch": "fix-79585-gemini-cli-status-v2",
-        "head_sha": "d475c040bca8220644468f465c51010c1f9a9fc4",
-        "author": "giodl73-repo",
+        "title": "fix(install): validate downloaded scripts before execution",
+        "body": "## Problem\n\nFour code paths in `scripts/install.sh` download remote scripts via `download_file` and execute them with `bash \"$tmp\"` without any validation. While HTTPS/TLS1.2 protects the transport, truncated downloads, HTML error pages (e.g., CDN 403 responses), and empty responses would be silently executed as bash scripts.\n\nAffected paths:\n1. `run_remote_bash` (Homebrew installer from `raw.githubusercontent.com`)\n2. NodeSource apt/deb setup script (`deb.nodesource.com/setup_*.x`)\n3. NodeSource dnf/rpm setup script (`rpm.nodesource.com/setup_*.x`)\n4. NodeSource yum/rpm setup script (`rpm.nodesource.com/setup_*.x`)\n\nContrast with `bootstrap_gum_temp` which verifies downloaded content with SHA256 checksums.\n\n## Fix\n\n### Layer 1: Download failure guards\n\nEvery download-then-execute path now aborts immediately when `download_file` (or its `run_quiet_step` wrapper) fails:\n\n- `run_remote_bash`: `download_file \"$url\" \"$tmp\" || return 1`\n- All three NodeSource paths: `run_quiet_step ... download_file ... || return 1`\n\nWithout these guards, `run_quiet_step`'s `if \"$@\"` wrapper suppresses `set -e`, so a failed `download_file` that left a partial file on disk would fall through to validation and execution. This addresses the [P2] finding from ClawSweeper review.\n\n### Layer 2: Structural validation\n\nExtract a reusable `validate_downloaded_script()` function and apply it to all four download-then-execute paths. The validation:\n1. Rejects empty files (`[[ ! -s \"$file\" ]]`)\n2. Rejects files that don't start with a shebang (`#!`) using raw byte check (`od -An -tx1 -N2`)\n3. Sanitizes the first-line diagnostic before logging: strips control characters (bytes 0x00-0x1F, 0x7F, 0x80-0x9F) via `LC_ALL=C tr -d` and escapes backslashes so untrusted downloaded content cannot inject terminal escape sequences through `ui_error`'s `echo -e` path.\n\nA full SHA256 checksum pin is impractical because these setup scripts update frequently and a pinned hash would break the installer on every release.\n\n## Real behavior proof\n\nBehavior addressed: `run_remote_bash()` and three NodeSource paths executed downloaded content unconditionally. Two separate failure modes: (1) `download_file` failure was not checked, so a failed curl/wget leaving a partial shebang-prefixed file would pass validation and reach `/bin/bash`; (2) no structural validation existed, so HTML error pages, empty files, and binary blobs would be executed as scripts.\n\nReal environment tested: macOS (bash 3.2) and Linux (Ubuntu 24.04, WSL2, bash 5.x). The real patched functions were extracted from `scripts/install.sh` and exercised against local HTTP/HTTPS fixtures.\n\nExact steps or command run after this patch:\n```bash\nbash scripts/test-install-validation.sh\n```\n\nEvidence after fix:\n```console\n$ bash scripts/test-install-validation.sh\n-- GREEN: validation rejects bad downloads --\n  PASS  empty file  -> rejected\n  PASS  HTML error   -> rejected\n  PASS  JSON error   -> rejected\n  PASS  binary blob  -> rejected\n  PASS  C1 escape    -> rejected\n  PASS  NUL prefix   -> rejected (raw byte check caught NUL before #!)\n  PASS  C1 diagnostic -> C1 bytes stripped from error output\n  PASS  valid script (#!bash)     -> accepted\n  PASS  valid script (#!env bash) -> accepted\n  PASS  partial download (valid shebang) -> accepted by validation alone\n  PASS  failed download (partial) -> pipeline rejected before validation\n\n-- RED: no validation lets bad downloads through --\n  PASS  empty file  -> accepted (DANGEROUS without validation)\n  PASS  HTML error   -> accepted (DANGEROUS without validation)\n  PASS  JSON error   -> accepted (DANGEROUS without validation)\n  PASS  binary blob  -> accepted (DANGEROUS without validation)\n\nResults: 15 passed, 0 failed\nAll checks passed\n```\n\nThe two new partial-download tests (lines 10-11 in GREEN) prove the download_file failure guard is essential:\n- Test 10: `partial.sh` has a valid `#!/bin/bash` shebang, so `validate_downloaded_script` alone ACCEPTS it\n- Test 11: The full pipeline with a failing downloader REJECTS before reaching validation, because `download_file ... || return 1` exits early\n\nObserved result after fix: All 15 harness tests pass. Download failure guards prevent partial files from reaching validation. Structural validation catches HTML errors, empty files, binary blobs, C1 escape attacks, and NUL-prefixed files. The first-line diagnostic is sanitized against terminal injection.\n\nWhat was not tested: Live download from `raw.githubusercontent.com` returning an actual CDN error page (structural validation is tested against local HTTP and HTTPS servers instead).\n",
+        "branch": "fix/install-validate-remote-script",
+        "head_sha": "b788b60deca8a6a467f5032e0bde9c6eb48b6a5b",
+        "author": "sebtardif",
         "labels": [
-          "commands",
-          "maintainer",
-          "size: S",
+          "scripts",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
           "P2",
-          "rating: 🧂 unranked krab",
+          "rating: 🐚 platinum hermit",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "status: 📣 needs proof"
+          "merge-risk: 🚨 security-boundary",
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "src/commands/models/list.status-command.ts",
-            "additions": 63,
-            "deletions": 8,
+            "path": "scripts/install.sh",
+            "additions": 39,
+            "deletions": 4,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/commands/models/list.status.test.ts",
-            "additions": 94,
+            "path": "scripts/test-install-validation.sh",
+            "additions": 272,
             "deletions": 0,
-            "changeType": "MODIFIED"
+            "changeType": "ADDED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86544",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86544.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82955",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82955.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 96,
+          "total": 84,
           "counts": {
-            "SUCCESS": 70,
-            "SKIPPED": 22,
-            "IN_PROGRESS": 3,
-            "NEUTRAL": 1
+            "SKIPPED": 16,
+            "SUCCESS": 67,
+            "FAILURE": 1
           },
           "blockers": [
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
-            "checks-node-agentic-agents:IN_PROGRESS"
+            "checks-node-agentic-agents:FAILURE"
           ],
-          "pending": [
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
-            "checks-node-agentic-agents:IN_PROGRESS"
-          ],
-          "terminalBlockers": []
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-agents:FAILURE"
+          ]
         }
-      }
+      },
+      "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 4361,
+    "total_ms": 2287,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 563
+        "ms": 594
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1283
+        "ms": 1489
       },
       {
         "name": "classify_commands",
@@ -160,7 +143,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2497
+        "ms": 195
       },
       {
         "name": "append_ledger",
