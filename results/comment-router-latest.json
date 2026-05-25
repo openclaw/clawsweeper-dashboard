@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-25T04:51:21.097Z",
+  "generated_at": "2026-05-25T04:53:33.112Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-25T01:51:20.824Z",
+  "since": "2026-05-25T01:53:30.937Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    86329
+    86293
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 10,
+  "commands_seen": 4,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,508 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86293:4531077155:2026-05-25T04:53:24Z:clawsweeper_needs_human",
+      "comment_id": "4531077155",
+      "comment_version_key": "4531077155:2026-05-25T04:53:24Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86293#issuecomment-4531077155",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86293,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-25T02:33:18Z",
+      "comment_updated_at": "2026-05-25T04:53:24Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=76c1dbb4cccccebef027f02252b3c9bcd8f15484)",
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": "76c1dbb4cccccebef027f02252b3c9bcd8f15484",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(memory): bound INDEX_CACHE lifetime in long-running gateway daemons",
+        "body": "## Real behavior proof\n\n**Behavior addressed:** Long-running OpenClaw gateway daemons accumulate chokidar `FSEventWrap` native handles and `memory/*.md` file descriptors for the entire process lifetime. RSS grows ~1 GB/h until OOM, typically within 4–6 h on memory-heavy workloads. Root cause: `MemoryIndexManager` instances live in the module-level `INDEX_CACHE` and are only torn down at process exit (#40389), which long-running daemons never reach until restart.\n\n**Real environment tested:** Production gateway daemon on macOS 15.7.4 (Apple Silicon), OpenClaw `2026.4.15` base, default config (`agents.defaults.memorySearch.sync.watch=true`), Node `v24.13.0`. Patch applied at runtime by replacing the installed `dist/` directory with a build of this branch (`fix/memory-index-manager-runtime-eviction`), then `launchctl kickstart -k gui/501/ai.openclaw.gateway` to restart the daemon onto the patched dist.\n\n**Exact steps or command run after this patch:** see code block below.\n\n```\nStep 1: Build the patched dist\npnpm install && pnpm build\n\nStep 2: Replace installed dist on the production host\ncp -R dist/ ~/.nvm/versions/node/v24.13.0/lib/node_modules/openclaw/dist/\n\nStep 3: Restart the gateway onto the patched dist\nlaunchctl kickstart -k gui/501/ai.openclaw.gateway\n\nStep 4: Verify new gateway came up and patched code is loaded\npgrep -f openclaw-gateway\ngrep -l 'closeIdleManagedCacheEntries' \\\n  ~/.nvm/versions/node/v24.13.0/lib/node_modules/openclaw/dist/manager-*.js\n\nStep 5: Start a sampler that records ps + lsof every 10 minutes\nnohup /tmp/soak-v2-sampler.sh > /tmp/soak-v2-sampler.log 2>&1 &\n\nStep 6: Run normal workload (memory_search invocations from gateway agents)\nStep 7: After 14 h: capture current ps/lsof/CSV state\nps -p 93144 -o pid,etime,rss,vsz,command\nlsof -p 93144 | awk '{print $5}' | sort | uniq -c | sort -rn\nlsof -p 93144 | grep -c '/memory/'\n```\n\n**Evidence after fix:** real terminal output from the soaked production gateway (PID 93144, 14 h elapsed at PR submission).\n\nProcess state at +14 h on patched daemon (started 2026-05-24 20:37 +0800):\n\n```\n$ ps -p 93144 -o pid,etime,rss,vsz,command\n  PID  ELAPSED    RSS      VSZ COMMAND\n93144 14:00:38 3156336 48135156 openclaw-gateway\n```\n\nfd breakdown at steady state between sweeps:\n\n```\n$ lsof -p 93144 | awk '{print $5}' | sort | uniq -c | sort -rn\n  16 REG       (regular files: dist + libs, stable baseline)\n   8 IPv4      (network sockets, stable)\n   4 PIPE\n   4 DIR\n   3 unix\n   3 KQUEUE    (== baseline 3, never grows)\n   2 CHR\n   1 IPv6\n   1 systm\n$ lsof -p 93144 | grep -c '/memory/'\n0\n```\n\nSampler CSV excerpts (`/tmp/soak-v2-samples.csv`, 78 data points, 10 min interval):\n\n```csv\ntimestamp,pid,etime,rss_kb,vsz_kb,fd_total,memory_fd,kqueue,reg\n2026-05-24T20:52:41+0800,93144,15:15,1367528,37220752,43,0,3,16        # baseline\n2026-05-24T21:02:46+0800,93144,25:20,1785012,46010708,598,554,3,572    # memory_search burst\n2026-05-24T21:12:50+0800,93144,35:24,1502644,45728044,596,554,3,571    # still bursting\n2026-05-24T21:22:54+0800,93144,45:28,1597452,45822680,40,0,3,15        # sidecar swept; fd back to baseline\n2026-05-25T08:48:05+0800,93144,12:10:39,2319392,47039688,597,557,3,574 # next burst\n2026-05-25T08:58:10+0800,93144,12:20:44,2319140,47039432,597,557,3,574 # still bursting\n2026-05-25T09:08:14+0800,93144,12:30:48,2881712,47600968,41,0,3,17     # swept again\n2026-05-25T10:28:49+0800,93144,13:51:23,2925140,47774268,44,0,3,16     # most recent\n```\n\nFor comparison, before the patch (2026-05-23, same daemon, 11 h uptime, no sidecar) heap snapshot diff showed:\n\n```\nConstructor                  # objects (delta)   shallow size delta\nNode / FSEventWrap           +612                +253 KB\nNode / FSEvent               +613                +245 KB\nNode / FSWatcher             +615                +197 KB\nNode / Stats                 +543                +173 KB\n```\n\nand `lsof` of that pre-patch daemon showed `488` chokidar `awaitWriteFinish` read fds on `~/.openclaw/workspace/memory/`.\n\n**Observed result after fix:** `memory_fd` (chokidar read fds on `memory/*.md`) oscillates between `0` baseline and ~557 during bursts, returning to `0` within one sweep interval — without the patch, this value grew monotonically to 488+ and never returned to baseline. `kqueue` stays pinned at exactly `3` for the entire 14 h soak — without the patch, `FSEventWrap` instances accumulated by the hundreds (+612 in the pre-patch 11 h heap diff). RSS rose ~150 MB/h (from 1.37 GB at +15 min to 3.16 GB at +14 h), well under OOM — without the patch the same workload hit OOM at ~4.7 GB within 4–6 h. Sidecar log lines confirm the sweep is running and reporting `memory index manager idle eviction: evicted N (deferred M busy, K revalidated) (remaining R)`. 31 unit tests cover the in-flight protection deferral and revalidation paths deterministically (the live soak never hit those paths because our workload's burst rate is slower than the 15 min idle threshold, but the guards are wired and tested).\n\n**What was not tested:** Windows / Linux daemons (only macOS validated live; CI covers cross-platform builds, but no live soak on those platforms yet). Multi-agent workloads exercising > 50 `MemoryIndexManager` instances simultaneously (our production setup has ~3 active managers). Workloads where individual `sync()` batches exceed the 15 min idle threshold (would exercise the busy-defer path live; covered by unit tests but not by soak). 24 h+ continuous soak (in progress; 14 h at PR submission, will post 24 h and 48 h checkpoints as PR comments).\n\n## Out-of-scope follow-ups\n\n- Changing `sync.watch` default from `true` to `false` (tracked in #71335)\n- Refactoring chokidar to a singleton-per-workspace watcher\n- Adding a config flag to opt out of the in-flight protection (it should always be on)\n\n---\n\n## Problem\n\nCached `MemoryIndexManager` instances live in a module-level `INDEX_CACHE` that grows for the entire gateway daemon lifetime. Each instance owns a chokidar `FSWatcher` recursively watching the memory directory (under the default `sync.watch=true`, see #71335), so every cache entry holds an `FSEventWrap` native handle plus one `awaitWriteFinish` file descriptor per touched `memory/*.md` file.\n\nCached managers are torn down at CLI exit (#40389), but daemons never reach that exit path until restart. This PR adds a periodic runtime sweep that bounds cache lifetime *during* normal daemon operation, so restart is no longer the only way to release these resources.\n\n### Measured impact (production daemon, OpenClaw 2026.4.15 + this patch)\n\n| Metric          | Without patch (11h)        | With patch (13h+ live soak)   |\n|-----------------|----------------------------|-------------------------------|\n| FSEventWrap     | 612 native handles         | bounded; returns to ~3 baseline |\n| memory_fd       | 488 (chokidar holds)       | 0 between sweeps              |\n| RSS growth rate | ~1 GB/h                    | ~150 MB/h (~7× improvement)   |\n| Outcome at 13 h | OOM within 4 to 6 h        | 3.25 GB stable, no OOM        |\n\nSampling: 78 data points at 10 min interval, soak still running at PR submission time (will update when the soak passes the 24 h and 48 h marks). Sweep cadence: 5 min scan, 15 min idle threshold (both configurable).\n\n## Fix\n\nExtend `ManagedCache` with idle tracking and add a gateway-lifetime sidecar:\n\n- `ManagedCache.lastAccessAt` is refreshed on every cache hit and on initial set.\n- `closeIdleManagedCacheEntries` walks `lastAccessAt`, closes stale entries, and isolates `close()` errors so one bad entry does not stop the rest. It reuses the per-manager `close()` method introduced in #40389 — no new teardown code path.\n- `closeIdleMemoryIndexManagers` (in `manager.ts`) layers in the embedding-probe-cache cleanup that the manager would otherwise miss.\n- `scheduleMemoryIndexIdleEvict` (in `server-startup-post-attach.ts`) registers a gateway-lifetime sidecar that runs the sweep every `idleEvictScanMs` (default 5 min), evicting managers idle for `idleEvictMs` (default 15 min). Setting either to `0` disables the sweep entirely.\n\n## In-flight protection\n\n`ManagedCache` tracks an `inflightCount` map keyed the same way as `cache` / `lastAccessAt`:\n\n- `acquireManagedCacheKey(cache, key)` increments the count, refreshes `lastAccessAt`, and returns an idempotent `release()` function.\n- `isManagedCacheKeyBusy(cache, key)` reports whether the count is > 0.\n- `closeIdleManagedCacheEntries` consults `isManagedCacheKeyBusy` during both the survey loop and immediately before `close()`. Busy entries are skipped, counted, and surfaced via `onSkipBusy` / `skippedBusy`.\n- A revalidation gate (just before close) also re-checks `lastAccessAt` freshness and cache identity, catching entries that became active or were swapped during the scan-to-close gap. These are reported as `skippedRevalidated`.\n\nIn `MemoryIndexManager`, a protected `withBusy(fn)` helper wraps the acquire/release pair in try/finally. It guards:\n\n- `sync(...)` — covers batch reindex, targeted session sync, full sync. The refcount is released in the same `.finally()` that nulls `this.syncing`, so they unwind together.\n- `search(...)` — protects the embedding/vector/FTS work plus the inline `sync({ reason: \"search\", force: true })` bootstrap that runs on the first call after process start.\n- `ensureProviderInitialized(...)` — covers `probeVectorAvailability`, `probeEmbeddingAvailability`, and the lazy provider hookup invoked by `sync` / `search`.\n\n`close()` and `closeMemoryIndexManagersForAgent` clear any residual `inflightCount` entry alongside the cache slot. The `release()` returned by `acquireManagedCacheKey` is idempotent, so a release that fires after `close()` is a no-op.\n\nSidecar log lines now report both deferral classes:\n\n```\nmemory index manager idle eviction: evicted 3 (deferred 1 busy, 0 revalidated) (remaining 5)\n```\n\n## Configuration\n\nTwo new optional knobs under `agents.defaults.memorySearch.sync`:\n\n| Key                  | Default | Meaning                                                        |\n|----------------------|---------|----------------------------------------------------------------|\n| `idleEvictMs`        | 900000  | Manager is eligible for eviction after this many ms idle. `0` disables. |\n| `idleEvictScanMs`    | 300000  | Sidecar runs the sweep this often. `0` disables.               |\n\nBoth fields are documented in the zod schema (`src/config/zod-schema.agent-runtime.ts`), the TypeScript type definitions (`src/config/types.tools.ts`), and the UI field labels map (`src/config/schema.labels.ts`).\n\n## Validation\n\n### Live soak (production daemon)\n\n- **Base:** OpenClaw 2026.4.15, default config (`sync.watch=true`)\n- **Patched dist** applied at runtime via dist replacement\n- **Sampler:** `lsof`-derived fd counts + `ps`-derived RSS, 10 min interval\n- **Duration:** 13 h continuous at PR submission, still running\n- **Result:** see \"Measured impact\" table above. Raw CSV available on request; I will post 24 h and 48 h checkpoints as comments here.\n\nSidecar observed behavior during the soak:\n\n- fd accumulates during `memory_search` activity (up to ~600 handles)\n- next sweep evicts idle managers, fd returns to baseline within 10 min\n- `skippedBusy=0` and `skippedRevalidated=0` throughout — confirms the in-flight and revalidation guards are wired correctly but our workload's burst rate did not exercise them (the unit tests below do)\n\n### Tests\n\n- `extensions/memory-core/src/memory/manager-cache.test.ts` — 21 tests (was 11). New coverage: `acquireManagedCacheKey` / `isManagedCacheKeyBusy` / busy deferral / refcount / `lastAccessAt` refresh / `inflightCount` cleanup / revalidation gate for cache-hit, busy, identity-swap, and slot-disappearance gaps.\n- `extensions/memory-core/src/memory/manager.idle-gc.test.ts` — 10 tests (was 5). New coverage: in-flight protection at manager-level entry points (`search`, `sync`, `ensureProviderInitialized`).\n- `extensions/memory-core/` — 718/718 across 57 files.\n- `src/gateway/server-startup-post-attach.test.ts` — 41 tests pass.\n- `src/agents/memory-search.test.ts` — 27 tests pass.\n- `pnpm run lint`, `pnpm run tsgo:core`, `pnpm run tsgo:extensions`, `pnpm run tsgo:test`, and `pnpm run build` all green.\n\n## Risk / Compatibility\n\n- Default idle threshold (15 min) is conservative — comfortably outlives typical bursts of `memory_search` calls within a session.\n- Worst-case dwell is `idleMs + scanMs + max in-flight op duration` (was unbounded; `idleMs + scanMs` if all ops are short).\n- Short-lived CLI invocations are unchanged — `closeAllMemoryIndexManagers` is still the exit path from #40389, and it clears `inflightCount` alongside the rest of the cache.\n- Public `MemoryPluginRuntime.closeIdleMemorySearchManagers` return type grows two additive fields (`skippedBusy`, `skippedRevalidated`). Existing callers reading `evicted` / `remaining` continue to work unchanged via TypeScript structural typing.\n- No new dependencies, no schema migration, no protocol change.\n\n## Out of scope\n\n- Does NOT change `sync.watch` default value (#71335 tracks that separately).\n- Does NOT refactor the watcher to be singleton-per-workspace (much larger architectural change).\n- Does NOT introduce an opt-out for the in-flight protection — it's a safety net that should always be on. The only configurable knobs are the sweep cadence and idle threshold.\n\n<details>\n<summary>Lifecycle phase comparison vs #40389 (for reviewers)</summary>\n\n|                | #40389 (merged)              | This PR                                   |\n|----------------|------------------------------|-------------------------------------------|\n| Trigger        | Process exit (CLI `finally`) | Periodic sidecar (gateway runtime)        |\n| Frequency      | Once per process             | Every `idleEvictScanMs`                   |\n| Scope          | All cached managers          | Idle managers only                        |\n| Lifecycle phase| Shutdown teardown            | Continuous daemon lifetime                |\n| Protection     | N/A (process exiting)        | `isBusy` + `withBusy` + revalidation gate |\n| Symptom fixed  | One-shot CLI hangs on exit   | Daemon fd/RSS growth in normal operation  |\n| Code sharing   | Added per-manager `close()`  | Reuses #40389's `close()` in the sweep    |\n\nThe two are layered: #40389 handles the moment of exit; this PR handles the time between starts and exits, which is where long-lived daemons spend ~100% of their wall clock.\n\n</details>\n\nRefs #71335, #40389.\n\n## Raw production data\n\nReal terminal output from the soaked production gateway (PID 93144 at the time of writing, 14 h elapsed, OpenClaw `2026.4.15` base + this patch backported as runtime dist replacement).\n\n### Before the patch (baseline measured 2026-05-23, no patch, 11 h uptime)\n\nHeap snapshot delta over 11 h (`chrome devtools heap snapshot`):\n\n```\nConstructor                              # objects (delta)   shallow size delta\nNode / FSEventWrap                       +612                +253 KB\nNode / FSEvent                           +613                +245 KB\nNode / FSWatcher                         +615                +197 KB\nNode / Stats                             +543                +173 KB\nchokidar / WatchHelper                   +76                 +24 KB\n```\n\n`lsof -p <gateway>` count by location (no patch, 11 h):\n\n```\nFile location                              fd count\n~/.openclaw/workspace/memory/              488    (chokidar awaitWriteFinish read fds)\n~/.openclaw/workspace/memory/*/            57     (artifact subdir .md files)\n~/.openclaw/tasks/                         4\n~/.openclaw/flows/                         4\n~/.openclaw/logs/                          2\n```\n\nRSS over 11 h grew from ~700 MB baseline to ~2.3 GB (+1.6 GB, ~150 MB/h);\nprocess subsequently OOM'd at ~4.7 GB.\n\n### After the patch (live soak in progress, 14 h elapsed at PR submission)\n\n`ps` snapshot at +14 h:\n\n```\n$ ps -p 93144 -o pid,etime,rss,vsz,command\n  PID  ELAPSED    RSS      VSZ COMMAND\n93144 14:00:38 3156336 48135156 openclaw-gateway\n```\n\n`lsof` fd breakdown at +14 h (steady state between sweeps):\n\n```\n$ lsof -p 93144 | awk '{print $5}' | sort | uniq -c | sort -rn\n  16 REG       (regular files: dist + libs, stable)\n   8 IPv4      (network sockets)\n   4 PIPE\n   4 DIR\n   3 unix\n   3 KQUEUE    (== baseline 3, never grows)\n   2 CHR\n   1 IPv6\n   1 systm\n$ lsof -p 93144 | grep -c '/memory/'\n0                                 (zero chokidar fds between sweeps)\n```\n\nSidecar in action — sampler CSV excerpts (`/tmp/soak-v2-samples.csv`, 78 lines, 10 min interval):\n\n```csv\ntimestamp,pid,etime,rss_kb,vsz_kb,fd_total,memory_fd,kqueue,reg\n2026-05-24T20:52:41+0800,93144,15:15,1367528,37220752,43,0,3,16        # +15min post-restart, baseline\n2026-05-24T21:02:46+0800,93144,25:20,1785012,46010708,598,554,3,572    # memory_search burst\n2026-05-24T21:12:50+0800,93144,35:24,1502644,45728044,596,554,3,571    # still in burst\n2026-05-24T21:22:54+0800,93144,45:28,1597452,45822680,40,0,3,15        # ← sidecar swept; fd back to baseline\n...\n2026-05-25T08:48:05+0800,93144,12:10:39,2319392,47039688,597,557,3,574 # next burst\n2026-05-25T08:58:10+0800,93144,12:20:44,2319140,47039432,597,557,3,574 # still bursting\n2026-05-25T09:08:14+0800,93144,12:30:48,2881712,47600968,41,0,3,17     # ← swept again; fd baseline\n2026-05-25T10:28:49+0800,93144,13:51:23,2925140,47774268,44,0,3,16     # most recent sample\n```\n\nVisible behavior in the CSV:\n\n- `fd_total` swings between baseline `~40` and burst `~600` and reliably returns to baseline within one sweep interval (10 min in this run)\n- `memory_fd` (chokidar `awaitWriteFinish` read fds) stays at `0` between bursts — they are released by `close()`, not just dropped from the JS heap\n- `kqueue` stays at exactly `3` throughout (native kevent handles) — confirms `FSEventWrap` is being destroyed, not orphaned\n- `rss_kb` rises slowly (~150 MB/h) but does not approach OOM territory; without the patch the same workload OOM'd within 4–6 h\n\nRaw CSV (83 lines) and any additional intervals available on request.\n\n",
+        "branch": "fix/memory-index-manager-runtime-eviction",
+        "head_sha": "76c1dbb4cccccebef027f02252b3c9bcd8f15484",
+        "author": "quengh",
+        "labels": [
+          "docs",
+          "gateway",
+          "extensions: memory-core",
+          "agents",
+          "size: XL",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "docs/reference/memory-config.md",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/index.ts",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/manager-runtime.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/index.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-cache.test.ts",
+            "additions": 480,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-cache.ts",
+            "additions": 231,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-runtime.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager.idle-gc.test.ts",
+            "additions": 315,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager.ts",
+            "additions": 145,
+            "deletions": 35,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/search-manager.ts",
+            "additions": 27,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/runtime-provider.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/memory-search.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/memory-search.ts",
+            "additions": 24,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.help.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.labels.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.tools.ts",
+            "additions": 25,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.agent-runtime.ts",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.test.ts",
+            "additions": 9,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.ts",
+            "additions": 116,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/memory-state.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86293",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86293.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 26,
+            "SUCCESS": 71,
+            "IN_PROGRESS": 1,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "checks-node-agentic-agents:FAILURE"
+          ],
+          "pending": [
+            "Security High (plugin-trust-boundary):IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ]
+        }
+      },
+      "reason": "target is not open"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86293:4531520301:2026-05-25T04:31:43Z:re_review",
+      "comment_id": "4531520301",
+      "comment_version_key": "4531520301:2026-05-25T04:31:43Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86293#issuecomment-4531520301",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86293,
+      "author": "quengh",
+      "author_id": 3940773,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-25T04:31:43Z",
+      "comment_updated_at": "2026-05-25T04:31:43Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86293:4531247032:2026-05-25T03:29:16Z:re_review",
+      "comment_id": "4531247032",
+      "comment_version_key": "4531247032:2026-05-25T03:29:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86293#issuecomment-4531247032",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86293,
+      "author": "quengh",
+      "author_id": 3940773,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-25T03:29:16Z",
+      "comment_updated_at": "2026-05-25T03:29:16Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86293:4531231050:2026-05-25T03:23:54Z:re_review",
+      "comment_id": "4531231050",
+      "comment_version_key": "4531231050:2026-05-25T03:23:54Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86293#issuecomment-4531231050",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86293,
+      "author": "quengh",
+      "author_id": 3940773,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-25T03:23:54Z",
+      "comment_updated_at": "2026-05-25T03:23:54Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(memory): bound INDEX_CACHE lifetime in long-running gateway daemons",
+        "body": "## Real behavior proof\n\n**Behavior addressed:** Long-running OpenClaw gateway daemons accumulate chokidar `FSEventWrap` native handles and `memory/*.md` file descriptors for the entire process lifetime. RSS grows ~1 GB/h until OOM, typically within 4–6 h on memory-heavy workloads. Root cause: `MemoryIndexManager` instances live in the module-level `INDEX_CACHE` and are only torn down at process exit (#40389), which long-running daemons never reach until restart.\n\n**Real environment tested:** Production gateway daemon on macOS 15.7.4 (Apple Silicon), OpenClaw `2026.4.15` base, default config (`agents.defaults.memorySearch.sync.watch=true`), Node `v24.13.0`. Patch applied at runtime by replacing the installed `dist/` directory with a build of this branch (`fix/memory-index-manager-runtime-eviction`), then `launchctl kickstart -k gui/501/ai.openclaw.gateway` to restart the daemon onto the patched dist.\n\n**Exact steps or command run after this patch:** see code block below.\n\n```\nStep 1: Build the patched dist\npnpm install && pnpm build\n\nStep 2: Replace installed dist on the production host\ncp -R dist/ ~/.nvm/versions/node/v24.13.0/lib/node_modules/openclaw/dist/\n\nStep 3: Restart the gateway onto the patched dist\nlaunchctl kickstart -k gui/501/ai.openclaw.gateway\n\nStep 4: Verify new gateway came up and patched code is loaded\npgrep -f openclaw-gateway\ngrep -l 'closeIdleManagedCacheEntries' \\\n  ~/.nvm/versions/node/v24.13.0/lib/node_modules/openclaw/dist/manager-*.js\n\nStep 5: Start a sampler that records ps + lsof every 10 minutes\nnohup /tmp/soak-v2-sampler.sh > /tmp/soak-v2-sampler.log 2>&1 &\n\nStep 6: Run normal workload (memory_search invocations from gateway agents)\nStep 7: After 14 h: capture current ps/lsof/CSV state\nps -p 93144 -o pid,etime,rss,vsz,command\nlsof -p 93144 | awk '{print $5}' | sort | uniq -c | sort -rn\nlsof -p 93144 | grep -c '/memory/'\n```\n\n**Evidence after fix:** real terminal output from the soaked production gateway (PID 93144, 14 h elapsed at PR submission).\n\nProcess state at +14 h on patched daemon (started 2026-05-24 20:37 +0800):\n\n```\n$ ps -p 93144 -o pid,etime,rss,vsz,command\n  PID  ELAPSED    RSS      VSZ COMMAND\n93144 14:00:38 3156336 48135156 openclaw-gateway\n```\n\nfd breakdown at steady state between sweeps:\n\n```\n$ lsof -p 93144 | awk '{print $5}' | sort | uniq -c | sort -rn\n  16 REG       (regular files: dist + libs, stable baseline)\n   8 IPv4      (network sockets, stable)\n   4 PIPE\n   4 DIR\n   3 unix\n   3 KQUEUE    (== baseline 3, never grows)\n   2 CHR\n   1 IPv6\n   1 systm\n$ lsof -p 93144 | grep -c '/memory/'\n0\n```\n\nSampler CSV excerpts (`/tmp/soak-v2-samples.csv`, 78 data points, 10 min interval):\n\n```csv\ntimestamp,pid,etime,rss_kb,vsz_kb,fd_total,memory_fd,kqueue,reg\n2026-05-24T20:52:41+0800,93144,15:15,1367528,37220752,43,0,3,16        # baseline\n2026-05-24T21:02:46+0800,93144,25:20,1785012,46010708,598,554,3,572    # memory_search burst\n2026-05-24T21:12:50+0800,93144,35:24,1502644,45728044,596,554,3,571    # still bursting\n2026-05-24T21:22:54+0800,93144,45:28,1597452,45822680,40,0,3,15        # sidecar swept; fd back to baseline\n2026-05-25T08:48:05+0800,93144,12:10:39,2319392,47039688,597,557,3,574 # next burst\n2026-05-25T08:58:10+0800,93144,12:20:44,2319140,47039432,597,557,3,574 # still bursting\n2026-05-25T09:08:14+0800,93144,12:30:48,2881712,47600968,41,0,3,17     # swept again\n2026-05-25T10:28:49+0800,93144,13:51:23,2925140,47774268,44,0,3,16     # most recent\n```\n\nFor comparison, before the patch (2026-05-23, same daemon, 11 h uptime, no sidecar) heap snapshot diff showed:\n\n```\nConstructor                  # objects (delta)   shallow size delta\nNode / FSEventWrap           +612                +253 KB\nNode / FSEvent               +613                +245 KB\nNode / FSWatcher             +615                +197 KB\nNode / Stats                 +543                +173 KB\n```\n\nand `lsof` of that pre-patch daemon showed `488` chokidar `awaitWriteFinish` read fds on `~/.openclaw/workspace/memory/`.\n\n**Observed result after fix:** `memory_fd` (chokidar read fds on `memory/*.md`) oscillates between `0` baseline and ~557 during bursts, returning to `0` within one sweep interval — without the patch, this value grew monotonically to 488+ and never returned to baseline. `kqueue` stays pinned at exactly `3` for the entire 14 h soak — without the patch, `FSEventWrap` instances accumulated by the hundreds (+612 in the pre-patch 11 h heap diff). RSS rose ~150 MB/h (from 1.37 GB at +15 min to 3.16 GB at +14 h), well under OOM — without the patch the same workload hit OOM at ~4.7 GB within 4–6 h. Sidecar log lines confirm the sweep is running and reporting `memory index manager idle eviction: evicted N (deferred M busy, K revalidated) (remaining R)`. 31 unit tests cover the in-flight protection deferral and revalidation paths deterministically (the live soak never hit those paths because our workload's burst rate is slower than the 15 min idle threshold, but the guards are wired and tested).\n\n**What was not tested:** Windows / Linux daemons (only macOS validated live; CI covers cross-platform builds, but no live soak on those platforms yet). Multi-agent workloads exercising > 50 `MemoryIndexManager` instances simultaneously (our production setup has ~3 active managers). Workloads where individual `sync()` batches exceed the 15 min idle threshold (would exercise the busy-defer path live; covered by unit tests but not by soak). 24 h+ continuous soak (in progress; 14 h at PR submission, will post 24 h and 48 h checkpoints as PR comments).\n\n## Out-of-scope follow-ups\n\n- Changing `sync.watch` default from `true` to `false` (tracked in #71335)\n- Refactoring chokidar to a singleton-per-workspace watcher\n- Adding a config flag to opt out of the in-flight protection (it should always be on)\n\n---\n\n## Problem\n\nCached `MemoryIndexManager` instances live in a module-level `INDEX_CACHE` that grows for the entire gateway daemon lifetime. Each instance owns a chokidar `FSWatcher` recursively watching the memory directory (under the default `sync.watch=true`, see #71335), so every cache entry holds an `FSEventWrap` native handle plus one `awaitWriteFinish` file descriptor per touched `memory/*.md` file.\n\nCached managers are torn down at CLI exit (#40389), but daemons never reach that exit path until restart. This PR adds a periodic runtime sweep that bounds cache lifetime *during* normal daemon operation, so restart is no longer the only way to release these resources.\n\n### Measured impact (production daemon, OpenClaw 2026.4.15 + this patch)\n\n| Metric          | Without patch (11h)        | With patch (13h+ live soak)   |\n|-----------------|----------------------------|-------------------------------|\n| FSEventWrap     | 612 native handles         | bounded; returns to ~3 baseline |\n| memory_fd       | 488 (chokidar holds)       | 0 between sweeps              |\n| RSS growth rate | ~1 GB/h                    | ~150 MB/h (~7× improvement)   |\n| Outcome at 13 h | OOM within 4 to 6 h        | 3.25 GB stable, no OOM        |\n\nSampling: 78 data points at 10 min interval, soak still running at PR submission time (will update when the soak passes the 24 h and 48 h marks). Sweep cadence: 5 min scan, 15 min idle threshold (both configurable).\n\n## Fix\n\nExtend `ManagedCache` with idle tracking and add a gateway-lifetime sidecar:\n\n- `ManagedCache.lastAccessAt` is refreshed on every cache hit and on initial set.\n- `closeIdleManagedCacheEntries` walks `lastAccessAt`, closes stale entries, and isolates `close()` errors so one bad entry does not stop the rest. It reuses the per-manager `close()` method introduced in #40389 — no new teardown code path.\n- `closeIdleMemoryIndexManagers` (in `manager.ts`) layers in the embedding-probe-cache cleanup that the manager would otherwise miss.\n- `scheduleMemoryIndexIdleEvict` (in `server-startup-post-attach.ts`) registers a gateway-lifetime sidecar that runs the sweep every `idleEvictScanMs` (default 5 min), evicting managers idle for `idleEvictMs` (default 15 min). Setting either to `0` disables the sweep entirely.\n\n## In-flight protection\n\n`ManagedCache` tracks an `inflightCount` map keyed the same way as `cache` / `lastAccessAt`:\n\n- `acquireManagedCacheKey(cache, key)` increments the count, refreshes `lastAccessAt`, and returns an idempotent `release()` function.\n- `isManagedCacheKeyBusy(cache, key)` reports whether the count is > 0.\n- `closeIdleManagedCacheEntries` consults `isManagedCacheKeyBusy` during both the survey loop and immediately before `close()`. Busy entries are skipped, counted, and surfaced via `onSkipBusy` / `skippedBusy`.\n- A revalidation gate (just before close) also re-checks `lastAccessAt` freshness and cache identity, catching entries that became active or were swapped during the scan-to-close gap. These are reported as `skippedRevalidated`.\n\nIn `MemoryIndexManager`, a protected `withBusy(fn)` helper wraps the acquire/release pair in try/finally. It guards:\n\n- `sync(...)` — covers batch reindex, targeted session sync, full sync. The refcount is released in the same `.finally()` that nulls `this.syncing`, so they unwind together.\n- `search(...)` — protects the embedding/vector/FTS work plus the inline `sync({ reason: \"search\", force: true })` bootstrap that runs on the first call after process start.\n- `ensureProviderInitialized(...)` — covers `probeVectorAvailability`, `probeEmbeddingAvailability`, and the lazy provider hookup invoked by `sync` / `search`.\n\n`close()` and `closeMemoryIndexManagersForAgent` clear any residual `inflightCount` entry alongside the cache slot. The `release()` returned by `acquireManagedCacheKey` is idempotent, so a release that fires after `close()` is a no-op.\n\nSidecar log lines now report both deferral classes:\n\n```\nmemory index manager idle eviction: evicted 3 (deferred 1 busy, 0 revalidated) (remaining 5)\n```\n\n## Configuration\n\nTwo new optional knobs under `agents.defaults.memorySearch.sync`:\n\n| Key                  | Default | Meaning                                                        |\n|----------------------|---------|----------------------------------------------------------------|\n| `idleEvictMs`        | 900000  | Manager is eligible for eviction after this many ms idle. `0` disables. |\n| `idleEvictScanMs`    | 300000  | Sidecar runs the sweep this often. `0` disables.               |\n\nBoth fields are documented in the zod schema (`src/config/zod-schema.agent-runtime.ts`), the TypeScript type definitions (`src/config/types.tools.ts`), and the UI field labels map (`src/config/schema.labels.ts`).\n\n## Validation\n\n### Live soak (production daemon)\n\n- **Base:** OpenClaw 2026.4.15, default config (`sync.watch=true`)\n- **Patched dist** applied at runtime via dist replacement\n- **Sampler:** `lsof`-derived fd counts + `ps`-derived RSS, 10 min interval\n- **Duration:** 13 h continuous at PR submission, still running\n- **Result:** see \"Measured impact\" table above. Raw CSV available on request; I will post 24 h and 48 h checkpoints as comments here.\n\nSidecar observed behavior during the soak:\n\n- fd accumulates during `memory_search` activity (up to ~600 handles)\n- next sweep evicts idle managers, fd returns to baseline within 10 min\n- `skippedBusy=0` and `skippedRevalidated=0` throughout — confirms the in-flight and revalidation guards are wired correctly but our workload's burst rate did not exercise them (the unit tests below do)\n\n### Tests\n\n- `extensions/memory-core/src/memory/manager-cache.test.ts` — 21 tests (was 11). New coverage: `acquireManagedCacheKey` / `isManagedCacheKeyBusy` / busy deferral / refcount / `lastAccessAt` refresh / `inflightCount` cleanup / revalidation gate for cache-hit, busy, identity-swap, and slot-disappearance gaps.\n- `extensions/memory-core/src/memory/manager.idle-gc.test.ts` — 10 tests (was 5). New coverage: in-flight protection at manager-level entry points (`search`, `sync`, `ensureProviderInitialized`).\n- `extensions/memory-core/` — 718/718 across 57 files.\n- `src/gateway/server-startup-post-attach.test.ts` — 41 tests pass.\n- `src/agents/memory-search.test.ts` — 27 tests pass.\n- `pnpm run lint`, `pnpm run tsgo:core`, `pnpm run tsgo:extensions`, `pnpm run tsgo:test`, and `pnpm run build` all green.\n\n## Risk / Compatibility\n\n- Default idle threshold (15 min) is conservative — comfortably outlives typical bursts of `memory_search` calls within a session.\n- Worst-case dwell is `idleMs + scanMs + max in-flight op duration` (was unbounded; `idleMs + scanMs` if all ops are short).\n- Short-lived CLI invocations are unchanged — `closeAllMemoryIndexManagers` is still the exit path from #40389, and it clears `inflightCount` alongside the rest of the cache.\n- Public `MemoryPluginRuntime.closeIdleMemorySearchManagers` return type grows two additive fields (`skippedBusy`, `skippedRevalidated`). Existing callers reading `evicted` / `remaining` continue to work unchanged via TypeScript structural typing.\n- No new dependencies, no schema migration, no protocol change.\n\n## Out of scope\n\n- Does NOT change `sync.watch` default value (#71335 tracks that separately).\n- Does NOT refactor the watcher to be singleton-per-workspace (much larger architectural change).\n- Does NOT introduce an opt-out for the in-flight protection — it's a safety net that should always be on. The only configurable knobs are the sweep cadence and idle threshold.\n\n<details>\n<summary>Lifecycle phase comparison vs #40389 (for reviewers)</summary>\n\n|                | #40389 (merged)              | This PR                                   |\n|----------------|------------------------------|-------------------------------------------|\n| Trigger        | Process exit (CLI `finally`) | Periodic sidecar (gateway runtime)        |\n| Frequency      | Once per process             | Every `idleEvictScanMs`                   |\n| Scope          | All cached managers          | Idle managers only                        |\n| Lifecycle phase| Shutdown teardown            | Continuous daemon lifetime                |\n| Protection     | N/A (process exiting)        | `isBusy` + `withBusy` + revalidation gate |\n| Symptom fixed  | One-shot CLI hangs on exit   | Daemon fd/RSS growth in normal operation  |\n| Code sharing   | Added per-manager `close()`  | Reuses #40389's `close()` in the sweep    |\n\nThe two are layered: #40389 handles the moment of exit; this PR handles the time between starts and exits, which is where long-lived daemons spend ~100% of their wall clock.\n\n</details>\n\nRefs #71335, #40389.\n\n## Raw production data\n\nReal terminal output from the soaked production gateway (PID 93144 at the time of writing, 14 h elapsed, OpenClaw `2026.4.15` base + this patch backported as runtime dist replacement).\n\n### Before the patch (baseline measured 2026-05-23, no patch, 11 h uptime)\n\nHeap snapshot delta over 11 h (`chrome devtools heap snapshot`):\n\n```\nConstructor                              # objects (delta)   shallow size delta\nNode / FSEventWrap                       +612                +253 KB\nNode / FSEvent                           +613                +245 KB\nNode / FSWatcher                         +615                +197 KB\nNode / Stats                             +543                +173 KB\nchokidar / WatchHelper                   +76                 +24 KB\n```\n\n`lsof -p <gateway>` count by location (no patch, 11 h):\n\n```\nFile location                              fd count\n~/.openclaw/workspace/memory/              488    (chokidar awaitWriteFinish read fds)\n~/.openclaw/workspace/memory/*/            57     (artifact subdir .md files)\n~/.openclaw/tasks/                         4\n~/.openclaw/flows/                         4\n~/.openclaw/logs/                          2\n```\n\nRSS over 11 h grew from ~700 MB baseline to ~2.3 GB (+1.6 GB, ~150 MB/h);\nprocess subsequently OOM'd at ~4.7 GB.\n\n### After the patch (live soak in progress, 14 h elapsed at PR submission)\n\n`ps` snapshot at +14 h:\n\n```\n$ ps -p 93144 -o pid,etime,rss,vsz,command\n  PID  ELAPSED    RSS      VSZ COMMAND\n93144 14:00:38 3156336 48135156 openclaw-gateway\n```\n\n`lsof` fd breakdown at +14 h (steady state between sweeps):\n\n```\n$ lsof -p 93144 | awk '{print $5}' | sort | uniq -c | sort -rn\n  16 REG       (regular files: dist + libs, stable)\n   8 IPv4      (network sockets)\n   4 PIPE\n   4 DIR\n   3 unix\n   3 KQUEUE    (== baseline 3, never grows)\n   2 CHR\n   1 IPv6\n   1 systm\n$ lsof -p 93144 | grep -c '/memory/'\n0                                 (zero chokidar fds between sweeps)\n```\n\nSidecar in action — sampler CSV excerpts (`/tmp/soak-v2-samples.csv`, 78 lines, 10 min interval):\n\n```csv\ntimestamp,pid,etime,rss_kb,vsz_kb,fd_total,memory_fd,kqueue,reg\n2026-05-24T20:52:41+0800,93144,15:15,1367528,37220752,43,0,3,16        # +15min post-restart, baseline\n2026-05-24T21:02:46+0800,93144,25:20,1785012,46010708,598,554,3,572    # memory_search burst\n2026-05-24T21:12:50+0800,93144,35:24,1502644,45728044,596,554,3,571    # still in burst\n2026-05-24T21:22:54+0800,93144,45:28,1597452,45822680,40,0,3,15        # ← sidecar swept; fd back to baseline\n...\n2026-05-25T08:48:05+0800,93144,12:10:39,2319392,47039688,597,557,3,574 # next burst\n2026-05-25T08:58:10+0800,93144,12:20:44,2319140,47039432,597,557,3,574 # still bursting\n2026-05-25T09:08:14+0800,93144,12:30:48,2881712,47600968,41,0,3,17     # ← swept again; fd baseline\n2026-05-25T10:28:49+0800,93144,13:51:23,2925140,47774268,44,0,3,16     # most recent sample\n```\n\nVisible behavior in the CSV:\n\n- `fd_total` swings between baseline `~40` and burst `~600` and reliably returns to baseline within one sweep interval (10 min in this run)\n- `memory_fd` (chokidar `awaitWriteFinish` read fds) stays at `0` between bursts — they are released by `close()`, not just dropped from the JS heap\n- `kqueue` stays at exactly `3` throughout (native kevent handles) — confirms `FSEventWrap` is being destroyed, not orphaned\n- `rss_kb` rises slowly (~150 MB/h) but does not approach OOM territory; without the patch the same workload OOM'd within 4–6 h\n\nRaw CSV (83 lines) and any additional intervals available on request.\n\n",
+        "branch": "fix/memory-index-manager-runtime-eviction",
+        "head_sha": "76c1dbb4cccccebef027f02252b3c9bcd8f15484",
+        "author": "quengh",
+        "labels": [
+          "docs",
+          "gateway",
+          "extensions: memory-core",
+          "agents",
+          "size: XL",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "docs/reference/memory-config.md",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/index.ts",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/manager-runtime.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/index.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-cache.test.ts",
+            "additions": 480,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-cache.ts",
+            "additions": 231,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-runtime.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager.idle-gc.test.ts",
+            "additions": 315,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager.ts",
+            "additions": 145,
+            "deletions": 35,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/search-manager.ts",
+            "additions": 27,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/runtime-provider.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/memory-search.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/memory-search.ts",
+            "additions": 24,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.help.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.labels.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.tools.ts",
+            "additions": 25,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.agent-runtime.ts",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.test.ts",
+            "additions": 9,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.ts",
+            "additions": 116,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/memory-state.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86293",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86293.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 26,
+            "SUCCESS": 71,
+            "IN_PROGRESS": 1,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "checks-node-agentic-agents:FAILURE"
+          ],
+          "pending": [
+            "Security High (plugin-trust-boundary):IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-agents:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 465,
+    "total_ms": 5035,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 267
+        "ms": 323
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1841
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 192
+        "ms": 2854
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
