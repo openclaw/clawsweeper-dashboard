@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-25T12:55:38.706Z",
+  "generated_at": "2026-05-25T12:55:41.929Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-25T09:55:36.331Z",
+  "since": "2026-05-25T09:55:38.918Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    86427
+    86479
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,117 +31,251 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86427:4533296023:2026-05-25T12:55:32Z:clawsweeper_needs_human",
-      "comment_id": "4533296023",
-      "comment_version_key": "4533296023:2026-05-25T12:55:32Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86427#issuecomment-4533296023",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86479:4534299896:2026-05-25T12:55:35Z:clawsweeper_auto_repair",
+      "comment_id": "4534299896",
+      "comment_version_key": "4534299896:2026-05-25T12:55:35Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86479#issuecomment-4534299896",
       "repo": "openclaw/openclaw",
-      "issue_number": 86427,
+      "issue_number": 86479,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-25T09:50:52Z",
-      "comment_updated_at": "2026-05-25T12:55:32Z",
+      "comment_created_at": "2026-05-25T12:36:17Z",
+      "comment_updated_at": "2026-05-25T12:55:35Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
       "autoclose_message": null,
       "implementation_prompt": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "No ClawSweeper repair lane is needed because the diff is narrow and I found no actionable defect; the remaining path is maintainer review and CI gating.; Cleared: The diff only changes embedded runner lock lifecycle code and tests; it does not touch dependencies, workflows, packages, credentials, or other supply-chain surfaces. (sha=0f0787a5d2d1e030688a9a250675e3242c4ef879)",
-      "review_summary": "The PR adds an idempotent dispose path to the embedded-attempt session lock controller, calls it from runEmbeddedAttempt outer teardown, and adds controller lifecycle regression tests.\n\nPR surface: Source +19, Tests +39. Total +58 across 3 files.\n\nReproducibility: yes. Source inspection shows current main can skip cleanup after trajectory flush throws, and the PR body supplies a before/after terminal harness using the real lock primitive and controller.",
-      "review_followup": "No ClawSweeper repair lane is needed because the diff is narrow and I found no actionable defect; the remaining path is maintainer review and CI gating.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=62ecf5dd188b7d95532fdcdcb4275e7260e057fb)",
+      "review_summary": "The PR centralizes inbound supplemental quote/forward/thread/group context projection through core finalization, exports new channel-inbound SDK helpers/types, migrates rich channel plugins, updates tests, and adds a changelog entry.\n\nPR surface: Source +206, Tests +140, Docs +1. Total +347 across 23 files.\n\nReproducibility: yes. for the source path, but not with a live channel run: a visible Signal quote can produce `visibleQuoteSender` while `visibleQuoteText` is empty, and the branch only builds `SupplementalContext` when `entry.replyToBody` is truthy.",
+      "review_followup": "Human review is needed because the PR has the protected maintainer label, mock-only real behavior proof, public SDK compatibility risk, and two focused review findings.",
       "freeform_prompt": null,
-      "expected_head_sha": "0f0787a5d2d1e030688a9a250675e3242c4ef879",
+      "expected_head_sha": "62ecf5dd188b7d95532fdcdcb4275e7260e057fb",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): release embedded-attempt session lock on every exit path",
-        "body": "### Summary\n\n- **Problem**: During an embedded agent run the gateway holds a write lock on the session `.jsonl` file. If the run times out or a tool errors, the lock can be left held by the live gateway process — subsequent requests to that session block for the acquire timeout and then fail with `SessionWriteLockTimeoutError` (`OPENCLAW_SESSION_WRITE_LOCK_TIMEOUT`), and the retained session graph leaks memory. (#86014)\n- **Root Cause**: `createEmbeddedAttemptSessionLockController` acquires its coarse session lock (`heldLock`) **eagerly at creation** and the run releases it only inside the post-run cleanup block (`acquireForCleanup` → `cleanupEmbeddedAttemptResources`, which itself releases in a `finally`). That cleanup block is ordinary try-body code. The run's outer `finally` did **not** release the lock — it only emitted diagnostics and restored skill env. Normal timeout/abort/error paths funnel into `aborted`/`timedOut`/`promptError` flags and *do* reach the cleanup block, but an exception thrown in the ~post-prompt processing between the prompt teardown and the cleanup block (e.g. a tool/result step or the trajectory flush erroring) escapes straight to the outer `finally`, skipping the release. The lock then stays held by the live process (its PID is alive, so it is not stale) until the long compaction-scaled watchdog window elapses or a retry re-acquires it — effectively wedging the session. (The reporter's \"`maxHoldMs` grows unboundedly\" is a fixed value: the embedded-attempt lock's `maxHoldMs` is the compaction window + grace = `1020000`ms, matching the reported lock file; the observed `createdAt` refresh is the lock being re-acquired by retries.)\n- **Fix**: Give the lock controller an idempotent `dispose()` that releases `heldLock` if it is still retained, and call it from the run's outer `finally` so the lock is released on **every** exit path. On normal/aborted/timed-out runs the cleanup block still hands the lock to `acquireForCleanup` first, so `dispose()` is a no-op then (no double release); only the exception-skips-cleanup path now actually releases via `dispose()`.\n- **What changed**:\n  - `src/agents/pi-embedded-runner/run/attempt.session-lock.ts`: add `dispose(): Promise<void>` to `EmbeddedAttemptSessionLockController` (releases the retained `heldLock`, idempotent).\n  - `src/agents/pi-embedded-runner/run/attempt.ts`: capture a `releaseRetainedSessionLock` closure once the controller exists and invoke it in the run's outer `finally` (guarded so a release error is logged rather than masking the run's original error).\n  - `src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts`: regression coverage.\n- **What did NOT change (scope boundary)**:\n  - The happy-path lock handoff (`acquireForCleanup` → `cleanupEmbeddedAttemptResources`) and its flush behavior are unchanged; `dispose()` is a safety net.\n  - The session write-lock primitive, its watchdog/stale logic, and `maxHoldMs` derivation are unchanged. The separate \"an operation inside `withSessionWriteLock` never returns\" variant (its own `finally` cannot run) remains covered only by the watchdog and is out of scope.\n  - No config keys, protocol, or message-delivery behavior changed.\n\n### Reproduction\n\n1. An embedded attempt creates the session lock controller (eagerly acquiring the session write lock).\n2. Post-prompt processing throws (e.g. a tool/result step or trajectory flush errors) before the cleanup block runs `acquireForCleanup`.\n- Before: the exception escapes to the outer `finally`, which does not release the lock; the lock file persists held by the live process and the next request to that session fails with `SessionWriteLockTimeoutError`.\n- After: the outer `finally` calls the controller's `dispose()`, releasing the retained lock; the next request succeeds.\n\n### Real behavior proof\n\n- **Behavior addressed**: when an embedded attempt throws after eagerly acquiring the session lock but before the cleanup block, the run must still release the session write lock so later requests to the same session do not fail with `SessionWriteLockTimeoutError`.\n- **Real environment tested (Linux, Node 22)**: a standalone harness drives the **real** `acquireSessionWriteLock` and the **real** `createEmbeddedAttemptSessionLockController` against a temp session file, with the embedded-attempt `maxHoldMs` (1020000) the gateway uses. It runs an attempt that acquires the lock then throws during post-prompt processing, then issues a second `acquireSessionWriteLock` for the same session from the same live process — once without the fix (no `dispose()` in the finally) and once with it.\n- **Exact steps or command run after this patch**: `tsx /tmp/qmd86014/repro.mts`.\n- **Evidence after fix (verbatim harness output)**:\n\n```text\n--- BEFORE (pre-fix: outer finally does not release) (dispose in finally = false) ---\n  attempt threw: post-processing failure (e.g., trajectory flush)\n  lock file persists: true\n  subsequent acquire on same session: FAILED SessionWriteLockTimeoutError (isSessionWriteLockTimeoutError=true)\n\n--- AFTER (fix: outer finally calls controller.dispose()) (dispose in finally = true) ---\n  attempt threw: post-processing failure (e.g., trajectory flush)\n  lock file persists: false\n  subsequent acquire on same session: SUCCEEDED\n\nRESULT: PASS — BEFORE leaks the lock and the next request hits SessionWriteLockTimeoutError;\n         AFTER (controller.dispose() in the outer finally) releases it and the next request succeeds.\n```\n\n- **Observed result after fix**: the leaked lock is released on the exception path; the next request to the same session succeeds instead of failing with `SessionWriteLockTimeoutError` — the reporter's error (`session file locked (timeout 60000ms): pid=7 …/<session>.jsonl.lock`) is reproduced verbatim (same shape, differing only in timeout/pid) and removed by the fix.\n- **Regression tests**: `pnpm test src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts` (68 passed) including two new cases — `dispose()` releases the eagerly-held lock when cleanup is skipped (and is idempotent), and `dispose()` does not double-release a lock already handed to `acquireForCleanup`.\n- **What was not tested**: a full multi-process live gateway run with real cron `agentTurn` retries over time was not executed; the harness exercises the real lock primitive + real controller end to end and the unit tests cover the `dispose()` contract. The \"stalled operation inside `withSessionWriteLock` never returns\" variant is not addressed here (covered by the watchdog).\n\n### Risk / Mitigation\n\n- **Risk**: releasing in the outer `finally` could double-release a lock the cleanup block already released, or a release error could mask the run's original error.\n- **Mitigation**: `dispose()` is idempotent — the happy/aborted/timed-out paths transfer the lock out via `acquireForCleanup` (so the controller no longer retains it and `dispose()` is a no-op), proven by a no-double-release test. The outer-`finally` call is wrapped so a release failure is logged rather than thrown, mirroring the existing teardown logging. No behavior change on paths that already released the lock.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [x] Sessions / storage\n\n### Linked Issue/PR\n\nFixes #86014\n",
-        "branch": "fix/86014-embedded-session-lock-release",
-        "head_sha": "0f0787a5d2d1e030688a9a250675e3242c4ef879",
-        "author": "openperf",
+        "title": "refactor: centralize inbound supplemental context",
+        "body": "## Summary\n\nCentralizes inbound supplemental context projection so rich channel plugins pass canonical quote/forward/thread/group facts into core instead of hand-writing legacy `MsgContext` fields at each call site.\n\nWhat changed:\n\n- `finalizeInboundContext` now accepts `MsgContext.SupplementalContext` and projects it into the legacy `ReplyTo*`, `Forwarded*`, `Thread*`, `GroupSystemPrompt`, and structured untrusted-context fields before normalizing prompt-facing context.\n- `buildChannelInboundEventContext` now carries canonical `SupplementalContext` through to the finalizer instead of expanding those fields itself.\n- Added `resolveChannelInboundSupplementalContext` for shared quote visibility, self-quote body/media suppression, and lazy quote-media merging.\n- Added `filterChannelInboundQuoteContext` for quote-only checks so plugins do not need to construct partial supplemental payloads just to ask the visibility question.\n- Migrated Discord, Telegram, WhatsApp, Signal, iMessage, Matrix, MS Teams, Feishu, and QQBot touched paths to the shared helpers/finalizer projection while keeping platform parsing and fetches local.\n- Preserved explicit legacy fields when a plugin sets them; supplemental projection only fills missing values.\n- Fixed the Matrix thread edge from review by omitting supplemental quote ids for thread-target turns so finalizer projection cannot backfill `ReplyToId` into thread-only context.\n- Exported `SupplementalContextFacts` through the plugin SDK and documented `MsgContext.SupplementalContext` as the canonical new channel path.\n- Deprecated `filterChannelTurnSupplementalContext` in favor of `filterChannelInboundSupplementalContext`, or `filterChannelInboundQuoteContext` for quote-only checks.\n- Added an `Unreleased` changelog entry for the plugin SDK helper/export/deprecation surface.\n\nAPI/deprecation notes:\n\n- Deprecated: `filterChannelTurnSupplementalContext` alias.\n- Preferred: `filterChannelInboundSupplementalContext` for full supplemental filtering.\n- Preferred: `filterChannelInboundQuoteContext` for quote-only checks.\n- Preferred canonical payload: `SupplementalContextFacts` on `MsgContext.SupplementalContext`.\n- Not deprecated: legacy `ReplyTo*`, `Forwarded*`, and `Thread*` fields. They remain runtime/template compatibility fields and are now projected by core.\n\nDiff/LOC notes:\n\n- Total branch diff: +582 / -235, net +347.\n- Tests: +198 / -58, net +140.\n- Changelog: +1.\n- Production/runtime: +383 / -177, net +206.\n- This is not raw LOC-negative, mostly because the central helper, public type docs, and regression coverage are new. It does remove repeated per-channel projection responsibility and narrows future channel changes to canonical supplemental facts.\n\n## Verification\n\nLatest exact-branch proof:\n\n- `node scripts/run-vitest.mjs run src/auto-reply/reply/inbound-context.test.ts src/channels/inbound-event/context.test.ts src/plugins/contracts/plugin-sdk-subpaths.test.ts --testNamePattern \"SupplementalContext|channel-inbound|inbound context|finalizeInboundContext\"`\n  - passed: 2 files passed, 1 skipped, 15 tests passed\n- `node scripts/run-vitest.mjs run src/auto-reply/reply/inbound-context.test.ts --testNamePattern \"SupplementalContext|finalizeInboundContext\"`\n  - passed: 1 file, 2 tests passed\n- `node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.extensions.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/extensions-test.tsbuildinfo`\n  - passed\n- `pnpm exec oxfmt --check --threads=1 src/auto-reply/templating.ts src/channels/turn/types.ts src/auto-reply/reply/inbound-context.ts src/plugin-sdk/channel-inbound.ts`\n  - passed\n- `git diff --check`\n  - passed\n- `.agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main --no-web-search --output /tmp/channel-context-autoreview-branch.txt --json-output /tmp/channel-context-autoreview-branch.json`\n  - clean: no accepted/actionable findings; overall patch is correct\n\nEarlier focused channel proof during this refactor:\n\n- `node scripts/run-vitest.mjs run src/channels/inbound-event/context.test.ts src/auto-reply/reply/inbound-context.test.ts`\n  - passed: 2 files, 26 tests\n- `node scripts/run-vitest.mjs run extensions/msteams/src/monitor-handler/message-handler.authz.test.ts extensions/matrix/src/matrix/monitor/handler.body-for-agent.test.ts`\n  - passed: 2 files, 25 tests\n- `node scripts/run-vitest.mjs run extensions/whatsapp/src/auto-reply/monitor/inbound-context.test.ts extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.test.ts`\n  - passed: 2 files, 48 tests\n- `node scripts/run-vitest.mjs run extensions/signal/src/monitor/event-handler.inbound-context.test.ts extensions/imessage/src/monitor.gating.test.ts extensions/imessage/src/monitor/inbound-processing.systemPrompt.test.ts`\n  - passed: 3 files, 48 tests\n- `timeout 240s node scripts/run-vitest.mjs run extensions/telegram/src/bot-message-context.dm-topic-threadid.test.ts -t \"builds Telegram payloads through the shared channel turn context\"`\n  - passed: 1 test\n- `timeout 180s node scripts/run-vitest.mjs run extensions/telegram/src/bot.test.ts --testNamePattern \"includes replied image media|keeps reply linkage while omitting filtered binary reply captions|redacts forwarded origin inside reply targets\"`\n  - passed: 3 tests\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.extension-discord.config.ts --testNamePattern \"does not inject the bot's previous message body|does not attach referenced reply media when reply context is hidden|processDiscordMessage\"`\n  - passed: 2 files, 77 tests\n- `node scripts/run-vitest.mjs run extensions/feishu/src/bot.test.ts extensions/qqbot/src/engine/gateway/outbound-dispatch.test.ts --testNamePattern \"quoted|quote|thread\"`\n  - passed: Feishu file, QQBot skipped by pattern, 14 tests\n- `node scripts/run-vitest.mjs run extensions/qqbot/src/engine/gateway/outbound-dispatch.test.ts`\n  - passed: 1 file, 3 tests\n\n## Real behavior proof\n\nBehavior addressed: Inbound quote/forward/thread supplemental context is filtered and projected consistently in core while preserving Discord self-reply body/media suppression and existing channel routing metadata.\n\nReal environment tested: Local source checkout with focused core, plugin SDK, and representative rich-channel Vitest suites plus extension test typecheck.\n\nExact steps or command run after this patch: See `Verification` above; latest branch-level commands were run after the final API/deprecation cleanup and commit.\n\nEvidence after fix: Focused tests passed for core finalization, SDK exports, Discord, Telegram, WhatsApp, Signal, iMessage, Matrix, MS Teams, Feishu, and QQBot surfaces; branch autoreview reported no accepted/actionable findings.\n\nObserved result after fix: Channels now pass canonical `SupplementalContext` or shared helper results into core; `finalizeInboundContext` projects legacy fields once; Matrix thread turns do not get unintended `ReplyToId` backfill.\n\nWhat was not tested: Full repository test suite, full CI, and live channel roundtrips were not run for this refactor PR.\n",
+        "branch": "refactor/channel-supplemental-context-core",
+        "head_sha": "62ecf5dd188b7d95532fdcdcb4275e7260e057fb",
+        "author": "steipete",
         "labels": [
-          "agents",
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦞 diamond lobster",
-          "status: 👀 ready for maintainer look"
+          "channel: discord",
+          "channel: imessage",
+          "channel: matrix",
+          "channel: msteams",
+          "channel: signal",
+          "channel: telegram",
+          "channel: whatsapp-web",
+          "maintainer",
+          "channel: feishu",
+          "size: L",
+          "channel: qqbot",
+          "mantis: telegram-visible-proof",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts",
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/message-handler.context.ts",
+            "additions": 38,
+            "deletions": 36,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/bot.test.ts",
             "additions": 39,
-            "deletions": 0,
+            "deletions": 36,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.ts",
+            "path": "extensions/feishu/src/bot.ts",
+            "additions": 12,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/imessage/src/monitor/inbound-processing.ts",
+            "additions": 28,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/matrix/src/matrix/monitor/handler.body-for-agent.test.ts",
+            "additions": 23,
+            "deletions": 17,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/matrix/src/matrix/monitor/handler.ts",
+            "additions": 20,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/msteams/src/monitor-handler/message-handler.authz.test.ts",
+            "additions": 7,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/msteams/src/monitor-handler/message-handler.ts",
+            "additions": 15,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qqbot/src/engine/gateway/outbound-dispatch.ts",
+            "additions": 8,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/signal/src/monitor/event-handler.ts",
             "additions": 9,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/signal/src/monitor/inbound-context.ts",
+            "additions": 18,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/bot-message-context.session.ts",
+            "additions": 38,
+            "deletions": 18,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/auto-reply/monitor/inbound-context.ts",
+            "additions": 16,
+            "deletions": 16,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts",
+            "additions": 9,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/inbound-context.test.ts",
+            "additions": 67,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
-            "additions": 10,
+            "path": "src/auto-reply/reply/inbound-context.ts",
+            "additions": 30,
             "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/templating.ts",
+            "additions": 35,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/channels/inbound-event/context.test.ts",
+            "additions": 62,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/channels/inbound-event/context.ts",
+            "additions": 11,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/channels/inbound-event/supplemental-context.ts",
+            "additions": 74,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/channels/turn/types.ts",
+            "additions": 6,
+            "deletions": 31,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/channel-inbound.ts",
+            "additions": 16,
+            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86427",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86427.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86479",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86479.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 101,
+          "total": 103,
           "counts": {
-            "SUCCESS": 73,
-            "SKIPPED": 27,
+            "CANCELLED": 2,
+            "SKIPPED": 26,
+            "SUCCESS": 74,
             "NEUTRAL": 1
           },
-          "blockers": [],
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
           "pending": [],
-          "terminalBlockers": []
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
         }
       },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2712,
+    "total_ms": 3389,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 427
+        "ms": 439
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1937
+        "ms": 2560
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 328
+        "ms": 370
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
