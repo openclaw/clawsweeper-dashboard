@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-25T08:43:58.488Z",
+  "generated_at": "2026-05-25T08:44:30.041Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-25T05:43:55.577Z",
+  "since": "2026-05-25T05:44:28.087Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4532888636
   ],
-  "status_comment_id": 4532889142,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "NONE",
       "comment_created_at": "2026-05-25T08:43:19Z",
       "comment_updated_at": "2026-05-25T08:43:19Z",
-      "status_comment_id": 4532889142,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -59,111 +59,34 @@
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-25T08:43:59.515Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 86388
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-25T08:44:01.217Z",
-          "response_comment_id": "4532889142",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): clear runtime config snapshot before SIGUSR1 in-process restart",
-        "body": "### Bug description\n\nAfter calling `config.patch` to update `openclaw.json`, a subsequent SIGUSR1 in-process restart reverts the newly-written config to the old values.\n\nThis is the root cause behind #86350.\n\n### Root cause analysis\n\n1. `config.patch` writes to `openclaw.json` via `replaceConfigFile()`.\n2. The Gateway run loop receives SIGUSR1 and triggers an in-process restart.\n3. The `onIteration` hook resets lanes and reloads the task registry, but **does not clear `runtimeConfigSnapshot`**.\n4. `loadConfig()` calls `loadPinnedRuntimeConfig()`, which returns the stale snapshot because `runtimeConfigSnapshot` is still set.\n5. The new iteration starts with old config. Any subsequent write (e.g. another `config.patch`) applies the stale snapshot as the base, silently reverting the first patch.\n\n### Fix\n\nCall `clearRuntimeConfigSnapshot()` in the restart iteration hook, right after `resetAllLanes()` and before `resetGatewayRestartStateForInProcessRestart()`.\n\n```diff\n// src/cli/gateway-cli/run-loop.ts\nconst { resetAllLanes, ... } = await loadGatewayLifecycleRuntimeModule();\nresetAllLanes();\n+clearRuntimeConfigSnapshot();\nresetGatewayRestartStateForInProcessRestart();\n```\n\nThis ensures the next startup reads fresh config from disk instead of the stale snapshot.\n\n### Real behavior proof\n\n**Behavior or issue addressed:** After `config.patch` writes new plugin paths to `openclaw.json`, a SIGUSR1 in-process restart should preserve the new config. Instead, it reverts to the pre-patch values because the stale `runtimeConfigSnapshot` is still pinned in memory.\n\n**Real environment tested:**\n- OS: Ubuntu 22.04 (VM-77-188-ubuntu)\n- Node: v24.14.1\n- OpenClaw: commit `b1b28415` (latest main as of 2026-05-25)\n- Config path: `~/.openclaw/openclaw.json`\n\n**Exact steps or command run after the patch:**\n1. Start OpenClaw Gateway: `openclaw gateway start`\n2. Patch config: `openclaw config.patch --plugins.load.paths /tmp/test-plugin`\n3. Verify disk write: `cat ~/.openclaw/openclaw.json` shows `/tmp/test-plugin`\n4. Trigger in-process restart: `kill -USR1 <gateway-pid>`\n5. Read config: `openclaw config.get --plugins.load.paths`\n\n**Evidence after fix:**\n\n*Before fix (console output):*\n```\n$ openclaw config.patch --plugins.load.paths /tmp/test-plugin\n$ cat ~/.openclaw/openclaw.json | jq '.plugins.load.paths'\n[\"/tmp/test-plugin\"]\n$ kill -USR1 12345\n$ openclaw config.get --plugins.load.paths\n[]\n```\nThe config reverts to empty array (pre-patch state).\n\n*After fix (console output):*\n```\n$ openclaw config.patch --plugins.load.paths /tmp/test-plugin\n$ cat ~/.openclaw/openclaw.json | jq '.plugins.load.paths'\n[\"/tmp/test-plugin\"]\n$ kill -USR1 12345\n$ openclaw config.get --plugins.load.paths\n[\"/tmp/test-plugin\"]\n```\nThe patch survives the restart.\n\n**Observed result after the fix:** After applying the fix, SIGUSR1 restart preserves the patched config. The `runtimeConfigSnapshot` is cleared, so `loadConfig()` reads fresh values from disk instead of returning the stale snapshot.\n\n**What was not tested:** No manual test on macOS or Windows. The fix is a single `clearRuntimeConfigSnapshot()` call in `run-loop.ts`, which is platform-agnostic.\n\n### Regression test\n\nAdded assertion in `run-loop.test.ts`:\n\n```ts\nexpect(clearRuntimeConfigSnapshot).toHaveBeenCalledTimes(1); // first SIGUSR1\n// ... second SIGUSR1 ...\nexpect(clearRuntimeConfigSnapshot).toHaveBeenCalledTimes(2);\n```\n\nMock setup:\n```ts\nvi.mock(\"../../config/runtime-snapshot.js\", () => ({\n  clearRuntimeConfigSnapshot: () => clearRuntimeConfigSnapshot(),\n}));\n```\n\n### Test results\n\n- `tsc --noEmit`: pass (no type errors)\n- `vitest run src/cli/gateway-cli/run-loop.test.ts`: test suite compiles and passes (verified via type-check)\n\n### Related issues\n\n- Fixes #86350\n\n---\n\n**Checklist**\n- [x] I have read the contribution guidelines.\n- [x] This change is minimal and scoped to the specific bug.\n- [x] Regression test included.\n- [x] Real behavior proof provided with all required fields.",
-        "branch": "fix/sigusr1-stale-config-snapshot",
-        "head_sha": "050d41c1ecdeac761774315818410f1083a68a7c",
-        "author": "xuzehan-icenter",
-        "labels": [
-          "cli",
-          "size: XS",
-          "proof: supplied",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 security-boundary",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/cli/gateway-cli/run-loop.test.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/run-loop.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86388",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86388.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 45,
-          "counts": {
-            "SUCCESS": 17,
-            "IN_PROGRESS": 3,
-            "SKIPPED": 24,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "preflight:IN_PROGRESS",
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS"
-          ],
-          "pending": [
-            "preflight:IN_PROGRESS",
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS"
-          ],
-          "terminalBlockers": []
-        }
-      }
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 6352,
+    "total_ms": 3015,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 738
+        "ms": 1945
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2164
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 3436
+        "ms": 1062
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
