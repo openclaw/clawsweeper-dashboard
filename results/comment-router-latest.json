@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-25T16:36:47.216Z",
+  "generated_at": "2026-05-25T16:39:05.613Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-25T13:36:45.060Z",
+  "since": "2026-05-25T13:39:03.035Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    86552
+    79214
   ],
-  "comment_ids": [
-    4535745745
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 6,
+  "commands_seen": 3,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,17 +31,112 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:86552:4535745745:2026-05-25T16:35:42Z:re_review",
-      "comment_id": "4535745745",
-      "comment_version_key": "4535745745:2026-05-25T16:35:42Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86552#issuecomment-4535745745",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:79214:4403062604:2026-05-25T16:38:59Z:clawsweeper_needs_human",
+      "comment_id": "4403062604",
+      "comment_version_key": "4403062604:2026-05-25T16:38:59Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/79214#issuecomment-4403062604",
       "repo": "openclaw/openclaw",
-      "issue_number": 86552,
-      "author": "TimToxopeus",
-      "author_id": 14136558,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-25T16:35:42Z",
-      "comment_updated_at": "2026-05-25T16:35:42Z",
+      "issue_number": 79214,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-08T03:27:35Z",
+      "comment_updated_at": "2026-05-25T16:38:59Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "No ClawSweeper repair lane is needed; the remaining action is normal maintainer review and CI gating for an otherwise clean PR.; Cleared: The diff only calls existing diagnostic helpers and adds tests/changelog; I found no concrete security or supply-chain concern. (sha=9328a27642c704cbaf68411653d246a25ab62620)",
+      "review_summary": "Adds gated `message.queued`, `session.state`, and `message.processed` diagnostic lifecycle events around isolated cron agent turns, with regression tests and a changelog entry.\n\nPR surface: Source +48, Tests +129, Docs +1. Total +178 across 3 files.\n\nReproducibility: yes. Source inspection of current main shows isolated cron turns execute without the lifecycle diagnostic calls while the dispatch path emits them; I did not run the repro because this review is read-only.",
+      "review_followup": "No ClawSweeper repair lane is needed; the remaining action is normal maintainer review and CI gating for an otherwise clean PR.",
+      "freeform_prompt": null,
+      "expected_head_sha": "9328a27642c704cbaf68411653d246a25ab62620",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): emit message.queued/processed for isolated-agent turns",
+        "body": "## Summary\n\nThe diagnostic-event seam for `message.queued` / `session.state` / `message.processed` is currently emitted only by channel-driven dispatch (`src/auto-reply/reply/dispatch-from-config.ts:417`) and the embedded runner (`src/agents/pi-embedded-runner/runs.ts:75,89`). The isolated-cron agent path (`src/cron/isolated-agent/run.ts`) executes full agent turns including LLM calls, but never emits these events. Anything subscribed to the diagnostic-events bus for per-session attribution silently drops 100% of cron-isolated traffic.\n\nThis PR adds a paired `logMessageQueued` → `logSessionStateChange(\"processing\")` → ... → `logSessionStateChange(\"idle\")` → `logMessageProcessed` lifecycle inside `runCronIsolatedAgentTurn`, using the prepared `runSessionId` / `runSessionKey` and a stable `cron-isolated` source label. This mirrors the dispatch path's lifecycle so `state.queueDepth` is incremented and decremented symmetrically and downstream subscribers see the full per-run lifecycle.\n\n## Problem\n\nAny consumer of `message.queued` for per-session attribution — diagnostics exporters, OTel bridges, custom observability plugins — currently sees zero spans for cron-isolated runs. LLM calls fire, sessions exist, but downstream subscribers cannot distinguish runs from each other and tend to bucket them under whatever static fallback id their integration uses.\n\nIn a deployment with several daily isolated cron jobs over a 13-day window, an OTel subscriber observed 63 distinct cron-driven sessions in the native JSONL shipper but only 4 distinct `session.id` values reaching its trace store — a 94% gap that this single emission point closes.\n\n## Solution\n\nAdded paired diagnostic-event calls to `runCronIsolatedAgentTurn`:\n\n- `logMessageQueued({sessionId, sessionKey, channel: \"cron\", source: \"cron-isolated\"})` after `prepared.ok`.\n- `logSessionStateChange({state: \"processing\"})` immediately after queued.\n- `logSessionStateChange({state: \"idle\"})` in `finally` (decrements `state.queueDepth`).\n- `logMessageProcessed({outcome, durationMs, error?})` in `finally`.\n\nOutcomes: success → `completed`; aborted/thrown/finalizer-error → `error` with reason.\n\n## Changes\n\n- `src/cron/isolated-agent/run.ts` — added the diagnostic lifecycle calls inside `runCronIsolatedAgentTurn`.\n- `src/cron/isolated-agent/run.diagnostic-events.test.ts` — new focused regression test asserting the queued → processing → idle → processed sequence with consistent `sessionKey`.\n- `CHANGELOG.md` — entry under `## Unreleased` / `### Fixes`.\n\n## Real Behavior Proof\n\n- **Behavior or issue addressed:** Subscribers to OpenClaw's diagnostic-events bus (e.g. OTel exporters) receive zero `message.queued` / `message.processed` events for isolated-cron agent turns, even though those runs make LLM calls and have a real session UUID. Downstream attribution buckets every cron-isolated run under whatever static fallback id the integration declares, hiding distinct sessions from traces.\n- **Real environment tested:** Local OpenClaw checkout built from this branch (`pr/cron-isolated-message-queued`, head `275f1bb430`) on Linux 6.12.30 / Node 24.13.0. Gateway run as a systemd user unit (`openclaw-gateway.service`). A diagnostic-events subscriber registered via `onDiagnosticEvent` was attached to verify event emission per run.\n- **Exact steps or command run after this patch:**\n\n```bash\npnpm install\npnpm tsgo:core\npnpm test src/cron/isolated-agent/run.diagnostic-events.test.ts\npnpm test src/cron/isolated-agent/run.session-key.test.ts \\\n          src/cron/isolated-agent/run.session-key-isolation.test.ts \\\n          src/cron/isolated-agent/run.payload-fallbacks.test.ts \\\n          src/cron/isolated-agent/run.meta-error-status.test.ts\npnpm build\nsystemctl --user restart openclaw-gateway\nnode dist/index.js cron run <isolated-job-id>\njournalctl --user -u openclaw-gateway --since \"30 seconds ago\" \\\n  | grep -E \"event: message\\\\.(queued|processed)|started root span\"\n```\n\n- **Evidence after fix:** Subscriber output from the live deployment after triggering an isolated cron job (session UUIDs and job ids redacted to short prefixes; agent label is generic, no IPs / chat ids / private endpoints):\n\n```\n[bridge] event: message.queued sessionKey: agent:main:cron:<jobId-prefix>:run:<runUuid-prefix> source: cron-isolated\n[bridge] started root span for main session: agent:main:cron:<jobId-prefix>:run:<runUuid-prefix> agent: <agentId>\n[bridge] event: message.processed sessionKey: agent:main:cron:<jobId-prefix>:run:<runUuid-prefix>\n```\n\nTests:\n\n```\npnpm tsgo:core              → exit 0\npnpm test src/cron/isolated-agent/run.diagnostic-events.test.ts\n  Test Files  1 passed (1)\n       Tests  1 passed (1)\n\npnpm test src/cron/isolated-agent/run.session-key.test.ts \\\n          src/cron/isolated-agent/run.session-key-isolation.test.ts \\\n          src/cron/isolated-agent/run.payload-fallbacks.test.ts \\\n          src/cron/isolated-agent/run.meta-error-status.test.ts\n  Test Files  4 passed (4)\n       Tests  17 passed (17)\n```\n\n- **Observed result after fix:** Both lifecycle events fire with the run's `sessionId` / `sessionKey`. The bridge subscriber attached via `onDiagnosticEvent` receives `message.queued`, then `session.state` (processing → idle), then `message.processed`, all sharing the same `sessionKey` for the same isolated cron run. `state.queueDepth` returns to 0 after the run because the paired `logSessionStateChange(\"idle\")` runs in `finally`. Distinct cron run UUIDs now reach downstream span/aggregation logic instead of collapsing into a single static fallback id.\n- **What was not tested:** The heartbeat-runner isolated-session path at `src/infra/heartbeat-runner.ts:1266` shares a similar shape but is intentionally out of scope for this PR — left as a follow-up if maintainers agree the same seam belongs there. `pnpm check` was not run end-to-end; the changed-surface gates above plus the build are the proof bar this PR carries.\n\n## Notes\n\n- `logMessageQueued` runs after `prepared.ok` to avoid noisy queued/processed pairs for runs that bail out at preparation; matches the existing pattern where dispatch only logs after route resolution.\n- Both `logSessionStateChange` calls and `logMessageProcessed` run inside the `finally` block, ensuring the `state.queueDepth` decrement and processed event always fire even on early returns / throws.\n- No public-API changes; `logMessageQueued` / `logSessionStateChange` / `logMessageProcessed` are existing exports.\n\n## Review feedback addressed (rev 2, commit 275f1bb430)\n\n- **P1 — taskLabel:** dropped. The `logMessageQueued` call now passes only `{sessionId, sessionKey, channel, source}`, matching the helper's typed parameter and event schema on `main`.\n- **P2 — queue-state lifecycle:** added `logSessionStateChange({state: \"processing\"})` immediately after `logMessageQueued`, and `logSessionStateChange({state: \"idle\"})` in the `finally` block before `logMessageProcessed`. This pairs the `state.queueDepth` increment with its decrement and matches the dispatch path's lifecycle.\n- **P3 — changelog:** added entry under `## Unreleased` / `### Fixes`.\n- **Real behavior proof:** subscriber output included above (redacted).\n- **Regression test:** added `run.diagnostic-events.test.ts` covering queued / processing / idle / processed sequencing and session-key consistency.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+        "branch": "pr/cron-isolated-message-queued",
+        "head_sha": "9328a27642c704cbaf68411653d246a25ab62620",
+        "author": "arniesaha",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦞 diamond lobster",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run.diagnostic-events.test.ts",
+            "additions": 129,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run.ts",
+            "additions": 49,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-79214",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-79214.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "CANCELLED": 1,
+            "SUCCESS": 71,
+            "SKIPPED": 28,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-commands-doctor:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-commands-doctor:FAILURE"
+          ]
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:79214:4432490577:2026-05-12T16:09:35Z:re_review",
+      "comment_id": "4432490577",
+      "comment_version_key": "4432490577:2026-05-12T16:09:35Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/79214#issuecomment-4432490577",
+      "repo": "openclaw/openclaw",
+      "issue_number": 79214,
+      "author": "arniesaha",
+      "author_id": 3646287,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-12T16:09:35Z",
+      "comment_updated_at": "2026-05-12T16:09:35Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -64,93 +157,178 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "perf(agents): reuse manifest metadata during model resolution",
-        "body": "## Summary\n- resolve manifest plugin metadata once while resolving configured/default model refs\n- pass the resolved `manifestPlugins` through alias index construction and nested model normalization instead of reloading manifest metadata repeatedly\n- add a regression test that keeps `openrouter:auto` manifest normalization working while proving metadata is only loaded once\n\n## AI assistance\nThis PR was AI-assisted. Alyana/Codex helped identify the resolver hot path, write the patch, add the regression test, and run local validation.\n\n## Understanding\nThe resolver uses manifest plugin metadata to normalize provider/model refs, including aliases such as `openrouter:auto` and configured shorthand aliases. The issue was not that normalization was wrong, but that this codepath repeatedly reloaded the same manifest metadata while resolving aliases. This patch resolves the manifest plugin list once, preserves the default-manifest fallback behavior, and threads the resolved metadata through the nested resolver calls.\n\n## Real behavior proof\n- **Behavior or issue addressed:** Real OpenClaw agent-turn model resolution was spending multiple seconds repeatedly loading manifest metadata while resolving the default model and alias index.\n- **Real environment tested:** Local Lumina/OpenClaw setup serving the real Discord-backed agent session for `#alyana`, using the same runtime path that triggered the profiling trace.\n- **Exact steps or command run after this patch:** Sent a real Discord request through the local OpenClaw session path and inspected the runtime resolver profiling output for the resulting agent turn after applying this patch.\n- **Evidence after fix:** Redacted runtime log / live output excerpt from the real OpenClaw setup after the patch:\n\n```text\nbefore patch, real agent turn profiling:\nresolve_default_model: 3.818s\n  resolve_for_agent: 1.900s\n  build_alias_index: 1.918s\n\nafter patch, same real session path:\nresolve_default_model: 156ms\n  resolve_for_agent: 80ms\n  build_alias_index: 76ms\n```\n\n- **Observed result after fix:** The resolver hot path dropped from seconds to roughly 156ms on the real Discord/session path while preserving manifest normalization for `openrouter:auto` and configured shorthand aliases.\n- **What was not tested:** I did not paste raw private Discord/session logs into this public PR. Broad full-suite failures remain in unrelated ACP env, CLI update/option-collision, and registry-backed channel contract shards.\n\n## Session / prompt context\nThe issue was found from local OpenClaw runtime profiling during real Discord request handling. I am not pasting raw private Discord/session logs into the PR body, but the sanitized trace above captures the measured before/after resolver timings from the real setup.\n\n## Validation\n- `pnpm vitest run src/agents/model-selection-manifest-workspace.test.ts`\n- `pnpm vitest run src/agents/model-selection-resolve.test.ts src/agents/model-selection.test.ts src/gateway/session-utils.test.ts`\n- `pnpm build && pnpm check`\n- `pnpm test` attempted; broad suite still has unrelated failures in ACP env, CLI update/option-collision, and registry-backed channel contract shards, with no resolver/model-selection failures observed\n- `codex review --base origin/main` attempted locally, but could not complete because local Codex/OpenAI auth is missing (`401 Unauthorized`)",
-        "branch": "alyana/resolve-default-model-manifest-normalization",
-        "head_sha": "101217754a3fad863094c3947d15b7bb79524add",
-        "author": "timtoxopeus",
+        "title": "fix(cron): emit message.queued/processed for isolated-agent turns",
+        "body": "## Summary\n\nThe diagnostic-event seam for `message.queued` / `session.state` / `message.processed` is currently emitted only by channel-driven dispatch (`src/auto-reply/reply/dispatch-from-config.ts:417`) and the embedded runner (`src/agents/pi-embedded-runner/runs.ts:75,89`). The isolated-cron agent path (`src/cron/isolated-agent/run.ts`) executes full agent turns including LLM calls, but never emits these events. Anything subscribed to the diagnostic-events bus for per-session attribution silently drops 100% of cron-isolated traffic.\n\nThis PR adds a paired `logMessageQueued` → `logSessionStateChange(\"processing\")` → ... → `logSessionStateChange(\"idle\")` → `logMessageProcessed` lifecycle inside `runCronIsolatedAgentTurn`, using the prepared `runSessionId` / `runSessionKey` and a stable `cron-isolated` source label. This mirrors the dispatch path's lifecycle so `state.queueDepth` is incremented and decremented symmetrically and downstream subscribers see the full per-run lifecycle.\n\n## Problem\n\nAny consumer of `message.queued` for per-session attribution — diagnostics exporters, OTel bridges, custom observability plugins — currently sees zero spans for cron-isolated runs. LLM calls fire, sessions exist, but downstream subscribers cannot distinguish runs from each other and tend to bucket them under whatever static fallback id their integration uses.\n\nIn a deployment with several daily isolated cron jobs over a 13-day window, an OTel subscriber observed 63 distinct cron-driven sessions in the native JSONL shipper but only 4 distinct `session.id` values reaching its trace store — a 94% gap that this single emission point closes.\n\n## Solution\n\nAdded paired diagnostic-event calls to `runCronIsolatedAgentTurn`:\n\n- `logMessageQueued({sessionId, sessionKey, channel: \"cron\", source: \"cron-isolated\"})` after `prepared.ok`.\n- `logSessionStateChange({state: \"processing\"})` immediately after queued.\n- `logSessionStateChange({state: \"idle\"})` in `finally` (decrements `state.queueDepth`).\n- `logMessageProcessed({outcome, durationMs, error?})` in `finally`.\n\nOutcomes: success → `completed`; aborted/thrown/finalizer-error → `error` with reason.\n\n## Changes\n\n- `src/cron/isolated-agent/run.ts` — added the diagnostic lifecycle calls inside `runCronIsolatedAgentTurn`.\n- `src/cron/isolated-agent/run.diagnostic-events.test.ts` — new focused regression test asserting the queued → processing → idle → processed sequence with consistent `sessionKey`.\n- `CHANGELOG.md` — entry under `## Unreleased` / `### Fixes`.\n\n## Real Behavior Proof\n\n- **Behavior or issue addressed:** Subscribers to OpenClaw's diagnostic-events bus (e.g. OTel exporters) receive zero `message.queued` / `message.processed` events for isolated-cron agent turns, even though those runs make LLM calls and have a real session UUID. Downstream attribution buckets every cron-isolated run under whatever static fallback id the integration declares, hiding distinct sessions from traces.\n- **Real environment tested:** Local OpenClaw checkout built from this branch (`pr/cron-isolated-message-queued`, head `275f1bb430`) on Linux 6.12.30 / Node 24.13.0. Gateway run as a systemd user unit (`openclaw-gateway.service`). A diagnostic-events subscriber registered via `onDiagnosticEvent` was attached to verify event emission per run.\n- **Exact steps or command run after this patch:**\n\n```bash\npnpm install\npnpm tsgo:core\npnpm test src/cron/isolated-agent/run.diagnostic-events.test.ts\npnpm test src/cron/isolated-agent/run.session-key.test.ts \\\n          src/cron/isolated-agent/run.session-key-isolation.test.ts \\\n          src/cron/isolated-agent/run.payload-fallbacks.test.ts \\\n          src/cron/isolated-agent/run.meta-error-status.test.ts\npnpm build\nsystemctl --user restart openclaw-gateway\nnode dist/index.js cron run <isolated-job-id>\njournalctl --user -u openclaw-gateway --since \"30 seconds ago\" \\\n  | grep -E \"event: message\\\\.(queued|processed)|started root span\"\n```\n\n- **Evidence after fix:** Subscriber output from the live deployment after triggering an isolated cron job (session UUIDs and job ids redacted to short prefixes; agent label is generic, no IPs / chat ids / private endpoints):\n\n```\n[bridge] event: message.queued sessionKey: agent:main:cron:<jobId-prefix>:run:<runUuid-prefix> source: cron-isolated\n[bridge] started root span for main session: agent:main:cron:<jobId-prefix>:run:<runUuid-prefix> agent: <agentId>\n[bridge] event: message.processed sessionKey: agent:main:cron:<jobId-prefix>:run:<runUuid-prefix>\n```\n\nTests:\n\n```\npnpm tsgo:core              → exit 0\npnpm test src/cron/isolated-agent/run.diagnostic-events.test.ts\n  Test Files  1 passed (1)\n       Tests  1 passed (1)\n\npnpm test src/cron/isolated-agent/run.session-key.test.ts \\\n          src/cron/isolated-agent/run.session-key-isolation.test.ts \\\n          src/cron/isolated-agent/run.payload-fallbacks.test.ts \\\n          src/cron/isolated-agent/run.meta-error-status.test.ts\n  Test Files  4 passed (4)\n       Tests  17 passed (17)\n```\n\n- **Observed result after fix:** Both lifecycle events fire with the run's `sessionId` / `sessionKey`. The bridge subscriber attached via `onDiagnosticEvent` receives `message.queued`, then `session.state` (processing → idle), then `message.processed`, all sharing the same `sessionKey` for the same isolated cron run. `state.queueDepth` returns to 0 after the run because the paired `logSessionStateChange(\"idle\")` runs in `finally`. Distinct cron run UUIDs now reach downstream span/aggregation logic instead of collapsing into a single static fallback id.\n- **What was not tested:** The heartbeat-runner isolated-session path at `src/infra/heartbeat-runner.ts:1266` shares a similar shape but is intentionally out of scope for this PR — left as a follow-up if maintainers agree the same seam belongs there. `pnpm check` was not run end-to-end; the changed-surface gates above plus the build are the proof bar this PR carries.\n\n## Notes\n\n- `logMessageQueued` runs after `prepared.ok` to avoid noisy queued/processed pairs for runs that bail out at preparation; matches the existing pattern where dispatch only logs after route resolution.\n- Both `logSessionStateChange` calls and `logMessageProcessed` run inside the `finally` block, ensuring the `state.queueDepth` decrement and processed event always fire even on early returns / throws.\n- No public-API changes; `logMessageQueued` / `logSessionStateChange` / `logMessageProcessed` are existing exports.\n\n## Review feedback addressed (rev 2, commit 275f1bb430)\n\n- **P1 — taskLabel:** dropped. The `logMessageQueued` call now passes only `{sessionId, sessionKey, channel, source}`, matching the helper's typed parameter and event schema on `main`.\n- **P2 — queue-state lifecycle:** added `logSessionStateChange({state: \"processing\"})` immediately after `logMessageQueued`, and `logSessionStateChange({state: \"idle\"})` in the `finally` block before `logMessageProcessed`. This pairs the `state.queueDepth` increment with its decrement and matches the dispatch path's lifecycle.\n- **P3 — changelog:** added entry under `## Unreleased` / `### Fixes`.\n- **Real behavior proof:** subscriber output included above (redacted).\n- **Regression test:** added `run.diagnostic-events.test.ts` covering queued / processing / idle / processed sequencing and session-key consistency.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+        "branch": "pr/cron-isolated-message-queued",
+        "head_sha": "9328a27642c704cbaf68411653d246a25ab62620",
+        "author": "arniesaha",
         "labels": [
-          "agents",
           "size: S",
           "proof: supplied",
+          "proof: sufficient",
           "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
+          "rating: 🦞 diamond lobster",
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "src/agents/model-selection-manifest-workspace.test.ts",
-            "additions": 94,
+            "path": "CHANGELOG.md",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/model-selection-shared.ts",
-            "additions": 53,
-            "deletions": 14,
+            "path": "src/cron/isolated-agent/run.diagnostic-events.test.ts",
+            "additions": 129,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run.ts",
+            "additions": 49,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86552",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86552.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-79214",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-79214.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 37,
+          "total": 102,
           "counts": {
-            "IN_PROGRESS": 11,
-            "SKIPPED": 17,
-            "SUCCESS": 9
+            "CANCELLED": 1,
+            "SUCCESS": 71,
+            "SKIPPED": 28,
+            "FAILURE": 1,
+            "NEUTRAL": 1
           },
           "blockers": [
-            "preflight:IN_PROGRESS",
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Scan changed paths (precise):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "security-fast:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS"
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-commands-doctor:FAILURE"
           ],
-          "pending": [
-            "preflight:IN_PROGRESS",
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Scan changed paths (precise):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "security-fast:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS"
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-commands-doctor:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:79214:4403208390:2026-05-08T04:00:33Z:re_review",
+      "comment_id": "4403208390",
+      "comment_version_key": "4403208390:2026-05-08T04:00:33Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/79214#issuecomment-4403208390",
+      "repo": "openclaw/openclaw",
+      "issue_number": 79214,
+      "author": "arniesaha",
+      "author_id": 3646287,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-08T04:00:33Z",
+      "comment_updated_at": "2026-05-08T04:00:33Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): emit message.queued/processed for isolated-agent turns",
+        "body": "## Summary\n\nThe diagnostic-event seam for `message.queued` / `session.state` / `message.processed` is currently emitted only by channel-driven dispatch (`src/auto-reply/reply/dispatch-from-config.ts:417`) and the embedded runner (`src/agents/pi-embedded-runner/runs.ts:75,89`). The isolated-cron agent path (`src/cron/isolated-agent/run.ts`) executes full agent turns including LLM calls, but never emits these events. Anything subscribed to the diagnostic-events bus for per-session attribution silently drops 100% of cron-isolated traffic.\n\nThis PR adds a paired `logMessageQueued` → `logSessionStateChange(\"processing\")` → ... → `logSessionStateChange(\"idle\")` → `logMessageProcessed` lifecycle inside `runCronIsolatedAgentTurn`, using the prepared `runSessionId` / `runSessionKey` and a stable `cron-isolated` source label. This mirrors the dispatch path's lifecycle so `state.queueDepth` is incremented and decremented symmetrically and downstream subscribers see the full per-run lifecycle.\n\n## Problem\n\nAny consumer of `message.queued` for per-session attribution — diagnostics exporters, OTel bridges, custom observability plugins — currently sees zero spans for cron-isolated runs. LLM calls fire, sessions exist, but downstream subscribers cannot distinguish runs from each other and tend to bucket them under whatever static fallback id their integration uses.\n\nIn a deployment with several daily isolated cron jobs over a 13-day window, an OTel subscriber observed 63 distinct cron-driven sessions in the native JSONL shipper but only 4 distinct `session.id` values reaching its trace store — a 94% gap that this single emission point closes.\n\n## Solution\n\nAdded paired diagnostic-event calls to `runCronIsolatedAgentTurn`:\n\n- `logMessageQueued({sessionId, sessionKey, channel: \"cron\", source: \"cron-isolated\"})` after `prepared.ok`.\n- `logSessionStateChange({state: \"processing\"})` immediately after queued.\n- `logSessionStateChange({state: \"idle\"})` in `finally` (decrements `state.queueDepth`).\n- `logMessageProcessed({outcome, durationMs, error?})` in `finally`.\n\nOutcomes: success → `completed`; aborted/thrown/finalizer-error → `error` with reason.\n\n## Changes\n\n- `src/cron/isolated-agent/run.ts` — added the diagnostic lifecycle calls inside `runCronIsolatedAgentTurn`.\n- `src/cron/isolated-agent/run.diagnostic-events.test.ts` — new focused regression test asserting the queued → processing → idle → processed sequence with consistent `sessionKey`.\n- `CHANGELOG.md` — entry under `## Unreleased` / `### Fixes`.\n\n## Real Behavior Proof\n\n- **Behavior or issue addressed:** Subscribers to OpenClaw's diagnostic-events bus (e.g. OTel exporters) receive zero `message.queued` / `message.processed` events for isolated-cron agent turns, even though those runs make LLM calls and have a real session UUID. Downstream attribution buckets every cron-isolated run under whatever static fallback id the integration declares, hiding distinct sessions from traces.\n- **Real environment tested:** Local OpenClaw checkout built from this branch (`pr/cron-isolated-message-queued`, head `275f1bb430`) on Linux 6.12.30 / Node 24.13.0. Gateway run as a systemd user unit (`openclaw-gateway.service`). A diagnostic-events subscriber registered via `onDiagnosticEvent` was attached to verify event emission per run.\n- **Exact steps or command run after this patch:**\n\n```bash\npnpm install\npnpm tsgo:core\npnpm test src/cron/isolated-agent/run.diagnostic-events.test.ts\npnpm test src/cron/isolated-agent/run.session-key.test.ts \\\n          src/cron/isolated-agent/run.session-key-isolation.test.ts \\\n          src/cron/isolated-agent/run.payload-fallbacks.test.ts \\\n          src/cron/isolated-agent/run.meta-error-status.test.ts\npnpm build\nsystemctl --user restart openclaw-gateway\nnode dist/index.js cron run <isolated-job-id>\njournalctl --user -u openclaw-gateway --since \"30 seconds ago\" \\\n  | grep -E \"event: message\\\\.(queued|processed)|started root span\"\n```\n\n- **Evidence after fix:** Subscriber output from the live deployment after triggering an isolated cron job (session UUIDs and job ids redacted to short prefixes; agent label is generic, no IPs / chat ids / private endpoints):\n\n```\n[bridge] event: message.queued sessionKey: agent:main:cron:<jobId-prefix>:run:<runUuid-prefix> source: cron-isolated\n[bridge] started root span for main session: agent:main:cron:<jobId-prefix>:run:<runUuid-prefix> agent: <agentId>\n[bridge] event: message.processed sessionKey: agent:main:cron:<jobId-prefix>:run:<runUuid-prefix>\n```\n\nTests:\n\n```\npnpm tsgo:core              → exit 0\npnpm test src/cron/isolated-agent/run.diagnostic-events.test.ts\n  Test Files  1 passed (1)\n       Tests  1 passed (1)\n\npnpm test src/cron/isolated-agent/run.session-key.test.ts \\\n          src/cron/isolated-agent/run.session-key-isolation.test.ts \\\n          src/cron/isolated-agent/run.payload-fallbacks.test.ts \\\n          src/cron/isolated-agent/run.meta-error-status.test.ts\n  Test Files  4 passed (4)\n       Tests  17 passed (17)\n```\n\n- **Observed result after fix:** Both lifecycle events fire with the run's `sessionId` / `sessionKey`. The bridge subscriber attached via `onDiagnosticEvent` receives `message.queued`, then `session.state` (processing → idle), then `message.processed`, all sharing the same `sessionKey` for the same isolated cron run. `state.queueDepth` returns to 0 after the run because the paired `logSessionStateChange(\"idle\")` runs in `finally`. Distinct cron run UUIDs now reach downstream span/aggregation logic instead of collapsing into a single static fallback id.\n- **What was not tested:** The heartbeat-runner isolated-session path at `src/infra/heartbeat-runner.ts:1266` shares a similar shape but is intentionally out of scope for this PR — left as a follow-up if maintainers agree the same seam belongs there. `pnpm check` was not run end-to-end; the changed-surface gates above plus the build are the proof bar this PR carries.\n\n## Notes\n\n- `logMessageQueued` runs after `prepared.ok` to avoid noisy queued/processed pairs for runs that bail out at preparation; matches the existing pattern where dispatch only logs after route resolution.\n- Both `logSessionStateChange` calls and `logMessageProcessed` run inside the `finally` block, ensuring the `state.queueDepth` decrement and processed event always fire even on early returns / throws.\n- No public-API changes; `logMessageQueued` / `logSessionStateChange` / `logMessageProcessed` are existing exports.\n\n## Review feedback addressed (rev 2, commit 275f1bb430)\n\n- **P1 — taskLabel:** dropped. The `logMessageQueued` call now passes only `{sessionId, sessionKey, channel, source}`, matching the helper's typed parameter and event schema on `main`.\n- **P2 — queue-state lifecycle:** added `logSessionStateChange({state: \"processing\"})` immediately after `logMessageQueued`, and `logSessionStateChange({state: \"idle\"})` in the `finally` block before `logMessageProcessed`. This pairs the `state.queueDepth` increment with its decrement and matches the dispatch path's lifecycle.\n- **P3 — changelog:** added entry under `## Unreleased` / `### Fixes`.\n- **Real behavior proof:** subscriber output included above (redacted).\n- **Regression test:** added `run.diagnostic-events.test.ts` covering queued / processing / idle / processed sequencing and session-key consistency.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+        "branch": "pr/cron-isolated-message-queued",
+        "head_sha": "9328a27642c704cbaf68411653d246a25ab62620",
+        "author": "arniesaha",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦞 diamond lobster",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run.diagnostic-events.test.ts",
+            "additions": 129,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run.ts",
+            "additions": 49,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-79214",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-79214.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "CANCELLED": 1,
+            "SUCCESS": 71,
+            "SKIPPED": 28,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-commands-doctor:FAILURE"
           ],
-          "terminalBlockers": []
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-commands-doctor:FAILURE"
+          ]
         }
       },
       "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2423,
+    "total_ms": 2884,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 550
+        "ms": 422
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1593
+        "ms": 2143
       },
       {
         "name": "classify_commands",
@@ -158,11 +336,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 268
+        "ms": 297
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
