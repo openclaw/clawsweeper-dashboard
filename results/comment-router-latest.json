@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-25T12:35:24.932Z",
+  "generated_at": "2026-05-25T12:36:09.378Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-25T09:35:22.664Z",
+  "since": "2026-05-25T09:36:06.708Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    86427
+    86177
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 11,
+  "commands_seen": 5,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86427:4533296023:2026-05-25T12:35:19Z:clawsweeper_needs_human",
-      "comment_id": "4533296023",
-      "comment_version_key": "4533296023:2026-05-25T12:35:19Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86427#issuecomment-4533296023",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86177:4529749953:2026-05-25T12:36:01Z:clawsweeper_needs_human",
+      "comment_id": "4529749953",
+      "comment_version_key": "4529749953:2026-05-25T12:36:01Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86177#issuecomment-4529749953",
       "repo": "openclaw/openclaw",
-      "issue_number": 86427,
+      "issue_number": 86177,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-25T09:50:52Z",
-      "comment_updated_at": "2026-05-25T12:35:19Z",
+      "comment_created_at": "2026-05-24T19:31:33Z",
+      "comment_updated_at": "2026-05-25T12:36:01Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -51,46 +51,83 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "No ClawSweeper repair lane is needed because the diff is narrow and I found no actionable defect; the remaining path is maintainer review and CI gating.; Cleared: The diff touches only embedded runner lock lifecycle code and tests, with no dependency, workflow, package, credential, or supply-chain surface change. (sha=acef98666993a9bd0999b4ced34651b622ede671)",
-      "review_summary": "The PR adds an idempotent embedded-attempt session lock controller dispose path, invokes it from runEmbeddedAttempt teardown, and adds regression tests for skipped-cleanup and cleanup-handoff lock lifecycles.\n\nPR surface: Source +19, Tests +39. Total +58 across 3 files.\n\nReproducibility: yes. Source inspection shows current main eagerly retains heldLock and only releases it through the cleanup block, while the PR body supplies before/after live output from a harness using the real lock primitive and controller.",
-      "review_followup": "No ClawSweeper repair lane is needed because the diff is narrow and I found no actionable defect; the remaining path is maintainer review and CI gating.",
+      "repair_reason": "No mechanical repair is identified after the latest scoping; the remaining action is maintainer compatibility acceptance and normal landing review.; Cleared: No concrete security or supply-chain regression was found; the diff touches agent runtime code and tests but not dependencies, lockfiles, workflows, release scripts, permissions, or secret handling. (sha=a13f5b15f8a085aabbb9ff09583e7f70f19622ea)",
+      "review_summary": "The PR adds a shared OpenAI-compatible conversation-turn detector, applies a ModelStudio/DashScope/Qwen-scoped chat payload guard, updates blank-prompt replay classification, and adds focused transport, compat, helper, and compaction regression tests.\n\nPR surface: Source +83, Tests +298. Total +381 across 9 files.\n\nReproducibility: Partly: current source shows main can send a system/tool-only OpenAI-compatible payload, and the PR body exercises the fixed path with a local loopback runtime endpoint. The exact reporter Qwen compaction capture was not independently reproduced in this review.",
+      "review_followup": "No mechanical repair is identified after the latest scoping; the remaining action is maintainer compatibility acceptance and normal landing review.",
       "freeform_prompt": null,
-      "expected_head_sha": "acef98666993a9bd0999b4ced34651b622ede671",
+      "expected_head_sha": "a13f5b15f8a085aabbb9ff09583e7f70f19622ea",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): release embedded-attempt session lock on every exit path",
-        "body": "### Summary\n\n- **Problem**: During an embedded agent run the gateway holds a write lock on the session `.jsonl` file. If the run times out or a tool errors, the lock can be left held by the live gateway process — subsequent requests to that session block for the acquire timeout and then fail with `SessionWriteLockTimeoutError` (`OPENCLAW_SESSION_WRITE_LOCK_TIMEOUT`), and the retained session graph leaks memory. (#86014)\n- **Root Cause**: `createEmbeddedAttemptSessionLockController` acquires its coarse session lock (`heldLock`) **eagerly at creation** and the run releases it only inside the post-run cleanup block (`acquireForCleanup` → `cleanupEmbeddedAttemptResources`, which itself releases in a `finally`). That cleanup block is ordinary try-body code. The run's outer `finally` did **not** release the lock — it only emitted diagnostics and restored skill env. Normal timeout/abort/error paths funnel into `aborted`/`timedOut`/`promptError` flags and *do* reach the cleanup block, but an exception thrown in the ~post-prompt processing between the prompt teardown and the cleanup block (e.g. a tool/result step or the trajectory flush erroring) escapes straight to the outer `finally`, skipping the release. The lock then stays held by the live process (its PID is alive, so it is not stale) until the long compaction-scaled watchdog window elapses or a retry re-acquires it — effectively wedging the session. (The reporter's \"`maxHoldMs` grows unboundedly\" is a fixed value: the embedded-attempt lock's `maxHoldMs` is the compaction window + grace = `1020000`ms, matching the reported lock file; the observed `createdAt` refresh is the lock being re-acquired by retries.)\n- **Fix**: Give the lock controller an idempotent `dispose()` that releases `heldLock` if it is still retained, and call it from the run's outer `finally` so the lock is released on **every** exit path. On normal/aborted/timed-out runs the cleanup block still hands the lock to `acquireForCleanup` first, so `dispose()` is a no-op then (no double release); only the exception-skips-cleanup path now actually releases via `dispose()`.\n- **What changed**:\n  - `src/agents/pi-embedded-runner/run/attempt.session-lock.ts`: add `dispose(): Promise<void>` to `EmbeddedAttemptSessionLockController` (releases the retained `heldLock`, idempotent).\n  - `src/agents/pi-embedded-runner/run/attempt.ts`: capture a `releaseRetainedSessionLock` closure once the controller exists and invoke it in the run's outer `finally` (guarded so a release error is logged rather than masking the run's original error).\n  - `src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts`: regression coverage.\n- **What did NOT change (scope boundary)**:\n  - The happy-path lock handoff (`acquireForCleanup` → `cleanupEmbeddedAttemptResources`) and its flush behavior are unchanged; `dispose()` is a safety net.\n  - The session write-lock primitive, its watchdog/stale logic, and `maxHoldMs` derivation are unchanged. The separate \"an operation inside `withSessionWriteLock` never returns\" variant (its own `finally` cannot run) remains covered only by the watchdog and is out of scope.\n  - No config keys, protocol, or message-delivery behavior changed.\n\n### Reproduction\n\n1. An embedded attempt creates the session lock controller (eagerly acquiring the session write lock).\n2. Post-prompt processing throws (e.g. a tool/result step or trajectory flush errors) before the cleanup block runs `acquireForCleanup`.\n- Before: the exception escapes to the outer `finally`, which does not release the lock; the lock file persists held by the live process and the next request to that session fails with `SessionWriteLockTimeoutError`.\n- After: the outer `finally` calls the controller's `dispose()`, releasing the retained lock; the next request succeeds.\n\n### Real behavior proof\n\n- **Behavior addressed**: when an embedded attempt throws after eagerly acquiring the session lock but before the cleanup block, the run must still release the session write lock so later requests to the same session do not fail with `SessionWriteLockTimeoutError`.\n- **Real environment tested (Linux, Node 22)**: a standalone harness drives the **real** `acquireSessionWriteLock` and the **real** `createEmbeddedAttemptSessionLockController` against a temp session file, with the embedded-attempt `maxHoldMs` (1020000) the gateway uses. It runs an attempt that acquires the lock then throws during post-prompt processing, then issues a second `acquireSessionWriteLock` for the same session from the same live process — once without the fix (no `dispose()` in the finally) and once with it.\n- **Exact steps or command run after this patch**: `tsx /tmp/qmd86014/repro.mts`.\n- **Evidence after fix (verbatim harness output)**:\n\n```text\n--- BEFORE (pre-fix: outer finally does not release) (dispose in finally = false) ---\n  attempt threw: post-processing failure (e.g., trajectory flush)\n  lock file persists: true\n  subsequent acquire on same session: FAILED SessionWriteLockTimeoutError (isSessionWriteLockTimeoutError=true)\n\n--- AFTER (fix: outer finally calls controller.dispose()) (dispose in finally = true) ---\n  attempt threw: post-processing failure (e.g., trajectory flush)\n  lock file persists: false\n  subsequent acquire on same session: SUCCEEDED\n\nRESULT: PASS — BEFORE leaks the lock and the next request hits SessionWriteLockTimeoutError;\n         AFTER (controller.dispose() in the outer finally) releases it and the next request succeeds.\n```\n\n- **Observed result after fix**: the leaked lock is released on the exception path; the next request to the same session succeeds instead of failing with `SessionWriteLockTimeoutError` — the reporter's error (`session file locked (timeout 60000ms): pid=7 …/<session>.jsonl.lock`) is reproduced verbatim (same shape, differing only in timeout/pid) and removed by the fix.\n- **Regression tests**: `pnpm test src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts` (68 passed) including two new cases — `dispose()` releases the eagerly-held lock when cleanup is skipped (and is idempotent), and `dispose()` does not double-release a lock already handed to `acquireForCleanup`.\n- **What was not tested**: a full multi-process live gateway run with real cron `agentTurn` retries over time was not executed; the harness exercises the real lock primitive + real controller end to end and the unit tests cover the `dispose()` contract. The \"stalled operation inside `withSessionWriteLock` never returns\" variant is not addressed here (covered by the watchdog).\n\n### Risk / Mitigation\n\n- **Risk**: releasing in the outer `finally` could double-release a lock the cleanup block already released, or a release error could mask the run's original error.\n- **Mitigation**: `dispose()` is idempotent — the happy/aborted/timed-out paths transfer the lock out via `acquireForCleanup` (so the controller no longer retains it and `dispose()` is a no-op), proven by a no-double-release test. The outer-`finally` call is wrapped so a release failure is logged rather than thrown, mirroring the existing teardown logging. No behavior change on paths that already released the lock.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [x] Sessions / storage\n\n### Linked Issue/PR\n\nFixes #86014\n",
-        "branch": "fix/86014-embedded-session-lock-release",
-        "head_sha": "acef98666993a9bd0999b4ced34651b622ede671",
-        "author": "openperf",
+        "title": "Guard OpenAI chat payload turns",
+        "body": "Fixes #86145\n\n## Summary\n- Refuse ModelStudio/DashScope OpenAI-compatible chat streams when compaction/transport transforms leave no non-empty user or assistant turn in the final outbound `messages[]` payload, without making that invariant global for every OpenAI-compatible route.\n- Treat blank prompt submissions with system/tool-only replay, or empty user/assistant placeholders, as empty history instead of replay-backed blank user prompts.\n- Share one content-aware OpenAI-compatible conversation-turn helper across the scoped transport backstop and prompt submission classifier.\n- Add regressions for the stream-time guard, conversation-turn helper, and compaction branch recovery of user/assistant turns when preparation only contains tool output.\n\n## Real behavior proof\nBehavior addressed: Qwen/ModelStudio OpenAI-compatible chat requests no longer reach the provider with a `messages[]` payload that has no non-empty user or assistant turn after compaction and transport transforms.\n\nReal environment tested: Local OpenClaw runtime on this PR branch, using `createOpenAICompletionsTransportStreamFn` against a real local HTTP/SSE endpoint that behaves like an OpenAI-compatible `/v1/chat/completions` server. I also tested remote Alibaba Cloud Model Studio / DashScope international with a locally supplied API key; the key was not logged or included in this PR.\n\nExact steps or command run after this patch: `node scripts/run-vitest.mjs src/agents/openai-completions-compat.test.ts src/agents/openai-compatible-conversation-turn.test.ts src/agents/openai-transport-stream.test.ts src/agents/pi-embedded-runner/run/attempt.prompt-helpers.test.ts src/agents/pi-hooks/compaction-safeguard.test.ts`\n\nEvidence after fix: The focused Vitest run passed 8 files / 613 tests. The OpenAI-compatible transport test exercises the real `createOpenAICompletionsTransportStreamFn` path and verifies system-only payloads are rejected locally before sending to the configured endpoint. The new helper tests verify that system/tool-only payloads and empty user/assistant placeholders are rejected, while non-empty user/assistant content and assistant `tool_calls` are accepted. The transport regression also proves a generic local OpenAI-compatible route can still send a system-only request when it is not a ModelStudio-compatible endpoint.\n\nRemote provider evidence: On DashScope international (`https://dashscope-intl.aliyuncs.com/compatible-mode/v1`), the tested account exposed `qwen3-coder-plus`, dated `qwen3-coder-plus` variants, `qwen3-coder-next`, and `qwen-coder-plus`. The `qwen3-coder-plus` variants accepted the tested `system`-only, `system+tool`, and `tool`-only shapes with HTTP 200 on this account, so I could not reproduce the exact reported `qwen3-coder-plus` 400. `qwen-coder-plus` returned HTTP 400 for `system+tool` and `tool`-only with: `messages with role \"tool\" must be a response to a preceeding message with \"tool_calls\".` The account did not expose `qwen-long` on the international endpoint; the China endpoint rejected this international key as `invalid_api_key`.\n\nObserved result after fix: The malformed final payload shape is caught locally by OpenClaw before the network send. Normal payloads with a non-empty user turn still pass through, assistant tool-call turns are not blocked solely because their `content` is empty/null, and generic non-ModelStudio OpenAI-compatible routes are not newly blocked.\n\nWhat was not tested: I did not reproduce the exact `qwen3-coder-plus` `Role must be user or assistant and Content length must be greater than 0` 400 with the available DashScope international account. That may require the reporter's exact captured payload, proxy/provider route, or a China-region `qwen-long` key. Local `node scripts/run-tsgo.mjs` did not complete within about 20 minutes on this checkout and was stopped; CI remains the broader type gate.\n\n## Validation\n- `node scripts/run-vitest.mjs src/agents/openai-completions-compat.test.ts src/agents/openai-compatible-conversation-turn.test.ts src/agents/openai-transport-stream.test.ts src/agents/pi-embedded-runner/run/attempt.prompt-helpers.test.ts src/agents/pi-hooks/compaction-safeguard.test.ts`\n- `node_modules/.bin/oxfmt --check --threads=1 src/agents/openai-compatible-conversation-turn.ts src/agents/openai-compatible-conversation-turn.test.ts src/agents/openai-transport-stream.ts src/agents/openai-transport-stream.test.ts src/agents/pi-embedded-runner/run/attempt.prompt-helpers.ts src/agents/pi-embedded-runner/run/attempt.prompt-helpers.test.ts src/agents/pi-hooks/compaction-safeguard.test.ts`\n- `git diff --check`\n\nIf this PR is squashed or reworked, please preserve Andy Ye as the author or include:\nCo-authored-by: Andy Ye <35905412+TurboTheTurtle@users.noreply.github.com>\n\n",
+        "branch": "fix/openai-payload-real-turn-86145",
+        "head_sha": "a13f5b15f8a085aabbb9ff09583e7f70f19622ea",
+        "author": "turbotheturtle",
         "labels": [
           "agents",
-          "size: S",
+          "size: M",
           "proof: supplied",
           "proof: sufficient",
           "P1",
-          "rating: 🦞 diamond lobster",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
           "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts",
-            "additions": 39,
+            "path": "src/agents/openai-compatible-conversation-turn.test.ts",
+            "additions": 53,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/openai-compatible-conversation-turn.ts",
+            "additions": 53,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/openai-completions-compat.test.ts",
+            "additions": 20,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.ts",
-            "additions": 9,
+            "path": "src/agents/openai-completions-compat.ts",
+            "additions": 6,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
-            "additions": 10,
+            "path": "src/agents/openai-transport-stream.test.ts",
+            "additions": 130,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-transport-stream.ts",
+            "additions": 21,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.prompt-helpers.test.ts",
+            "additions": 26,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.prompt-helpers.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-hooks/compaction-safeguard.test.ts",
+            "additions": 69,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
@@ -98,50 +135,379 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86427",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86427.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86177",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86177.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 102,
+          "total": 106,
           "counts": {
-            "SUCCESS": 73,
-            "SKIPPED": 28,
+            "CANCELLED": 2,
+            "SKIPPED": 25,
+            "SUCCESS": 78,
             "NEUTRAL": 1
           },
-          "blockers": [],
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
           "pending": [],
-          "terminalBlockers": []
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
         }
       },
       "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86177:4534217921:2026-05-25T12:23:01Z:re_review",
+      "comment_id": "4534217921",
+      "comment_version_key": "4534217921:2026-05-25T12:23:01Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86177#issuecomment-4534217921",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86177,
+      "author": "osolmaz",
+      "author_id": 2453968,
+      "author_association": "MEMBER",
+      "comment_created_at": "2026-05-25T12:23:01Z",
+      "comment_updated_at": "2026-05-25T12:23:01Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86177:4533943227:2026-05-25T11:37:04Z:re_review",
+      "comment_id": "4533943227",
+      "comment_version_key": "4533943227:2026-05-25T11:37:04Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86177#issuecomment-4533943227",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86177,
+      "author": "osolmaz",
+      "author_id": 2453968,
+      "author_association": "MEMBER",
+      "comment_created_at": "2026-05-25T11:37:04Z",
+      "comment_updated_at": "2026-05-25T11:37:04Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "write",
+      "target": {
+        "kind": "pull_request",
+        "title": "Guard OpenAI chat payload turns",
+        "body": "Fixes #86145\n\n## Summary\n- Refuse ModelStudio/DashScope OpenAI-compatible chat streams when compaction/transport transforms leave no non-empty user or assistant turn in the final outbound `messages[]` payload, without making that invariant global for every OpenAI-compatible route.\n- Treat blank prompt submissions with system/tool-only replay, or empty user/assistant placeholders, as empty history instead of replay-backed blank user prompts.\n- Share one content-aware OpenAI-compatible conversation-turn helper across the scoped transport backstop and prompt submission classifier.\n- Add regressions for the stream-time guard, conversation-turn helper, and compaction branch recovery of user/assistant turns when preparation only contains tool output.\n\n## Real behavior proof\nBehavior addressed: Qwen/ModelStudio OpenAI-compatible chat requests no longer reach the provider with a `messages[]` payload that has no non-empty user or assistant turn after compaction and transport transforms.\n\nReal environment tested: Local OpenClaw runtime on this PR branch, using `createOpenAICompletionsTransportStreamFn` against a real local HTTP/SSE endpoint that behaves like an OpenAI-compatible `/v1/chat/completions` server. I also tested remote Alibaba Cloud Model Studio / DashScope international with a locally supplied API key; the key was not logged or included in this PR.\n\nExact steps or command run after this patch: `node scripts/run-vitest.mjs src/agents/openai-completions-compat.test.ts src/agents/openai-compatible-conversation-turn.test.ts src/agents/openai-transport-stream.test.ts src/agents/pi-embedded-runner/run/attempt.prompt-helpers.test.ts src/agents/pi-hooks/compaction-safeguard.test.ts`\n\nEvidence after fix: The focused Vitest run passed 8 files / 613 tests. The OpenAI-compatible transport test exercises the real `createOpenAICompletionsTransportStreamFn` path and verifies system-only payloads are rejected locally before sending to the configured endpoint. The new helper tests verify that system/tool-only payloads and empty user/assistant placeholders are rejected, while non-empty user/assistant content and assistant `tool_calls` are accepted. The transport regression also proves a generic local OpenAI-compatible route can still send a system-only request when it is not a ModelStudio-compatible endpoint.\n\nRemote provider evidence: On DashScope international (`https://dashscope-intl.aliyuncs.com/compatible-mode/v1`), the tested account exposed `qwen3-coder-plus`, dated `qwen3-coder-plus` variants, `qwen3-coder-next`, and `qwen-coder-plus`. The `qwen3-coder-plus` variants accepted the tested `system`-only, `system+tool`, and `tool`-only shapes with HTTP 200 on this account, so I could not reproduce the exact reported `qwen3-coder-plus` 400. `qwen-coder-plus` returned HTTP 400 for `system+tool` and `tool`-only with: `messages with role \"tool\" must be a response to a preceeding message with \"tool_calls\".` The account did not expose `qwen-long` on the international endpoint; the China endpoint rejected this international key as `invalid_api_key`.\n\nObserved result after fix: The malformed final payload shape is caught locally by OpenClaw before the network send. Normal payloads with a non-empty user turn still pass through, assistant tool-call turns are not blocked solely because their `content` is empty/null, and generic non-ModelStudio OpenAI-compatible routes are not newly blocked.\n\nWhat was not tested: I did not reproduce the exact `qwen3-coder-plus` `Role must be user or assistant and Content length must be greater than 0` 400 with the available DashScope international account. That may require the reporter's exact captured payload, proxy/provider route, or a China-region `qwen-long` key. Local `node scripts/run-tsgo.mjs` did not complete within about 20 minutes on this checkout and was stopped; CI remains the broader type gate.\n\n## Validation\n- `node scripts/run-vitest.mjs src/agents/openai-completions-compat.test.ts src/agents/openai-compatible-conversation-turn.test.ts src/agents/openai-transport-stream.test.ts src/agents/pi-embedded-runner/run/attempt.prompt-helpers.test.ts src/agents/pi-hooks/compaction-safeguard.test.ts`\n- `node_modules/.bin/oxfmt --check --threads=1 src/agents/openai-compatible-conversation-turn.ts src/agents/openai-compatible-conversation-turn.test.ts src/agents/openai-transport-stream.ts src/agents/openai-transport-stream.test.ts src/agents/pi-embedded-runner/run/attempt.prompt-helpers.ts src/agents/pi-embedded-runner/run/attempt.prompt-helpers.test.ts src/agents/pi-hooks/compaction-safeguard.test.ts`\n- `git diff --check`\n\nIf this PR is squashed or reworked, please preserve Andy Ye as the author or include:\nCo-authored-by: Andy Ye <35905412+TurboTheTurtle@users.noreply.github.com>\n\n",
+        "branch": "fix/openai-payload-real-turn-86145",
+        "head_sha": "a13f5b15f8a085aabbb9ff09583e7f70f19622ea",
+        "author": "turbotheturtle",
+        "labels": [
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/openai-compatible-conversation-turn.test.ts",
+            "additions": 53,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/openai-compatible-conversation-turn.ts",
+            "additions": 53,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/openai-completions-compat.test.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-completions-compat.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-transport-stream.test.ts",
+            "additions": 130,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-transport-stream.ts",
+            "additions": 21,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.prompt-helpers.test.ts",
+            "additions": 26,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.prompt-helpers.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-hooks/compaction-safeguard.test.ts",
+            "additions": 69,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86177",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86177.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 106,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 25,
+            "SUCCESS": 78,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86177:4529868932:2026-05-24T20:24:26Z:re_review",
+      "comment_id": "4529868932",
+      "comment_version_key": "4529868932:2026-05-24T20:24:26Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86177#issuecomment-4529868932",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86177,
+      "author": "TurboTheTurtle",
+      "author_id": 35905412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-24T20:24:26Z",
+      "comment_updated_at": "2026-05-24T20:24:26Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86177:4529863919:2026-05-24T20:22:30Z:re_review",
+      "comment_id": "4529863919",
+      "comment_version_key": "4529863919:2026-05-24T20:22:30Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86177#issuecomment-4529863919",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86177,
+      "author": "TurboTheTurtle",
+      "author_id": 35905412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-24T20:22:30Z",
+      "comment_updated_at": "2026-05-24T20:22:30Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "Guard OpenAI chat payload turns",
+        "body": "Fixes #86145\n\n## Summary\n- Refuse ModelStudio/DashScope OpenAI-compatible chat streams when compaction/transport transforms leave no non-empty user or assistant turn in the final outbound `messages[]` payload, without making that invariant global for every OpenAI-compatible route.\n- Treat blank prompt submissions with system/tool-only replay, or empty user/assistant placeholders, as empty history instead of replay-backed blank user prompts.\n- Share one content-aware OpenAI-compatible conversation-turn helper across the scoped transport backstop and prompt submission classifier.\n- Add regressions for the stream-time guard, conversation-turn helper, and compaction branch recovery of user/assistant turns when preparation only contains tool output.\n\n## Real behavior proof\nBehavior addressed: Qwen/ModelStudio OpenAI-compatible chat requests no longer reach the provider with a `messages[]` payload that has no non-empty user or assistant turn after compaction and transport transforms.\n\nReal environment tested: Local OpenClaw runtime on this PR branch, using `createOpenAICompletionsTransportStreamFn` against a real local HTTP/SSE endpoint that behaves like an OpenAI-compatible `/v1/chat/completions` server. I also tested remote Alibaba Cloud Model Studio / DashScope international with a locally supplied API key; the key was not logged or included in this PR.\n\nExact steps or command run after this patch: `node scripts/run-vitest.mjs src/agents/openai-completions-compat.test.ts src/agents/openai-compatible-conversation-turn.test.ts src/agents/openai-transport-stream.test.ts src/agents/pi-embedded-runner/run/attempt.prompt-helpers.test.ts src/agents/pi-hooks/compaction-safeguard.test.ts`\n\nEvidence after fix: The focused Vitest run passed 8 files / 613 tests. The OpenAI-compatible transport test exercises the real `createOpenAICompletionsTransportStreamFn` path and verifies system-only payloads are rejected locally before sending to the configured endpoint. The new helper tests verify that system/tool-only payloads and empty user/assistant placeholders are rejected, while non-empty user/assistant content and assistant `tool_calls` are accepted. The transport regression also proves a generic local OpenAI-compatible route can still send a system-only request when it is not a ModelStudio-compatible endpoint.\n\nRemote provider evidence: On DashScope international (`https://dashscope-intl.aliyuncs.com/compatible-mode/v1`), the tested account exposed `qwen3-coder-plus`, dated `qwen3-coder-plus` variants, `qwen3-coder-next`, and `qwen-coder-plus`. The `qwen3-coder-plus` variants accepted the tested `system`-only, `system+tool`, and `tool`-only shapes with HTTP 200 on this account, so I could not reproduce the exact reported `qwen3-coder-plus` 400. `qwen-coder-plus` returned HTTP 400 for `system+tool` and `tool`-only with: `messages with role \"tool\" must be a response to a preceeding message with \"tool_calls\".` The account did not expose `qwen-long` on the international endpoint; the China endpoint rejected this international key as `invalid_api_key`.\n\nObserved result after fix: The malformed final payload shape is caught locally by OpenClaw before the network send. Normal payloads with a non-empty user turn still pass through, assistant tool-call turns are not blocked solely because their `content` is empty/null, and generic non-ModelStudio OpenAI-compatible routes are not newly blocked.\n\nWhat was not tested: I did not reproduce the exact `qwen3-coder-plus` `Role must be user or assistant and Content length must be greater than 0` 400 with the available DashScope international account. That may require the reporter's exact captured payload, proxy/provider route, or a China-region `qwen-long` key. Local `node scripts/run-tsgo.mjs` did not complete within about 20 minutes on this checkout and was stopped; CI remains the broader type gate.\n\n## Validation\n- `node scripts/run-vitest.mjs src/agents/openai-completions-compat.test.ts src/agents/openai-compatible-conversation-turn.test.ts src/agents/openai-transport-stream.test.ts src/agents/pi-embedded-runner/run/attempt.prompt-helpers.test.ts src/agents/pi-hooks/compaction-safeguard.test.ts`\n- `node_modules/.bin/oxfmt --check --threads=1 src/agents/openai-compatible-conversation-turn.ts src/agents/openai-compatible-conversation-turn.test.ts src/agents/openai-transport-stream.ts src/agents/openai-transport-stream.test.ts src/agents/pi-embedded-runner/run/attempt.prompt-helpers.ts src/agents/pi-embedded-runner/run/attempt.prompt-helpers.test.ts src/agents/pi-hooks/compaction-safeguard.test.ts`\n- `git diff --check`\n\nIf this PR is squashed or reworked, please preserve Andy Ye as the author or include:\nCo-authored-by: Andy Ye <35905412+TurboTheTurtle@users.noreply.github.com>\n\n",
+        "branch": "fix/openai-payload-real-turn-86145",
+        "head_sha": "a13f5b15f8a085aabbb9ff09583e7f70f19622ea",
+        "author": "turbotheturtle",
+        "labels": [
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/openai-compatible-conversation-turn.test.ts",
+            "additions": 53,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/openai-compatible-conversation-turn.ts",
+            "additions": 53,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/openai-completions-compat.test.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-completions-compat.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-transport-stream.test.ts",
+            "additions": 130,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-transport-stream.ts",
+            "additions": 21,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.prompt-helpers.test.ts",
+            "additions": 26,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.prompt-helpers.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-hooks/compaction-safeguard.test.ts",
+            "additions": 69,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86177",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86177.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 106,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 25,
+            "SUCCESS": 78,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2525,
+    "total_ms": 5659,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 323
+        "ms": 464
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1935
+        "ms": 2193
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 250
+        "ms": 2983
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
