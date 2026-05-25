@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-25T23:35:44.778Z",
+  "generated_at": "2026-05-25T23:35:45.928Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-25T20:35:42.802Z",
+  "since": "2026-05-25T20:35:43.681Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    86638
+    86584
   ],
   "comment_ids": [
     4538044337
   ],
   "status_comment_id": 4538044562,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 11,
+  "commands_seen": 4,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,18 +33,119 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:86638:4538044337:2026-05-25T23:35:17Z:re_review",
-      "comment_id": "4538044337",
-      "comment_version_key": "4538044337:2026-05-25T23:35:17Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86638#issuecomment-4538044337",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86584:4535997399:2026-05-25T23:35:40Z:clawsweeper_needs_human",
+      "comment_id": "4535997399",
+      "comment_version_key": "4535997399:2026-05-25T23:35:40Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86584#issuecomment-4535997399",
       "repo": "openclaw/openclaw",
-      "issue_number": 86638,
-      "author": "TurboTheTurtle",
-      "author_id": 35905412,
+      "issue_number": 86584,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-25T23:35:17Z",
-      "comment_updated_at": "2026-05-25T23:35:17Z",
-      "status_comment_id": 4538044562,
+      "comment_created_at": "2026-05-25T17:22:39Z",
+      "comment_updated_at": "2026-05-25T23:35:40Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "No automated repair is needed; maintainers should make the exact-head CI and session-state merge-risk decision.; Cleared: No dependency, CI, credential, permission, release, package, or supply-chain surface is changed; the review concern is session-state correctness. (sha=d79a3b44b43b8b274eb5520938e21538d2dea131)",
+      "review_summary": "The PR adds a pre-message-persist snapshot hook, publishes pi-owned session writes through the embedded session-lock controller, and adds regression coverage for owned, external, mixed-interleave, active-fence, benign-advance, multi-turn, and cleanup cases.\n\nPR surface: Source +133, Tests +303. Total +436 across 5 files.\n\nReproducibility: yes. Current main still uses a refresh-only post-persist callback, and the PR body plus added current-head tests provide a high-confidence source and harness reproduction for the false positive and mixed-interleave fail-closed behavior.",
+      "review_followup": "No automated repair is needed; maintainers should make the exact-head CI and session-state merge-risk decision.",
+      "freeform_prompt": null,
+      "expected_head_sha": "d79a3b44b43b8b274eb5520938e21538d2dea131",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): gate owned-write publish on pre-append fingerprint (#86572)",
+        "body": "## Summary\n\nFixes `EmbeddedAttemptSessionTakeoverError` in vanilla openclaw caused by pi's stream iteration writing via direct `appendFileSync` between `releaseForPrompt` and the next external-hook lock acquisition. The lane's own writes are recorded in the existing `ownedSessionFileWrites` machinery via `publishOwnedPostMessageWrite(beforeWrite)`, gated on the **pre-append** fingerprint matching the trusted fence. External mutations — including those interleaved before pi's own append — never pass the gate and still trip the takeover fence.\n\nCloses #86572.\n\n## Revision history\n\n- `91ba92c9ab` — original `refreshBeforeLock` shim. ClawSweeper flagged blanket-refresh weakened takeover detection.\n- `d824be0298` — `publishOwnedPostMessageWrite()` gated on `fenceFingerprint`. ClawSweeper flagged the mixed external-then-pi interleave: when an external write landed between `releaseForPrompt` and pi's append, `fenceFingerprint` was still trusted, so the combined post-write state (external + pi) got recorded as owned.\n- **`584ba0e65b`** (HEAD) — gate switched to `beforeWrite` (pre-append fingerprint passed in by the caller). External mutations between trust point and pi's append fail the gate; mixed-interleave negative test added.\n\n## Root cause\n\n`_handleAgentEvent` → `sessionManager.appendMessage` → `_persist` uses synchronous `appendFileSync`. The session-tool-result-guard fires `onMessagePersisted` immediately after that synchronous append. The previous fence-refresh in `onMessagePersisted` only updated the local fence, never recording the write as owned — so a hook firing later in the same prompt window saw `current` ≠ `fenceFingerprint` and tripped.\n\n## Fix\n\n### 1. New `publishOwnedPostMessageWrite(beforeWrite)` method\n\n`EmbeddedAttemptSessionLockController` gains:\n\n```ts\npublishOwnedPostMessageWrite(beforeWrite: SessionFileFingerprint | undefined): void {\n  if (takeoverDetected) return;\n  if (!beforeWrite) return;\n  // Trust gate: beforeWrite is the file fingerprint captured immediately\n  // BEFORE pi's appendFileSync. If something external landed between\n  // releaseForPrompt (which trusted F0) and this append, beforeWrite = F1\n  // ≠ F0 and isTrustedSessionFileState returns false — fail closed.\n  if (!isTrustedSessionFileState(sessionFileFenceKey, beforeWrite)) return;\n  const current = readSessionFileFingerprintSync(params.lockOptions.sessionFile);\n  if (sameSessionFileFingerprint(beforeWrite, current)) return;\n  const generation = recordOwnedSessionFileWrite(sessionFileFenceKey, current);\n  if (fenceActive) {\n    fenceFingerprint = current;\n    fenceSnapshot = { fingerprint: current };\n    fenceGeneration = generation;\n  }\n}\n```\n\n### 2. Plumb the pre-append fingerprint through `session-tool-result-guard`\n\nThe guard gains an optional `beforeMessagePersist` hook that runs immediately before `originalAppend(message)`. Its return value flows back through `onMessagePersisted`'s new context arg:\n\n```ts\nbeforeMessagePersist?: () => unknown;\nonMessagePersisted?: (\n  message: AgentMessage,\n  context: { beforeWriteSnapshot?: unknown },\n) => void | Promise<void>;\n```\n\nType stays `unknown` so `session-tool-result-guard` doesn't depend on `SessionFileFingerprint`'s structure.\n\n### 3. Wire at the call site (`runEmbeddedAttempt`)\n\n```ts\nbeforeMessagePersist: () => readSessionFileFingerprintSync(params.sessionFile),\nonMessagePersisted: (_message, { beforeWriteSnapshot }) => {\n  sessionLockController.publishOwnedPostMessageWrite(\n    beforeWriteSnapshot as SessionFileFingerprint | undefined,\n  );\n},\n```\n\n### Why this addresses the bot's concern\n\nClawSweeper required:\n\n> *\"Capture the session-file fingerprint immediately before the pi/session-manager append that triggers onMessagePersisted, pass that baseline into the session-lock controller, record the post-write fingerprint only when the baseline matches the trusted fence, and add a regression where an external append happens between releaseForPrompt and the pi append and still trips the hook lock.\"*\n\nAll four parts are in this PR:\n- **Capture pre-append baseline:** `beforeMessagePersist` runs *before* `originalAppend(message)`.\n- **Pass into controller:** flows through `onMessagePersisted`'s context arg.\n- **Record only when baseline matches trusted fence:** `isTrustedSessionFileState(key, beforeWrite)` is the gate.\n- **Mixed-interleave regression test:** new test `trips takeover on a mixed external-then-pi append (publish refuses to launder external mutation)`.\n\n## Real behavior proof\n\n- **Behavior addressed:** Eliminates spurious `EmbeddedAttemptSessionTakeoverError` on the lane's own pi-driven writes when an external hook fires after rapid pi writes. The takeover fence still trips on genuine external mutations AND on mixed external-then-pi interleaves.\n\n- **Real environment tested:** Local OpenClaw source checkout (macOS 15.5, Node 22.19+) at the patched branch HEAD `584ba0e65b`, branched off `3eb06e305e` (current upstream main). The new regression tests exercise the production `installSessionExternalHookWriteLock` + `EmbeddedAttemptSessionLockController` + `installSessionPersistenceGuard` machinery against real temp session JSONL files via `fs.appendFile`. The proof harness loads the controller from source and drives four scenarios end-to-end against a real temp session file.\n\n- **Exact steps or command run after this patch:**\n\n  ```sh\n  pnpm install\n  node scripts/run-vitest.mjs src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts\n  node scripts/run-vitest.mjs src/agents/session-tool-result-guard.test.ts src/agents/session-tool-result-guard.transcript-events.test.ts src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts\n  npx tsx /Users/umank/code/openclaw-tickets/proof/run-refresh-before-hook-lock-proof.mjs\n  ```\n\n- **Evidence after fix:**\n\n  **(a) Four-scenario proof harness** — verbatim stdout:\n\n  ```\n  ============================================================\n  PR #86584 — publish-on-onMessagePersisted proof (Issue #86572)\n  ============================================================\n  source under test: src/agents/pi-embedded-runner/run/attempt.session-lock.ts\n                     publishOwnedPostMessageWrite(beforeWrite)\n                     gated on isTrustedSessionFileState(key, beforeWrite)\n\n  -------- Scenario A — pre-fix: pi-style write WITHOUT publish (trips takeover) --------\n    setup       mode=pre-fix\n    lifecycle   releaseForPrompt() — capture fence F0 + mark trusted\n    pi-write    pi appendFileSync (F0 → F1) — no publish call\n    hook        beforeToolCall() — wrapped by installSessionExternalHookWriteLock\n    hook        RESULT: TAKEOVER (EmbeddedAttemptSessionTakeoverError)\n    state       controller.hasSessionTakeover() = true\n\n  -------- Scenario B — post-fix: pi-style write WITH publish (hook fires cleanly) --------\n    setup       mode=post-fix\n    lifecycle   releaseForPrompt() — capture fence F0 + mark trusted\n    pi-write    pi appendFileSync (F0 → F1) with pre-write captured\n    publish     publishOwnedPostMessageWrite(F0) — F0 is trusted, record F1 as owned\n    hook        beforeToolCall()\n    hook        RESULT: hook fired successfully (hookOutcome.fired=true)\n    state       controller.hasSessionTakeover() = false\n\n  -------- Scenario C — negative: external write bypasses publish (still trips) --------\n    setup       mode=external-only\n    lifecycle   releaseForPrompt() — capture fence F0 + mark trusted\n    pi-write    EXTERNAL appendFileSync (F0 → F1) — no publish\n    hook        beforeToolCall()\n    hook        RESULT: TAKEOVER (EmbeddedAttemptSessionTakeoverError)\n    state       controller.hasSessionTakeover() = true\n\n  -------- Scenario D — mixed interleave: external THEN pi write + publish (still trips) --------\n    setup       mode=mixed-interleave\n    lifecycle   releaseForPrompt() — capture fence F0 + mark trusted\n    external    EXTERNAL appendFileSync first (F0 → F1)\n    pi-write    pi appendFileSync second (F1 → F2) — pre-write captured = F1\n    publish     publishOwnedPostMessageWrite(F1) — F1 NOT trusted, skip (fail closed)\n    hook        beforeToolCall()\n    hook        RESULT: TAKEOVER (EmbeddedAttemptSessionTakeoverError)\n    state       controller.hasSessionTakeover() = true\n\n  ============================================================\n    Scenario A (no fix):       hook fired=false, threw=TAKEOVER\n    Scenario B (with fix):     hook fired=true, threw=no\n    Scenario C (negative):     hook fired=false, threw=TAKEOVER\n    Scenario D (mixed):        hook fired=false, threw=TAKEOVER\n\n    RESULT: PASS\n  ============================================================\n  ```\n\n  Scenario D is the **bot-requested mixed-interleaving regression**. Without the pre-append gate, the publish would record F2 as owned (because F0 is trusted at publish time) and the external mutation would be laundered. With the gate, F1 (pre-append after external) is checked — it's not trusted — publish skips — fence trips correctly on the combined state.\n\n  **(b) Test suite** — 80 cases across 2 test files green:\n\n  ```\n   Test Files  2 passed (2)\n        Tests  80 passed (80)\n  ```\n\n  Key new/updated tests under \"embedded attempt session lock lifecycle\":\n\n  - `accepts pi-style writes published via publishOwnedPostMessageWrite before beforeToolCall fires` — positive case (passes pre-write F0).\n  - `trips takeover on a same-file external write that bypasses publishOwnedPostMessageWrite` — basic negative case.\n  - **`trips takeover on a mixed external-then-pi append (publish refuses to launder external mutation)`** — the bot-required mixed-interleave regression.\n  - `allows multiple prompt turns with pi-style writes published per turn` — multi-turn, three iterations.\n  - `does not classify a different session file's writes as owned by this controller` — cross-file isolation.\n  - `does not hang when reacquireAfterPrompt rejects after a pi-style direct write` — abort/error path.\n\n  Adjacent session-tool-result-guard test surfaces (4 files, 46 cases) also green; no regressions from the new `beforeMessagePersist` opt.\n\n- **Observed result after fix:** All four harness scenarios PASS as expected, including the mixed-interleave fail-closed check. `pnpm check:changed` clean (typecheck/lint/cycles/etc.).\n\n- **What was not tested:** A live gateway-fallback reproduction against the patched build on real workload. The local repro that @cby2k has (session `4f181fe9-…`) is the most direct validation target; the patched build is being prepared on the user's GB10 node for that confirmation. The test suite plus the four-scenario proof harness cover the structural invariants — including the mixed-interleave case the bot required.\n\n## Compatibility / Risk\n\n- `publishOwnedPostMessageWrite(beforeWrite)` is a new method; only one call site (`onMessagePersisted` in `runEmbeddedAttempt`). Not part of any external API.\n- `session-tool-result-guard`'s `onMessagePersisted` signature gains an optional `context` arg. The only internal caller is `runEmbeddedAttempt`; no external consumers found via grep.\n- `session-tool-result-guard` gains an optional `beforeMessagePersist` hook. Backward-compatible (no caller required to provide it). When omitted, behavior is unchanged.\n- **Does not weaken takeover detection** — the pre-append trust gate ensures only writes preceded by a trusted-fence baseline get recorded as owned. External mutations that bypass the callback, OR external mutations that interleave with pi's own append, both fail the gate.\n- `refreshAfterOwnedSessionWrite` retained on the controller for existing call sites in tests; production wiring no longer uses it from `onMessagePersisted`.\n\n## Related\n\n- Issue #86572 — root cause analysis and acceptance criteria.\n- #85913 — original `EmbeddedAttemptSessionTakeoverError` tracking issue; cby2k's deterministic repro.\n- #86067 — file-scoped prompt-window guard (cross-lane race) — independent fix; this PR addresses the same-lane race.\n- ClawSweeper reviews on `91ba92c9ab` and `d824be0298` drove the design through two iterations; the trust gate's parameter shape (pre-append vs current) was the key correctness pivot.\n\n---\n\n*This PR is AI-assisted. Code authored with Claude.*\n",
+        "branch": "fix/session-takeover-refresh-before-hook-lock",
+        "head_sha": "d79a3b44b43b8b274eb5520938e21538d2dea131",
+        "author": "ubehera",
+        "labels": [
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 session-state",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts",
+            "additions": 303,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.ts",
+            "additions": 108,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
+            "additions": 16,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-tool-result-guard-wrapper.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-tool-result-guard.ts",
+            "additions": 11,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86584",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86584.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "SUCCESS": 73,
+            "SKIPPED": 28,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86584:4536869308:2026-05-25T19:59:12Z:re_review",
+      "comment_id": "4536869308",
+      "comment_version_key": "4536869308:2026-05-25T19:59:12Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86584#issuecomment-4536869308",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86584,
+      "author": "ubehera",
+      "author_id": 3691059,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-25T19:59:12Z",
+      "comment_updated_at": "2026-05-25T19:59:12Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -59,52 +160,116 @@
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-25T23:35:45.427Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 86638
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-25T23:35:46.641Z",
-          "response_comment_id": "4538044562",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86584:4536262860:2026-05-25T18:12:22Z:re_review",
+      "comment_id": "4536262860",
+      "comment_version_key": "4536262860:2026-05-25T18:12:22Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86584#issuecomment-4536262860",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86584,
+      "author": "ubehera",
+      "author_id": 3691059,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-25T18:12:22Z",
+      "comment_updated_at": "2026-05-25T18:12:22Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86584:4536019149:2026-05-25T17:27:11Z:re_review",
+      "comment_id": "4536019149",
+      "comment_version_key": "4536019149:2026-05-25T17:27:11Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86584#issuecomment-4536019149",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86584,
+      "author": "ubehera",
+      "author_id": 3691059,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-25T17:27:11Z",
+      "comment_updated_at": "2026-05-25T17:27:11Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "Fix run-scoped sessions_send pingback fallback",
-        "body": "## Summary\n- route fire-and-forget `sessions_send` messages directly into active run-scoped targets when possible\n- fall back to the durable parent session key if transcript-commit steering is rejected, so pending pingbacks are not stranded on an ended run\n- add regression coverage for a `[TASK-COMPLETE]` pingback targeting a blocked cron run session\n\nFixes #86586\n\n## Real behavior proof\nBehavior addressed: A faster callee can send a fire-and-forget `sessions_send` pingback to a caller's run-scoped cron session while the caller run is still blocked by a slower sibling tool call. If the active-run queue rejects before committing that pingback to the transcript, this patch reroutes the pending message to the durable parent session key instead of leaving it orphaned on the ended run.\n\nReal environment tested: Local OpenClaw source runtime at PR head `20a916223e7974233007a4b0d5b42a0289920b36`, Node `v24.15.0`, isolated temporary `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH`, bundled plugins/channels disabled, real temporary gateway server, and real loopback `GatewayClient`. The harness imports the production `startGatewayServer`, `GatewayClient`, `createSessionsSendTool`, and embedded-run active session registry paths from this branch.\n\nExact steps or command run after this patch:\n```sh\ngit fetch origin pull/86638/head:refs/tmp/pr86638-head\ngit worktree add /private/tmp/openclaw-pr86638-proof refs/tmp/pr86638-head\ncd /private/tmp/openclaw-pr86638-proof\npnpm install --frozen-lockfile\nnode --import tsx .tmp/pr86638-real-gateway-proof.ts\n```\n\nThe temporary proof harness did this against the real local gateway:\n1. Started a gateway on a random loopback port with token auth, temp state/config, `OPENCLAW_SKIP_CHANNELS=1`, and `OPENCLAW_DISABLE_BUNDLED_PLUGINS=1`.\n2. Connected a real `GatewayClient` and created the durable cron caller session through `sessions.create` for `agent:leasing-ops:cron:monthly-utility`.\n3. Registered an active embedded run for the run-scoped caller key `agent:leasing-ops:cron:monthly-utility:run:run-fast`.\n4. Confirmed the active run queue rejected transcript-commit steering with `reason: transcript_commit_wait_unsupported`.\n5. Invoked production `sessions_send` with `timeoutSeconds: 0` and a `callGateway` implementation backed by the real loopback `GatewayClient`.\n\nEvidence after fix: Redacted terminal output from that command:\n```text\n[gateway] http server listening (0 plugins)\n[gateway/channels] skipping channel start (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)\n[gateway] ready\n[ws] ⇄ res ✓ sessions.create 272ms conn=d168b0fc…d877 id=0d3fa513…6118\n[ws] ⇄ res ✓ agent 85ms runId=675300ae-7116-4a00-9156-08f6bdb97cc0 conn=d168b0fc…d877 id=3166d8bb…8292\n```\n\n```json\n{\n  \"scenario\": \"real temporary gateway run-scoped sessions_send fallback\",\n  \"prHead\": \"20a916223e7974233007a4b0d5b42a0289920b36\",\n  \"tempGateway\": {\n    \"url\": \"ws://127.0.0.1:59052\",\n    \"stateDir\": \"<temp-state-dir>\",\n    \"configPath\": \"<temp-config-path>\"\n  },\n  \"realGatewaySessionCreate\": {\n    \"ok\": true,\n    \"key\": \"agent:leasing-ops:cron:monthly-utility\"\n  },\n  \"activeEmbeddedRunRegistry\": {\n    \"runScopedCallerKey\": \"agent:leasing-ops:cron:monthly-utility:run:run-fast\",\n    \"resolvedSessionId\": \"caller-active-session\",\n    \"directTranscriptCommitQueueOutcome\": {\n      \"queued\": false,\n      \"sessionId\": \"caller-active-session\",\n      \"reason\": \"transcript_commit_wait_unsupported\",\n      \"gatewayHealth\": \"live\"\n    }\n  },\n  \"sessionsSendResult\": {\n    \"runId\": \"eb6867ab-89bb-4509-a194-1c0c0904be77\",\n    \"status\": \"accepted\",\n    \"sessionKey\": \"agent:leasing-ops:cron:monthly-utility:run:run-fast\",\n    \"delivery\": {\n      \"status\": \"pending\",\n      \"mode\": \"announce\"\n    }\n  },\n  \"fallbackGatewayDelivery\": {\n    \"fallbackSessionKey\": \"agent:leasing-ops:cron:monthly-utility\",\n    \"containsTaskComplete\": true,\n    \"runScopedGatewayCallSeen\": false,\n    \"acceptedRunId\": \"gateway-agent-request-issued\"\n  },\n  \"durableSessionVisibleInRealGateway\": true\n}\n```\n\nObserved result after fix: The real gateway accepted the durable cron session, the active run-scoped delivery rejected transcript-commit steering instead of silently committing the pingback, and the production `sessions_send` fallback issued the gateway `agent` request to `agent:leasing-ops:cron:monthly-utility`. The captured fallback payload preserved `[TASK-COMPLETE] re-portal occupancy ready`, and `runScopedGatewayCallSeen: false` proves the gateway request was not sent to the ended run-scoped key.\n\nWhat was not tested: I did not connect to the reporter's private production host, Telegram account, or local cron log files. The fallback `agent` request was accepted by the real temp gateway, then the temp agent run later failed on missing OpenAI auth in the isolated state dir; that model-auth failure happened after routing proof and does not affect the verified session-key fallback behavior.\n\n## Supplemental verification\n- `node scripts/run-vitest.mjs src/agents/openclaw-tools.sessions.test.ts src/agents/pi-embedded-runner/runs.test.ts` -> `Test Files 4 passed (4)`, `Tests 78 passed (78)`\n- `pnpm check:test-types`\n\nIf this PR is squash-merged or reworked, please preserve author attribution or include:\n`Co-authored-by: Andy Ye <35905412+TurboTheTurtle@users.noreply.github.com>`",
-        "branch": "fix/sessions-send-parallel-pingback-86586",
-        "head_sha": "20a916223e7974233007a4b0d5b42a0289920b36",
-        "author": "turbotheturtle",
+        "title": "fix(agents): gate owned-write publish on pre-append fingerprint (#86572)",
+        "body": "## Summary\n\nFixes `EmbeddedAttemptSessionTakeoverError` in vanilla openclaw caused by pi's stream iteration writing via direct `appendFileSync` between `releaseForPrompt` and the next external-hook lock acquisition. The lane's own writes are recorded in the existing `ownedSessionFileWrites` machinery via `publishOwnedPostMessageWrite(beforeWrite)`, gated on the **pre-append** fingerprint matching the trusted fence. External mutations — including those interleaved before pi's own append — never pass the gate and still trip the takeover fence.\n\nCloses #86572.\n\n## Revision history\n\n- `91ba92c9ab` — original `refreshBeforeLock` shim. ClawSweeper flagged blanket-refresh weakened takeover detection.\n- `d824be0298` — `publishOwnedPostMessageWrite()` gated on `fenceFingerprint`. ClawSweeper flagged the mixed external-then-pi interleave: when an external write landed between `releaseForPrompt` and pi's append, `fenceFingerprint` was still trusted, so the combined post-write state (external + pi) got recorded as owned.\n- **`584ba0e65b`** (HEAD) — gate switched to `beforeWrite` (pre-append fingerprint passed in by the caller). External mutations between trust point and pi's append fail the gate; mixed-interleave negative test added.\n\n## Root cause\n\n`_handleAgentEvent` → `sessionManager.appendMessage` → `_persist` uses synchronous `appendFileSync`. The session-tool-result-guard fires `onMessagePersisted` immediately after that synchronous append. The previous fence-refresh in `onMessagePersisted` only updated the local fence, never recording the write as owned — so a hook firing later in the same prompt window saw `current` ≠ `fenceFingerprint` and tripped.\n\n## Fix\n\n### 1. New `publishOwnedPostMessageWrite(beforeWrite)` method\n\n`EmbeddedAttemptSessionLockController` gains:\n\n```ts\npublishOwnedPostMessageWrite(beforeWrite: SessionFileFingerprint | undefined): void {\n  if (takeoverDetected) return;\n  if (!beforeWrite) return;\n  // Trust gate: beforeWrite is the file fingerprint captured immediately\n  // BEFORE pi's appendFileSync. If something external landed between\n  // releaseForPrompt (which trusted F0) and this append, beforeWrite = F1\n  // ≠ F0 and isTrustedSessionFileState returns false — fail closed.\n  if (!isTrustedSessionFileState(sessionFileFenceKey, beforeWrite)) return;\n  const current = readSessionFileFingerprintSync(params.lockOptions.sessionFile);\n  if (sameSessionFileFingerprint(beforeWrite, current)) return;\n  const generation = recordOwnedSessionFileWrite(sessionFileFenceKey, current);\n  if (fenceActive) {\n    fenceFingerprint = current;\n    fenceSnapshot = { fingerprint: current };\n    fenceGeneration = generation;\n  }\n}\n```\n\n### 2. Plumb the pre-append fingerprint through `session-tool-result-guard`\n\nThe guard gains an optional `beforeMessagePersist` hook that runs immediately before `originalAppend(message)`. Its return value flows back through `onMessagePersisted`'s new context arg:\n\n```ts\nbeforeMessagePersist?: () => unknown;\nonMessagePersisted?: (\n  message: AgentMessage,\n  context: { beforeWriteSnapshot?: unknown },\n) => void | Promise<void>;\n```\n\nType stays `unknown` so `session-tool-result-guard` doesn't depend on `SessionFileFingerprint`'s structure.\n\n### 3. Wire at the call site (`runEmbeddedAttempt`)\n\n```ts\nbeforeMessagePersist: () => readSessionFileFingerprintSync(params.sessionFile),\nonMessagePersisted: (_message, { beforeWriteSnapshot }) => {\n  sessionLockController.publishOwnedPostMessageWrite(\n    beforeWriteSnapshot as SessionFileFingerprint | undefined,\n  );\n},\n```\n\n### Why this addresses the bot's concern\n\nClawSweeper required:\n\n> *\"Capture the session-file fingerprint immediately before the pi/session-manager append that triggers onMessagePersisted, pass that baseline into the session-lock controller, record the post-write fingerprint only when the baseline matches the trusted fence, and add a regression where an external append happens between releaseForPrompt and the pi append and still trips the hook lock.\"*\n\nAll four parts are in this PR:\n- **Capture pre-append baseline:** `beforeMessagePersist` runs *before* `originalAppend(message)`.\n- **Pass into controller:** flows through `onMessagePersisted`'s context arg.\n- **Record only when baseline matches trusted fence:** `isTrustedSessionFileState(key, beforeWrite)` is the gate.\n- **Mixed-interleave regression test:** new test `trips takeover on a mixed external-then-pi append (publish refuses to launder external mutation)`.\n\n## Real behavior proof\n\n- **Behavior addressed:** Eliminates spurious `EmbeddedAttemptSessionTakeoverError` on the lane's own pi-driven writes when an external hook fires after rapid pi writes. The takeover fence still trips on genuine external mutations AND on mixed external-then-pi interleaves.\n\n- **Real environment tested:** Local OpenClaw source checkout (macOS 15.5, Node 22.19+) at the patched branch HEAD `584ba0e65b`, branched off `3eb06e305e` (current upstream main). The new regression tests exercise the production `installSessionExternalHookWriteLock` + `EmbeddedAttemptSessionLockController` + `installSessionPersistenceGuard` machinery against real temp session JSONL files via `fs.appendFile`. The proof harness loads the controller from source and drives four scenarios end-to-end against a real temp session file.\n\n- **Exact steps or command run after this patch:**\n\n  ```sh\n  pnpm install\n  node scripts/run-vitest.mjs src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts\n  node scripts/run-vitest.mjs src/agents/session-tool-result-guard.test.ts src/agents/session-tool-result-guard.transcript-events.test.ts src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts\n  npx tsx /Users/umank/code/openclaw-tickets/proof/run-refresh-before-hook-lock-proof.mjs\n  ```\n\n- **Evidence after fix:**\n\n  **(a) Four-scenario proof harness** — verbatim stdout:\n\n  ```\n  ============================================================\n  PR #86584 — publish-on-onMessagePersisted proof (Issue #86572)\n  ============================================================\n  source under test: src/agents/pi-embedded-runner/run/attempt.session-lock.ts\n                     publishOwnedPostMessageWrite(beforeWrite)\n                     gated on isTrustedSessionFileState(key, beforeWrite)\n\n  -------- Scenario A — pre-fix: pi-style write WITHOUT publish (trips takeover) --------\n    setup       mode=pre-fix\n    lifecycle   releaseForPrompt() — capture fence F0 + mark trusted\n    pi-write    pi appendFileSync (F0 → F1) — no publish call\n    hook        beforeToolCall() — wrapped by installSessionExternalHookWriteLock\n    hook        RESULT: TAKEOVER (EmbeddedAttemptSessionTakeoverError)\n    state       controller.hasSessionTakeover() = true\n\n  -------- Scenario B — post-fix: pi-style write WITH publish (hook fires cleanly) --------\n    setup       mode=post-fix\n    lifecycle   releaseForPrompt() — capture fence F0 + mark trusted\n    pi-write    pi appendFileSync (F0 → F1) with pre-write captured\n    publish     publishOwnedPostMessageWrite(F0) — F0 is trusted, record F1 as owned\n    hook        beforeToolCall()\n    hook        RESULT: hook fired successfully (hookOutcome.fired=true)\n    state       controller.hasSessionTakeover() = false\n\n  -------- Scenario C — negative: external write bypasses publish (still trips) --------\n    setup       mode=external-only\n    lifecycle   releaseForPrompt() — capture fence F0 + mark trusted\n    pi-write    EXTERNAL appendFileSync (F0 → F1) — no publish\n    hook        beforeToolCall()\n    hook        RESULT: TAKEOVER (EmbeddedAttemptSessionTakeoverError)\n    state       controller.hasSessionTakeover() = true\n\n  -------- Scenario D — mixed interleave: external THEN pi write + publish (still trips) --------\n    setup       mode=mixed-interleave\n    lifecycle   releaseForPrompt() — capture fence F0 + mark trusted\n    external    EXTERNAL appendFileSync first (F0 → F1)\n    pi-write    pi appendFileSync second (F1 → F2) — pre-write captured = F1\n    publish     publishOwnedPostMessageWrite(F1) — F1 NOT trusted, skip (fail closed)\n    hook        beforeToolCall()\n    hook        RESULT: TAKEOVER (EmbeddedAttemptSessionTakeoverError)\n    state       controller.hasSessionTakeover() = true\n\n  ============================================================\n    Scenario A (no fix):       hook fired=false, threw=TAKEOVER\n    Scenario B (with fix):     hook fired=true, threw=no\n    Scenario C (negative):     hook fired=false, threw=TAKEOVER\n    Scenario D (mixed):        hook fired=false, threw=TAKEOVER\n\n    RESULT: PASS\n  ============================================================\n  ```\n\n  Scenario D is the **bot-requested mixed-interleaving regression**. Without the pre-append gate, the publish would record F2 as owned (because F0 is trusted at publish time) and the external mutation would be laundered. With the gate, F1 (pre-append after external) is checked — it's not trusted — publish skips — fence trips correctly on the combined state.\n\n  **(b) Test suite** — 80 cases across 2 test files green:\n\n  ```\n   Test Files  2 passed (2)\n        Tests  80 passed (80)\n  ```\n\n  Key new/updated tests under \"embedded attempt session lock lifecycle\":\n\n  - `accepts pi-style writes published via publishOwnedPostMessageWrite before beforeToolCall fires` — positive case (passes pre-write F0).\n  - `trips takeover on a same-file external write that bypasses publishOwnedPostMessageWrite` — basic negative case.\n  - **`trips takeover on a mixed external-then-pi append (publish refuses to launder external mutation)`** — the bot-required mixed-interleave regression.\n  - `allows multiple prompt turns with pi-style writes published per turn` — multi-turn, three iterations.\n  - `does not classify a different session file's writes as owned by this controller` — cross-file isolation.\n  - `does not hang when reacquireAfterPrompt rejects after a pi-style direct write` — abort/error path.\n\n  Adjacent session-tool-result-guard test surfaces (4 files, 46 cases) also green; no regressions from the new `beforeMessagePersist` opt.\n\n- **Observed result after fix:** All four harness scenarios PASS as expected, including the mixed-interleave fail-closed check. `pnpm check:changed` clean (typecheck/lint/cycles/etc.).\n\n- **What was not tested:** A live gateway-fallback reproduction against the patched build on real workload. The local repro that @cby2k has (session `4f181fe9-…`) is the most direct validation target; the patched build is being prepared on the user's GB10 node for that confirmation. The test suite plus the four-scenario proof harness cover the structural invariants — including the mixed-interleave case the bot required.\n\n## Compatibility / Risk\n\n- `publishOwnedPostMessageWrite(beforeWrite)` is a new method; only one call site (`onMessagePersisted` in `runEmbeddedAttempt`). Not part of any external API.\n- `session-tool-result-guard`'s `onMessagePersisted` signature gains an optional `context` arg. The only internal caller is `runEmbeddedAttempt`; no external consumers found via grep.\n- `session-tool-result-guard` gains an optional `beforeMessagePersist` hook. Backward-compatible (no caller required to provide it). When omitted, behavior is unchanged.\n- **Does not weaken takeover detection** — the pre-append trust gate ensures only writes preceded by a trusted-fence baseline get recorded as owned. External mutations that bypass the callback, OR external mutations that interleave with pi's own append, both fail the gate.\n- `refreshAfterOwnedSessionWrite` retained on the controller for existing call sites in tests; production wiring no longer uses it from `onMessagePersisted`.\n\n## Related\n\n- Issue #86572 — root cause analysis and acceptance criteria.\n- #85913 — original `EmbeddedAttemptSessionTakeoverError` tracking issue; cby2k's deterministic repro.\n- #86067 — file-scoped prompt-window guard (cross-lane race) — independent fix; this PR addresses the same-lane race.\n- ClawSweeper reviews on `91ba92c9ab` and `d824be0298` drove the design through two iterations; the trust gate's parameter shape (pre-append vs current) was the key correctness pivot.\n\n---\n\n*This PR is AI-assisted. Code authored with Claude.*\n",
+        "branch": "fix/session-takeover-refresh-before-hook-lock",
+        "head_sha": "d79a3b44b43b8b274eb5520938e21538d2dea131",
+        "author": "ubehera",
         "labels": [
           "agents",
-          "size: S",
+          "size: M",
           "proof: supplied",
+          "proof: sufficient",
           "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 session-state",
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "src/agents/openclaw-tools.sessions.test.ts",
-            "additions": 92,
+            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts",
+            "additions": 303,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/tools/sessions-send-tool.ts",
-            "additions": 56,
+            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.ts",
+            "additions": 108,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
+            "additions": 16,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-tool-result-guard-wrapper.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-tool-result-guard.ts",
+            "additions": 11,
             "deletions": 2,
             "changeType": "MODIFIED"
           }
@@ -112,49 +277,50 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86638",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86638.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86584",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86584.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
           "total": 102,
           "counts": {
-            "SUCCESS": 74,
-            "SKIPPED": 27,
+            "SUCCESS": 73,
+            "SKIPPED": 28,
             "NEUTRAL": 1
           },
           "blockers": [],
           "pending": [],
           "terminalBlockers": []
         }
-      }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4338,
+    "total_ms": 5046,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 435
+        "ms": 369
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1529
+        "ms": 1863
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 2352
+        "ms": 2789
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
