@@ -2,21 +2,21 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-86487"
 mode: "autonomous"
-run_id: "26403372925"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26403372925"
+run_id: "26404067447"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26404067447"
 head_sha: "eef3e9ab6847da2b2c2979a3cfa5bc1aeae155ae"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-25T13:48:31.319Z"
+published_at: "2026-05-25T14:18:53.468Z"
 canonical: "#86487"
 canonical_issue: null
 canonical_pr: "#86487"
 actions_total: 1
 fix_executed: 0
-fix_failed: 1
-fix_blocked: 1
+fix_failed: 0
+fix_blocked: 0
 apply_executed: 0
-apply_blocked: 0
+apply_blocked: 1
 apply_skipped: 0
 needs_human_count: 0
 ---
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/26403372925](https://github.com/openclaw/clawsweeper/actions/runs/26403372925)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/26404067447](https://github.com/openclaw/clawsweeper/actions/runs/26404067447)
 
 Workflow conclusion: success
 
@@ -43,10 +43,10 @@ Make PR #86487 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 | --- | ---: |
 | Worker actions | 1 |
 | Fix executed | 0 |
-| Fix failed | 1 |
-| Fix blocked | 1 |
+| Fix failed | 0 |
+| Fix blocked | 0 |
 | Applied executions | 0 |
-| Apply blocked | 0 |
+| Apply blocked | 1 |
 | Apply skipped | 0 |
 | Needs human | 0 |
 
@@ -54,15 +54,13 @@ Make PR #86487 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | failed |  |  | command timed out after 300000ms: git fetch origin +refs/pull/86487/head:refs/remotes/clawsweeper/source-pr-86487 |
-| execute_fix | blocked |  |  | command timed out after 300000ms: git fetch origin +refs/pull/86487/head:refs/remotes/clawsweeper/source-pr-86487 |
-| automerge_repair_outcome_comment | updated | #86487 |  |  |
+| repair_contributor_branch | pushed | https://github.com/openclaw/openclaw/pull/86487 |  |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| #86487 | merge_canonical | blocked | fix_pr | job does not allow merge |
 
 ## Worker Action Matrix
 
