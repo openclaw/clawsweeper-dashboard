@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-25T13:20:54.868Z",
+  "generated_at": "2026-05-25T13:21:26.316Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-25T10:20:54.354Z",
+  "since": "2026-05-25T10:21:24.191Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    86492
+    85271
   ],
   "comment_ids": [
-    4534585061
+    4534593054
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4534593293,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:86177:4534585061:2026-05-25T13:19:37Z:automerge",
-      "comment_id": "4534585061",
-      "comment_version_key": "4534585061:2026-05-25T13:19:37Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86177#issuecomment-4534585061",
+      "idempotency_key": "comment-router:openclaw/openclaw:85271:4534593054:2026-05-25T13:20:57Z:automerge",
+      "comment_id": "4534593054",
+      "comment_version_key": "4534593054:2026-05-25T13:20:57Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85271#issuecomment-4534593054",
       "repo": "openclaw/openclaw",
-      "issue_number": 86177,
+      "issue_number": 85271,
       "author": "osolmaz",
       "author_id": 2453968,
       "author_association": "MEMBER",
-      "comment_created_at": "2026-05-25T13:19:37Z",
-      "comment_updated_at": "2026-05-25T13:19:37Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-05-25T13:20:57Z",
+      "comment_updated_at": "2026-05-25T13:20:57Z",
+      "status_comment_id": 4534593293,
       "trigger": "mention",
       "command": "automerge",
       "intent": "automerge",
@@ -53,36 +53,132 @@
       "trusted_bot": false,
       "trusted_bot_author": null,
       "automation_source": null,
-      "repair_reason": null,
+      "repair_reason": "automerge enabled; CHANGELOG.md entry is required before automerge; dispatch a focused changelog repair",
       "review_summary": null,
       "review_followup": null,
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "waiting",
+      "actions": [
+        {
+          "action": "ensure_automerge_job",
+          "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85271.md",
+          "status": "executed",
+          "mode": "autonomous",
+          "cluster_id": "automerge-openclaw-openclaw-85271",
+          "status_detail": "written"
+        },
+        {
+          "action": "label",
+          "label": "clawsweeper:automerge",
+          "status": "executed"
+        },
+        {
+          "action": "dispatch_repair",
+          "workflow": "repair-cluster-worker.yml",
+          "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85271.md",
+          "mode": "autonomous",
+          "status": "waiting",
+          "reason": "adopted job must be committed before worker dispatch"
+        },
+        {
+          "action": "comment",
+          "status": "pending"
+        }
+      ],
+      "author_repository_permission": "write",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(qqbot): derive outbound watchdog from configured timeouts (#85267)",
+        "body": "## Summary\n\nFixes #85267\n\nReporter ran `openclaw` + local `ollama` with `qwen3.5:27b` (slow local model) configured as:\n\n```yaml\nmodels:\n  providers:\n    ollama:\n      timeoutSeconds: 1800\n```\n\nDirect ollama call to the same model worked fine, but going through openclaw's QQBot channel aborted at ~5 minutes with `LLM request timed out`.\n\n## Root cause\n\nThe embedded-runner LLM-idle-timeout layer (`src/agents/pi-embedded-runner/run/llm-idle-timeout.ts`) already honors longer per-provider `timeoutSeconds`. But `extensions/qqbot/src/engine/gateway/outbound-dispatch.ts` held a **separate hardcoded** outbound response watchdog:\n\n```ts\nconst RESPONSE_TIMEOUT = 300_000;\n```\n\nraced against `dispatchPromise`. Slow first block-reply → QQBot rejected the wait at 5 min regardless of the configured longer ceiling. Effectively the per-channel watchdog silently undercut the provider timeout.\n\n## Fix\n\nDon't add a new QQBot-only knob. Derive the watchdog from existing config the user already sets:\n\n- `agents.defaults.timeoutSeconds`\n- `max(models.providers.<id>.timeoutSeconds)` across configured providers\n- Floored at the historical `300_000ms` so unconfigured deployments keep prior behavior\n- Clamped to `MAX_SAFE_TIMEOUT_MS` (~24.8d) so the value is always a safe `setTimeout` argument\n\nImplemented as a small pure resolver `resolveResponseTimeoutMs(cfg)` so it is independently unit-testable and consistent with `resolveLlmIdleTimeoutMs` upstream.\n\n## Files\n\n- **NEW** `extensions/qqbot/src/engine/gateway/response-timeout.ts` — pure resolver\n- **NEW** `extensions/qqbot/src/engine/gateway/response-timeout.test.ts` — unit tests\n- `extensions/qqbot/src/engine/gateway/outbound-dispatch.ts` — replace `RESPONSE_TIMEOUT` constant with `resolveResponseTimeoutMs(cfg)`\n\n## Tests\n\n`extensions/qqbot/src/engine/gateway/response-timeout.test.ts` covers:\n\n- No config → 5 min floor preserved\n- `agents.defaults.timeoutSeconds` longer than floor honored\n- `agents.defaults.timeoutSeconds` shorter than floor ignored (no regression for users already on 5-min floor)\n- `models.providers.ollama.timeoutSeconds: 1800` honored — **direct #85267 repro shape**\n- max-across-providers wins\n- non-positive / NaN / wrong-type values ignored\n- absurd input clamped to `MAX_SAFE_TIMEOUT_MS`\n\nAcceptance criterion from clawsweeper review (`extensions/qqbot/src/engine/gateway/outbound-dispatch.test.ts`) — existing tests untouched, unrelated to the timeout branch.\n\n## Notes\n\n- Behavior change is purely additive for the configured-longer-timeout case; default deployments see no change.\n- The existing `agents.defaults.timeoutSeconds < 300s` case is intentionally **not** allowed to undercut the historical floor — staying conservative on the regression direction.\n\n\n## Real behavior proof\n\nBehavior addressed: QQBot no longer stops waiting at the old 300s outbound watchdog when the existing provider timeout config allows a slower local model response.\n\nReal environment tested: Local OpenClaw PR worktree on macOS using Node 25.9.0. This exercises the actual QQBot `dispatchOutbound()` path with fake timers and mocked QQBot network sends; it is source-level behavior proof, not a live QQBot/Ollama credentialed run.\n\nExact steps or command run after this patch:\n\n```shell\nnode scripts/run-vitest.mjs extensions/qqbot/src/engine/gateway/outbound-dispatch.test.ts extensions/qqbot/src/engine/gateway/response-timeout.test.ts src/agents/pi-embedded-runner/run/llm-idle-timeout.test.ts\n```\n\nEvidence after fix: Terminal output from the PR worktree:\n\n```text\nRUN  v4.1.7 /Users/onur/oc/openclaw-pr-85271\n\nTest Files  4 passed (4)\n     Tests  155 passed (155)\n  Start at  17:58:35\n  Duration  1.48s (transform 699ms, setup 431ms, import 611ms, tests 132ms, environment 0ms)\n```\n\nObserved result after fix: The added dispatch-level regression test configures `models.providers.ollama.timeoutSeconds: 1800`, advances time to 300s, verifies `dispatchOutbound()` has not settled and no reply was sent, then advances to 301s and verifies the late block reply is delivered. This proves the actual QQBot dispatch path now waits past the old 5-minute cap when a longer provider timeout is configured.\n\nWhat was not tested: I did not run a live QQBot + Ollama + qwen3.5:27b environment with real QQBot credentials and a real long model response.\n",
+        "branch": "fix/85267-qqbot-response-timeout",
+        "head_sha": "1d43a6afdd1f025f8d0b7efb9f3bc57a5682ba7b",
+        "author": "symbolstar",
+        "labels": [
+          "size: M",
+          "channel: qqbot",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🦞 diamond lobster",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look",
+          "clawsweeper:automerge"
+        ],
+        "files": [
+          {
+            "path": "extensions/qqbot/src/engine/gateway/outbound-dispatch.test.ts",
+            "additions": 41,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qqbot/src/engine/gateway/outbound-dispatch.ts",
+            "additions": 12,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qqbot/src/engine/gateway/response-timeout.test.ts",
+            "additions": 75,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/qqbot/src/engine/gateway/response-timeout.ts",
+            "additions": 103,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": "automerge-openclaw-openclaw-85271",
+        "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85271.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85271",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85271.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 100,
+          "counts": {
+            "CANCELLED": 1,
+            "SUCCESS": 74,
+            "SKIPPED": 24,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      }
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 1651,
+    "total_ms": 4687,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 502
+        "ms": 478
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1635
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 4
       },
       {
         "name": "execute_commands",
-        "ms": 1138
+        "ms": 2562
       },
       {
         "name": "append_ledger",
