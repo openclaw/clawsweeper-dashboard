@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-25T10:09:51.162Z",
+  "generated_at": "2026-05-25T10:09:58.776Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-25T07:09:48.331Z",
+  "since": "2026-05-25T07:09:56.687Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    86427
+    86431
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,75 +31,80 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86427:4533296023:2026-05-25T10:09:44Z:clawsweeper_needs_human",
-      "comment_id": "4533296023",
-      "comment_version_key": "4533296023:2026-05-25T10:09:44Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86427#issuecomment-4533296023",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86431:4533366529:2026-05-25T10:09:51Z:clawsweeper_auto_repair",
+      "comment_id": "4533366529",
+      "comment_version_key": "4533366529:2026-05-25T10:09:51Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86431#issuecomment-4533366529",
       "repo": "openclaw/openclaw",
-      "issue_number": 86427,
+      "issue_number": 86431,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-25T09:50:52Z",
-      "comment_updated_at": "2026-05-25T10:09:44Z",
+      "comment_created_at": "2026-05-25T10:02:17Z",
+      "comment_updated_at": "2026-05-25T10:09:51Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
       "autoclose_message": null,
       "implementation_prompt": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "No ClawSweeper repair lane is needed because the patch is focused and I found no actionable defect; the remaining path is ordinary maintainer review and CI gating.; Cleared: Cleared: the diff changes internal TypeScript lock lifecycle code and tests only, with no dependency, workflow, secret, permission, package, or supply-chain changes. (sha=1d1370b07a6f15a925e62428213b92711f87b0ce)",
-      "review_summary": "The PR adds an idempotent embedded-attempt lock-controller dispose path, calls it from runEmbeddedAttempt's outer teardown, and adds focused lock lifecycle regression tests.\n\nPR surface: Source +32, Tests +39. Total +71 across 3 files.\n\nReproducibility: yes. Current main shows the retained lock is acquired before the run and only released through cleanup, while the PR body supplies before/after harness output for the skipped-cleanup path using the real lock primitive and controller.",
-      "review_followup": "No ClawSweeper repair lane is needed because the patch is focused and I found no actionable defect; the remaining path is ordinary maintainer review and CI gating.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=e36410cb7471b04a2f6e24fcdbfcb714e1d00428)",
+      "review_summary": "The PR adds bestEffort guidance to the message tool schema, extends the required durable delivery unsupported-channel error with a retry hint, and adds unit assertions for those strings.\n\nPR surface: Source +8, Tests +16. Total +24 across 4 files.\n\nReproducibility: yes. for the review finding: source inspection shows the prompt snapshot checker compares generated dynamic tool output to committed snapshots, and the committed bestEffort snapshots still lack the new description. I did not run the generator because this review is read-only.",
+      "review_followup": "Needs contributor action for real behavior proof, plus a mechanical snapshot update, so this is not a safe fully automated repair lane right now.",
       "freeform_prompt": null,
-      "expected_head_sha": "1d1370b07a6f15a925e62428213b92711f87b0ce",
+      "expected_head_sha": "e36410cb7471b04a2f6e24fcdbfcb714e1d00428",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): release embedded-attempt session lock on every exit path",
-        "body": "### Summary\n\n- **Problem**: During an embedded agent run the gateway holds a write lock on the session `.jsonl` file. If the run times out or a tool errors, the lock can be left held by the live gateway process — subsequent requests to that session block for the acquire timeout and then fail with `SessionWriteLockTimeoutError` (`OPENCLAW_SESSION_WRITE_LOCK_TIMEOUT`), and the retained session graph leaks memory. (#86014)\n- **Root Cause**: `createEmbeddedAttemptSessionLockController` acquires its coarse session lock (`heldLock`) **eagerly at creation** and the run releases it only inside the post-run cleanup block (`acquireForCleanup` → `cleanupEmbeddedAttemptResources`, which itself releases in a `finally`). That cleanup block is ordinary try-body code. The run's outer `finally` did **not** release the lock — it only emitted diagnostics and restored skill env. Normal timeout/abort/error paths funnel into `aborted`/`timedOut`/`promptError` flags and *do* reach the cleanup block, but an exception thrown in the ~post-prompt processing between the prompt teardown and the cleanup block (e.g. a tool/result step or the trajectory flush erroring) escapes straight to the outer `finally`, skipping the release. The lock then stays held by the live process (its PID is alive, so it is not stale) until the long compaction-scaled watchdog window elapses or a retry re-acquires it — effectively wedging the session. (The reporter's \"`maxHoldMs` grows unboundedly\" is a fixed value: the embedded-attempt lock's `maxHoldMs` is the compaction window + grace = `1020000`ms, matching the reported lock file; the observed `createdAt` refresh is the lock being re-acquired by retries.)\n- **Fix**: Give the lock controller an idempotent `dispose()` that releases `heldLock` if it is still retained, and call it from the run's outer `finally` so the lock is released on **every** exit path. On normal/aborted/timed-out runs the cleanup block still hands the lock to `acquireForCleanup` first, so `dispose()` is a no-op then (no double release); only the exception-skips-cleanup path now actually releases via `dispose()`.\n- **What changed**:\n  - `src/agents/pi-embedded-runner/run/attempt.session-lock.ts`: add `dispose(): Promise<void>` to `EmbeddedAttemptSessionLockController` (releases the retained `heldLock`, idempotent).\n  - `src/agents/pi-embedded-runner/run/attempt.ts`: capture a `releaseRetainedSessionLock` closure once the controller exists and invoke it in the run's outer `finally` (guarded so a release error is logged rather than masking the run's original error).\n  - `src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts`: regression coverage.\n- **What did NOT change (scope boundary)**:\n  - The happy-path lock handoff (`acquireForCleanup` → `cleanupEmbeddedAttemptResources`) and its flush behavior are unchanged; `dispose()` is a safety net.\n  - The session write-lock primitive, its watchdog/stale logic, and `maxHoldMs` derivation are unchanged. The separate \"an operation inside `withSessionWriteLock` never returns\" variant (its own `finally` cannot run) remains covered only by the watchdog and is out of scope.\n  - No config keys, protocol, or message-delivery behavior changed.\n\n### Reproduction\n\n1. An embedded attempt creates the session lock controller (eagerly acquiring the session write lock).\n2. Post-prompt processing throws (e.g. a tool/result step or trajectory flush errors) before the cleanup block runs `acquireForCleanup`.\n- Before: the exception escapes to the outer `finally`, which does not release the lock; the lock file persists held by the live process and the next request to that session fails with `SessionWriteLockTimeoutError`.\n- After: the outer `finally` calls the controller's `dispose()`, releasing the retained lock; the next request succeeds.\n\n### Real behavior proof\n\n- **Behavior addressed**: when an embedded attempt throws after eagerly acquiring the session lock but before the cleanup block, the run must still release the session write lock so later requests to the same session do not fail with `SessionWriteLockTimeoutError`.\n- **Real environment tested (Linux, Node 22)**: a standalone harness drives the **real** `acquireSessionWriteLock` and the **real** `createEmbeddedAttemptSessionLockController` against a temp session file, with the embedded-attempt `maxHoldMs` (1020000) the gateway uses. It runs an attempt that acquires the lock then throws during post-prompt processing, then issues a second `acquireSessionWriteLock` for the same session from the same live process — once without the fix (no `dispose()` in the finally) and once with it.\n- **Exact steps or command run after this patch**: `tsx /tmp/qmd86014/repro.mts`.\n- **Evidence after fix (verbatim harness output)**:\n\n```text\n--- BEFORE (pre-fix: outer finally does not release) (dispose in finally = false) ---\n  attempt threw: post-processing failure (e.g., trajectory flush)\n  lock file persists: true\n  subsequent acquire on same session: FAILED SessionWriteLockTimeoutError (isSessionWriteLockTimeoutError=true)\n\n--- AFTER (fix: outer finally calls controller.dispose()) (dispose in finally = true) ---\n  attempt threw: post-processing failure (e.g., trajectory flush)\n  lock file persists: false\n  subsequent acquire on same session: SUCCEEDED\n\nRESULT: PASS — BEFORE leaks the lock and the next request hits SessionWriteLockTimeoutError;\n         AFTER (controller.dispose() in the outer finally) releases it and the next request succeeds.\n```\n\n- **Observed result after fix**: the leaked lock is released on the exception path; the next request to the same session succeeds instead of failing with `SessionWriteLockTimeoutError` — the reporter's error (`session file locked (timeout 60000ms): pid=7 …/<session>.jsonl.lock`) is reproduced verbatim (same shape, differing only in timeout/pid) and removed by the fix.\n- **Regression tests**: `pnpm test src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts` (68 passed) including two new cases — `dispose()` releases the eagerly-held lock when cleanup is skipped (and is idempotent), and `dispose()` does not double-release a lock already handed to `acquireForCleanup`.\n- **What was not tested**: a full multi-process live gateway run with real cron `agentTurn` retries over time was not executed; the harness exercises the real lock primitive + real controller end to end and the unit tests cover the `dispose()` contract. The \"stalled operation inside `withSessionWriteLock` never returns\" variant is not addressed here (covered by the watchdog).\n\n### Risk / Mitigation\n\n- **Risk**: releasing in the outer `finally` could double-release a lock the cleanup block already released, or a release error could mask the run's original error.\n- **Mitigation**: `dispose()` is idempotent — the happy/aborted/timed-out paths transfer the lock out via `acquireForCleanup` (so the controller no longer retains it and `dispose()` is a no-op), proven by a no-double-release test. The outer-`finally` call is wrapped so a release failure is logged rather than thrown, mirroring the existing teardown logging. No behavior change on paths that already released the lock.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [x] Sessions / storage\n\n### Linked Issue/PR\n\nFixes #86014\n",
-        "branch": "fix/86014-embedded-session-lock-release",
-        "head_sha": "1d1370b07a6f15a925e62428213b92711f87b0ce",
-        "author": "openperf",
+        "title": "fix(message-tool): clarify best-effort delivery recovery",
+        "body": "## Summary\r\n\r\nWhat problem does this PR solve?\r\n\r\n\r\nWhy does this matter now?\r\n\r\n\r\nWhat is the intended outcome?\r\n\r\n\r\nWhat is intentionally out of scope?\r\n\r\n\r\nWhat does success look like?\r\n\r\n\r\nWhat should reviewers focus on?\r\n\r\n<details>\r\n<summary>Summary guidance</summary>\r\n\r\nThis PR description is the contributor's durable explanation of the change. Write it for human maintainers first; ClawSweeper and Barnacle use the same text to understand intent, proof, risk, and current review state.\r\n\r\nDescribe the intent and outcome in 2-5 bullets. Avoid restating the diff; reviewers and bots can read the changed files.\r\n\r\nIf this PR fixes a plugin beta-release blocker, title it `fix(<plugin-id>): beta blocker - <summary>` and link the matching `Beta blocker: <plugin-name> - <summary>` issue labeled `beta-blocker`. Contributors cannot label PRs, so the title is the PR-side signal for maintainers and automation.\r\n\r\n</details>\r\n\r\n## Linked context\r\n\r\nWhich issue does this close?\r\n\r\nCloses #\r\n\r\nWhich issues, PRs, or discussions are related?\r\n\r\nRelated #\r\n\r\nWas this requested by a maintainer or owner?\r\n\r\n<details>\r\n<summary>Linked context guidance</summary>\r\n\r\nLink the issue, PR, discussion, maintainer request, or owner request that explains why this PR should exist. Maintainer context helps reviewers and automation distinguish intended work from drive-by churn.\r\n\r\n</details>\r\n\r\n## Real behavior proof (required for external PRs)\r\n\r\n- Behavior or issue addressed:\r\n- Real environment tested:\r\n- Exact steps or command run after this patch:\r\n- Evidence after fix (screenshot, recording, terminal capture, console output, redacted runtime log, linked artifact, or copied live output):\r\n- Observed result after fix:\r\n- What was not tested:\r\n- Proof limitations or environment constraints:\r\n- Before evidence (optional but encouraged):\r\n\r\n<details>\r\n<summary>Real behavior proof guidance</summary>\r\n\r\nExternal contributors must show after-fix evidence from a real OpenClaw setup. Unit tests, mocks, lint, typechecks, snapshots, and CI are supplemental only.\r\n\r\nScreenshots are encouraged even for CLI, console, text, or log changes. Terminal screenshots, copied live output, redacted runtime logs, recordings, and linked artifacts count.\r\n\r\nIf your environment cannot produce the ideal proof, explain that under `Proof limitations or environment constraints` so reviewers and ClawSweeper can direct the next step properly.\r\n\r\nBe mindful of private information like IP addresses, API keys, phone numbers, non-public endpoints, or other private details when providing evidence.\r\n\r\n</details>\r\n\r\n## Tests and validation\r\n\r\nWhich commands did you run?\r\n\r\n\r\nWhat regression coverage was added or updated?\r\n\r\n\r\nWhat failed before this fix, if known?\r\n\r\n\r\nIf no test was added, why not?\r\n\r\n<details>\r\n<summary>Testing guidance</summary>\r\n\r\nList focused commands, not every incidental check. CI is useful support, but external PRs still need real behavior proof above when behavior changes.\r\n\r\n</details>\r\n\r\n## Risk checklist\r\n\r\nDid user-visible behavior change? (`Yes/No`)\r\n\r\n\r\nDid config, environment, or migration behavior change? (`Yes/No`)\r\n\r\n\r\nDid security, auth, secrets, network, or tool execution behavior change? (`Yes/No`)\r\n\r\n\r\nWhat is the highest-risk area?\r\n\r\n\r\nHow is that risk mitigated?\r\n\r\n<details>\r\n<summary>Risk guidance</summary>\r\n\r\nUse this for author judgment that is not obvious from the diff. ClawSweeper can see touched files, but it cannot know which behavior you think is risky, why the risk is acceptable, or what mitigation reviewers should verify.\r\n\r\n</details>\r\n\r\n## Current review state\r\n\r\nWhat is the next action?\r\n\r\n\r\nWhat is still waiting on author, maintainer, CI, or external proof?\r\n\r\n\r\nWhich bot or reviewer comments were addressed?\r\n\r\n<details>\r\n<summary>Review state guidance</summary>\r\n\r\nKeep this as the durable state for review progress. If useful information appears in comments, fold the current next action or blocker back here so maintainers and ClawSweeper do not need to reconstruct state from comment history.\r\n\r\n</details>\r\n",
+        "branch": "fix/message-tool-best-effort-capability",
+        "head_sha": "e36410cb7471b04a2f6e24fcdbfcb714e1d00428",
+        "author": "ctwlty",
         "labels": [
           "agents",
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦞 diamond lobster",
-          "status: 👀 ready for maintainer look"
+          "size: XS",
+          "triage: needs-real-behavior-proof",
+          "P3",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts",
-            "additions": 39,
+            "path": "src/agents/tools/message-tool.test.ts",
+            "additions": 14,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.ts",
-            "additions": 15,
-            "deletions": 0,
+            "path": "src/agents/tools/message-tool.ts",
+            "additions": 6,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
-            "additions": 17,
-            "deletions": 0,
+            "path": "src/infra/outbound/message.test.ts",
+            "additions": 12,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/message.ts",
+            "additions": 4,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86427",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86427.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86431",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86431.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
@@ -108,33 +113,36 @@
           "total": 102,
           "counts": {
             "CANCELLED": 2,
-            "SKIPPED": 28,
+            "SKIPPED": 27,
             "SUCCESS": 71,
+            "FAILURE": 1,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:CANCELLED"
+            "Real behavior proof:CANCELLED",
+            "check-additional-boundaries-a:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
+            "Real behavior proof:CANCELLED",
+            "check-additional-boundaries-a:FAILURE"
           ]
         }
       },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3140,
+    "total_ms": 2294,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 412
+        "ms": 313
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2409
+        "ms": 1766
       },
       {
         "name": "classify_commands",
@@ -142,7 +150,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 302
+        "ms": 197
       },
       {
         "name": "append_ledger",
