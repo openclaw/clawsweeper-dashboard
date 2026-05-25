@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-25T16:53:32.569Z",
+  "generated_at": "2026-05-25T16:53:39.566Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-25T13:53:29.959Z",
+  "since": "2026-05-25T13:53:36.960Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    86067
+    79214
   ],
-  "comment_ids": [
-    4535829568
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 6,
+  "commands_seen": 3,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,17 +31,109 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:86067:4535829568:2026-05-25T16:52:27Z:re_review",
-      "comment_id": "4535829568",
-      "comment_version_key": "4535829568:2026-05-25T16:52:27Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86067#issuecomment-4535829568",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:79214:4403062604:2026-05-25T16:53:33Z:clawsweeper_needs_human",
+      "comment_id": "4403062604",
+      "comment_version_key": "4403062604:2026-05-25T16:53:33Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/79214#issuecomment-4403062604",
       "repo": "openclaw/openclaw",
-      "issue_number": 86067,
-      "author": "ubehera",
-      "author_id": 3691059,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-25T16:52:27Z",
-      "comment_updated_at": "2026-05-25T16:52:27Z",
+      "issue_number": 79214,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-08T03:27:35Z",
+      "comment_updated_at": "2026-05-25T16:53:33Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "No ClawSweeper repair lane is needed because the current PR has no blocking findings; the remaining action is ordinary maintainer review and CI gating.; Cleared: The diff only adds existing internal diagnostic-event calls, tests, and a changelog entry; it does not alter dependencies, CI, secrets, permissions, or package execution paths. (sha=dbbeb7bfab633fcfd394e007d44174e73169c517)",
+      "review_summary": "The PR adds `message.queued`, `session.state`, and `message.processed` diagnostic lifecycle events around `runCronIsolatedAgentTurn`, plus regression coverage and a changelog entry.\n\nPR surface: Source +48, Tests +129, Docs +1. Total +178 across 3 files.\n\nReproducibility: yes. Source inspection on current main shows isolated cron executes full agent turns without the lifecycle calls that dispatch already emits, so diagnostic subscribers cannot receive those events from this path.",
+      "review_followup": "No ClawSweeper repair lane is needed because the current PR has no blocking findings; the remaining action is ordinary maintainer review and CI gating.",
+      "freeform_prompt": null,
+      "expected_head_sha": "dbbeb7bfab633fcfd394e007d44174e73169c517",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): emit message.queued/processed for isolated-agent turns",
+        "body": "## Summary\n\nThe diagnostic-event seam for `message.queued` / `session.state` / `message.processed` is currently emitted only by channel-driven dispatch (`src/auto-reply/reply/dispatch-from-config.ts:417`) and the embedded runner (`src/agents/pi-embedded-runner/runs.ts:75,89`). The isolated-cron agent path (`src/cron/isolated-agent/run.ts`) executes full agent turns including LLM calls, but never emits these events. Anything subscribed to the diagnostic-events bus for per-session attribution silently drops 100% of cron-isolated traffic.\n\nThis PR adds a paired `logMessageQueued` → `logSessionStateChange(\"processing\")` → ... → `logSessionStateChange(\"idle\")` → `logMessageProcessed` lifecycle inside `runCronIsolatedAgentTurn`, using the prepared `runSessionId` / `runSessionKey` and a stable `cron-isolated` source label. This mirrors the dispatch path's lifecycle so `state.queueDepth` is incremented and decremented symmetrically and downstream subscribers see the full per-run lifecycle.\n\n## Problem\n\nAny consumer of `message.queued` for per-session attribution — diagnostics exporters, OTel bridges, custom observability plugins — currently sees zero spans for cron-isolated runs. LLM calls fire, sessions exist, but downstream subscribers cannot distinguish runs from each other and tend to bucket them under whatever static fallback id their integration uses.\n\nIn a deployment with several daily isolated cron jobs over a 13-day window, an OTel subscriber observed 63 distinct cron-driven sessions in the native JSONL shipper but only 4 distinct `session.id` values reaching its trace store — a 94% gap that this single emission point closes.\n\n## Solution\n\nAdded paired diagnostic-event calls to `runCronIsolatedAgentTurn`:\n\n- `logMessageQueued({sessionId, sessionKey, channel: \"cron\", source: \"cron-isolated\"})` after `prepared.ok`.\n- `logSessionStateChange({state: \"processing\"})` immediately after queued.\n- `logSessionStateChange({state: \"idle\"})` in `finally` (decrements `state.queueDepth`).\n- `logMessageProcessed({outcome, durationMs, error?})` in `finally`.\n\nOutcomes: success → `completed`; aborted/thrown/finalizer-error → `error` with reason.\n\n## Changes\n\n- `src/cron/isolated-agent/run.ts` — added the diagnostic lifecycle calls inside `runCronIsolatedAgentTurn`.\n- `src/cron/isolated-agent/run.diagnostic-events.test.ts` — new focused regression test asserting the queued → processing → idle → processed sequence with consistent `sessionKey`.\n- `CHANGELOG.md` — entry under `## Unreleased` / `### Fixes`.\n\n## Real Behavior Proof\n\n- **Behavior or issue addressed:** Subscribers to OpenClaw's diagnostic-events bus (e.g. OTel exporters) receive zero `message.queued` / `message.processed` events for isolated-cron agent turns, even though those runs make LLM calls and have a real session UUID. Downstream attribution buckets every cron-isolated run under whatever static fallback id the integration declares, hiding distinct sessions from traces.\n- **Real environment tested:** Local OpenClaw checkout built from this branch (`pr/cron-isolated-message-queued`, head `275f1bb430`) on Linux 6.12.30 / Node 24.13.0. Gateway run as a systemd user unit (`openclaw-gateway.service`). A diagnostic-events subscriber registered via `onDiagnosticEvent` was attached to verify event emission per run.\n- **Exact steps or command run after this patch:**\n\n```bash\npnpm install\npnpm tsgo:core\npnpm test src/cron/isolated-agent/run.diagnostic-events.test.ts\npnpm test src/cron/isolated-agent/run.session-key.test.ts \\\n          src/cron/isolated-agent/run.session-key-isolation.test.ts \\\n          src/cron/isolated-agent/run.payload-fallbacks.test.ts \\\n          src/cron/isolated-agent/run.meta-error-status.test.ts\npnpm build\nsystemctl --user restart openclaw-gateway\nnode dist/index.js cron run <isolated-job-id>\njournalctl --user -u openclaw-gateway --since \"30 seconds ago\" \\\n  | grep -E \"event: message\\\\.(queued|processed)|started root span\"\n```\n\n- **Evidence after fix:** Subscriber output from the live deployment after triggering an isolated cron job (session UUIDs and job ids redacted to short prefixes; agent label is generic, no IPs / chat ids / private endpoints):\n\n```\n[bridge] event: message.queued sessionKey: agent:main:cron:<jobId-prefix>:run:<runUuid-prefix> source: cron-isolated\n[bridge] started root span for main session: agent:main:cron:<jobId-prefix>:run:<runUuid-prefix> agent: <agentId>\n[bridge] event: message.processed sessionKey: agent:main:cron:<jobId-prefix>:run:<runUuid-prefix>\n```\n\nTests:\n\n```\npnpm tsgo:core              → exit 0\npnpm test src/cron/isolated-agent/run.diagnostic-events.test.ts\n  Test Files  1 passed (1)\n       Tests  1 passed (1)\n\npnpm test src/cron/isolated-agent/run.session-key.test.ts \\\n          src/cron/isolated-agent/run.session-key-isolation.test.ts \\\n          src/cron/isolated-agent/run.payload-fallbacks.test.ts \\\n          src/cron/isolated-agent/run.meta-error-status.test.ts\n  Test Files  4 passed (4)\n       Tests  17 passed (17)\n```\n\n- **Observed result after fix:** Both lifecycle events fire with the run's `sessionId` / `sessionKey`. The bridge subscriber attached via `onDiagnosticEvent` receives `message.queued`, then `session.state` (processing → idle), then `message.processed`, all sharing the same `sessionKey` for the same isolated cron run. `state.queueDepth` returns to 0 after the run because the paired `logSessionStateChange(\"idle\")` runs in `finally`. Distinct cron run UUIDs now reach downstream span/aggregation logic instead of collapsing into a single static fallback id.\n- **What was not tested:** The heartbeat-runner isolated-session path at `src/infra/heartbeat-runner.ts:1266` shares a similar shape but is intentionally out of scope for this PR — left as a follow-up if maintainers agree the same seam belongs there. `pnpm check` was not run end-to-end; the changed-surface gates above plus the build are the proof bar this PR carries.\n\n## Notes\n\n- `logMessageQueued` runs after `prepared.ok` to avoid noisy queued/processed pairs for runs that bail out at preparation; matches the existing pattern where dispatch only logs after route resolution.\n- Both `logSessionStateChange` calls and `logMessageProcessed` run inside the `finally` block, ensuring the `state.queueDepth` decrement and processed event always fire even on early returns / throws.\n- No public-API changes; `logMessageQueued` / `logSessionStateChange` / `logMessageProcessed` are existing exports.\n\n## Review feedback addressed (rev 2, commit 275f1bb430)\n\n- **P1 — taskLabel:** dropped. The `logMessageQueued` call now passes only `{sessionId, sessionKey, channel, source}`, matching the helper's typed parameter and event schema on `main`.\n- **P2 — queue-state lifecycle:** added `logSessionStateChange({state: \"processing\"})` immediately after `logMessageQueued`, and `logSessionStateChange({state: \"idle\"})` in the `finally` block before `logMessageProcessed`. This pairs the `state.queueDepth` increment with its decrement and matches the dispatch path's lifecycle.\n- **P3 — changelog:** added entry under `## Unreleased` / `### Fixes`.\n- **Real behavior proof:** subscriber output included above (redacted).\n- **Regression test:** added `run.diagnostic-events.test.ts` covering queued / processing / idle / processed sequencing and session-key consistency.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+        "branch": "pr/cron-isolated-message-queued",
+        "head_sha": "dbbeb7bfab633fcfd394e007d44174e73169c517",
+        "author": "arniesaha",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦞 diamond lobster",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run.diagnostic-events.test.ts",
+            "additions": 129,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run.ts",
+            "additions": 49,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-79214",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-79214.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "SUCCESS": 72,
+            "SKIPPED": 28,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-agents:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-agents:FAILURE"
+          ]
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:79214:4432490577:2026-05-12T16:09:35Z:re_review",
+      "comment_id": "4432490577",
+      "comment_version_key": "4432490577:2026-05-12T16:09:35Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/79214#issuecomment-4432490577",
+      "repo": "openclaw/openclaw",
+      "issue_number": 79214,
+      "author": "arniesaha",
+      "author_id": 3646287,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-12T16:09:35Z",
+      "comment_updated_at": "2026-05-12T16:09:35Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -64,36 +154,35 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): file-scoped prompt-window guard for same-session embedded races",
-        "body": "## Update (commit `4254386508`): post-stream drain in installPromptSubmissionLockRelease\n\nAdds `await params.waitForSessionEvents(params.session)` before `await params.reacquireAfterPrompt()` in the `finally` block of `installPromptSubmissionLockRelease`, mirroring the existing pre-release drain at the top of the same wrapper. Reported and production-mitigated by @kesslerio against AlphaClaw on OpenClaw 2026.5.19 (see #85913 thread).\n\n**What this addresses**: a same-lane race in deployments that populate the embedded runner's `_agentEventQueue` for provider-emitted side effects (AlphaClaw is the reported case). Without the drain, queued same-process writes can settle between `streamFn` return and `reacquireAfterPrompt`'s fence check, misclassifying the lane's own writes as external mutation. With the drain, those writes settle before the fence check runs.\n\n**What this does NOT address**: in vanilla openclaw / pi, `_agentEventQueue` isn't populated by the upstream session manager, so the drain is a no-op in the dominant code path. The actual same-lane race vanilla openclaw users may be hitting is post-fence: pi's listener-driven writes happen after `reacquireAfterPrompt` has passed, then trip on the *next* `withSessionWriteLock` call (e.g., a `beforeToolCall` hook). The root-cause fix for that case is to extend `withOwnedSessionTranscriptWrites`'s ALS scope to span the full `agent.prompt()` call so pi's listener-driven writes flow through `publishOwnedSessionFileFence`. That is a larger refactor and is being tracked as a follow-up issue rather than bundled into this PR.\n\n**Why include the drain in #86067 anyway**: small, additive, symmetric with the existing pre-release drain, production-validated by the reporter for the AlphaClaw deployment shape, and provides defensive value for any future fork that wires the event queue. Total cost: one `await` in a `finally` block, no behavior change in vanilla pi.\n\n**Tests**: two existing event-order assertions updated to include the post-stream drain marker; one new test (`drains prompt-emitted session events before reacquireAfterPrompt's fence check`) pins down the ordering invariant. 76 cases pass across both test files.\n\n---\n\n## Summary\n\n- Adds a file-scoped prompt-window guard that serialises embedded-runner prompt windows on the same resolved session JSONL across concurrent lanes.\n- Introduces `releaseForSessionIdleWait()` for the post-prompt compaction window so it does not block other lanes' real prompt windows.\n- Routes every exit path through a turn-release `try/catch` and `try/finally` so the file-scoped queue is vacated on success, takeover, lock-timeout, fence-mismatch, and mid-flight release errors. A wedge in one lane never leaves later same-file waiters blocked.\n\nFixes #85913.\n\n## Background\n\n`createEmbeddedAttemptSessionLockController` releases the OS-level session write lock during provider streaming so long model calls don't hold the lock for minutes at a time. After streaming, `reacquireAfterPrompt()` reacquires the lock and `assertSessionFileFence()` checks an inode/size/mtime fingerprint to detect external mutation. If the file changed in an unowned way, the controller throws `EmbeddedAttemptSessionTakeoverError`.\n\nThe fence is a symptom-catcher, not a race preventer. The live-repro evidence on the issue shows the underlying race: two lanes on the same OpenClaw process can both resolve to the same JSONL (stuck-session recovery firing a fresh embedded run on a session UUID whose file resolution aliases to an already-active file). Both lanes release for prompt simultaneously, both stride into provider streams, the slower one's reacquire trips the fence after the provider call has already produced output, and the chain falls all the way to `Embedded agent failed before reply: All models failed`. The user sees a dropped reply.\n\n`RuntimeEnv` is module-scoped at `ownedSessionFileWrites` / `trustedSessionFileStates` — both keyed by `path.resolve(sessionFile)`. The fix extends that pattern with a third process-global map: a per-file queue of prompt turns.\n\n## What changed\n\n`src/agents/pi-embedded-runner/run/attempt.session-lock.ts`\n\n- New module-level `promptSessionFileTurnTails: Map<string, Promise<void>>` keyed by the same `resolveSessionFileFenceKey` the fence already uses.\n- `acquirePromptSessionFileTurn(sessionFileKey)` returns `{ awaitPrior, release }`. The first entrant on a file gets `awaitPrior: undefined` and falls through with no extra acquire/release. The second entrant gets the first's tail and waits on it before its own prompt window opens.\n- `performHeldLockReleaseForWindow(registerPromptHolder)` consolidates the held-lock release path. When `registerPromptHolder` is true and a prior turn exists, the entrant yields its OS lock, awaits the prior turn, reacquires fresh, and then continues with the existing fingerprint/snapshot/release sequence. Wrapped in `try/catch` so any exception between acquiring the turn and the controller taking ownership releases the turn slot before rethrowing.\n- `releaseForPrompt()` becomes a one-liner over `performHeldLockReleaseForWindow(true)`.\n- `releaseForSessionIdleWait()` (new public method) becomes a one-liner over `performHeldLockReleaseForWindow(false)`. Used for the post-prompt compaction window, which is not a provider-prompt window and must not serialise other lanes' prompts.\n- `reacquireAfterPrompt()` releases the turn in a `finally` block — the success path and every error branch (lock-timeout, takeover fence, any other exception) all vacate the slot. The no-op-early-return branch (`takeoverDetected || heldLock`) also releases the turn so a no-op entrant cannot strand the queue.\n- `resetEmbeddedAttemptSessionFilePromptGuardsForTest()` (new test helper) clears the module-level map so tests start from a clean slate.\n- Exported `releaseForSessionIdleWait` on the `EmbeddedAttemptSessionLockController` type.\n\n`src/agents/pi-embedded-runner/run/attempt.ts`\n\n- Line 4277: the post-prompt compaction wait uses `releaseForSessionIdleWait()` instead of `releaseForPrompt()`. This path was already a non-prompt release — the rename makes it not contend with real prompt windows on the same file. The matching post-compaction `withSessionWriteLock` reacquires the OS lock internally; no other behavior changes.\n\n`src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts`\n\n- `afterEach` clears the new queue alongside the existing `resetSessionWriteLockStateForTest()` cleanup.\n- Six existing multi-controller test bodies call `resetEmbeddedAttemptSessionFilePromptGuardsForTest()` between the first controller's `releaseForPrompt()` and the second controller's `releaseForPrompt()`. These tests were written before the file-scoped guard existed and use `releaseForPrompt()` as a \"drop the OS lock\" call without a paired `reacquireAfterPrompt()`. The reset preserves their existing assertions without forcing them to invent reacquire calls they don't need.\n- Five new test cases under the same `describe` block:\n  - Serialisation happy path — second same-file controller's `releaseForPrompt()` blocks until the first calls `reacquireAfterPrompt()`.\n  - **Cleanup-on-reacquire-failure** — first controller's `reacquireAfterPrompt()` rejects with a `SessionWriteLockTimeoutError`; the second controller's `releaseForPrompt()` still completes (the turn was released in the `finally`).\n  - **Cleanup-on-release-failure** — first controller's held-lock release rejects partway through `releaseForPrompt()`; the second controller's `releaseForPrompt()` still completes (the turn was released in the `catch` before re-throwing).\n  - Compaction-wait isolation — `releaseForSessionIdleWait()` does not block another lane's `releaseForPrompt()` on the same file.\n  - Cross-file isolation — controllers on different `sessionFile`s do not serialise.\n\n## Verification\n\n```sh\n# All acceptance-criteria tests from the issue's bot review:\nnode scripts/run-vitest.mjs \\\n  src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts \\\n  src/logging/diagnostic-stuck-session-recovery.runtime.test.ts \\\n  src/infra/heartbeat-runner.skips-busy-session-lane.test.ts \\\n  src/agents/model-fallback.test.ts \\\n  src/agents/failover-error.test.ts\n\n# Test Files  7 passed (7)\n#      Tests  306 passed (306)\n```\n\n`pnpm check:changed` exit 0 (typecheck, lint, runtime import cycles, repo guards).\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Two concurrent embedded attempts on the same resolved session JSONL no longer race during the provider-streaming window. The losing lane's reply was being dropped because the takeover fence fired mid-stream after the provider had already started producing output. With the file-scoped turn queue, the second entrant waits for the first to reacquire (or fail cleanly) before its own prompt window opens. Failure-path cleanup ensures one wedged prompt cannot block later prompts on the same file.\n\n- **Real environment tested:** Local OpenClaw source checkout (macOS 15.5, Node 22.19+) at the patched branch HEAD `65705d8c39`. The patched `createEmbeddedAttemptSessionLockController` runs in two real concurrent controllers against a shared session JSONL with the production `acquireSessionWriteLock` contract; per-microsecond timestamps and the lock-acquire/release event ledger are captured below. The acceptance-criteria test sweep from the issue's bot review runs against the same patched source.\n\n- **Exact steps or command run after this patch:**\n\n  ```sh\n  pnpm install\n  pnpm build\n  node scripts/run-vitest.mjs src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts\n\n  # Acceptance-criteria sweep from the issue's bot review:\n  node scripts/run-vitest.mjs \\\n    src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts \\\n    src/logging/diagnostic-stuck-session-recovery.runtime.test.ts \\\n    src/infra/heartbeat-runner.skips-busy-session-lane.test.ts \\\n    src/agents/model-fallback.test.ts \\\n    src/agents/failover-error.test.ts\n\n  # Drive the patched controller end-to-end against a shared session JSONL:\n  npx tsx /abs/path/to/pr-proof/run-session-takeover-guard-proof.mjs /abs/path/to/openclaw\n  ```\n\n- **Evidence after fix:**\n\n  **Before/after reproduction** — same scenario run against pre-patch (`5be62e779b`, the commit one before this fix) and post-patch (`65705d8c39`) source via the same `run-same-file-race-repro.mjs` script. Two real `EmbeddedAttemptSessionLockController` instances on a shared temp session JSONL; production `acquireSessionWriteLock` (no test mocks); external mutation injected mid-prompt to simulate the aliased-UUID concurrent lane from the live-repro evidence in #85913:\n\n  ```\n  PRE-PATCH (5be62e779b):\n    [   2.60ms] ctrl-A   prompt in flight (200ms hold)\n    [   9.47ms] ctrl-B   prompt in flight (200ms hold)\n    [ 111.70ms] external appending bytes outside the ownership chain\n    [ 209.67ms] ctrl-A   THREW on reacquire: TAKEOVER (EmbeddedAttemptSessionTakeoverError)\n    [ 210.98ms] ctrl-B   THREW on reacquire: TAKEOVER (EmbeddedAttemptSessionTakeoverError)\n    Result:  replies delivered 0 of 2  ·  takeover errors 2\n\n  POST-PATCH (65705d8c39):\n    [   2.64ms] ctrl-A   prompt in flight (200ms hold)\n    [ 111.53ms] external appending bytes outside the ownership chain\n    [ 209.33ms] ctrl-A   THREW on reacquire: TAKEOVER (EmbeddedAttemptSessionTakeoverError)\n    [ 210.89ms] ctrl-B   prompt in flight (200ms hold)\n    [ 415.45ms] ctrl-B   DELIVERED (reacquire succeeded)\n    Result:  replies delivered 1 of 2  ·  takeover errors 1\n  ```\n\n  Read the timestamps: on pre-patch, both controllers enter their mid-prompt sleep at ms 2 and 9 simultaneously (both have active fences capturing the same stale fingerprint), so when the external write hits at ms 111, both lanes observe the mutation when they reacquire at ms ~210. On post-patch, lane B's `prompt in flight` log line does not appear until ms 210 — which is the same moment lane A's reacquire throws. The file-scoped queue held lane B's `releaseForPrompt` until lane A's turn vacated; by then the file was stable, so lane B's release captured a fresh fingerprint and its reacquire succeeded at ms 415.\n\n  Lane A's takeover is the unavoidable case (a true external mutation during its prompt window — no coordination primitive can save it; the fence correctly fires as the safety net). Lane B is the cascade casualty the patch saves.\n\n  **Internal controller proof** — earlier in the proof pipeline, two real controllers driven through same-file contention with timestamped event ledger. Verbatim stdout from the run on this branch (`65705d8c39`):\n\n  ```\n  ============================================================\n  PR #86067 — file-scoped prompt-window guard proof\n  ============================================================\n\n  openclaw checkout: /Users/.../openclaw\n  source under test:  src/agents/pi-embedded-runner/run/attempt.session-lock.ts\n\n  ============================================================\n  Scenario A — same-file prompt windows serialise\n  ============================================================\n\n    [  509.55ms] setup                  two controllers on /tmp/proof-session.jsonl\n    [  509.59ms] first                  releaseForPrompt() — register turn-1\n    [  514.63ms] second                 releaseForPrompt() — should block on turn-1\n    [  514.69ms] observe                t+0.06ms: secondCompleted=false (expected: false)\n    [  514.70ms] first                  reacquireAfterPrompt() — release turn-1, second waiter unblocks\n    [  515.86ms] observe                t+1.23ms: secondCompleted=true (expected: true)\n\n    event ledger:\n      acquire(A-1)\n      acquire(A-2)\n      release(A-1)\n      release(A-2)\n      acquire(A-3)\n      acquire(A-4)\n      release(A-4)\n\n    Scenario A: PASS — second controller waited for first's reacquire\n\n  ============================================================\n  Scenario B — cleanup-on-failure: first's reacquire throws\n  ============================================================\n\n    [  516.19ms] setup                  two controllers; first's reacquire mocked to throw SessionWriteLockTimeoutError\n    [  516.21ms] first                  releaseForPrompt() — register turn-1\n    [  516.31ms] second                 releaseForPrompt() — should block on turn-1\n    [  516.37ms] observe                t+0.05ms: secondCompleted=false (expected: false)\n    [  516.38ms] first                  reacquireAfterPrompt() — throws SessionWriteLockTimeoutError\n    [  516.41ms] first                  threw: SessionWriteLockTimeoutError (OPENCLAW_SESSION_WRITE_LOCK_TIMEOUT)\n    [  516.42ms] observe                turn-1 must have been vacated in reacquire's finally\n    [  516.50ms] observe                t+0.18ms: secondCompleted=true (expected: true)\n\n    Scenario B: PASS — second waiter completed despite first's reacquire failure\n  ```\n\n  Scenario A's event ledger is the key observable: lock A-1 is the first controller's initial acquire, A-2 the second's initial acquire, A-3 is the first controller's reacquire-after-prompt (which fires the turn release on the queue), and A-4 is the second controller's reacquire-fresh after its prior-wait dance. Without the file-scoped guard, both A-1 and A-2 would release simultaneously and both controllers would stride into provider streams.\n\n  Scenario B's timestamps prove the cleanup-on-failure path is wired correctly: `secondCompleted` flips from `false` → `true` within 80 µs of the first controller's reacquire throwing. If `reacquireAfterPrompt`'s finally block weren't releasing the turn on the error path, this assertion would have timed out instead.\n\n  Targeted session-lock suite (74 tests including the 5 new file-scoped guard regressions):\n\n  ```\n  RUN  v4.1.7 /Users/.../openclaw\n   Test Files  2 passed (2)\n        Tests  74 passed (74)\n     Duration  919ms\n  ```\n\n  Full acceptance-criteria sweep (the five files the issue's bot review named):\n\n  ```\n  RUN  v4.1.7 /Users/.../openclaw\n   Test Files  7 passed (7)\n        Tests  306 passed (306)\n     Duration  46.34s\n  ```\n\n  The two regression tests that distinguish a correct fix from a half-fix are:\n\n  - `vacates the prompt turn so later waiters proceed when reacquireAfterPrompt throws` — drives the first controller's reacquire mock to reject with `SessionWriteLockTimeoutError`. Asserts that a second waiter blocked on the first's turn completes its `releaseForPrompt()` after the throw. If the cleanup is wired only on the success path, this test times out (the second waiter blocks forever on a turn promise that never resolves).\n  - `vacates the prompt turn when releaseForPrompt itself fails mid-flight` — drives the first controller's held-lock release to reject. The first `releaseForPrompt()` throws partway, but the `catch` in `performHeldLockReleaseForWindow` releases the turn before rethrowing. A second `releaseForPrompt()` then completes cleanly. If the cleanup is only in `reacquireAfterPrompt`, this test also times out.\n\n  Both of these are deterministic — they trigger the failure path via `vi.fn().mockRejectedValueOnce(...)`, not via timing.\n\n- **Observed result after fix:** Concurrent same-file prompt windows serialise instead of racing. Failed prompt windows (lock-timeout, takeover, release error) vacate the file-scoped queue so subsequent prompts on the same file proceed. The takeover fence remains in place as a defense-in-depth check against external mutation.\n\n- **What was not tested:** A live multi-agent gateway run that fires stuck-session recovery on an aliased session UUID. The unit tests cover the locking primitive directly through its public contract; the existing `heartbeat-runner.skips-busy-session-lane.test.ts` and `diagnostic-stuck-session-recovery.runtime.test.ts` continue to pass and exercise the surrounding flows. Verifying the end-to-end fix against the real 122-event/3-day takeover pattern from the issue would require running a patched gateway under that workload for the same window.\n\n- **Before evidence:** Without the file-scoped guard, two same-file controllers both call `releaseForPrompt()`, both stride into provider streams, and whichever reacquires second observes the other's writes and throws `EmbeddedAttemptSessionTakeoverError`. The chain falls through `model-fallback` → `failover-error` → `Embedded agent failed before reply: All models failed`. The live log slices in #85913 show 122 such events across 3 days on one local gateway, including the user-visible drop trace at `9dada894-1cb4-4610-a135-68d5ece67e51` on 2026-05-19 02:42:34.\n\n## Risk / compatibility\n\n- Public Plugin SDK surface: unchanged. `EmbeddedAttemptSessionLockController` is internal to `src/agents/pi-embedded-runner/run/` and not exposed through `openclaw/plugin-sdk/*`.\n- Backward compatibility: `releaseForPrompt()` keeps its prior signature; `releaseForSessionIdleWait()` is additive. The only production caller of `releaseForPrompt` is `installPromptSubmissionLockRelease` (`attempt.session-lock.ts:1014`), which already pairs it with `reacquireAfterPrompt` in a `try/finally` — that wrapper is what makes the file-scoped guard correct in production.\n- Single new module-level map (`promptSessionFileTurnTails`) sits alongside the existing `ownedSessionFileWrites` and `trustedSessionFileStates` singletons; same lifetime, same key scheme, same reset hook. No persistent state, no disk artefacts, no cross-process coordination.\n- Performance: no contention path is a single map lookup + an early continue. Contention path adds one extra `acquireLock + release` pair on the second entrant to yield the OS lock during the wait — this is necessary because the prior turn-holder must be able to reacquire after their provider call.\n\n## Security\n\n- New permissions/capabilities? No.\n- Secrets/tokens handling changed? No.\n- New/changed network calls? No.\n- Command/tool execution surface changed? No.\n- Data access scope changed? No. Touches in-process lock state and one new process-global map keyed by resolved session file paths.\n\n---\n\n*This PR is AI-assisted. Code authored with Claude.*\n",
-        "branch": "fix/session-takeover-file-scoped-prompt-guard",
-        "head_sha": "42543865080a470d2fd9540b8319a66548c52f51",
-        "author": "ubehera",
+        "title": "fix(cron): emit message.queued/processed for isolated-agent turns",
+        "body": "## Summary\n\nThe diagnostic-event seam for `message.queued` / `session.state` / `message.processed` is currently emitted only by channel-driven dispatch (`src/auto-reply/reply/dispatch-from-config.ts:417`) and the embedded runner (`src/agents/pi-embedded-runner/runs.ts:75,89`). The isolated-cron agent path (`src/cron/isolated-agent/run.ts`) executes full agent turns including LLM calls, but never emits these events. Anything subscribed to the diagnostic-events bus for per-session attribution silently drops 100% of cron-isolated traffic.\n\nThis PR adds a paired `logMessageQueued` → `logSessionStateChange(\"processing\")` → ... → `logSessionStateChange(\"idle\")` → `logMessageProcessed` lifecycle inside `runCronIsolatedAgentTurn`, using the prepared `runSessionId` / `runSessionKey` and a stable `cron-isolated` source label. This mirrors the dispatch path's lifecycle so `state.queueDepth` is incremented and decremented symmetrically and downstream subscribers see the full per-run lifecycle.\n\n## Problem\n\nAny consumer of `message.queued` for per-session attribution — diagnostics exporters, OTel bridges, custom observability plugins — currently sees zero spans for cron-isolated runs. LLM calls fire, sessions exist, but downstream subscribers cannot distinguish runs from each other and tend to bucket them under whatever static fallback id their integration uses.\n\nIn a deployment with several daily isolated cron jobs over a 13-day window, an OTel subscriber observed 63 distinct cron-driven sessions in the native JSONL shipper but only 4 distinct `session.id` values reaching its trace store — a 94% gap that this single emission point closes.\n\n## Solution\n\nAdded paired diagnostic-event calls to `runCronIsolatedAgentTurn`:\n\n- `logMessageQueued({sessionId, sessionKey, channel: \"cron\", source: \"cron-isolated\"})` after `prepared.ok`.\n- `logSessionStateChange({state: \"processing\"})` immediately after queued.\n- `logSessionStateChange({state: \"idle\"})` in `finally` (decrements `state.queueDepth`).\n- `logMessageProcessed({outcome, durationMs, error?})` in `finally`.\n\nOutcomes: success → `completed`; aborted/thrown/finalizer-error → `error` with reason.\n\n## Changes\n\n- `src/cron/isolated-agent/run.ts` — added the diagnostic lifecycle calls inside `runCronIsolatedAgentTurn`.\n- `src/cron/isolated-agent/run.diagnostic-events.test.ts` — new focused regression test asserting the queued → processing → idle → processed sequence with consistent `sessionKey`.\n- `CHANGELOG.md` — entry under `## Unreleased` / `### Fixes`.\n\n## Real Behavior Proof\n\n- **Behavior or issue addressed:** Subscribers to OpenClaw's diagnostic-events bus (e.g. OTel exporters) receive zero `message.queued` / `message.processed` events for isolated-cron agent turns, even though those runs make LLM calls and have a real session UUID. Downstream attribution buckets every cron-isolated run under whatever static fallback id the integration declares, hiding distinct sessions from traces.\n- **Real environment tested:** Local OpenClaw checkout built from this branch (`pr/cron-isolated-message-queued`, head `275f1bb430`) on Linux 6.12.30 / Node 24.13.0. Gateway run as a systemd user unit (`openclaw-gateway.service`). A diagnostic-events subscriber registered via `onDiagnosticEvent` was attached to verify event emission per run.\n- **Exact steps or command run after this patch:**\n\n```bash\npnpm install\npnpm tsgo:core\npnpm test src/cron/isolated-agent/run.diagnostic-events.test.ts\npnpm test src/cron/isolated-agent/run.session-key.test.ts \\\n          src/cron/isolated-agent/run.session-key-isolation.test.ts \\\n          src/cron/isolated-agent/run.payload-fallbacks.test.ts \\\n          src/cron/isolated-agent/run.meta-error-status.test.ts\npnpm build\nsystemctl --user restart openclaw-gateway\nnode dist/index.js cron run <isolated-job-id>\njournalctl --user -u openclaw-gateway --since \"30 seconds ago\" \\\n  | grep -E \"event: message\\\\.(queued|processed)|started root span\"\n```\n\n- **Evidence after fix:** Subscriber output from the live deployment after triggering an isolated cron job (session UUIDs and job ids redacted to short prefixes; agent label is generic, no IPs / chat ids / private endpoints):\n\n```\n[bridge] event: message.queued sessionKey: agent:main:cron:<jobId-prefix>:run:<runUuid-prefix> source: cron-isolated\n[bridge] started root span for main session: agent:main:cron:<jobId-prefix>:run:<runUuid-prefix> agent: <agentId>\n[bridge] event: message.processed sessionKey: agent:main:cron:<jobId-prefix>:run:<runUuid-prefix>\n```\n\nTests:\n\n```\npnpm tsgo:core              → exit 0\npnpm test src/cron/isolated-agent/run.diagnostic-events.test.ts\n  Test Files  1 passed (1)\n       Tests  1 passed (1)\n\npnpm test src/cron/isolated-agent/run.session-key.test.ts \\\n          src/cron/isolated-agent/run.session-key-isolation.test.ts \\\n          src/cron/isolated-agent/run.payload-fallbacks.test.ts \\\n          src/cron/isolated-agent/run.meta-error-status.test.ts\n  Test Files  4 passed (4)\n       Tests  17 passed (17)\n```\n\n- **Observed result after fix:** Both lifecycle events fire with the run's `sessionId` / `sessionKey`. The bridge subscriber attached via `onDiagnosticEvent` receives `message.queued`, then `session.state` (processing → idle), then `message.processed`, all sharing the same `sessionKey` for the same isolated cron run. `state.queueDepth` returns to 0 after the run because the paired `logSessionStateChange(\"idle\")` runs in `finally`. Distinct cron run UUIDs now reach downstream span/aggregation logic instead of collapsing into a single static fallback id.\n- **What was not tested:** The heartbeat-runner isolated-session path at `src/infra/heartbeat-runner.ts:1266` shares a similar shape but is intentionally out of scope for this PR — left as a follow-up if maintainers agree the same seam belongs there. `pnpm check` was not run end-to-end; the changed-surface gates above plus the build are the proof bar this PR carries.\n\n## Notes\n\n- `logMessageQueued` runs after `prepared.ok` to avoid noisy queued/processed pairs for runs that bail out at preparation; matches the existing pattern where dispatch only logs after route resolution.\n- Both `logSessionStateChange` calls and `logMessageProcessed` run inside the `finally` block, ensuring the `state.queueDepth` decrement and processed event always fire even on early returns / throws.\n- No public-API changes; `logMessageQueued` / `logSessionStateChange` / `logMessageProcessed` are existing exports.\n\n## Review feedback addressed (rev 2, commit 275f1bb430)\n\n- **P1 — taskLabel:** dropped. The `logMessageQueued` call now passes only `{sessionId, sessionKey, channel, source}`, matching the helper's typed parameter and event schema on `main`.\n- **P2 — queue-state lifecycle:** added `logSessionStateChange({state: \"processing\"})` immediately after `logMessageQueued`, and `logSessionStateChange({state: \"idle\"})` in the `finally` block before `logMessageProcessed`. This pairs the `state.queueDepth` increment with its decrement and matches the dispatch path's lifecycle.\n- **P3 — changelog:** added entry under `## Unreleased` / `### Fixes`.\n- **Real behavior proof:** subscriber output included above (redacted).\n- **Regression test:** added `run.diagnostic-events.test.ts` covering queued / processing / idle / processed sequencing and session-key consistency.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+        "branch": "pr/cron-isolated-message-queued",
+        "head_sha": "dbbeb7bfab633fcfd394e007d44174e73169c517",
+        "author": "arniesaha",
         "labels": [
-          "agents",
-          "size: M",
+          "size: S",
           "proof: supplied",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 availability",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦞 diamond lobster",
           "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts",
-            "additions": 308,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.ts",
-            "additions": 131,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
+            "path": "CHANGELOG.md",
             "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run.diagnostic-events.test.ts",
+            "additions": 129,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run.ts",
+            "additions": 49,
             "deletions": 1,
             "changeType": "MODIFIED"
           }
@@ -101,46 +190,144 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86067",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86067.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-79214",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-79214.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 100,
+          "total": 102,
           "counts": {
-            "SUCCESS": 81,
-            "SKIPPED": 18,
+            "SUCCESS": 72,
+            "SKIPPED": 28,
+            "FAILURE": 1,
             "NEUTRAL": 1
           },
-          "blockers": [],
+          "blockers": [
+            "checks-node-agentic-agents:FAILURE"
+          ],
           "pending": [],
-          "terminalBlockers": []
+          "terminalBlockers": [
+            "checks-node-agentic-agents:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:79214:4403208390:2026-05-08T04:00:33Z:re_review",
+      "comment_id": "4403208390",
+      "comment_version_key": "4403208390:2026-05-08T04:00:33Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/79214#issuecomment-4403208390",
+      "repo": "openclaw/openclaw",
+      "issue_number": 79214,
+      "author": "arniesaha",
+      "author_id": 3646287,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-08T04:00:33Z",
+      "comment_updated_at": "2026-05-08T04:00:33Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): emit message.queued/processed for isolated-agent turns",
+        "body": "## Summary\n\nThe diagnostic-event seam for `message.queued` / `session.state` / `message.processed` is currently emitted only by channel-driven dispatch (`src/auto-reply/reply/dispatch-from-config.ts:417`) and the embedded runner (`src/agents/pi-embedded-runner/runs.ts:75,89`). The isolated-cron agent path (`src/cron/isolated-agent/run.ts`) executes full agent turns including LLM calls, but never emits these events. Anything subscribed to the diagnostic-events bus for per-session attribution silently drops 100% of cron-isolated traffic.\n\nThis PR adds a paired `logMessageQueued` → `logSessionStateChange(\"processing\")` → ... → `logSessionStateChange(\"idle\")` → `logMessageProcessed` lifecycle inside `runCronIsolatedAgentTurn`, using the prepared `runSessionId` / `runSessionKey` and a stable `cron-isolated` source label. This mirrors the dispatch path's lifecycle so `state.queueDepth` is incremented and decremented symmetrically and downstream subscribers see the full per-run lifecycle.\n\n## Problem\n\nAny consumer of `message.queued` for per-session attribution — diagnostics exporters, OTel bridges, custom observability plugins — currently sees zero spans for cron-isolated runs. LLM calls fire, sessions exist, but downstream subscribers cannot distinguish runs from each other and tend to bucket them under whatever static fallback id their integration uses.\n\nIn a deployment with several daily isolated cron jobs over a 13-day window, an OTel subscriber observed 63 distinct cron-driven sessions in the native JSONL shipper but only 4 distinct `session.id` values reaching its trace store — a 94% gap that this single emission point closes.\n\n## Solution\n\nAdded paired diagnostic-event calls to `runCronIsolatedAgentTurn`:\n\n- `logMessageQueued({sessionId, sessionKey, channel: \"cron\", source: \"cron-isolated\"})` after `prepared.ok`.\n- `logSessionStateChange({state: \"processing\"})` immediately after queued.\n- `logSessionStateChange({state: \"idle\"})` in `finally` (decrements `state.queueDepth`).\n- `logMessageProcessed({outcome, durationMs, error?})` in `finally`.\n\nOutcomes: success → `completed`; aborted/thrown/finalizer-error → `error` with reason.\n\n## Changes\n\n- `src/cron/isolated-agent/run.ts` — added the diagnostic lifecycle calls inside `runCronIsolatedAgentTurn`.\n- `src/cron/isolated-agent/run.diagnostic-events.test.ts` — new focused regression test asserting the queued → processing → idle → processed sequence with consistent `sessionKey`.\n- `CHANGELOG.md` — entry under `## Unreleased` / `### Fixes`.\n\n## Real Behavior Proof\n\n- **Behavior or issue addressed:** Subscribers to OpenClaw's diagnostic-events bus (e.g. OTel exporters) receive zero `message.queued` / `message.processed` events for isolated-cron agent turns, even though those runs make LLM calls and have a real session UUID. Downstream attribution buckets every cron-isolated run under whatever static fallback id the integration declares, hiding distinct sessions from traces.\n- **Real environment tested:** Local OpenClaw checkout built from this branch (`pr/cron-isolated-message-queued`, head `275f1bb430`) on Linux 6.12.30 / Node 24.13.0. Gateway run as a systemd user unit (`openclaw-gateway.service`). A diagnostic-events subscriber registered via `onDiagnosticEvent` was attached to verify event emission per run.\n- **Exact steps or command run after this patch:**\n\n```bash\npnpm install\npnpm tsgo:core\npnpm test src/cron/isolated-agent/run.diagnostic-events.test.ts\npnpm test src/cron/isolated-agent/run.session-key.test.ts \\\n          src/cron/isolated-agent/run.session-key-isolation.test.ts \\\n          src/cron/isolated-agent/run.payload-fallbacks.test.ts \\\n          src/cron/isolated-agent/run.meta-error-status.test.ts\npnpm build\nsystemctl --user restart openclaw-gateway\nnode dist/index.js cron run <isolated-job-id>\njournalctl --user -u openclaw-gateway --since \"30 seconds ago\" \\\n  | grep -E \"event: message\\\\.(queued|processed)|started root span\"\n```\n\n- **Evidence after fix:** Subscriber output from the live deployment after triggering an isolated cron job (session UUIDs and job ids redacted to short prefixes; agent label is generic, no IPs / chat ids / private endpoints):\n\n```\n[bridge] event: message.queued sessionKey: agent:main:cron:<jobId-prefix>:run:<runUuid-prefix> source: cron-isolated\n[bridge] started root span for main session: agent:main:cron:<jobId-prefix>:run:<runUuid-prefix> agent: <agentId>\n[bridge] event: message.processed sessionKey: agent:main:cron:<jobId-prefix>:run:<runUuid-prefix>\n```\n\nTests:\n\n```\npnpm tsgo:core              → exit 0\npnpm test src/cron/isolated-agent/run.diagnostic-events.test.ts\n  Test Files  1 passed (1)\n       Tests  1 passed (1)\n\npnpm test src/cron/isolated-agent/run.session-key.test.ts \\\n          src/cron/isolated-agent/run.session-key-isolation.test.ts \\\n          src/cron/isolated-agent/run.payload-fallbacks.test.ts \\\n          src/cron/isolated-agent/run.meta-error-status.test.ts\n  Test Files  4 passed (4)\n       Tests  17 passed (17)\n```\n\n- **Observed result after fix:** Both lifecycle events fire with the run's `sessionId` / `sessionKey`. The bridge subscriber attached via `onDiagnosticEvent` receives `message.queued`, then `session.state` (processing → idle), then `message.processed`, all sharing the same `sessionKey` for the same isolated cron run. `state.queueDepth` returns to 0 after the run because the paired `logSessionStateChange(\"idle\")` runs in `finally`. Distinct cron run UUIDs now reach downstream span/aggregation logic instead of collapsing into a single static fallback id.\n- **What was not tested:** The heartbeat-runner isolated-session path at `src/infra/heartbeat-runner.ts:1266` shares a similar shape but is intentionally out of scope for this PR — left as a follow-up if maintainers agree the same seam belongs there. `pnpm check` was not run end-to-end; the changed-surface gates above plus the build are the proof bar this PR carries.\n\n## Notes\n\n- `logMessageQueued` runs after `prepared.ok` to avoid noisy queued/processed pairs for runs that bail out at preparation; matches the existing pattern where dispatch only logs after route resolution.\n- Both `logSessionStateChange` calls and `logMessageProcessed` run inside the `finally` block, ensuring the `state.queueDepth` decrement and processed event always fire even on early returns / throws.\n- No public-API changes; `logMessageQueued` / `logSessionStateChange` / `logMessageProcessed` are existing exports.\n\n## Review feedback addressed (rev 2, commit 275f1bb430)\n\n- **P1 — taskLabel:** dropped. The `logMessageQueued` call now passes only `{sessionId, sessionKey, channel, source}`, matching the helper's typed parameter and event schema on `main`.\n- **P2 — queue-state lifecycle:** added `logSessionStateChange({state: \"processing\"})` immediately after `logMessageQueued`, and `logSessionStateChange({state: \"idle\"})` in the `finally` block before `logMessageProcessed`. This pairs the `state.queueDepth` increment with its decrement and matches the dispatch path's lifecycle.\n- **P3 — changelog:** added entry under `## Unreleased` / `### Fixes`.\n- **Real behavior proof:** subscriber output included above (redacted).\n- **Regression test:** added `run.diagnostic-events.test.ts` covering queued / processing / idle / processed sequencing and session-key consistency.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+        "branch": "pr/cron-isolated-message-queued",
+        "head_sha": "dbbeb7bfab633fcfd394e007d44174e73169c517",
+        "author": "arniesaha",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦞 diamond lobster",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run.diagnostic-events.test.ts",
+            "additions": 129,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run.ts",
+            "additions": 49,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-79214",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-79214.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "SUCCESS": 72,
+            "SKIPPED": 28,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-agents:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-agents:FAILURE"
+          ]
         }
       },
       "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2863,
+    "total_ms": 2943,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 782
+        "ms": 473
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1816
+        "ms": 2120
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 252
+        "ms": 329
       },
       {
         "name": "append_ledger",
