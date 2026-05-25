@@ -1,20 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-25T04:01:21.032Z",
+  "generated_at": "2026-05-25T04:01:22.725Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-25T01:01:19.078Z",
+  "since": "2026-05-25T01:01:20.079Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    86276
+    86089
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4529160682
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
+  "scanned_comments": 1,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -31,17 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:86276:4530897829:2026-05-25T04:01:15Z:automerge",
-      "comment_id": "4530897829",
-      "comment_version_key": "4530897829:2026-05-25T04:01:15Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86276#issuecomment-4530897829",
+      "idempotency_key": "comment-router:openclaw/openclaw:86089:4529160682:2026-05-25T04:00:49Z:automerge",
+      "comment_id": "4529160682",
+      "comment_version_key": "4529160682:2026-05-25T04:00:49Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86089#issuecomment-4529160682",
       "repo": "openclaw/openclaw",
-      "issue_number": 86276,
+      "issue_number": 86089,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-25T01:36:53Z",
-      "comment_updated_at": "2026-05-25T04:01:15Z",
+      "comment_created_at": "2026-05-24T15:28:30Z",
+      "comment_updated_at": "2026-05-25T04:00:49Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "automerge",
@@ -52,8 +54,8 @@
       "trusted_bot_author": null,
       "automation_source": null,
       "repair_reason": null,
-      "review_summary": "This PR adds CLI-level hard timeout handling for local and embedded-fallback agent runs, with docs and focused tests around timeout, signal, and exit behavior.\n\nPR surface: Source +219, Tests +314, Docs 0. Total +533 across 6 files.\n\nReproducibility: yes. for the blocking review finding: source inspection shows the new startup hard timer uses a 600s fallback before config-backed timeout resolution. I did not rerun live commands in this read-only review.",
-      "review_followup": "A narrow automated repair can align the startup timer with the existing config-backed timeout contract and add focused regression coverage.",
+      "review_summary": "The PR persists restart-recovery delivery context for direct agent and auto-reply sessions, uses it to deliver resumed or failed recovery output, normalizes new session-store fields, reserves plugin slot keys, and expands regression coverage plus a deadcode allowlist change.\n\nPR surface: Source +431, Tests +693, Other +31. Total +1155 across 13 files.\n\nReproducibility: yes. from source inspection: current main's restart resume path calls the gateway agent with `deliver: false` and has no persisted restart delivery context fields, while the linked report describes the resulting silent channel behavior. I did not run the full gateway restart scenario locally in this read-only review.",
+      "review_followup": "A narrow automated repair can remove the deadcode allowlist regression while leaving the reviewed restart-recovery implementation intact.",
       "freeform_prompt": null,
       "expected_head_sha": null,
       "finding_id": null,
@@ -62,41 +64,102 @@
       "author_repository_permission": "none",
       "target": {
         "kind": "pull_request",
-        "title": "fix(cli): enforce local agent hard timeout",
-        "body": "## Problem\n\n`openclaw agent --local --timeout N` can still leave the CLI alive until an outer wrapper timeout kills it. The lower-level embedded agent timeout is useful, but it is not a command-level wall-clock guarantee: setup, plugin registration, retries, cleanup, or a wedged embedded run can keep the CLI process around after the operator-specified timeout window.\n\n## Change and value\n\nThis PR adds a CLI-level hard timeout for embedded local agent runs. Explicit `--local` runs and embedded fallback runs now share a wall-clock boundary of the resolved `--timeout N` plus 30 seconds of grace. If that timer fires, the CLI aborts the local run signal and exits with code `124`, matching the exit code operators already see from GNU `timeout` wrappers.\n\nThe value is that scripts no longer need to wait for their own much larger timeout window just because the embedded run failed to settle cleanly.\n\n## Who is affected, and who is not\n\n- Affected: operators and automation running `openclaw agent --local` with a finite `--timeout` or configured agent timeout.\n- Affected: gateway-backed runs only after they enter embedded fallback; the normal Gateway request path keeps its existing timeout and `chat.abort` behavior.\n- Not affected: `--timeout 0`; that continues to mean no CLI hard timeout.\n- Not fixed here: post-success event-loop handles that keep the process alive after a successful local result. That is covered separately by #86264.\n\n## Why now\n\nLocal diagnostics showed the no-completion CLI-exit class directly: an `agent --local` run can fail to produce a final result before the outer wrapper kills it, even when the inner `--timeout` is shorter. This patch makes the local CLI boundary own that wall-clock guarantee instead of relying only on the embedded runner to unwind itself.\n\n## Implementation\n\n- Arms a startup local-agent hard timer before full plugin/command registration, so `agent --local --timeout N` is bounded even if setup hangs before the agent command action is reached.\n- Keeps the lower-level embedded-run helper boundary around the existing `agentCommand` call sites.\n- Uses `--timeout N + 30s` as the hard deadline, with `--timeout 0` disabling the timer.\n- Forwards the resolved timeout into `agentCommand`, so cooperative embedded abort and the outer hard boundary agree on the same timeout.\n- Preserves `SIGINT`/`SIGTERM` precedence: signals still exit promptly with `130`/`143`, even if the embedded run ignores abort or rejects during teardown.\n- On timeout, aborts the signal, writes a concise timeout error, and exits through `runtime.exit(124)`.\n\n## Real behavior proof\n\nBehavior or issue addressed: `openclaw agent --local --timeout N` and embedded fallback runs should have a command-level wall-clock timeout even if setup or the local run fails to settle after lower-level aborts.\n\nReal environments tested:\n\n- Before/production baseline: global OpenClaw `2026.5.20 (e510042)` with the local `cli-exit-fix` patch still applied.\n- Draft defect reproduction: old draft #86276 head `8790ec43051f30fb48a5b8772ff4f3671f9307cd2` stacked with #86264 head `98802c0f63c0a4fcc8639b8dde535f3bed879207`.\n- Fixed PR head: `e0e10b389dc3c08b27890db5d78e47d3fc9ef58f`.\n- Combined stack proof: #86276 `e0e10b389dc3c08b27890db5d78e47d3fc9ef58f` + #86264 `98802c0f63c0a4fcc8639b8dde535f3bed879207`, combined head `6a806f8f19628c16f99627162b8f53a01e27e680`.\n\nBefore, the local workaround was still firing instead of upstream owning the timeout:\n\n```bash\ntimeout 70s openclaw agent --local --agent eval-1 --timeout 1 --model ollama-cloud/glm-5.1 -m 'Reply with exactly the word: PONG' --json\n```\n\nObserved:\n\n```text\n[openclaw] cli-exit-fix: hard wall-clock SIGKILL after 31s (timeout=1s + 30s grace)\nEXIT_CODE=1\nELAPSED_SEC=40\n```\n\nDuring review, the first draft of this PR was proven insufficient: with the old branch head stacked with #86264, `timeout 70s ... --timeout 1` still exited only from the outer wrapper after about 70 seconds and did not print OpenClaw's timeout message. A plugin trace showed repeated pre-agent discovery/registration work, meaning the hard boundary had been armed too late.\n\nAfter the startup boundary fix, the same timeout class is owned by OpenClaw:\n\n```bash\ntimeout 70s node /tmp/openclaw-combined-package/openclaw.mjs agent --local --agent eval-1 --timeout 1 --model ollama-cloud/glm-5.1 -m 'Reply with exactly the word: PONG' --json\n```\n\nObserved:\n\n```text\nlocal agent command timed out after 1s plus 30s grace\nEXIT_CODE=124\nELAPSED_SEC=39\n```\n\nA live source-worktree run with a longer real-model timeout also hit OpenClaw's own hard boundary, not the outer wrapper:\n\n```bash\ntimeout 300s node /tmp/openclaw-cli-exit-combined/openclaw.mjs agent --local --agent eval-1 --timeout 180 --model ollama-cloud/glm-5.1 -m 'Reply with exactly the word: PONG' --json\n```\n\nObserved:\n\n```text\n[agent/embedded] [trace:embedded-run] ... phase=attempt-dispatch ...\nlocal agent command timed out after 180s plus 30s grace\nEXIT_CODE=124\nELAPSED_SEC=212\n```\n\nSuccessful local-agent behavior was also checked on the combined stack with #86264, using an isolated temporary `HOME` and the repo's mock OpenAI server:\n\n```bash\ntimeout 240s node /tmp/openclaw-cli-exit-combined/openclaw.mjs agent --local --agent main --session-id combined-cli-exit-proof --message 'Return marker OPENCLAW_CLI_EXIT_COMBINED_PROOF_OK' --thinking off --json\n```\n\nObserved:\n\n```text\nfinalAssistantVisibleText: OPENCLAW_CLI_EXIT_COMBINED_PROOF_OK\nexecutionTrace.runner: embedded\nexecutionTrace.attempts[0].result: success\nmock request path: /v1/responses\nEXIT_CODE=0\nELAPSED_SEC=41\nASSERT_AGENT_TURN=passed\n```\n\nProof transcripts captured locally under `/home/captain/codex-workspace/proof/2026-05-25-cli-exit-combined/`:\n\n- `12-before-global-timeout1.out`\n- `22-after-combined-package-timeout1.out`\n- `23-after-combined-package-plugin-trace.out`\n- `25-after-combined-package-early-boundary-timeout1.out`\n- `31-after-combined-source-success-pong.out`\n- `32-after-combined-source-mock-success.out`\n\nWhat was not tested: a standalone package install from this exact branch without #86264. The success-path exit proof above is intentionally run on the combined stack because #86264 owns the post-completion cleanup class.\n\n## Verification\n\nStandalone #86276 head `e0e10b389dc3c08b27890db5d78e47d3fc9ef58f`:\n\n- `pnpm test:unit:fast -- src/cli/run-main.test.ts src/cli/run-main.exit.test.ts src/commands/agent-via-gateway.test.ts`\n- `pnpm exec oxfmt --check src/cli/run-main.ts src/cli/run-main.test.ts src/cli/run-main.exit.test.ts src/commands/agent-via-gateway.ts src/commands/agent-via-gateway.test.ts`\n- `git diff --check`\n- `pnpm tsgo:core`\n\nCombined stack `6a806f8f19628c16f99627162b8f53a01e27e680`:\n\n- `pnpm build`\n- `pnpm test:unit:fast -- src/cli/run-main.test.ts src/cli/run-main.exit.test.ts src/commands/agent-via-gateway.test.ts src/agents/pi-embedded-runner/context-engine-maintenance.test.ts`\n- `pnpm exec oxfmt --check src/cli/run-main.ts src/cli/run-main.test.ts src/cli/run-main.exit.test.ts src/commands/agent-via-gateway.ts src/agents/pi-embedded-runner/context-engine-maintenance.ts`\n- `git diff --check`\n- `pnpm tsgo:core`\n\n## Relationship to #86264\n\n#86264 handles the post-completion cleanup class: a command has finished but deferred context-engine maintenance keeps work alive. This PR handles the no-completion class: a local/embedded agent command never settles, so the CLI needs a hard wall-clock boundary. The combined mock-agent proof verifies the two fixes compose: successful local results still exit normally, while wedged/no-completion runs are capped by this PR.\n\nAI-assisted: yes.\n",
-        "branch": "codex/local-agent-hard-timeout",
-        "head_sha": "e0e10b389dc3c08b27890db5d78e47d3fc9ef58f",
-        "author": "kaspre",
+        "title": "[Fix] Deliver restart recovery replies",
+        "body": "## Summary\n\n- Problem: gateway restarts could leave in-flight Discord/chat turns silent when the previous Gateway process died mid-run.\n- Solution: persist restart delivery context for direct agent and auto-reply runs, then use it when recovery resumes or emits a visible failure notice.\n- What changed: restart recovery now delivers best-effort resumed replies through the captured route, preserves pending final delivery context, normalizes new session-store fields, and keeps legacy route fallback only for unresumable notices.\n- What did NOT change (scope boundary): no new channel defaults, no plugin-specific policy in core, and no live transport implementation changes.\n\n## Motivation\n\n- Users should see either the recovered reply or a clear recovery failure notice after a Gateway restart instead of a silent aborted turn.\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [ ] Feature\n- [x] Refactor required for the fix\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [ ] Skills / tool execution\n- [ ] Auth / tokens\n- [x] Memory / storage\n- [x] Integrations\n- [x] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- Closes #69249\n- Related #\n- [x] This PR fixes a bug or regression\n\n## Real behavior proof (required for external PRs)\n\nBehavior addressed: Gateway restart recovery produces visible feedback for interrupted chat-bound main sessions after a Gateway restart.\nReal environment tested: Local Darwin 25.4.0 arm64, Node v24.14.0, real OpenClaw QA Gateway child over WebSocket/RPC, bundled qa-channel plugin, qa-lab synthetic bus, mock-openai provider.\nExact steps or command run after this patch: `node scripts/run-node.mjs qa suite --provider-mode mock-openai --scenario gateway-restart-inflight-run --concurrency 1 --output-dir .artifacts/qa-e2e/gateway-restart-visible-recovery-ci-fix-final`\nEvidence after fix: QA suite report `.artifacts/qa-e2e/gateway-restart-visible-recovery-ci-fix-final/qa-suite-report.md` includes this copied terminal/report output from the real Gateway/qa-channel run:\n\n```text\nOpenClaw QA Scenario Suite\nPassed: 1\nFailed: 0\n\nGateway restart in-flight recovery\nStatus: pass\nrunId=3019924e-f9c4-4e3f-b970-c9a3d7e83207 interruptedStatus=ok interruptedMarkers=0\nRESTART-RECOVERY-OK\nNotes: qa-channel + qa-lab bus + real gateway child + mock-openai provider.\n```\nObserved result after fix: The in-flight run settled across Gateway restart without duplicate interrupted delivery (`interruptedMarkers=0`), Gateway and qa-channel became healthy again, and the follow-up recovery marker was delivered exactly once to the qa-channel transcript.\nWhat was not tested: Live Discord transport/guild delivery and live model provider; this proof used qa-channel for the real Gateway/plugin transport path and mock-openai for deterministic model behavior.\nBefore evidence (optional but encouraged): Not collected from a real environment before the fix.\n\n## Root Cause (if applicable)\n\n- Root cause: restart recovery tracked run/session state but did not carry the outbound delivery route needed for a replacement Gateway process to send visible recovery output.\n- Missing detection / guardrail: restart recovery tests did not assert the resumed delivery context or the visible failure notice route.\n- Contributing context (if known): direct agent runs and auto-reply runs persisted delivery metadata differently, so recovery needed one normalized context path plus a scoped legacy fallback for failure notices.\n\n## Regression Test Plan (if applicable)\n\n- Coverage level that should have caught this:\n  - [ ] Unit test\n  - [x] Seam / integration test\n  - [ ] End-to-end test\n  - [ ] Existing coverage already sufficient\n- Target test or file: `src/agents/main-session-restart-recovery.test.ts`, `src/agents/agent-command.live-model-switch.test.ts`, `src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts`, `src/config/sessions/sessions.test.ts`\n- Scenario the test should lock in: interrupted main sessions resume with captured route context, pending final delivery prefers pending context, unresumable notices can use legacy session route, and store loading normalizes recovery fields.\n- Why this is the smallest reliable guardrail: it exercises persisted session recovery decisions without needing a live channel transport.\n- Existing test that already covers this (if any): N/A before this PR.\n- If no new test is added, why not: N/A - tests were added/updated.\n\n## User-visible / Behavior Changes\n\nInterrupted chat-bound main sessions can now produce a visible best-effort recovery reply or failure notice after Gateway restart.\n\n## Diagram (if applicable)\n\n```text\nBefore:\n[gateway restart] -> [running session marked aborted] -> [recovery resumes deliver=false] -> [chat may stay silent]\n\nAfter:\n[gateway restart] -> [delivery context persisted] -> [recovery resumes or sends notice] -> [best-effort visible chat feedback]\n```\n\n## Security Impact (required)\n\n- New permissions/capabilities? (`Yes/No`): No\n- Secrets/tokens handling changed? (`Yes/No`): No\n- New/changed network calls? (`Yes/No`): Yes\n- Command/tool execution surface changed? (`Yes/No`): No\n- Data access scope changed? (`Yes/No`): No\n- If any `Yes`, explain risk + mitigation: recovery can now call existing Gateway delivery paths after restart using persisted route context; mitigation is deliverable-channel validation, existing send policy checks, and best-effort delivery.\n\n## Repro + Verification\n\n### Environment\n\n- OS: Darwin 25.4.0 arm64\n- Runtime/container: Node v24.14.0 local Codex worktree\n- Model/provider: mock-openai\n- Integration/channel (if any): real Gateway child over WebSocket/RPC + bundled qa-channel plugin + qa-lab bus; no live Discord\n- Relevant config (redacted): QA suite generated isolated config/state\n\n### Steps\n\n1. Run `node scripts/run-node.mjs qa suite --provider-mode mock-openai --scenario gateway-restart-inflight-run --concurrency 1 --output-dir .artifacts/qa-e2e/gateway-restart-visible-recovery-ci-fix-final`.\n2. The scenario starts an agent run, applies a restart-required config change, waits for Gateway + qa-channel readiness after restart, then sends a same-session recovery follow-up.\n3. Inspect `.artifacts/qa-e2e/gateway-restart-visible-recovery-ci-fix-final/qa-suite-report.md` and `qa-suite-summary.json`.\n\n### Expected\n\n- Gateway returns healthy after restart, qa-channel returns ready, interrupted output is not duplicated, and the same session delivers the recovery marker exactly once.\n\n### Actual\n\n- QA scenario passed. Report details: `runId=3019924e-f9c4-4e3f-b970-c9a3d7e83207 interruptedStatus=ok interruptedMarkers=0` followed by `RESTART-RECOVERY-OK`.\n\n## Evidence\n\n- [x] Real Gateway/qa-channel trace or runtime report\n- [x] Supplemental focused test output\n- [ ] Screenshot/recording\n- [ ] Perf numbers (if relevant)\n\n## Human Verification (required)\n\nWhat you personally verified (not just CI), and how:\n\n- Verified scenarios: real QA Gateway restart in-flight recovery over qa-channel; focused restart recovery tests; local review gates.\n- Edge cases checked: Gateway restart readiness, qa-channel readiness, no duplicate interrupted delivery, exactly-once recovery marker delivery, pending final delivery context precedence, legacy route notice fallback, send-policy denial, and preserving no-historical-route behavior for resumable recovery.\n- What you did **not** verify: live Gateway restart against real Discord or a live model provider.\n\n## Review Conversations\n\n- [x] N/A - no GitHub review conversations yet.\n\n## Compatibility / Migration\n\n- Backward compatible? (`Yes/No`): Yes\n- Config/env changes? (`Yes/No`): No\n- Migration needed? (`Yes/No`): No\n- If yes, exact upgrade steps: N/A\n\n## Risks and Mitigations\n\n- Risk: persisted route context could be stale.\n  - Mitigation: resumable delivery uses only pending/restart recovery context, while historical route fallback is limited to unresumable failure notices and still passes send policy checks.\n\n\n\n\n\n\n\n",
+        "branch": "fix/gateway-restart-visible-recovery",
+        "head_sha": "77c604f97c8cecf2bda14001998478ce97511a8e",
+        "author": "samzong",
         "labels": [
-          "docs",
-          "cli",
+          "scripts",
           "commands",
-          "size: L",
-          "triage: needs-real-behavior-proof",
+          "agents",
+          "size: XL",
+          "proof: supplied",
           "proof: sufficient",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
+          "P1",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 automation",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
           "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "docs/cli/agent.md",
-            "additions": 1,
+            "path": "scripts/deadcode-unused-files.allowlist.mjs",
+            "additions": 32,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cli/run-main.exit.test.ts",
-            "additions": 50,
+            "path": "src/agents/agent-command.live-model-switch.test.ts",
+            "additions": 495,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cli/run-main.test.ts",
-            "additions": 46,
-            "deletions": 1,
+            "path": "src/agents/agent-command.ts",
+            "additions": 204,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/main-session-restart-recovery.test.ts",
+            "additions": 124,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/main-session-restart-recovery.ts",
+            "additions": 84,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts",
+            "additions": 53,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner.ts",
+            "additions": 152,
+            "deletions": 15,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/agent.test.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/sessions.test.ts",
+            "additions": 21,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/store-load.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/types.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/targets-session.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/session-entry-slot-keys.ts",
+            "additions": 2,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
@@ -121,26 +184,22 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86276",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86276.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86089",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86089.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 45,
+          "total": 105,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 38,
-            "SUCCESS": 5
+            "SUCCESS": 80,
+            "SKIPPED": 24,
+            "NEUTRAL": 1
           },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
+          "terminalBlockers": []
         }
       },
       "reason": "author association CONTRIBUTOR and repository permission none are not allowed"
@@ -148,15 +207,15 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2132,
+    "total_ms": 2872,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 310
+        "ms": 592
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1635
+        "ms": 2046
       },
       {
         "name": "classify_commands",
@@ -164,7 +223,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 177
+        "ms": 226
       },
       {
         "name": "append_ledger",
