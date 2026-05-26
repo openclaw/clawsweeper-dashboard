@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-26T16:02:21.154Z",
+  "generated_at": "2026-05-26T16:02:33.539Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-26T13:02:18.332Z",
+  "since": "2026-05-26T13:02:31.614Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    81851
+    86873
   ],
-  "comment_ids": [
-    4545934280
-  ],
-  "status_comment_id": 4545934832,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 4,
+  "commands_seen": 2,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,18 +31,104 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:81851:4545934280:2026-05-26T16:01:47Z:re_review",
-      "comment_id": "4545934280",
-      "comment_version_key": "4545934280:2026-05-26T16:01:47Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/81851#issuecomment-4545934280",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86873:4545841516:2026-05-26T16:02:28Z:clawsweeper_needs_human",
+      "comment_id": "4545841516",
+      "comment_version_key": "4545841516:2026-05-26T16:02:28Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86873#issuecomment-4545841516",
       "repo": "openclaw/openclaw",
-      "issue_number": 81851,
-      "author": "anagnorisis2peripeteia",
-      "author_id": 129746152,
+      "issue_number": 86873,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-26T16:01:47Z",
-      "comment_updated_at": "2026-05-26T16:01:47Z",
-      "status_comment_id": 4545934832,
+      "comment_created_at": "2026-05-26T15:51:23Z",
+      "comment_updated_at": "2026-05-26T16:02:28Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "The remaining action is contributor-supplied real behavior proof plus maintainer acceptance of the 30s LINE media-delivery tradeoff, not a narrow automation repair.; Cleared: No concrete security or supply-chain concern found; the diff touches LINE media timeout code/tests only and does not change dependencies, lockfiles, workflows, secrets, or install scripts. (sha=c10307cd7841cd3fe8df0ae92694f8b534153ba1)",
+      "review_summary": "The branch adds a 30s per-chunk idle timeout and timeout error around LINE inbound media downloads, plus mocked Vitest coverage for stalled headers and streams.\n\nPR surface: Source +107, Tests +108. Total +215 across 2 files.\n\nReproducibility: yes. from source inspection rather than a live run: current main awaits getMessageContent and saveMediaStream without a deadline before processMessage. A never-settling response or stream therefore blocks LINE inbound dispatch on that path.",
+      "review_followup": "The remaining action is contributor-supplied real behavior proof plus maintainer acceptance of the 30s LINE media-delivery tradeoff, not a narrow automation repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "c10307cd7841cd3fe8df0ae92694f8b534153ba1",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(line): add chunk-idle timeout to inbound media download",
+        "body": "## Summary\n\n`downloadLineMedia` in `extensions/line/src/download.ts` wraps the LINE\nMessaging API `getMessageContent` response in a `for-await` loop with no\nread deadline. When the LINE CDN returns HTTP headers but then stalls the\nbody stream, the function blocks indefinitely. Because\n`extensions/line/src/bot-handlers.ts:467-482` awaits the result before\ncalling `processMessage`, the entire inbound dispatch hangs: no agent reply\nis produced and the conversation goes silent.\n\nThis PR adds a per-chunk idle timeout (`LINE_DOWNLOAD_IDLE_TIMEOUT_MS =\n30_000`) to cap both the headers-level fetch and each stream chunk read.\nThe ceiling matches the existing Telegram pattern\n(`extensions/telegram/src/bot/delivery.resolve-media.ts:161`).\nThe timeout is idle (per-chunk), not overall, so legitimate slow-but-\nprogressing transfers continue.\n\n**Affected channel**: LINE inbound media only.\n**Unaffected**: Telegram, WhatsApp, MSTeams, Discord, Slack, Matrix,\nall other channels. Pure-text LINE messages. LINE outbound path.\n\n## Behavior change\n\n| Scenario | Before | After |\n|---|---|---|\n| Fast inbound media (<10 ms first chunk) | resolves promptly | resolves promptly |\n| Slow-but-progressing transfer (1 chunk / 50 ms) | resolves | resolves (idle cap is per-chunk, not overall) |\n| Server returns headers, never streams body | blocks indefinitely; no agent reply | rejects with `LineMediaDownloadTimeoutError(30_000)` after 30 s; existing catch at `bot-handlers.ts:474-481` dispatches without media |\n| Server never returns headers | blocks indefinitely | same rejection after 30 s |\n\n## Implementation notes\n\n- `withChunkIdleTimeout<T>()` wraps any `AsyncIterable<T>` so each `next()`\n  call races against a `setTimeout`. On timeout, `iterator.return()` is\n  called, which triggers `Readable.destroy()` for Node streams from\n  `@line/bot-sdk`.\n- `@line/bot-sdk` `HTTPFetchClient.get` does not accept `AbortSignal`, so\n  the underlying `fetch` cannot be cancelled. On timeout, the function\n  returns promptly but the background fetch may continue until TCP-level\n  timeout. This is an acceptable trade-off; the caller proceeds without\n  blocking.\n- After the timeout wins the race, the still-pending `next()` and\n  `getMessageContent()` promises are explicitly silenced\n  (`.then(noop, noop)`) so a later rejection from the destroyed upstream\n  cannot escape as an `unhandledRejection` on Node 22+.\n- The caller error path at `bot-handlers.ts:474-481` already handles\n  arbitrary errors via `String(err)`. The new error message includes\n  `\"stalled\"`, which routes to the `runtime.error?.(danger(...))` branch\n  (not the silent `\"exceeds limit\"` branch), so stalls are logged and\n  dispatch continues without media.\n- `chunkTimeoutMs` is an optional parameter so tests can use short values\n  without touching the exported constant; no LINE config schema entry is\n  added (out of scope for this PR; maintainer can request one if desired).\n- Worst-case wall time before rejection is sequential\n  (`(1 headers race) + (N chunk races)` of `chunkTimeoutMs` each), not a\n  single 30 s shared deadline. With the default 30 s ceiling this is well\n  inside LINE's 30 s webhook-ACK budget for the realistic single-stall\n  case; deeply stalled CDNs with partial-progress flapping could exceed it\n  but a follow-up overall-deadline option can be added if maintainers\n  prefer.\n\n## Files changed\n\n- `extensions/line/src/download.ts` (+113 / −6): adds\n  `LINE_DOWNLOAD_IDLE_TIMEOUT_MS`, `LineMediaDownloadTimeoutError`,\n  `withChunkIdleTimeout()`, wires `options?.chunkTimeoutMs` through both\n  the headers-level race and the stream-consumption phase, and silences\n  the orphaned upstream promises on timeout so they cannot become\n  `unhandledRejection`.\n- `extensions/line/src/download.test.ts` (+109 / −1): adds a\n  `chunk-idle timeout` describe block with 6 tests — stalled stream\n  rejects, stalled response headers reject, slow-but-progressing\n  completes, exported constant matches the Telegram constant,\n  `iterator.return()` is called exactly once on timeout (cleanup\n  verification), and partial-then-stall (first chunk delivered, second\n  chunk hangs) rejects within the per-chunk budget.\n\n## Non-scope (deliberately separate PRs)\n\n- WhatsApp `downloadInboundMedia` (`extensions/whatsapp/src/inbound/media.ts`) — same root pattern (no abort/timeout), separate PR.\n- MSTeams `resolveMSTeamsInboundMedia` (`extensions/msteams/src/monitor-handler/inbound-media.ts`) — same root pattern, separate PR.\n- Channel config knob for `chunkTimeoutMs`.\n- Metadata-first dispatch (start `processMessage` while media hydrates in background) — would require restructuring `bot-handlers.ts` and is broader than the LINE narrow ceiling.\n\n## Real behavior proof\n\nBehavior addressed: LINE inbound media download blocks indefinitely when the LINE CDN stalls the response body stream, preventing `processMessage` from being called and leaving the conversation silent.\n\nReal environment tested: local vitest integration probe mocking `@line/bot-sdk MessagingApiBlobClient.getMessageContent` and `openclaw/plugin-sdk/media-store.saveMediaStream`, exercising the real `downloadLineMedia` entrypoint with controlled-stall and controlled-delay stream fixtures. The mocked surface is the `@line/bot-sdk` SDK boundary plus the openclaw plugin-sdk boundary; the production code path under test is unchanged.\n\nExact steps or command run after this patch:\n\n```\npnpm test extensions/line/src/download.test.ts   # 12 passed (was 6; +6 new)\npnpm test extensions/line                         # 270 passed; no regressions\npnpm check:changed                                # all gates green (typecheck,\n                                                  #  lint, shrinkwraps,\n                                                  #  patches, import cycles,\n                                                  #  media download helpers,\n                                                  #  runtime sidecar loaders)\npnpm format:check extensions/line/src/download.ts extensions/line/src/download.test.ts\n```\n\nEvidence after fix:\n\n| Scenario | chunkTimeoutMs | Wall time | Outcome |\n|---|---|---|---|\n| Stalled stream | 100 ms | 100.26 ms | rejected: `LineMediaDownloadTimeoutError` |\n| Stalled response headers | 100 ms | 99.80 ms | rejected: `LineMediaDownloadTimeoutError` |\n| Default ceiling (30 s) + stall + 200 ms checkpoint | 30 000 ms | still pending at 200 ms | not falsely triggered |\n| Fast stream (5 ms first chunk) | 30 000 ms | 5.18 ms | resolved; no false positive |\n| Slow-but-progressing (50 ms chunk delay) | 500 ms | 50.88 ms | resolved |\n| Cleanup mock with `return()` spy | 50 ms | rejected | `iterator.return()` called exactly once |\n| Partial-then-stall (chunk 1 ok, chunk 2 hangs) | 50 ms | rejected | per-chunk budget reset works |\n\nObserved result after fix: Stalled streams reject with `LineMediaDownloadTimeoutError` at the configured ceiling. Slow-but-progressing streams complete without false-positive timeouts. The existing `catch` block in `extensions/line/src/bot-handlers.ts:474-481` routes the new error to `runtime.error?.(danger(...))` and continues dispatch without media, matching the existing failure-mode behavior. No regressions in the 270-test LINE extension suite. `pnpm check:changed` green across typecheck, lint, shrinkwraps, import cycles, and media-download helper roundtrip.\n\nWhat was not tested: live LINE channel credential pair with a real CDN stall (would require a controlled-slow inbound media generator and a dedicated LINE account; not feasible in this PR). WhatsApp and MSTeams unbounded stall behavior (out of scope). Production p99 percentiles (no live traffic instrumented). The orphaned background fetch in `@line/bot-sdk HTTPFetchClient.get` is acknowledged but not verified to settle within any particular bound; that is a `@line/bot-sdk` limitation, not introduced by this PR.",
+        "branch": "pr/d-d2-inbound-media-timeout-investigate",
+        "head_sha": "c10307cd7841cd3fe8df0ae92694f8b534153ba1",
+        "author": "masatohoshino",
+        "labels": [
+          "triage: mock-only-proof",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/line/src/download.test.ts",
+            "additions": 109,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/line/src/download.ts",
+            "additions": 113,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86873",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86873.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 11,
+          "counts": {
+            "FAILURE": 1,
+            "SUCCESS": 3,
+            "SKIPPED": 7
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ]
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86873:4545813396:2026-05-26T15:48:11Z:re_review",
+      "comment_id": "4545813396",
+      "comment_version_key": "4545813396:2026-05-26T15:48:11Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86873#issuecomment-4545813396",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86873,
+      "author": "masatohoshino",
+      "author_id": 246810661,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-26T15:48:11Z",
+      "comment_updated_at": "2026-05-26T15:48:11Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,380 +145,30 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-26T16:02:22.248Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 81851
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-26T16:02:24.082Z",
-          "response_comment_id": "4545934832",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(anthropic): claude-cli-interactive backend — stream reasoning via local TLS proxy (experimental)",
-        "body": "## Summary\n\n- **Problem.** OpenClaw's `claude-cli` backend invokes `claude -p --output-format stream-json` (headless). Starting **June 15, 2026** that path moves onto Anthropic's separate programmatic credit pool ([VentureBeat coverage](https://venturebeat.com/technology/anthropic-reinstates-openclaw-and-third-party-agent-usage-on-claude-subscriptions-with-a-catch)) — fixed monthly allowance, billed at API rates, doesn't roll over.\n- **Why it matters.** Every OpenClaw Opus turn on a Claude subscription will drain that fixed credit post–June 15 instead of counting against the interactive subscription limits subscribers are paying for. Opus turns exhaust the credit fast.\n- **What changed.** New opt-in `claude-cli-interactive` backend. Each turn spawns one fresh `bun wrapper.ts …` that boots a loopback HTTPS MITM on a 127.0.0.1 port, taps every API SSE event, re-emits the events as `claude -p --output-format stream-json` JSONL records, and kills the claude child on `end_turn`. A `tty-spoof.cjs` `NODE_OPTIONS=--require` preload keeps claude in interactive mode under piped stdio.\n- **What did NOT change (scope boundary).** Existing `claude-cli` backend untouched (shared gate functions — model-capability resolution, OAuth label, credential fingerprint, live-agent probes, model alias detection — extended via a single `isClaudeCliCompatibleBackend(provider)` helper to recognise both backend ids; every gate continues to return identical values for `claude-cli`). `agents.defaults.cliBackends.claude-cli` user overrides inherit into the interactive backend via `inheritUserConfigFrom` with `-p`-mode flags stripped. System CA store is not mutated (`NODE_EXTRA_CA_CERTS` scoped to the spawned claude child only). Non–`api.anthropic.com` CONNECT tunnels pass through unmodified. Tool-use rendering / waiting-on-tool injection lands in #82285, not here.\n- **AI-assisted:** yes — drafted with Claude.\n\n## Real behavior proof\n\n- **Behavior addressed:** `claude` running under OpenClaw in interactive (subscription) mode with full `init` / `stream_event*` / `result` JSONL reconstruction on the wrapper's stdout, sourced from the loopback MITM proxy's SSE tap.\n- **Real environment tested:** Windows 11 Pro 26200, Node v24.12.0, pnpm, Bun, `@anthropic-ai/claude-code` v2.1.142 (npm-installed), Opus 4.7 (`claude-opus-4-7`), live OpenClaw gateway driving the backend per-turn over Telegram.\n- **Exact steps or command run after this patch:** `unset NODE_OPTIONS && pnpm exec vitest run extensions/anthropic/cli-backend-interactive.test.ts`; `pnpm exec tsc --noEmit -p extensions/anthropic/tsconfig.json`; set `cliBackends.claude-cli-interactive` active in user config; restart the OpenClaw gateway; send a Telegram message that triggers an Opus 4.7 turn; observe wrapper boot in stderr, SSE flow through `127.0.0.1:<port>`, JSONL arriving at OpenClaw; send a follow-up message with `--resume <sessionId>` to verify resume.\n- **Evidence after fix:**\n  - vitest: `Test Files 1 passed (1) / Tests 5 passed (5)` — `normalizeConfig` branches (inherited claude-cli match, direct Bun-path override, env passthrough, no-override skip).\n  - Gateway log excerpt + cert listing + active-config snapshot on the [`proof-assets/pr-81851`](https://github.com/anagnorisis2peripeteia/openclaw/tree/proof-assets/pr-81851/.proof) branch. Embedded sample (one of three real turns in the gateway-log excerpt):\n\n    ```\n    cli exec: provider=claude-cli-interactive model=opus useResume=true session=present\n    cli argv: bun <NPM>\\…\\wrapper.ts --effort max --verbose --setting-sources user --resume <SESSION> --allowedTools mcp__openclaw__* --model opus <prompt:N chars>\n    [openclaw-proxy] certs ready: <HOME>\\.openclaw\\proxy-certs\\ca.crt\n    [openclaw-proxy] MITM proxy active on 127.0.0.1:17081 — Anthropic API traffic intercepted locally to capture thinking_delta events\n    [openclaw-proxy] spawning claude binary: <NPM>\\…\\@anthropic-ai\\claude-code\\bin\\claude.exe\n    [openclaw-proxy] result flushed, waiting for session write before kill\n    [openclaw-proxy] session file updated, killing claude\n    ```\n- **Observed result after fix:** per-turn lifecycle terminates cleanly — wrapper emits `init`, a continuous stream of `stream_event` records, then a single `result` on `end_turn`, sets `intentionalKill = true`, and `claude.kill()`s the child so the per-turn process tree exits 0.\n- **What was not tested:** Linux/macOS (developed on Windows 11 only); bundled-MCP `claude-config-file` mode end-to-end with multiple MCP servers active (only `mcp__openclaw__*` exercised live); forced Anthropic-side `429` / `overloaded_error` mid-stream (the `api_error` synthetic event path is implemented but I did not provoke a real 429).\n\n## Change Type\n\n- [x] Feature\n\n## Scope\n\n- [x] Gateway / orchestration\n- [x] Integrations\n\n## Linked\n\n- Related: #81550 (programmatic-mode reasoning bridge — this PR is the interactive-mode equivalent on a separate backend); #82285 (tool-use injection, builds on the `stream_event` surface this PR establishes).\n\n## Root Cause\n\nN/A — feature PR. The lack of thinking visibility on subscription is a property of `claude -p` (headless) mode, not a regression in OpenClaw.\n\n## Regression Test Plan\n\n- **Target:** `extensions/anthropic/cli-backend-interactive.test.ts`.\n- **Scenario locked in:** `normalizeConfig` post-merge shape across four branches — inherited claude-cli match (forces `command=\"bun\"`, stashes binary on env), direct Bun-path override (keeps the override as the spawn command, no env stash), env passthrough preservation, no-override case (env passthrough omitted so wrapper falls back to PATH lookup of `\"claude\"`).\n- **Why smallest reliable guardrail:** the failure mode is config-shape drift inside `normalizeConfig` — fully exercised synchronously without spawning bun or claude, runs in ms vs the minutes an e2e run would cost.\n\n## Risks and Mitigations\n\n- **Risk:** newly-installed user with no inherited `claude-cli` override could spawn `bun` as the claude binary if `normalizeConfig` stashed `merged.command` indiscriminately.\n  - **Mitigation:** `normalizeConfig` consults `context.config.agents.defaults.cliBackends.claude-cli.command`; only stashes the env passthrough on a match. Regression test asserts the env var is `undefined` for the no-override branch.\n- **Risk:** `tty-spoof.cjs` is a runtime support file (not a build output) and could be omitted from packaged installs.\n  - **Mitigation:** declared in `extensions/anthropic/package.json#openclaw.build.staticAssets`; postbuild asset copier ships it alongside the wrapper.\n- **Risk:** winget-installed `claude.exe` shadows the npm install via PATHEXT on Windows.\n  - **Mitigation:** wrapper spawns `OPENCLAW_INTERACTIVE_CLAUDE_BINARY` directly when the parent backend resolved a binary, never falling back to a bare PATH lookup.\n- **Risk:** title-gen / Haiku side-requests inject `{\"title\":\"…\"}` artifacts into the reasoning stream.\n  - **Mitigation:** mitm-server classifies each `/v1/messages` request into `auxiliary` (no tools) / `compaction` (compact.ts prompt markers) / `tool_followup` (last msg has tool_result) / `normal`. Wrapper drops auxiliary entirely, streams compaction as `thinking_delta`, emits a result only on `normal` `end_turn`. Response-content fingerprint backup (`<analysis>` + Primary-Request-and-Intent + Pending-Tasks) catches anything that slipped past the request-level classifier.\n- **Risk:** spilled-prompt overflow file leaks to concurrent runs via shared tempdir + `--add-dir`.\n  - **Mitigation:** per-run subdir under `${tmpdir()}/openclaw-interactive-proxy/run-<32-hex-bytes>/` (0700), file 0600, `--add-dir` scoped to the per-run subdir only.\n- **Risk:** local CA + leaf key persisted under user's OpenClaw config dir could be reused if an attacker gets read access.\n  - **Mitigation:** trust scoped to the spawned claude child via `NODE_EXTRA_CA_CERTS` only (no system trust mutation); CA issues solely the one `api.anthropic.com` leaf the per-turn proxy needs; key files hardened to 0600 with fail-closed regeneration; maintainer security review invited.\n- **Risk:** Anthropic-side non-SSE 4xx/5xx on `/v1/messages` (429, billing, overloaded) hangs the wrapper because claude doesn't self-exit on API error.\n  - **Mitigation:** mitm-server emits a synthetic `api_error` event for non-SSE 4xx/5xx; wrapper surfaces a `result` with `is_error: true` and exits nonzero so the CLI runner treats the turn as failed and triggers failover.\n- **Risk:** two resumes of the same Claude session race on the same transcript.\n  - **Mitigation:** backend config sets `serialize: true` so the framework queues same-session runs; different sessions still run concurrently. mitm-server binds both proxy stages on port 0 so concurrent proxies can't collide on a preferred port either.\n\n## Security Impact\n\n- **New permissions/capabilities:** Yes — per-turn local TLS MITM on a loopback port. Scoped to the spawned claude child via `NODE_EXTRA_CA_CERTS`; system trust store untouched. Local CA + leaf key cached under user's OpenClaw config dir at 0700/0600.\n- **Secrets/tokens handling changed:** No — wrapper does not read, log, or modify the Anthropic auth token; it is forwarded byte-for-byte to the re-issued upstream request.\n- **New/changed network calls:** Yes — claude's outbound HTTPS to `api.anthropic.com:443` is rerouted via `HTTPS_PROXY=http://127.0.0.1:<port>` inside the child. Non–`api.anthropic.com` CONNECT tunnels (statsig, datadog, etc.) bypass the TLS terminator entirely.\n- **Command/tool execution surface changed:** No — same `claude` binary, same allowed-tools (`mcp__openclaw__*`), same session semantics.\n- **Data access scope changed:** No — proxy sees only the SSE bytes claude itself sees on the wire; nothing exfiltrated or aggregated outside the per-turn process.\n\n## Compatibility / Migration\n\n- Backward compatible: existing `claude-cli` backend unchanged. Opt-in via the `claude-cli-interactive` id; no default flips.\n- New optional env: `OPENCLAW_INTERACTIVE_PROXY_DEBUG=1` enables verbose wrapper stderr.\n- Migration needed: no.\n\n## Prior art\n\n[`smithersai/claude-p`](https://github.com/smithersai/claude-p) runs `claude` without `-p` but bypasses the JSONL streaming surface entirely — works for the raw final text but loses the `stream_event` records that reasoning and tool-use rendering depend on. This PR reproduces the `-p --output-format stream-json` shape record-for-record from the SSE tap so existing OpenClaw stream consumers layer on unchanged.\n\n\n",
-        "branch": "feat/claude-cli-interactive-proxy",
-        "head_sha": "5272a2182e192cf7aa38364baf1029d778d13704",
-        "author": "anagnorisis2peripeteia",
-        "labels": [
-          "agents",
-          "size: XL",
-          "extensions: anthropic",
-          "proof: supplied",
-          "mantis: telegram-visible-proof",
-          "dependencies-changed",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 security-boundary",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "extensions/anthropic/cli-backend-interactive.test.ts",
-            "additions": 165,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/anthropic/cli-backend-interactive.ts",
-            "additions": 227,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/anthropic/cli-constants.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/anthropic/cli-shared.ts",
-            "additions": 4,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/anthropic/interactive-proxy/cert-manager.test.ts",
-            "additions": 53,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/anthropic/interactive-proxy/cert-manager.ts",
-            "additions": 281,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/anthropic/interactive-proxy/mitm-server.ts",
-            "additions": 325,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/anthropic/interactive-proxy/tsconfig.json",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/anthropic/interactive-proxy/tty-spoof.cjs",
-            "additions": 34,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/anthropic/interactive-proxy/wrapper.ts",
-            "additions": 764,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/anthropic/openclaw.plugin.json",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/anthropic/package.json",
-            "additions": 21,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/anthropic/provider-contract-api.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/anthropic/provider-policy-api.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/anthropic/register.runtime.ts",
-            "additions": 22,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/anthropic/setup-api.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/cli-backends.ts",
-            "additions": 36,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/cli-output.ts",
-            "additions": 19,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/cli-runner/execute.ts",
-            "additions": 18,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/cli-runner/helpers.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/command/attempt-execution.ts",
-            "additions": 4,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/model-runtime-aliases.ts",
-            "additions": 13,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/model-selection.test.ts",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.ts",
-            "additions": 131,
-            "deletions": 87,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/cli-backend.types.ts",
-            "additions": 13,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/runtime-postbuild.test.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "tsconfig.extensions.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-81851",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-81851.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 95,
-          "counts": {
-            "SUCCESS": 11,
-            "IN_PROGRESS": 62,
-            "SKIPPED": 21,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Scan changed paths (precise):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bundled-protocol:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-src-security:IN_PROGRESS",
-            "checks-node-core-ui:IN_PROGRESS",
-            "checks-node-core-support:IN_PROGRESS",
-            "checks-node-core-runtime-infra-state:IN_PROGRESS",
-            "checks-node-core-runtime-infra-process:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-shared:IN_PROGRESS",
-            "checks-node-core-runtime-cron-core:IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-core-runtime-cron-service:IN_PROGRESS",
-            "checks-node-agentic-control-plane-agent-chat:IN_PROGRESS",
-            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-plugin-ws:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-runtime:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-command-support:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-shared:IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS",
-            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
-            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
-            "checks-node-agentic-agents:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
-            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-session:IN_PROGRESS",
-            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "checks-windows-node-test:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Scan changed paths (precise):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bundled-protocol:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-src-security:IN_PROGRESS",
-            "checks-node-core-ui:IN_PROGRESS",
-            "checks-node-core-support:IN_PROGRESS",
-            "checks-node-core-runtime-infra-state:IN_PROGRESS",
-            "checks-node-core-runtime-infra-process:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-shared:IN_PROGRESS",
-            "checks-node-core-runtime-cron-core:IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-core-runtime-cron-service:IN_PROGRESS",
-            "checks-node-agentic-control-plane-agent-chat:IN_PROGRESS",
-            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-plugin-ws:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-runtime:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-command-support:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-shared:IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS",
-            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
-            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
-            "checks-node-agentic-agents:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
-            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-session:IN_PROGRESS",
-            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "checks-windows-node-test:IN_PROGRESS"
-          ],
-          "terminalBlockers": []
-        }
-      }
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 6443,
+    "total_ms": 3290,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 576
+        "ms": 369
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2230
+        "ms": 1540
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 3608
+        "ms": 1353
       },
       {
         "name": "append_ledger",
