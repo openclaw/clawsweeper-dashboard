@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-26T15:48:48.913Z",
+  "generated_at": "2026-05-26T15:49:01.192Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-26T12:48:44.901Z",
+  "since": "2026-05-26T12:49:00.481Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    86873
+    86952
   ],
   "comment_ids": [
-    4545813396
+    4545815267
   ],
-  "status_comment_id": 4545813945,
+  "status_comment_id": 4545815903,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,122 +31,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:86873:4545813396:2026-05-26T15:48:11Z:re_review",
-      "comment_id": "4545813396",
-      "comment_version_key": "4545813396:2026-05-26T15:48:11Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86873#issuecomment-4545813396",
-      "repo": "openclaw/openclaw",
-      "issue_number": 86873,
-      "author": "masatohoshino",
-      "author_id": 246810661,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-26T15:48:11Z",
-      "comment_updated_at": "2026-05-26T15:48:11Z",
-      "status_comment_id": 4545813945,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "8972d028ac7d13df13f52e0c8f830c79c6e61477",
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-26T15:48:49.804Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 86873
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-26T15:48:52.423Z",
-          "response_comment_id": "4545813945",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(line): add chunk-idle timeout to inbound media download",
-        "body": "## Summary\n\n`downloadLineMedia` in `extensions/line/src/download.ts` wraps the LINE\nMessaging API `getMessageContent` response in a `for-await` loop with no\nread deadline. When the LINE CDN returns HTTP headers but then stalls the\nbody stream, the function blocks indefinitely. Because\n`extensions/line/src/bot-handlers.ts:467-482` awaits the result before\ncalling `processMessage`, the entire inbound dispatch hangs: no agent reply\nis produced and the conversation goes silent.\n\nThis PR adds a per-chunk idle timeout (`LINE_DOWNLOAD_IDLE_TIMEOUT_MS =\n30_000`) to cap both the headers-level fetch and each stream chunk read.\nThe ceiling matches the existing Telegram pattern\n(`extensions/telegram/src/bot/delivery.resolve-media.ts:161`).\nThe timeout is idle (per-chunk), not overall, so legitimate slow-but-\nprogressing transfers continue.\n\n**Affected channel**: LINE inbound media only.\n**Unaffected**: Telegram, WhatsApp, MSTeams, Discord, Slack, Matrix,\nall other channels. Pure-text LINE messages. LINE outbound path.\n\n## Behavior change\n\n| Scenario | Before | After |\n|---|---|---|\n| Fast inbound media (<10 ms first chunk) | resolves promptly | resolves promptly |\n| Slow-but-progressing transfer (1 chunk / 50 ms) | resolves | resolves (idle cap is per-chunk, not overall) |\n| Server returns headers, never streams body | blocks indefinitely; no agent reply | rejects with `LineMediaDownloadTimeoutError(30_000)` after 30 s; existing catch at `bot-handlers.ts:474-481` dispatches without media |\n| Server never returns headers | blocks indefinitely | same rejection after 30 s |\n\n## Implementation notes\n\n- `withChunkIdleTimeout<T>()` wraps any `AsyncIterable<T>` so each `next()`\n  call races against a `setTimeout`. On timeout, `iterator.return()` is\n  called, which triggers `Readable.destroy()` for Node streams from\n  `@line/bot-sdk`.\n- `@line/bot-sdk` `HTTPFetchClient.get` does not accept `AbortSignal`, so\n  the underlying `fetch` cannot be cancelled. On timeout, the function\n  returns promptly but the background fetch may continue until TCP-level\n  timeout. This is an acceptable trade-off; the caller proceeds without\n  blocking.\n- After the timeout wins the race, the still-pending `next()` and\n  `getMessageContent()` promises are explicitly silenced\n  (`.then(noop, noop)`) so a later rejection from the destroyed upstream\n  cannot escape as an `unhandledRejection` on Node 22+.\n- The caller error path at `bot-handlers.ts:474-481` already handles\n  arbitrary errors via `String(err)`. The new error message includes\n  `\"stalled\"`, which routes to the `runtime.error?.(danger(...))` branch\n  (not the silent `\"exceeds limit\"` branch), so stalls are logged and\n  dispatch continues without media.\n- `chunkTimeoutMs` is an optional parameter so tests can use short values\n  without touching the exported constant; no LINE config schema entry is\n  added (out of scope for this PR; maintainer can request one if desired).\n- Worst-case wall time before rejection is sequential\n  (`(1 headers race) + (N chunk races)` of `chunkTimeoutMs` each), not a\n  single 30 s shared deadline. With the default 30 s ceiling this is well\n  inside LINE's 30 s webhook-ACK budget for the realistic single-stall\n  case; deeply stalled CDNs with partial-progress flapping could exceed it\n  but a follow-up overall-deadline option can be added if maintainers\n  prefer.\n\n## Files changed\n\n- `extensions/line/src/download.ts` (+113 / −6): adds\n  `LINE_DOWNLOAD_IDLE_TIMEOUT_MS`, `LineMediaDownloadTimeoutError`,\n  `withChunkIdleTimeout()`, wires `options?.chunkTimeoutMs` through both\n  the headers-level race and the stream-consumption phase, and silences\n  the orphaned upstream promises on timeout so they cannot become\n  `unhandledRejection`.\n- `extensions/line/src/download.test.ts` (+109 / −1): adds a\n  `chunk-idle timeout` describe block with 6 tests — stalled stream\n  rejects, stalled response headers reject, slow-but-progressing\n  completes, exported constant matches the Telegram constant,\n  `iterator.return()` is called exactly once on timeout (cleanup\n  verification), and partial-then-stall (first chunk delivered, second\n  chunk hangs) rejects within the per-chunk budget.\n\n## Non-scope (deliberately separate PRs)\n\n- WhatsApp `downloadInboundMedia` (`extensions/whatsapp/src/inbound/media.ts`) — same root pattern (no abort/timeout), separate PR.\n- MSTeams `resolveMSTeamsInboundMedia` (`extensions/msteams/src/monitor-handler/inbound-media.ts`) — same root pattern, separate PR.\n- Channel config knob for `chunkTimeoutMs`.\n- Metadata-first dispatch (start `processMessage` while media hydrates in background) — would require restructuring `bot-handlers.ts` and is broader than the LINE narrow ceiling.\n\n## Real behavior proof\n\nBehavior addressed: LINE inbound media download blocks indefinitely when the LINE CDN stalls the response body stream, preventing `processMessage` from being called and leaving the conversation silent.\n\nReal environment tested: local vitest integration probe mocking `@line/bot-sdk MessagingApiBlobClient.getMessageContent` and `openclaw/plugin-sdk/media-store.saveMediaStream`, exercising the real `downloadLineMedia` entrypoint with controlled-stall and controlled-delay stream fixtures. The mocked surface is the `@line/bot-sdk` SDK boundary plus the openclaw plugin-sdk boundary; the production code path under test is unchanged.\n\nExact steps or command run after this patch:\n\n```\npnpm test extensions/line/src/download.test.ts   # 12 passed (was 6; +6 new)\npnpm test extensions/line                         # 270 passed; no regressions\npnpm check:changed                                # all gates green (typecheck,\n                                                  #  lint, shrinkwraps,\n                                                  #  patches, import cycles,\n                                                  #  media download helpers,\n                                                  #  runtime sidecar loaders)\npnpm format:check extensions/line/src/download.ts extensions/line/src/download.test.ts\n```\n\nEvidence after fix:\n\n| Scenario | chunkTimeoutMs | Wall time | Outcome |\n|---|---|---|---|\n| Stalled stream | 100 ms | 100.26 ms | rejected: `LineMediaDownloadTimeoutError` |\n| Stalled response headers | 100 ms | 99.80 ms | rejected: `LineMediaDownloadTimeoutError` |\n| Default ceiling (30 s) + stall + 200 ms checkpoint | 30 000 ms | still pending at 200 ms | not falsely triggered |\n| Fast stream (5 ms first chunk) | 30 000 ms | 5.18 ms | resolved; no false positive |\n| Slow-but-progressing (50 ms chunk delay) | 500 ms | 50.88 ms | resolved |\n| Cleanup mock with `return()` spy | 50 ms | rejected | `iterator.return()` called exactly once |\n| Partial-then-stall (chunk 1 ok, chunk 2 hangs) | 50 ms | rejected | per-chunk budget reset works |\n\nObserved result after fix: Stalled streams reject with `LineMediaDownloadTimeoutError` at the configured ceiling. Slow-but-progressing streams complete without false-positive timeouts. The existing `catch` block in `extensions/line/src/bot-handlers.ts:474-481` routes the new error to `runtime.error?.(danger(...))` and continues dispatch without media, matching the existing failure-mode behavior. No regressions in the 270-test LINE extension suite. `pnpm check:changed` green across typecheck, lint, shrinkwraps, import cycles, and media-download helper roundtrip.\n\nWhat was not tested: live LINE channel credential pair with a real CDN stall (would require a controlled-slow inbound media generator and a dedicated LINE account; not feasible in this PR). WhatsApp and MSTeams unbounded stall behavior (out of scope). Production p99 percentiles (no live traffic instrumented). The orphaned background fetch in `@line/bot-sdk HTTPFetchClient.get` is acknowledged but not verified to settle within any particular bound; that is a `@line/bot-sdk` limitation, not introduced by this PR.",
-        "branch": "pr/d-d2-inbound-media-timeout-investigate",
-        "head_sha": "c10307cd7841cd3fe8df0ae92694f8b534153ba1",
-        "author": "masatohoshino",
-        "labels": [],
-        "files": [
-          {
-            "path": "extensions/line/src/download.test.ts",
-            "additions": 109,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/line/src/download.ts",
-            "additions": 113,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86873",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86873.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 2,
-          "counts": {
-            "SUCCESS": 2
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      }
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 8148,
+    "total_ms": 975,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2266
+        "ms": 699
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1733
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 4125
+        "ms": 264
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
