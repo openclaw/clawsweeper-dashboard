@@ -1,22 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-26T01:09:18.704Z",
+  "generated_at": "2026-05-26T01:09:32.828Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-25T22:09:18.156Z",
+  "since": "2026-05-25T22:09:30.822Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    86307
+    86693
   ],
-  "comment_ids": [
-    4538643842
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
+  "scanned_comments": 2,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -33,56 +31,110 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:86307:4538700116:2026-05-26T01:08:23Z:re_review",
-      "comment_id": "4538700116",
-      "comment_version_key": "4538700116:2026-05-26T01:08:23Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86307#issuecomment-4538700116",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86693:4538653473:2026-05-26T01:09:24Z:clawsweeper_needs_human",
+      "comment_id": "4538653473",
+      "comment_version_key": "4538653473:2026-05-26T01:09:24Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86693#issuecomment-4538653473",
       "repo": "openclaw/openclaw",
-      "issue_number": 86307,
-      "author": "giodl73-repo",
-      "author_id": 235387111,
+      "issue_number": 86693,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-26T01:08:23Z",
-      "comment_updated_at": "2026-05-26T01:08:23Z",
+      "comment_created_at": "2026-05-26T01:01:14Z",
+      "comment_updated_at": "2026-05-26T01:09:24Z",
       "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=af09415ea8a45feffd9e9a260b3808d0f029f7b3)",
       "review_summary": null,
       "review_followup": null,
       "freeform_prompt": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "af09415ea8a45feffd9e9a260b3808d0f029f7b3",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(heartbeat): trim trailing verbose ack wrappers from session context",
+        "body": "## Summary\n\nAdds selective trimming of trailing verbose heartbeat ack wrappers from session context to reduce context window inflation.\n\nReplaces #86472 which was incorrectly closed as \"already implemented.\" See [reopen explanation](https://github.com/openclaw/openclaw/pull/86472#issuecomment-4538611778) for why the close was wrong.\n\n## Problem\n\nCurrent main preserves ALL non-terminal assistant output in heartbeat spans unconditionally:\n\n```typescript\nif (sawNonTerminalAssistantOutput && !sawTerminalHeartbeatArtifact) {\n    return undefined; // always preserve everything\n}\n```\n\nThis means verbose ack wrappers like `\"Sure thing! HEARTBEAT_OK.\"` remain in session context even when they carry no useful information, inflating context windows with no-op heartbeat acknowledgements that could be trimmed.\n\n## What changed\n\n### `heartbeat-filter.ts`\n\n- **Added `sawToolActivity` tracking**: Records whether tool calls or results appeared in the heartbeat span, so we can distinguish \"model did real work\" from \"model just acknowledged\"\n- **Added `sawHeartbeatTokenInAssistant` tracking**: Uses the existing `isHeartbeatOkResponse()` to detect when a trailing assistant message is a no-op ack wrapper (token at edges, remaining text within ack budget)\n- **Replaced unconditional preservation with selective logic**: The single `return undefined` (preserve everything) is now a 3-branch check:\n  - No ack token detected: preserve (model produced a meaningful report)\n  - Ack token detected, but a user message followed or tools were used: preserve (interaction or real work happened)\n  - Ack token detected, trailing, no user follow-up, no tool activity: trim (verbose no-op wrapper)\n\nMiddle-token alerts like `\"Status HEARTBEAT_OK due to watchdog failure\"` are unaffected by this change because `isHeartbeatOkResponse()` already returns false for them on main (token is not at the edges). The existing test at line 94 covers this.\n\n### Tests (37 total, 4 new)\n\n- Trailing middle-token alert preservation without user follow-up (verifies no regression)\n- User-interaction preservation with ack wrappers\n- No-token trailing response preservation\n- Tool-activity preservation with trailing heartbeat output\n\n## Why #86472's close was wrong\n\nClawSweeper concluded \"already implemented\" because `isHeartbeatOkResponse` correctly rejects middle-token alerts on main, and there is a test proving that. But that test has existed since PR #83477 (May 19) and was never broken. The actual fix in this PR is the **ack-wrapper trimming** for trailing no-op responses, which main does NOT implement. Main over-preserves; this PR adds the selective trim.\n\n## Real behavior proof\n\nBehavior addressed: Verbose heartbeat ack wrappers containing HEARTBEAT_OK at edges are over-preserved in session context, inflating context windows\n\nReal environment tested: macOS 15.5, Node 22, openclaw dev checkout\n\nExact steps or command run after this patch:\n\n```bash\nnode -e \"\nconst HEARTBEAT_TOKEN = 'HEARTBEAT_OK';\nfunction stripTokenAtEdges(raw) {\n  let text = raw.trim();\n  if (!text.includes(HEARTBEAT_TOKEN)) return { text, didStrip: false };\n  let didStrip = false, changed = true;\n  const re = new RegExp(HEARTBEAT_TOKEN.replace(/[.*+?\\\\\\${}()|\\\\[\\\\]\\\\\\\\]/g, '\\\\\\\\\\\\\\$&') + '[^\\\\\\\\w]{0,4}\\$');\n  while (changed) {\n    changed = false;\n    if (text.startsWith(HEARTBEAT_TOKEN)) {\n      text = text.slice(HEARTBEAT_TOKEN.length).trimStart();\n      didStrip = true; changed = true; continue;\n    }\n    if (re.test(text)) {\n      const idx = text.lastIndexOf(HEARTBEAT_TOKEN);\n      const before = text.slice(0, idx).trimEnd();\n      text = before || ''; didStrip = true; changed = true;\n    }\n  }\n  return { text, didStrip };\n}\nfunction isNoOpAck(msg) {\n  const result = stripTokenAtEdges(msg);\n  return result.didStrip && (!result.text || result.text.length <= 280);\n}\nconst cases = [\n  { label: 'no-op ack (NEW: trimmed)', text: 'HEARTBEAT_OK' },\n  { label: 'wrapped ack (NEW: trimmed)', text: 'Sure! HEARTBEAT_OK.' },\n  { label: 'middle-token alert (unchanged: kept)', text: 'Status HEARTBEAT_OK due to watchdog failure' },\n  { label: 'no token (unchanged: kept)', text: 'Notification: 3 new messages arrived' },\n  { label: 'token at start (NEW: trimmed)', text: 'HEARTBEAT_OK - all systems normal' },\n];\nconsole.log('=== Heartbeat ack classifier ===');\nfor (const c of cases) {\n  const ack = isNoOpAck(c.text);\n  console.log(ack ? 'TRIM' : 'KEEP', '|', c.label + ':', JSON.stringify(c.text));\n}\n\"\n```\n\nEvidence after fix:\n\n```\n=== Heartbeat ack classifier ===\nTRIM | no-op ack (NEW: trimmed): \"HEARTBEAT_OK\"\nTRIM | wrapped ack (NEW: trimmed): \"Sure! HEARTBEAT_OK.\"\nKEEP | middle-token alert (unchanged: kept): \"Status HEARTBEAT_OK due to watchdog failure\"\nKEEP | no token (unchanged: kept): \"Notification: 3 new messages arrived\"\nTRIM | token at start (NEW: trimmed): \"HEARTBEAT_OK - all systems normal\"\n```\n\nObserved result after fix: The first three rows are new behavior added by this PR: trailing ack wrappers with the token at edges are now trimmed instead of preserved. The last two rows are existing main behavior, unchanged by this PR. This reduces context window inflation from verbose heartbeat acknowledgements without affecting meaningful alerts.\n\nWhat was not tested: No live heartbeat session with a real provider was tested end-to-end. The classifier behavior was verified with production `stripTokenAtEdges` logic and representative heartbeat response patterns.\n",
+        "branch": "fix/heartbeat-message-identity",
+        "head_sha": "af09415ea8a45feffd9e9a260b3808d0f029f7b3",
+        "author": "sebtardif",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/heartbeat-filter.test.ts",
+            "additions": 45,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/heartbeat-filter.ts",
+            "additions": 25,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86693",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86693.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "CANCELLED": 2,
+            "SUCCESS": 70,
+            "SKIPPED": 29,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "target is not open"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1613,
+    "total_ms": 2200,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 537
+        "ms": 313
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 1679
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 1065
+        "ms": 184
       },
       {
         "name": "append_ledger",
