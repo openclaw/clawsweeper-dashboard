@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-26T18:34:19.584Z",
+  "generated_at": "2026-05-26T18:34:57.292Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-26T15:34:16.182Z",
+  "since": "2026-05-26T15:34:56.619Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4547425593
   ],
-  "status_comment_id": 4547425931,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-05-26T18:33:45Z",
       "comment_updated_at": "2026-05-26T18:33:45Z",
-      "status_comment_id": 4547425931,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,209 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-26T18:34:20.413Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 86458
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-26T18:34:22.185Z",
-          "response_comment_id": "4547425931",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "AI-assisted: fix(chat): bound chat history display payloads",
-        "body": "## Summary\n\nThis PR fixes `chat.history` display payload growth by adding bounded display projections before history responses are returned to callers.\n\nIt covers text, tool payloads, image/media blocks, canvas media references, Swift protocol surfaces, UI/controller handling, gateway tests, public protocol docs, and a beta1 validation report. The branch has been rebased onto the current `release/2026.5.25` line and includes the later P2 raw-mode alignment fix.\n\nAI-assisted change: yes. Forge/Codex produced the implementation and PR publication using OpenAI Codex `gpt-5.5` in the OpenClaw workspace. Operator reviewed the findings, evidence packet, and remediation plan before this update.\n\n## Problem\n\n`chat.history` could return oversized visible history payloads when transcripts contained large tool results, media blocks, or long message content. That created an availability risk for WebChat and gateway callers because history reads could become large enough to stall UI/session flows.\n\nA late review pass also found that normal `messages` mode was capped to 64 KiB after safe tool redaction, which could unnecessarily drop safe text even when the caller configured a larger history budget.\n\n## Root Cause\n\nHistory projection and redaction were not consistently separated from raw transcript preservation. The display path needed bounded, caller-safe projections while keeping raw transcript data out of normal UI responses.\n\nThe final `messages` mode budget also applied a hard 64 KiB cap after redaction, rather than honoring the configured history budget for safe text.\n\n## Solution\n\n- Adds bounded chat display projection helpers for text, tool payloads, media, and canvas blocks.\n- Routes `chat.history` display responses through bounded projections instead of exposing unbounded raw payload shape.\n- Adds `mode: \"messages\" | \"turns\" | \"raw-messages\"` and gates raw payload inspection behind `operator.admin`.\n- Keeps `unsafeRawToolPayloads` schema-compatible, but it does not unlock raw payloads without explicit `mode: \"raw-messages\"`.\n- Preserves safe `messages` mode text up to the configured `maxHistoryBytes` budget after tool payload omission.\n- Regenerates Swift protocol models from the canonical schema output.\n- Documents the new history modes and raw-history admin guard in public WebChat/Gateway protocol docs.\n- Adds gateway regression tests for bounded tool payloads, visible media shaping, recent visible turn preservation, placeholder semantics, large safe text preservation, saturated scan-window metadata, and raw-mode authorization.\n\n## Real behavior proof\n\n**Behavior addressed:** `chat.history` was returning oversized display payloads (production logs showed >=88 KB responses and `readMs=1715-1893` even for tiny sessions, plus an 11050 ms WebSocket response), and could leak raw tool-call arguments / tool-result payloads into display history. This PR bounds display payloads, collapses tool turns by default, gates raw payloads behind `operator.admin`, and adds `mode=messages|turns|raw-messages` with omitted-mode defaulting to `turns` for display clients.\n\n**Real environment tested:** The branch was rebased onto the current `release/2026.5.25` line. The current PR head is `abd90849237e5fda7b5fbe8101c8918cb9e2e2d5`, based on `2e0ab1a0d46645b7a7c889f90584d9bb9c1e1218`. A beta1 display-path build was dogfooded on `openclaw-prod`; a combined temporary live build also included a separate Codex/WebChat delivery-hint fix solely to keep the local WebChat/Codex environment usable during testing. That message-delivery fix is intentionally not part of this PR.\n\n**Exact commands or gates run after the beta1 rebase:**\n\n```bash\nnode scripts/run-vitest.mjs src/gateway/server.chat.gateway-server-chat-b.test.ts -t \"chat.history messages mode omits raw tool payloads|chat.history messages mode ignores unsafeRawToolPayloads|chat.history raw-messages requires an admin or debug caller|chat.history raw-messages preserves raw tool payloads\"\n```\n\nObserved result on the final rebased head:\n\n```text\nTest Files 1 passed (1)\nTests 4 passed | 29 skipped (33)\n```\n\nFocused chat-history suite:\n\n```bash\nnpx vitest run \\\n  src/gateway/server.chat.gateway-server-chat-b.test.ts \\\n  src/gateway/server.chat.gateway-server-chat.test.ts \\\n  src/gateway/session-utils.fs.test.ts \\\n  ui/src/ui/controllers/chat.test.ts \\\n  ui/src/ui/app-chat.test.ts \\\n  test/scripts/list-prod-store-packages.test.ts\n```\n\nObserved result on the final rebased head:\n\n```text\nTest Files 8 passed (8)\nTests 395 passed (395)\n```\n\nThe earlier beta1 dogfood validation also passed a wider focused set used for the combined live build:\n\n```text\nTest Files 18 passed (18)\nTests 973 passed (973)\n```\n\n**Evidence after fix:** Post-restart `chat.history` telemetry showed display clients using the bounded turns path:\n\n```text\nmode=turns responseMode=turns rawToolPayloads=false\n```\n\nRepresentative large-history sample after the beta1 rebase:\n\n```text\nsessionHash=52d4d0e214e0\nmode=turns responseMode=turns rawToolPayloads=false\nrequestedLimit=20\nlocalMessages=412\nreturnedItems=10\ntoolRecordsCollapsed=395\nreadFileBytes=1130353\nresponseBytesReturned=29150\nreadMs=13\ntotalMs=21\nhasMoreBefore=false\n```\n\nPost-hotfix sampled window:\n\n```text\nsamples: 50\ntotalMs: min 0, p50 3, p90 24, max 605\nreadMs:  min 0, p50 1, p90 14, max 593\nresponseBytesReturned: min 212, p50 2690, p90 29150, max 29150\nreadFileBytes: min 1400, p50 5076, p90 1130353, max 1130353\ntoolRecordsCollapsed: min 0, p50 2, p90 395, max 395\n```\n\nTwo roughly 600 ms outliers remained in the checked window. The new telemetry attributes those to read-path components, while the response stayed bounded. This is evidence that the display payload/serialization outage path is fixed, not a claim that all filesystem/read jitter is solved by this PR.\n\nProduction before-evidence from the affected surface, redacted to session hashes, from the May 24 OpenClaw logs:\n\n```text\n2026-05-24T23:13:35.952Z chat.history metrics mode=messages sessionHash=ac38af406fed ... messagesBytesReturned=87915 responseBytesReturned=88104 readMs=1838 totalMs=1840\n2026-05-24T23:13:35.947Z chat.history metrics mode=messages sessionHash=75794a8e1d45 ... messagesBytesReturned=57617 responseBytesReturned=57810 readMs=1890 totalMs=1893\n2026-05-24T23:01:46.498Z chat.history metrics mode=messages sessionHash=a6923f4da653 ... localMessages=0 messagesBytesReturned=2 responseBytesReturned=128 readMs=1715 totalMs=1716\n2026-05-24T06:19:28.690Z WebSocket chat.history response took 11050ms\n```\n\n**Observed result after fix:** Display clients return `mode=turns` by default, collapse tool activity, bound response bytes, and do not expose raw tool payloads. Explicit `mode=messages` remains message-shaped and display-safe. Non-admin `mode=raw-messages` rejects with `INVALID_REQUEST`. Admin `mode=raw-messages` is the explicit raw diagnostic path. Admin callers sending `mode: \"messages\", unsafeRawToolPayloads: true` still get the safe display projection with tool payloads omitted.\n\n**Not tested:**\n- Control UI / WebChat browser surface was not driven through a browser or screen-recording session in this proof. Compatibility was exercised at the Gateway WebSocket protocol layer and through the UI controller/app tests.\n- The live dogfood tarball predates the final P2 raw-mode alignment commit. The raw-mode alignment behavior is covered by the final local regression tests on the rebased PR head.\n\n## Validation\n\n| Command / Gate | Result | Notes |\n|---|---:|---|\n| Raw-mode focused regression | PASS | 1 file, 4 tests passed on `abd9084923` |\n| Focused chat-history suite | PASS | 8 files, 395 tests passed on `abd9084923` |\n| Wider beta1 dogfood-focused validation | PASS | 18 files, 973 tests passed in the combined live-build worktree |\n| Package tarball integrity | PASS | `check-openclaw-package-tarball.mjs` passed for the beta1 live-build package |\n| Swift protocol generation | PASS | `GatewayModels.swift` regenerated to canonical output |\n| Diff whitespace check | PASS | `git diff --check origin/release/2026.5.25...HEAD` clean before push |\n| Secret/local-path scan | PASS | Diff scan found no obvious secrets or local home-path leaks before push |\n\n## Review Findings Addressed\n\n- ClawSweeper real-behavior-proof block: replaced prose proof with parser-shaped live/dogfood evidence and local regression output.\n- ClawSweeper P2 docs finding: documented `chat.history` modes and raw-history admin guard in `docs/web/webchat.md` and `docs/gateway/protocol.md`.\n- Bundled Swift protocol check: regenerated `GatewayModels.swift` instead of hand-editing optional defaults.\n- Agent-chat tests: updated the gateway-callable helper expectations so placeholder redaction does not break semantic assertions.\n- Dependency/deadcode check: focused validation and diff hygiene were rerun on the rebased head.\n- Copilot hot-path nits: avoided a second `augmentChatHistoryWithCanvasBlocks()` pass for non-raw history responses and cached `extractToolCallIds()` in turn aggregation.\n- Saturated scan-window `meta.hasMoreBefore` handling: fixed with a 1001-turn regression test verifying earlier history is reported when the scan window saturates.\n- ClawSweeper P2 `unsafeRawToolPayloads` contract: raw-payload branch now requires `mode === \"raw-messages\"`. Admin callers using `mode: \"messages\"` with the flag get the safe display projection. Added Gateway regression test `chat.history messages mode ignores unsafeRawToolPayloads for admin callers`.\n- ClawSweeper P2 unused-binding follow-up: removed the unused destructure binding while keeping the params schema backward-compatible.\n- Beta1 rebase preservation: after rebasing onto the `release/2026.5.25` line, the previously addressed raw-mode P2 finding was explicitly ported and re-tested.\n\n## Non-goals and Follow-Up\n\nThis PR intentionally does not address Codex/WebChat message-tool delivery hints, Codex pretool/tool-loop latency, provider failover, gateway startup auth prewarm, or reconnect/warmup read coalescing. Those have separate symptoms and should remain separate PRs.\n\nBrowser visual proof can be added if maintainers want it, but the current proof covers Gateway protocol behavior, UI controller/app behavior, and live dogfood telemetry for the bounded display path.\n\n## Risk Before Merge\n\n- Compatibility: `chat.history` response shape is intentionally bounded for display modes. Raw/debug access remains behind the explicit admin raw path.\n- Availability: this reduces large-history response pressure, but maintainers should still watch WebChat history latency on beta1/release builds.\n- Session-state: history display output changes should be checked against existing UI expectations and Swift clients.\n\n## Changelog\n\nNo `CHANGELOG.md` entry was added. OpenClaw contributor guidance leaves changelog handling to maintainers or landing automation.\n",
-        "branch": "forge/chat-history-display-bounds-v2",
-        "head_sha": "abd90849237e5fda7b5fbe8101c8918cb9e2e2d5",
-        "author": "ragesaq",
-        "labels": [
-          "docs",
-          "app: web-ui",
-          "gateway",
-          "scripts",
-          "size: XL",
-          "proof: sufficient",
-          "dependencies-changed",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
-            "additions": 9,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/gateway/protocol.md",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/plan/chat-history-beta2-fix-report-2026-05-25.md",
-            "additions": 91,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "docs/web/webchat.md",
-            "additions": 3,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/list-prod-store-packages.mjs",
-            "additions": 48,
-            "deletions": 13,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/chat-display-projection.ts",
-            "additions": 218,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/chat-history-turns.ts",
-            "additions": 481,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/protocol/schema/logs-chat.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/chat.ts",
-            "additions": 272,
-            "deletions": 24,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.chat.gateway-server-chat-b.test.ts",
-            "additions": 828,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.chat.gateway-server-chat.test.ts",
-            "additions": 6,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-utils.fs.test.ts",
-            "additions": 33,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-utils.fs.ts",
-            "additions": 118,
-            "deletions": 19,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-utils.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/list-prod-store-packages.test.ts",
-            "additions": 42,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/ui/app-chat.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/ui/controllers/chat.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/ui/controllers/chat.ts",
-            "additions": 12,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86458",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86458.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 15,
-          "counts": {
-            "SUCCESS": 4,
-            "FAILURE": 1,
-            "SKIPPED": 9,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
-        }
-      }
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 6587,
+    "total_ms": 2058,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 626
+        "ms": 659
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2761
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 3172
+        "ms": 1385
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
