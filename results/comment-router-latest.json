@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-26T03:27:47.353Z",
+  "generated_at": "2026-05-26T03:28:20.486Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-26T00:27:44.768Z",
+  "since": "2026-05-26T00:28:18.345Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    86739
+    86606
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 7,
+  "commands_seen": 3,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,70 +31,69 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86739:4539681094:2026-05-26T03:27:39Z:clawsweeper_needs_human",
-      "comment_id": "4539681094",
-      "comment_version_key": "4539681094:2026-05-26T03:27:39Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86739#issuecomment-4539681094",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86606:4536543664:2026-05-26T03:28:14Z:clawsweeper_auto_repair",
+      "comment_id": "4536543664",
+      "comment_version_key": "4536543664:2026-05-26T03:28:14Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86606#issuecomment-4536543664",
       "repo": "openclaw/openclaw",
-      "issue_number": 86739,
+      "issue_number": 86606,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-26T03:18:32Z",
-      "comment_updated_at": "2026-05-26T03:27:39Z",
+      "comment_created_at": "2026-05-25T19:00:52Z",
+      "comment_updated_at": "2026-05-26T03:28:14Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
       "autoclose_message": null,
       "implementation_prompt": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "No automated repair job is needed; maintainers should decide whether the bounded synchronous SIGKILL behavior is acceptable for MCP stdio shutdown.; Cleared: No concrete security or supply-chain concern found; the diff adds no dependencies, workflows, secret handling, or new execution source and reuses the existing process-tree signal helper. (sha=ff194d01213d7b760c50bfe9a731fe3c94164823)",
-      "review_summary": "The PR adds a synchronous SIGKILL fallback to `OpenClawStdioClientTransport.close()` and a regression test for SIGTERM-ignoring MCP stdio children.\n\nPR surface: Source +6, Tests +27. Total +33 across 2 files.\n\nReproducibility: yes. source-reproducible: current main returns from `close()` after scheduling the unref'd kill-tree SIGKILL rather than delivering it, and the PR body provides before/after harness output for a SIGTERM-ignoring child. I did not run the live harness in this read-only review.",
-      "review_followup": "No automated repair job is needed; maintainers should decide whether the bounded synchronous SIGKILL behavior is acceptable for MCP stdio shutdown.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=91d7f0764e596856ef43afc0521ebfd08ea12b34)",
+      "review_summary": "This PR adds a shared active-wake retry helper for compacting outcomes in subagent announcement delivery and adds regression tests for steering and generated-completion handoff paths.\n\nPR surface: Source +64, Tests +114. Total +178 across 2 files.\n\nReproducibility: yes. Current main source shows compacting is returned as a distinct queue failure and the affected active-wake callers only retry transcript-commit unsupported; the PR body also includes before/after focused Vitest output, though I did not run tests in this read-only review.",
+      "review_followup": "Human follow-up is needed because the contributor must fix the retry-window behavior and supply real compacting-run proof; automation cannot provide their real environment proof.",
       "freeform_prompt": null,
-      "expected_head_sha": "ff194d01213d7b760c50bfe9a731fe3c94164823",
+      "expected_head_sha": "91d7f0764e596856ef43afc0521ebfd08ea12b34",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): force SIGKILL synchronously when MCP stdio child ignores SIGTERM",
-        "body": "### Summary\n\n- **Problem**: After a Gateway restart, MCP server child processes spawned by the bundle-mcp runtime can survive: users see a linear pile-up of zombie MCP processes across restarts, SSH connection exhaustion, and Gateway slowdowns. The original report points at `disposeSession()`, but the actual mechanism is one layer deeper — `disposeSession()` already calls `transport.close()`, and `close()` already calls `killProcessTree(pid)`. (#86412)\n- **Root Cause**: `killProcessTree(pid)` sends SIGTERM to the process group **synchronously** and schedules the SIGKILL fallback with `setTimeout(..., graceMs).unref()`. The `.unref()` is intentional in the general utility (\"don't block event loop exit\"), but for a SIGTERM-ignoring child (a wrapped `npx`/`ssh` that does not propagate the signal, or any cooperative-but-slow child) the close() chain returns after a 2s graceful + 2s SIGTERM wait — and during gateway shutdown the runtime tears down right after that, **cancelling the unref'd SIGKILL setTimeout before it ever fires**. The child outlives the gateway; the next restart spawns a new one alongside, and the count grows linearly.\n- **Fix**: In `OpenClawStdioClientTransport.close()`, after the SIGTERM grace, if the child is still alive force-send SIGKILL **synchronously** via the existing `signalProcessTree(pid, \"SIGKILL\")` helper, then briefly wait for the reap, before `close()` returns. The kill is delivered before the gateway exits — no longer dependent on the `.unref()`'d timer winning the race against shutdown.\n- **What changed**:\n  - `src/agents/mcp-stdio-transport.ts`: synchronous SIGKILL fallback in `close()` (calls existing `signalProcessTree` from `src/process/kill-tree.ts`); add `SIGKILL_REAP_TIMEOUT_MS = 500`.\n  - `src/agents/mcp-stdio-transport.test.ts`: regression test (fake timers) covering the new synchronous-SIGKILL path; existing kill/no-kill cases unchanged.\n- **What did NOT change (scope boundary)**:\n  - `killProcessTree`'s general `.unref()` setTimeout fallback is unchanged (it stays correct for non-shutdown callers).\n  - `disposeSession()` / `BundleMcpSession` / the MCP runtime manager are unchanged.\n  - SSH-based MCP servers still leak the **remote** Node.js process on the remote host (the local `ssh` client is now reliably killed, but a remote watchdog or `ssh -t` is needed to clean up the remote node). The reporter notes this as a separate concern.\n  - No config keys, protocol, or session-store changes.\n\n### Reproduction\n\n1. Spawn an MCP stdio child that ignores SIGTERM: `node -e \"process.on('SIGTERM',()=>{});setInterval(()=>{},60_000)\"`.\n2. Drive the real `OpenClawStdioClientTransport.start()` → `transport.close()` against it.\n3. Immediately `process.exit(0)` to mimic the gateway exiting at the end of a shutdown.\n- Before: `close()` returns ~4s in (after the SIGTERM grace) and the unref'd SIGKILL setTimeout never fires (the runner exited first); the child outlives the runner.\n- After: `close()` sends a synchronous SIGKILL after the SIGTERM grace and reaps; the child is gone by the time the runner exits.\n\n### Real behavior proof\n\n- **Behavior addressed (#86412)**: when an MCP stdio child ignores SIGTERM, `transport.close()` must guarantee the child is dead by the time it returns, so the next gateway shutdown/restart step cannot leave the child orphaned.\n- **Real environment tested (Linux, Node 22)**: a standalone harness drives the **real** `OpenClawStdioClientTransport.start()`/`close()` against a real Node child that catches and swallows SIGTERM. The runner records the child pid, awaits `close()`, then `process.exit(0)` — same shape as the gateway exiting immediately after `disposeAllSessionMcpRuntimes`. A bash driver then checks whether the child pid is still alive.\n- **Exact steps or command run after this patch**: `bash /tmp/qmd86412/repro.sh AFTER` (and `bash /tmp/qmd86412/repro.sh BEFORE` with the fix temporarily stashed to compare).\n- **Evidence after fix (verbatim repro output)**:\n\n```text\n=== AFTER ===\nrunner: child pid=1668117  close() took 4013ms  exiting now\nAFTER: child pid=1668117 is GONE — clean\n\n=== BEFORE ===   (fix stashed)\nrunner: child pid=1668642  close() took 4006ms  exiting now\nBEFORE: child pid=1668642 is STILL ALIVE after runner exit  <-- LEAK\n```\n\n- **Observed result after fix**: the SIGTERM-ignoring child is reliably reaped before the runner exits. Without the fix, the same scenario leaves the child alive across runner exit (the unref'd SIGKILL timer is cancelled when the runner exits).\n- **Regression tests**: `node scripts/run-vitest.mjs src/agents/mcp-stdio-transport.test.ts` — full suite passes including a new fake-timer case that asserts `signalProcessTree(pid, \"SIGKILL\")` is invoked synchronously after the SIGTERM grace expires; the existing \"kills the process tree\" and \"does not kill\" cases still pass unchanged.\n- **What was not tested**: a real multi-server gateway restart loop on macOS with the reporter's exact configuration (5 SSH + local MCP servers) was not run; the harness exercises the real transport + real `signalProcessTree`/`killProcessTree` and the unref-race fix end to end. The remote-side SSH-Node leak is out of scope here — the local `ssh` client is reliably killed; the remote process requires a separate remote watchdog or `ssh -t`.\n\n### Risk / Mitigation\n\n- **Risk**: the new synchronous SIGKILL adds up to `SIGKILL_REAP_TIMEOUT_MS` (500 ms) to `close()`'s worst-case duration, and a synchronous SIGKILL is more aggressive than the previous unref'd-delayed SIGKILL.\n- **Mitigation**: SIGKILL is only sent if both the stdin-end grace AND the SIGTERM grace expired (i.e. the child has had 4s+ to exit cleanly). The 500ms reap is bounded — `close()` returns either when the child exits OR when the reap wait expires; it never blocks longer. The general `killProcessTree` utility keeps its `.unref()`'d-setTimeout behavior for non-shutdown callers, so no policy change in the broader codebase. Per-platform handling is delegated to the existing `signalProcessTree` helper (`taskkill /F` on Windows, `process.kill(-pid, \"SIGKILL\")` group-kill on Unix when detached).\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n\n### Linked Issue/PR\n\nFixes #86412\n",
-        "branch": "fix/86412-mcp-stdio-sync-sigkill",
-        "head_sha": "ff194d01213d7b760c50bfe9a731fe3c94164823",
-        "author": "openperf",
+        "title": "fix(agents): wait for compaction before requester steering fallback",
+        "body": "## Summary\n\nFixes #86566 (follow-up to #85489). Active requester steering treated a `compacting` outcome from `queueEmbeddedPiMessageWithOutcome` as a terminal wake failure, so completion delivery fell through to the requester-agent/direct fallback even though the active run becomes steerable again as soon as compaction finishes.\n\nThis introduces a shared `resolveActiveWakeWithRetries` helper used by **both** active-wake call sites — the steer path (`maybeSteerSubagentAnnounce`) and the generated-completion active wake (`sendSubagentAnnounceDirectly`). The helper treats `compacting` as transient: it waits through compaction and retries the same wake, bounded by cancellation and a finite backoff schedule that stays well within the announce delivery timeout. The best-effort transcript-commit retry and the compaction retry share a single loop, so a run that compacts and then reports `transcript_commit_wait_unsupported` still gets the best-effort retry. Other wake failures (`no_active_run`, `not_streaming`, delivery-mode mismatch, runtime rejection) keep their existing single-attempt fallback behavior.\n\nAddresses the earlier review notes: the compaction retry now also covers the completion wake path, and the best-effort fallback is preserved after compaction by handling both transient retries in one loop.\n\n## Real behavior proof\n\nBehavior or issue addressed: when an active requester is compacting and compaction finishes within the delivery timeout, both the steer path and the generated-completion wake should wait and re-steer the same active run instead of falling back to direct requester-agent delivery.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js 24.14.0, current PR head. Exercised the real `maybeSteerSubagentAnnounce` and `sendSubagentAnnounceDirectly` paths through `deliverSubagentAnnouncement` under the repo's vitest runner, with no mocking of the module under test (only the queue-outcome dependency is driven to simulate the compacting-then-ready sequence). Compared the pre-fix and post-fix code.\n\nExact steps or command run after this patch: ran the subagent announce delivery suite, including regression tests that drive the steer queue and the completion-handoff wake to return `compacting` first and a queued success second, plus a guard test that a non-compacting failure is not retried.\n\nEvidence after fix: stdout from the vitest run against the real steering and completion paths, comparing pre-fix and post-fix:\n$ node scripts/run-vitest.mjs src/agents/subagent-announce-delivery.test.ts -t 86566\n-- BEFORE the fix (compacting is terminal on both paths): regression tests fail --\nx waits through compaction and re-steers the active requester (86566)\nAssertionError: expected 'direct' to deeply equal 'steered'\nx waits through compaction on the completion handoff wake (86566)\nAssertionError: expected 'direct' to deeply equal 'steered'\n\ndoes not retry non-compacting steer failures (86566)\nTests  4 failed | 2 passed | 126 skipped (132)\n\n-- AFTER the fix (compacting is transient on both paths): all pass --\n\nwaits through compaction and re-steers the active requester (86566)\nwaits through compaction on the completion handoff wake (86566)\ndoes not retry non-compacting steer failures (86566)\nTests  6 passed | 126 skipped (132)\n\n\nObserved result after fix: before the fix a compacting outcome on either the steer path or the generated-completion wake routes the completion to the direct fallback path (`path: \"direct\"`); after the fix each path waits through compaction and re-attempts the same wake, so the completion stays on the steering path (`path: \"steered\"`) and the queue is attempted twice. A non-compacting failure (`no_active_run`) is attempted only once and is not retried. The full subagent-announce-delivery suite (132 tests) passes.\n\nWhat was not tested: no live multi-agent run with a real compaction cycle was exercised; the compacting-then-ready transition is simulated through the queue-outcome dependency on the real steering and completion code paths. The retry delays use the existing test-fast schedule so the bounded backoff is exercised without real waits.\n",
+        "branch": "fix-86566-compaction-steer-retry",
+        "head_sha": "91d7f0764e596856ef43afc0521ebfd08ea12b34",
+        "author": "alkor2000",
         "labels": [
           "agents",
-          "size: XS",
+          "size: M",
           "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/mcp-stdio-transport.test.ts",
-            "additions": 27,
+            "path": "src/agents/subagent-announce-delivery.test.ts",
+            "additions": 114,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/mcp-stdio-transport.ts",
-            "additions": 7,
-            "deletions": 1,
+            "path": "src/agents/subagent-announce-delivery.ts",
+            "additions": 84,
+            "deletions": 20,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86739",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86739.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86606",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86606.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
@@ -102,42 +101,218 @@
         "checks": {
           "total": 102,
           "counts": {
-            "CANCELLED": 2,
+            "SUCCESS": 72,
             "SKIPPED": 28,
-            "SUCCESS": 71,
+            "FAILURE": 1,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:CANCELLED"
+            "check-test-types:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
+            "check-test-types:FAILURE"
           ]
         }
       },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86606:4539669634:2026-05-26T03:16:46Z:re_review",
+      "comment_id": "4539669634",
+      "comment_version_key": "4539669634:2026-05-26T03:16:46Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86606#issuecomment-4539669634",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86606,
+      "author": "alkor2000",
+      "author_id": 131229172,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-26T03:16:46Z",
+      "comment_updated_at": "2026-05-26T03:16:46Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): wait for compaction before requester steering fallback",
+        "body": "## Summary\n\nFixes #86566 (follow-up to #85489). Active requester steering treated a `compacting` outcome from `queueEmbeddedPiMessageWithOutcome` as a terminal wake failure, so completion delivery fell through to the requester-agent/direct fallback even though the active run becomes steerable again as soon as compaction finishes.\n\nThis introduces a shared `resolveActiveWakeWithRetries` helper used by **both** active-wake call sites — the steer path (`maybeSteerSubagentAnnounce`) and the generated-completion active wake (`sendSubagentAnnounceDirectly`). The helper treats `compacting` as transient: it waits through compaction and retries the same wake, bounded by cancellation and a finite backoff schedule that stays well within the announce delivery timeout. The best-effort transcript-commit retry and the compaction retry share a single loop, so a run that compacts and then reports `transcript_commit_wait_unsupported` still gets the best-effort retry. Other wake failures (`no_active_run`, `not_streaming`, delivery-mode mismatch, runtime rejection) keep their existing single-attempt fallback behavior.\n\nAddresses the earlier review notes: the compaction retry now also covers the completion wake path, and the best-effort fallback is preserved after compaction by handling both transient retries in one loop.\n\n## Real behavior proof\n\nBehavior or issue addressed: when an active requester is compacting and compaction finishes within the delivery timeout, both the steer path and the generated-completion wake should wait and re-steer the same active run instead of falling back to direct requester-agent delivery.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js 24.14.0, current PR head. Exercised the real `maybeSteerSubagentAnnounce` and `sendSubagentAnnounceDirectly` paths through `deliverSubagentAnnouncement` under the repo's vitest runner, with no mocking of the module under test (only the queue-outcome dependency is driven to simulate the compacting-then-ready sequence). Compared the pre-fix and post-fix code.\n\nExact steps or command run after this patch: ran the subagent announce delivery suite, including regression tests that drive the steer queue and the completion-handoff wake to return `compacting` first and a queued success second, plus a guard test that a non-compacting failure is not retried.\n\nEvidence after fix: stdout from the vitest run against the real steering and completion paths, comparing pre-fix and post-fix:\n$ node scripts/run-vitest.mjs src/agents/subagent-announce-delivery.test.ts -t 86566\n-- BEFORE the fix (compacting is terminal on both paths): regression tests fail --\nx waits through compaction and re-steers the active requester (86566)\nAssertionError: expected 'direct' to deeply equal 'steered'\nx waits through compaction on the completion handoff wake (86566)\nAssertionError: expected 'direct' to deeply equal 'steered'\n\ndoes not retry non-compacting steer failures (86566)\nTests  4 failed | 2 passed | 126 skipped (132)\n\n-- AFTER the fix (compacting is transient on both paths): all pass --\n\nwaits through compaction and re-steers the active requester (86566)\nwaits through compaction on the completion handoff wake (86566)\ndoes not retry non-compacting steer failures (86566)\nTests  6 passed | 126 skipped (132)\n\n\nObserved result after fix: before the fix a compacting outcome on either the steer path or the generated-completion wake routes the completion to the direct fallback path (`path: \"direct\"`); after the fix each path waits through compaction and re-attempts the same wake, so the completion stays on the steering path (`path: \"steered\"`) and the queue is attempted twice. A non-compacting failure (`no_active_run`) is attempted only once and is not retried. The full subagent-announce-delivery suite (132 tests) passes.\n\nWhat was not tested: no live multi-agent run with a real compaction cycle was exercised; the compacting-then-ready transition is simulated through the queue-outcome dependency on the real steering and completion code paths. The retry delays use the existing test-fast schedule so the bounded backoff is exercised without real waits.\n",
+        "branch": "fix-86566-compaction-steer-retry",
+        "head_sha": "91d7f0764e596856ef43afc0521ebfd08ea12b34",
+        "author": "alkor2000",
+        "labels": [
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/subagent-announce-delivery.test.ts",
+            "additions": 114,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce-delivery.ts",
+            "additions": 84,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86606",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86606.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "SUCCESS": 72,
+            "SKIPPED": 28,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86606:4536780697:2026-05-25T19:42:27Z:re_review",
+      "comment_id": "4536780697",
+      "comment_version_key": "4536780697:2026-05-25T19:42:27Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86606#issuecomment-4536780697",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86606,
+      "author": "alkor2000",
+      "author_id": 131229172,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-25T19:42:27Z",
+      "comment_updated_at": "2026-05-25T19:42:27Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): wait for compaction before requester steering fallback",
+        "body": "## Summary\n\nFixes #86566 (follow-up to #85489). Active requester steering treated a `compacting` outcome from `queueEmbeddedPiMessageWithOutcome` as a terminal wake failure, so completion delivery fell through to the requester-agent/direct fallback even though the active run becomes steerable again as soon as compaction finishes.\n\nThis introduces a shared `resolveActiveWakeWithRetries` helper used by **both** active-wake call sites — the steer path (`maybeSteerSubagentAnnounce`) and the generated-completion active wake (`sendSubagentAnnounceDirectly`). The helper treats `compacting` as transient: it waits through compaction and retries the same wake, bounded by cancellation and a finite backoff schedule that stays well within the announce delivery timeout. The best-effort transcript-commit retry and the compaction retry share a single loop, so a run that compacts and then reports `transcript_commit_wait_unsupported` still gets the best-effort retry. Other wake failures (`no_active_run`, `not_streaming`, delivery-mode mismatch, runtime rejection) keep their existing single-attempt fallback behavior.\n\nAddresses the earlier review notes: the compaction retry now also covers the completion wake path, and the best-effort fallback is preserved after compaction by handling both transient retries in one loop.\n\n## Real behavior proof\n\nBehavior or issue addressed: when an active requester is compacting and compaction finishes within the delivery timeout, both the steer path and the generated-completion wake should wait and re-steer the same active run instead of falling back to direct requester-agent delivery.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js 24.14.0, current PR head. Exercised the real `maybeSteerSubagentAnnounce` and `sendSubagentAnnounceDirectly` paths through `deliverSubagentAnnouncement` under the repo's vitest runner, with no mocking of the module under test (only the queue-outcome dependency is driven to simulate the compacting-then-ready sequence). Compared the pre-fix and post-fix code.\n\nExact steps or command run after this patch: ran the subagent announce delivery suite, including regression tests that drive the steer queue and the completion-handoff wake to return `compacting` first and a queued success second, plus a guard test that a non-compacting failure is not retried.\n\nEvidence after fix: stdout from the vitest run against the real steering and completion paths, comparing pre-fix and post-fix:\n$ node scripts/run-vitest.mjs src/agents/subagent-announce-delivery.test.ts -t 86566\n-- BEFORE the fix (compacting is terminal on both paths): regression tests fail --\nx waits through compaction and re-steers the active requester (86566)\nAssertionError: expected 'direct' to deeply equal 'steered'\nx waits through compaction on the completion handoff wake (86566)\nAssertionError: expected 'direct' to deeply equal 'steered'\n\ndoes not retry non-compacting steer failures (86566)\nTests  4 failed | 2 passed | 126 skipped (132)\n\n-- AFTER the fix (compacting is transient on both paths): all pass --\n\nwaits through compaction and re-steers the active requester (86566)\nwaits through compaction on the completion handoff wake (86566)\ndoes not retry non-compacting steer failures (86566)\nTests  6 passed | 126 skipped (132)\n\n\nObserved result after fix: before the fix a compacting outcome on either the steer path or the generated-completion wake routes the completion to the direct fallback path (`path: \"direct\"`); after the fix each path waits through compaction and re-attempts the same wake, so the completion stays on the steering path (`path: \"steered\"`) and the queue is attempted twice. A non-compacting failure (`no_active_run`) is attempted only once and is not retried. The full subagent-announce-delivery suite (132 tests) passes.\n\nWhat was not tested: no live multi-agent run with a real compaction cycle was exercised; the compacting-then-ready transition is simulated through the queue-outcome dependency on the real steering and completion code paths. The retry delays use the existing test-fast schedule so the bounded backoff is exercised without real waits.\n",
+        "branch": "fix-86566-compaction-steer-retry",
+        "head_sha": "91d7f0764e596856ef43afc0521ebfd08ea12b34",
+        "author": "alkor2000",
+        "labels": [
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/subagent-announce-delivery.test.ts",
+            "additions": 114,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce-delivery.ts",
+            "additions": 84,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86606",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86606.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "SUCCESS": 72,
+            "SKIPPED": 28,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2918,
+    "total_ms": 2472,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 510
+        "ms": 454
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2063
+        "ms": 1671
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 322
+        "ms": 321
       },
       {
         "name": "append_ledger",
