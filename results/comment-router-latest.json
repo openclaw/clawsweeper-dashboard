@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-26T15:18:57.949Z",
+  "generated_at": "2026-05-26T15:18:59.180Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-26T12:18:55.271Z",
+  "since": "2026-05-26T12:18:58.603Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     86922
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4545538241
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 2,
@@ -40,12 +42,12 @@
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-26T14:02:00Z",
-      "comment_updated_at": "2026-05-26T15:18:51Z",
+      "comment_created_at": "2026-05-26T15:17:38Z",
+      "comment_updated_at": "2026-05-26T15:17:38Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -61,99 +63,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(config): trust mergeScopedSearchConfig-injected legacy web-search keys in validator",
-        "body": "## Summary\n\n- Teach `ToolsWebSearchSchema` in `src/config/zod-schema.agent-runtime.ts` to skip the legacy-shape rejection (`legacy web_search provider config must use plugins.entries.<plugin>.config.webSearch`) for keys that an installed plugin's `mergeScopedSearchConfig` has just injected at gateway boot — the exact path responsible for the fresh-deploy crash documented in #86779.\n- Have `mergeScopedSearchConfig` (`src/agents/tools/web-search-provider-config.ts`) call a new `markLegacyWebSearchPluginKeyTrusted(key)` exported by the schema module whenever it writes a key under `tools.web.search[<id>]`. The merge function is the natural source of truth for \"this legacy-named key was injected by an installed plugin shim, not hand-written\"; the validator then trusts only those keys.\n- Hand-written legacy `tools.web.search.<provider> = { … }` blocks that no installed plugin claims still fail validation with the same `use plugins.entries.<plugin>.config.webSearch` pointer — the strict rejection that's documented in repo guidance is preserved end-to-end.\n- Add 7 focused vitest cases in `src/config/zod-schema.web-search-plugin-shim.test.ts` covering: hand-written legacy rejection, post-merge acceptance, no over-trust spillover to other legacy keys, `mergeScopedSearchConfig` end-to-end before/after, `undefined` plugin config = no trust mark, non-record values pass through untouched, and `clearTrustedLegacyWebSearchPluginKeysForTest` reverts strict rejection.\n\n## Behavior change to flag\n\nCold gateway startup on `2026.5.22` no longer rejects configs whose `tools.web.search.<plugin>` shape was written by the plugin's compatibility shim. Operators on BLUE/GREEN deploys that hit `Gateway failed to start: Invalid config at /data/.openclaw/openclaw.json. tools.web.search.perplexity: legacy web_search provider config must use plugins.entries.<plugin>.config.webSearch` are unblocked without touching `openclaw.json`. Hand-written legacy configs still fail validation; the message is unchanged. The two existing call sites of `mergeScopedSearchConfig` (re-exported through the `provider-web-search*-contract.ts` Plugin SDK surfaces) gain an idempotent `Set.add(key)` side effect that's bounded to the process lifetime and clearable from tests.\n\n## Real behavior proof\n\n- **Behavior addressed:** `ToolsWebSearchSchema` now consults a process-local `trustedLegacyWebSearchPluginKeys` set in its `superRefine`. `mergeScopedSearchConfig` populates that set with the same key it just wrote into `searchConfig[key]`. The crash chain from #86779 (mergeScopedSearchConfig writes `tools.web.search.perplexity` → validator rejects → gateway refuses to start) is broken at the validator step.\n- **Real environment tested:** local macOS arm64 source checkout (post-rebase against `upstream/main`); behavior verified through the new `src/config/zod-schema.web-search-plugin-shim.test.ts` suite that drives `ToolsSchema.safeParse({ web: { search: { … } } })` directly with and without the trust mark, and end-to-end via `mergeScopedSearchConfig(...)` → `ToolsSchema.safeParse(...)` against the published `ToolsSchema` export. Existing `src/agents/tools/web-search.test.ts` (18 cases) and `src/config/config.web-search-provider.test.ts` (full suite) still pass — the merge function's added `Set.add` side effect is structurally safe.\n- **Exact steps or command run after this patch:**\n  - `pnpm test src/config/zod-schema.web-search-plugin-shim.test.ts`\n  - `pnpm test src/agents/tools/web-search.test.ts src/config/config.web-search-provider.test.ts src/config/schema.test.ts src/config/zod-schema.post-compaction-guard.test.ts`\n  - `pnpm test:changed`\n  - `pnpm check:changed`\n- **Evidence after fix:**\n  - `ToolsSchema.safeParse({ web: { search: { provider: \"perplexity\", perplexity: { apiKey: \"k\" } } } })` returns `success: false` with the legacy issue on `web.search.perplexity` before any merge runs — the strict rejection for hand-written configs survives.\n  - The same `ToolsSchema.safeParse(...)` returns `success: true` after `mergeScopedSearchConfig({ provider: \"perplexity\" }, \"perplexity\", { apiKey: \"k\" })` is called once, mirroring what happens at gateway boot when the perplexity plugin's manifest carries `compatibilityRuntimePaths: [\"tools.web.search.apiKey\"]`.\n  - Marking `perplexity` as trusted does **not** unblock the `brave` legacy shape — the trust set is per-key and has no spillover.\n  - `mergeScopedSearchConfig(..., undefined)` is a no-op for the trust set (the function early-returns before any mutation), so the validator still rejects the same key on subsequent parses.\n- **Observed result after fix:**\n  - `src/config/zod-schema.web-search-plugin-shim.test.ts`: 7 / 7 passed.\n  - `src/agents/tools/web-search.test.ts` + `src/config/config.web-search-provider.test.ts` + `src/config/schema.test.ts` + `src/config/zod-schema.post-compaction-guard.test.ts`: 18 + 65 + N + N = 101 / 101 passed across 4 files (no regression from the existing legacy-rejection or scoped-merge tests).\n  - `pnpm check:changed`: exit 0 (typecheck core + extensions + tests, lint, import-cycles 0 runtime value cycles, plugin-sdk wildcard / dependency-pin / package-patch guards all green).\n  - `pnpm test:changed`: 1869 / 1871 passed across 28 shards. The 2 failures in `src/commands/onboard.test.ts` (`fails fast for invalid --secret-input-mode`, `fails fast for invalid --reset-scope`) reproduce on pristine `upstream/main` with this patch reverted and have no overlap with `src/config/**` or `src/agents/tools/web-search-provider-config.ts`.\n- **What was not tested:** the original fresh-container reproduction from #86779 (`openclaw@2026.5.22 (a374c3a)` inside `node:22-bookworm-slim` Docker, perplexity/gemini/kimi plugins installed, gateway boot succeeding instead of crashing with the legacy-shape error). The fix is verified at the validator + merge integration that owns the rejection; the container-side production timeline and the \"Exact-bytes copy of working BLUE config to GREEN\" reproduction in #86779 come from the reporter's setup.\n\n## Notes\n\n- The trust set lives at module scope in `zod-schema.agent-runtime.ts` and is cleared between tests via `clearTrustedLegacyWebSearchPluginKeysForTest()` — gateway plugin metadata is process-stable (root `AGENTS.md`: \"Process-local metadata caches ok when lifecycle-owned and bounded/single-slot\"), so a single mutable Set is the right scope here. The set is keyed by the plugin's `tools.web.search.<key>` segment, not the plugin id, so each `mergeScopedSearchConfig(searchConfig, key, …)` call registers exactly the key it wrote.\n- The merge function is the only call site needed for registration today: the two Plugin SDK contract barrels (`provider-web-search-config-contract.ts`, `provider-web-search-contract.ts`, `provider-web-search.ts`) re-export `mergeScopedSearchConfig` without rewrapping it, so registration happens automatically wherever a plugin's compatibility shim runs.\n- Option B from the issue (\"validator skips the legacy-shape check for keys that match an installed plugin's `compatibilityRuntimePaths`\") is implemented through this auto-registration handshake rather than a separate manifest-discovery pass, which keeps the schema module pure (no transitive `src/plugins/**` import) and the diff small. Options A and C from the issue (rewriting the merge target shape, doctor-side migration) remain available as follow-up cleanups but are not needed to unblock the fresh-deploy crash.\n- Reviewed against root `AGENTS.md`, `src/agents/tools/CLAUDE.md`, `src/plugins/CLAUDE.md`, and `CONTRIBUTING.md`. No `CHANGELOG.md` edits (per CONTRIBUTING).\n\nRefs #86779\n",
-        "branch": "fix/web-search-validator-skip-plugin-keys",
-        "head_sha": "b5ea9c4f6cef361426b363fe20ca33615e5c4a6a",
-        "author": "yomxxx",
-        "labels": [
-          "agents",
-          "size: S",
-          "triage: mock-only-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/tools/web-search-provider-config.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/zod-schema.agent-runtime.ts",
-            "additions": 26,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/zod-schema.web-search-plugin-shim.test.ts",
-            "additions": 101,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86922",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86922.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "counts": {
-            "FAILURE": 3,
-            "SUCCESS": 72,
-            "SKIPPED": 20,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "check-guards:FAILURE",
-            "check-lint:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "check-guards:FAILURE",
-            "check-lint:FAILURE"
-          ]
-        }
-      },
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3069,
+    "total_ms": 1750,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 489
+        "ms": 566
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2175
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 380
+        "ms": 1173
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
