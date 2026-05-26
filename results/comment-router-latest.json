@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-26T22:19:55.275Z",
+  "generated_at": "2026-05-26T22:20:32.082Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-26T19:19:53.191Z",
+  "since": "2026-05-26T19:20:31.410Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,7 +14,7 @@
   "comment_ids": [
     4549509741
   ],
-  "status_comment_id": 4549509957,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-05-26T22:19:27Z",
       "comment_updated_at": "2026-05-26T22:19:27Z",
-      "status_comment_id": 4549509957,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,120 +61,22 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-26T22:19:55.903Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 86652
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-26T22:19:57.580Z",
-          "response_comment_id": "4549509957",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "perf(agents): memoize per-message token pressure on precheck path",
-        "body": "## Summary\n\nWhat problem does this PR solve?\n\n`shouldPreemptivelyCompactBeforePrompt` (the per-turn pre-prompt token-pressure precheck on the embedded-runner path) reduces over the entire transcript on every prompt submission via `estimateLlmBoundaryTokenPressure` → `estimateMessageTokenPressure`. The per-message work is recomputed every turn even when only a single message has been appended since the last call, so the wall-time cost of the precheck grows linearly with session length on the hot path before the provider request is sent.\n\nWhy does this matter now?\n\nTool-heavy long sessions pay multi-millisecond per-turn CPU on the precheck. Synthetic 1000-message tool-heavy transcripts measure ~3.0 ms / turn on the public fresh helper; with the embedded-runner cached path on the same transcript the warm per-turn cost drops to ~2.0 ms (and ~1.5 ms when only one new message has been appended). None of this is dominant on its own, but it is purely pre-dispatch local CPU that the same turn pays over and over with no semantic change to the inputs.\n\nWhat is the intended outcome?\n\nAdd a new internal-only helper `estimateAppendOnlyLlmBoundaryTokenPressure` that memoizes `estimateMessageTokenPressure` by message object identity using a process-local `WeakMap<object, number>`. The embedded-runner precheck site in `src/agents/pi-embedded-runner/run/attempt.ts` precomputes the cached estimate from `activeSession.messages` (append-only between prompt submissions) and feeds it to `shouldPreemptivelyCompactBeforePrompt` via the existing `llmBoundaryTokenPressure` parameter — the same caller-supplied anchor seam introduced in #85541.\n\nThe cache is intentionally NOT used by the public helpers re-exported through `src/plugin-sdk/agent-harness-runtime.ts`:\n\n- `estimateLlmBoundaryTokenPressure` recounts on every call.\n- `shouldPreemptivelyCompactBeforePrompt` defaults to a fresh recount unless the caller supplies an explicit `llmBoundaryTokenPressure` (already its public contract).\n- `estimateAppendOnlyLlmBoundaryTokenPressure` is not added to the plugin SDK surface; a new test reads `agent-harness-runtime.ts` and asserts it is absent.\n\nNo semantic change to the public helpers: the numerical output of `estimateLlmBoundaryTokenPressure` and the `route` / `overflowTokens` / `estimatedPromptTokens` fields of `shouldPreemptivelyCompactBeforePrompt` are byte-identical to current main for any given input. The new internal cached helper returns identical values to the fresh helper when called on the same inputs without intervening mutation; the committed benchmark prints a parity-check line to confirm this.\n\nWhat is intentionally out of scope?\n\n- Wiring `llmBoundaryTokenPressure` from a real-rendered-transport-bytes anchor (the canonical-fact-forward direction introduced in #85541). This PR caches the fallback path; it does not compete with that direction.\n- `estimateMessagesTokens` in `compaction.ts` (compaction-event path) and the existing prune loop in `compaction.ts`.\n- `estimateToolResultReductionPotential` in `tool-result-truncation.ts`, which is the un-cached residual cost still present in the precheck wall time.\n- Anthropic-side payload / cache-control work.\n- Media path work.\n\nWhat does success look like?\n\nThe committed replay artifact (`scripts/perf/preemptive-precheck-replay.ts`) demonstrates the post-patch warm wall-time of the embedded-runner cached path (≈ 2.0 ms) vs the public fresh helper baseline on the same transcript (≈ 3.0 ms), plus an explicit parity check that the two estimators return the same number on identical inputs. This PR does not claim TTFT, p95/p99, or any provider-side improvement. No semantic change on the public SDK helpers; all existing tests pass; new behavior tests pin both the public-helper freshness contract and the internal-cache invariants.\n\nWhat should reviewers focus on?\n\n- **Public SDK helper freshness:** `estimateLlmBoundaryTokenPressure` and `shouldPreemptivelyCompactBeforePrompt` still recount on every call. New tests under `describe(\"public estimator freshness\")` mutate message content in place after a first scan and assert the second scan reflects the mutation. This is the contract that earlier review rounds flagged as load-bearing for plugin SDK callers.\n- **Internal cache scope:** the WeakMap lives on `appendOnlyMessageTokenPressureCache` inside `preemptive-compaction.ts` and is only reachable via `estimateAppendOnlyLlmBoundaryTokenPressure`. That helper is only imported by `attempt.ts` for the `activeSession.messages` precheck. A test grep'ing `agent-harness-runtime.ts` guards against accidental SDK re-export.\n- **Append-only invariant on the embedded-runner path:** `activeSession.messages` is append-only between prompt submissions. Window replacement (`state.messages = limited`) creates new identities, which the WeakMap handles correctly.\n- **Identity-cache + `unwindowedMessages` interaction:** `attempt.ts` precomputes the cached estimate for `activeSession.messages` only. The `unwindowedMessages` path inside `shouldPreemptivelyCompactBeforePrompt` continues to use the fresh estimator (correctness-first; it is only invoked when context-engine prompt authority is `preassembly_may_overflow`).\n\n## Identity-cache scope and reproducible benchmark\n\nReproducible benchmark artifact: `scripts/perf/preemptive-precheck-replay.ts`. It mirrors the embedded-runner call shape at `src/agents/pi-embedded-runner/run/attempt.ts` — precompute the boundary estimate with the internal append-only cached estimator, then feed it to `shouldPreemptivelyCompactBeforePrompt` via `llmBoundaryTokenPressure`. It also runs the public fresh helper on a parallel transcript as a baseline, and emits a parity-check line.\n\nCaller inventory for `shouldPreemptivelyCompactBeforePrompt` (existing callers, NOT changed by this PR — confirms the cache is not silently engaged from anywhere else):\n\n- `src/agents/pi-embedded-runner/run/attempt.ts:4143` — embedded-runner prompt-submission loop. Messages source: `activeSession.messages`. Append-only; replacement via `state.messages = limited` creates new identities. **This is the only production caller that supplies `llmBoundaryTokenPressure` from the new internal cached estimator.**\n- `src/agents/command/cli-compaction.ts:515` — `openclaw compact` CLI. Messages source: `getSessionBranchMessages(sessionManager)` (read from session JSONL). Calls `shouldPreemptivelyCompactBeforePrompt` without `llmBoundaryTokenPressure` → fresh recount via the public helper.\n- `src/agents/pi-embedded-runner/tool-result-context-guard.ts:419` — mid-turn tool-result truncation guard. Calls `shouldPreemptivelyCompactBeforePrompt` without `llmBoundaryTokenPressure` → fresh recount via the public helper.\n\nExternal callers via plugin-sdk: `src/plugin-sdk/agent-harness-runtime.ts` re-exports `shouldPreemptivelyCompactBeforePrompt` and `estimateRenderedLlmBoundaryTokenPressure` for plugin authors. The new internal `estimateAppendOnlyLlmBoundaryTokenPressure` is intentionally NOT re-exported through the SDK — a new test under `describe(\"internal append-only cached estimator\")` reads `agent-harness-runtime.ts` and asserts the helper name is absent. Plugin SDK callers that mutate message objects in place between calls continue to see fresh estimates, which addresses the ClawSweeper P1 finding from the prior round of review.\n\n## Linked context\n\nWhich issue does this close?\n\nCloses #\n\nThis PR does not close an issue. It addresses a structural cost identified in local profiling that overlaps in shape with reports such as #76702 (Windows + Feishu DM slow large-session latency) and #86231 (Codex harness prompt latency overhead). It deliberately does not claim to resolve either, because neither has been root-caused to the precheck path; the per-turn precheck saving alone is too small to explain those reports.\n\nWhich issues, PRs, or discussions are related?\n\nRelated #85541 (the PR that reshaped this estimator into `estimateLlmBoundaryTokenPressure` and introduced `llmBoundaryTokenPressure` as a caller-supplied anchor — this PR uses that seam rather than competing with it).\n\nWas this requested by a maintainer or owner?\n\nNo.\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: per-turn `shouldPreemptivelyCompactBeforePrompt` CPU wall time on the embedded-runner precheck path scales O(N) with transcript size and recomputes the same per-message token pressure on every turn for unchanged messages. The earlier round of this PR addressed the cost by caching inside the public helper, which created a plugin-SDK compatibility break (stale estimates after in-place message mutation). This rework moves the cache off the public helper and onto a new internal append-only helper used only by `attempt.ts`.\n- Real environment tested: Linux 6.8.0-111-generic, Node 22.22.2, branch `feature/openclaw-preemptive-precheck-cache` on `a5e7c03eb2` rebased on `8da8bc4aad`. Production function `shouldPreemptivelyCompactBeforePrompt` is the call under measurement, via the same import path the embedded-runner uses, with the same `llmBoundaryTokenPressure` parameter that `attempt.ts` supplies after this patch.\n- Exact steps or command run after this patch:\n  - `node --version` → v22.22.2\n  - `PROBE_HEAD=$(git rev-parse HEAD) pnpm exec tsx scripts/perf/preemptive-precheck-replay.ts`\n  - `node scripts/run-vitest.mjs src/agents/pi-embedded-runner/run/preemptive-compaction.test.ts`\n  - `node scripts/run-vitest.mjs src/agents/pi-embedded-runner/run/`\n  - `node scripts/run-vitest.mjs src/agents/pi-embedded-runner/run/preemptive-compaction.test.ts src/agents/command/cli-compaction.test.ts src/agents/pi-embedded-runner/tool-result-context-guard.test.ts`\n  - `node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo`\n  - `node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test.tsbuildinfo`\n  - `node scripts/run-oxlint.mjs src/agents/pi-embedded-runner/run/preemptive-compaction.ts src/agents/pi-embedded-runner/run/preemptive-compaction.test.ts src/agents/pi-embedded-runner/run/attempt.ts scripts/perf/preemptive-precheck-replay.ts`\n- Evidence after fix:\n\nLive console output from the committed replay artifact against the production helpers — copied terminal capture, not a unit test summary:\n\n```\n$ PROBE_HEAD=$(git rev-parse HEAD) pnpm exec tsx scripts/perf/preemptive-precheck-replay.ts\nopenclaw preemptive-precheck-replay (embedded-runner path)\ncommit                      a5e7c03eb2...\nmessages_in                 1010\nbudget_tokens               200000\nreserve                     16000\n\ncold_precheck_ms            8.138 (append-only cached path)\nwarm_precheck_ms_mean       1.963 (20 repeats, append-only cached path)\nfresh_precheck_ms_mean      3.025 (20 repeats, public fresh helper, parallel transcript)\nappend_step_ms_mean         1.478 (10 turns, one new user msg each, cached path)\n\nestimator_parity_cached     199618\nestimator_parity_fresh      199618\nestimator_parity_match      true\n\nper-append measurements (cached path):\n  turn  1 ms=   1.388 route=compact_then_truncate  estimatedPromptTokens=1555832\n  turn  2 ms=   1.360 route=compact_then_truncate  estimatedPromptTokens=1555911\n  ...\n  turn 10 ms=   2.078 route=compact_then_truncate  estimatedPromptTokens=1556544\n\nfinal_route                 compact_then_truncate\nfinal_estimatedPromptTokens 1556544\nfinal_overflowTokens        1372544\nfinal_promptBudgetBefRes    184000\n```\n\nVitest output for the changed test file (copied):\n\n```\n$ node scripts/run-vitest.mjs src/agents/pi-embedded-runner/run/preemptive-compaction.test.ts\n Test Files  2 passed (2)\n      Tests  50 passed (50)\n```\n\n- Observed result after fix: the public `estimateLlmBoundaryTokenPressure` and `shouldPreemptivelyCompactBeforePrompt` helpers return fresh estimates after in-place content mutation (pinned by `re-reads content after in-place mutation so SDK callers see fresh estimates` and `shouldPreemptivelyCompactBeforePrompt recomputes pressure on mutated content by default`). The internal `estimateAppendOnlyLlmBoundaryTokenPressure` returns the same number as the fresh public helper on identical inputs (pinned by the benchmark's `estimator_parity_match` line and by the test `matches the fresh public helper on a single scan`), and is byte-identical to the un-mutated cold scan on repeat. The cached path's warm-per-turn cost (1.963 ms) is ~35% lower than the fresh public helper's per-turn cost (3.025 ms) on the same 1010-message tool-heavy synthetic transcript.\n- What was not tested: no live provider/channel ingress (no Anthropic/OpenAI call); no captured real session JSONL replay (the transcript is synthetic but uses the production message shape and the production exported helper); no Windows or non-x86_64 hardware run; no claim of TTFT or provider-side improvement.\n- Proof limitations or environment constraints: synthetic transcript, single machine, single Node version. Absolute numbers are hardware-dependent; the relative ordering (cached < fresh < cold) and the parity check are the parts that generalize. The replay harness can be re-run by any reviewer on a normal worktree (no provider credentials required).\n\n## Tests and validation\n\nWhich commands did you run?\n\nListed under \"Exact steps or command run after this patch\" above.\n\nWhat regression coverage was added or updated?\n\nThe prior round's stale-mutation test was removed because it incorrectly pinned the public helper's stale-after-mutation behavior — the exact regression ClawSweeper flagged. The new test suites are organized into two `describe` blocks:\n\n`public estimator freshness` (asserts the SDK contract):\n1. Same boundary estimate on repeat scans of the same unchanged messages.\n2. **Re-reads content after in-place mutation so SDK callers see fresh estimates** (the inverse of the removed test).\n3. **`shouldPreemptivelyCompactBeforePrompt` recomputes pressure on mutated content by default.**\n4. Recounts duplicate message identities so repeated entries add their bytes.\n\n`internal append-only cached estimator` (asserts the embedded-runner-only cache contract):\n1. Matches the fresh public helper on a single scan (parity).\n2. Reflects a new message identity appended after a prior scan.\n3. Adds the per-message cost for each duplicate identity without short-circuiting on cache hit.\n4. Counts assistant tool-call argument bytes identically on repeat scans.\n5. **Is not re-exported through the plugin SDK surface** (reads `src/plugin-sdk/agent-harness-runtime.ts` and asserts the helper name is absent).\n\nWhat failed before this fix, if known?\n\nNot a correctness regression on current main; the rework is a response to a ClawSweeper P1 finding on the earlier round of this PR that the prior implementation made the package-exported precheck helper return stale estimates after in-place message mutation.\n\nIf no test was added, why not?\n\nN/A.\n\n## Risk checklist\n\nDid user-visible behavior change? (`Yes/No`)\n\nNo. `shouldPreemptivelyCompactBeforePrompt` returns the same decision for any given input it received before this PR. The embedded-runner now supplies an additional `llmBoundaryTokenPressure` from the new internal cached estimator, but that estimator returns the same number as the previous fresh recount on the same input (asserted by `matches the fresh public helper on a single scan` and by the benchmark's `estimator_parity_match` line).\n\nDid config, environment, or migration behavior change? (`Yes/No`)\n\nNo.\n\nDid security, auth, secrets, network, or tool execution behavior change? (`Yes/No`)\n\nNo.\n\nWhat is the highest-risk area?\n\nThe append-only cache contract on the embedded-runner path. If a future caller imports `estimateAppendOnlyLlmBoundaryTokenPressure` and uses it against a non-append-only message stream (e.g. message objects that get content-mutated in place between calls), the cached estimate will be stale.\n\nHow is that risk mitigated?\n\n- **Type & comment contract:** the doc-comment block above `appendOnlyMessageTokenPressureCache` names the contract and explicitly cites the test that pins it. Future contributors importing the helper will see the contract immediately.\n- **SDK isolation test:** the new test `is not re-exported through the plugin SDK surface` reads `src/plugin-sdk/agent-harness-runtime.ts` and asserts `estimateAppendOnlyLlmBoundaryTokenPressure` is absent. Any future PR that re-exports it through the SDK barrel will fail this test and force an explicit review of the contract.\n- **In-tree caller inventory:** the only production caller of the internal helper is `attempt.ts` (`activeSession.messages` is append-only between prompt submissions; window replacement creates new identities). `cli-compaction.ts` and `tool-result-context-guard.ts` continue to call the public helper for fresh estimates.\n- **Repo policy alignment:** process-local metadata caches are explicitly permitted by `AGENTS.md` (\"Process-local metadata caches ok when lifecycle-owned and bounded/single-slot. Freshness exceptions need named owner + tests\"). This cache is process-local, lifecycle-bounded by the WeakMap-to-message reference, single-slot per message, and covered by the named test contract.\n\n## Current review state\n\nWhat is the next action?\n\nMaintainer review.\n\nWhat is still waiting on author, maintainer, CI, or external proof?\n\nMaintainer review.\n\nWhich bot or reviewer comments were addressed?\n\nClawSweeper review 2026-05-26T16:09Z flagged the prior round's `[P1] Keep exported precheck estimates fresh after mutation — preemptive-compaction.ts:217`. The rework above moves the WeakMap off the SDK-exported `estimateLlmBoundaryTokenPressure` and onto a new internal `estimateAppendOnlyLlmBoundaryTokenPressure` that is not exported through `src/plugin-sdk/agent-harness-runtime.ts`. The new test suite asserts (a) the public helpers re-read after in-place mutation (the contract ClawSweeper asked for) and (b) the cached helper is not on the SDK surface. The pre-rework benchmark line (\"cold_precheck_ms ≈ 4× warm_precheck_ms\") was replaced with a benchmark that also reports the public fresh helper baseline and an explicit `estimator_parity_match` line.\n\nCodex / GPT-5.5 PR diff review (`docs/work-items/openclaw-preemptive-precheck-cache/GPT55-PR-REVIEW.md`): verdict GO, no P0/P1, one P2 (test name clarity) applied in `a5e7c03eb2`.\n",
-        "branch": "feature/openclaw-preemptive-precheck-cache",
-        "head_sha": "a5e7c03eb2b71e34e87a8c131e5de6477449ef3c",
-        "author": "masatohoshino",
-        "labels": [
-          "scripts",
-          "agents",
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "scripts/perf/preemptive-precheck-replay.ts",
-            "additions": 236,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run/preemptive-compaction.test.ts",
-            "additions": 196,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run/preemptive-compaction.ts",
-            "additions": 46,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86652",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86652.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 106,
-          "counts": {
-            "SUCCESS": 75,
-            "SKIPPED": 25,
-            "FAILURE": 1,
-            "IN_PROGRESS": 3,
-            "QUEUED": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "build-artifacts:FAILURE",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "macos-node:QUEUED",
-            "macos-swift:IN_PROGRESS"
-          ],
-          "pending": [
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "macos-node:QUEUED",
-            "macos-swift:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "build-artifacts:FAILURE"
-          ]
-        }
-      }
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 4835,
+    "total_ms": 2183,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 596
+        "ms": 660
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1475
+        "ms": 0
       },
       {
         "name": "classify_commands",
@@ -182,7 +84,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2738
+        "ms": 1511
       },
       {
         "name": "append_ledger",
