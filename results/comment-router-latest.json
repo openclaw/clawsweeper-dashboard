@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-26T07:49:43.697Z",
+  "generated_at": "2026-05-26T07:49:59.304Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-26T04:49:43.279Z",
+  "since": "2026-05-26T04:49:56.979Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    86801
+    86783
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 2,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,120 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86783:4541440968:2026-05-26T07:49:53Z:clawsweeper_needs_human",
+      "comment_id": "4541440968",
+      "comment_version_key": "4541440968:2026-05-26T07:49:53Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86783#issuecomment-4541440968",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86783,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-26T07:04:37Z",
+      "comment_updated_at": "2026-05-26T07:49:53Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "No ClawSweeper repair lane is needed; the remaining action is ordinary maintainer review and CI/merge gating for the existing PR.; Cleared: No concrete security or supply-chain concern found; the diff touches session lock cleanup logic and colocated tests only. (sha=378a36e8c2f98586ec408f64bc6d701f04df7565)",
+      "review_summary": "The PR memoizes owner-process argv reads per PID during session lock cleanup, yields between lock entries, and adds regression tests for same-PID and throwing resolver behavior.\n\nPR surface: Source +18, Tests +72. Total +90 across 2 files.\n\nReproducibility: yes. Current main source shows one owner-args lookup path inside the per-lock cleanup loop, and the PR body supplies a concrete 1,800-lock harness showing the pre-fix call explosion and after-fix collapse; I did not run tests because this was a read-only review.",
+      "review_followup": "No ClawSweeper repair lane is needed; the remaining action is ordinary maintainer review and CI/merge gating for the existing PR.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "378a36e8c2f98586ec408f64bc6d701f04df7565",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): memoize per-pid owner-args lookup and yield in cleanStaleLockFiles",
+        "body": "### Summary\n\n- **Problem**: On gateway startup, the `sidecars.session-locks` phase blocks the main event loop long enough to starve concurrent timers and HTTP polling. The reporter sees an 87-second stall on Windows after the v5.20 → v5.22 upgrade with two agents (interactive Telegram + cron `model_call`) firing within ~30s of each other: Telegram `getMe` calls time out at 10s despite 31s elapsed wall, the health monitor flaps and cascade-restarts four bots, and the run never recovers. (#86509)\n- **Root Cause**: `cleanStaleLockFiles` iterates every `.jsonl.lock` in each agent's sessions dir on a single serial `for ... await` and, for any fresh non-self alive pid, calls `readOwnerProcessArgs(pid)` to decide whether the lock owner is an OpenClaw process. There is **no per-pid memoization**, so when many locks share the same pid (gateway, MCP wrapper, cron run) the resolver is invoked once per lock. On Linux a `/proc/PID/cmdline` read is ~0.1 ms — annoying but tolerable; on Windows the resolver shells out to `powershell -Command \"Get-CimInstance Win32_Process -Filter ...\" | Select-Object -ExpandProperty CommandLine` synchronously per pid, ~0.5–1 s each. With multiple agents × dozens of fresh locks pointing at a handful of repeat pids that scales to tens of seconds of synchronous main-thread work, exactly matching the reported 87 s phase.\n- **Fix**: Two surgical changes in `cleanStaleLockFiles` only.\n  - **Per-sweep memo**: wrap the resolver with a `Map<pid, args>` cache populated on first call. Same pid in the same sweep no longer re-spawns PowerShell (or re-reads `/proc/PID/cmdline`); pids do not recycle within a single sweep so per-invocation caching is safe.\n  - **Yield to the event loop between locks**: `await new Promise((r) => setImmediate(r))` at the top of each iteration so concurrent timers (Telegram polling watchdog, fetch timeouts, health monitor) get a chance to run between per-lock sync syscalls instead of all of them piling up under a single long stack.\n- **What changed**:\n  - `src/agents/session-write-lock.ts`: memoize `readOwnerProcessArgs` per invocation; yield via `setImmediate` between lock entries inside the loop.\n  - `src/agents/session-write-lock.test.ts`: regression test asserting the resolver is invoked exactly once for multiple lock files sharing one pid in a single sweep.\n- **What did NOT change (scope boundary)**:\n  - The lock-staleness rules, file removal semantics, `inspectLockPayload`/`inspectLockPayloadForSession`, `markRestartAbortedMainSessionsFromLocks`, and the outer sidecar loop (`for sessionsDir of sessionDirs` in `server-startup-post-attach.ts`) are unchanged. Parallelizing the outer loop is a separate, larger concern.\n  - The general `readOwnerProcessArgs` reader signature is unchanged — the memo lives entirely inside `cleanStaleLockFiles`.\n  - No config keys, protocol, schema, or default behavior changes.\n\n### Reproduction\n\n1. Six agent sessions dirs, each populated with many `.jsonl.lock` files whose `pid` clusters on a small set of fresh non-self alive pids and whose `createdAt` is recent (so `cleanStaleLockFiles` enters the \"non-OpenClaw owner\" check path).\n2. Run `cleanStaleLockFiles` once per dir (the production sidecar pattern).\n3. Count how many times the (mock or real) `readOwnerProcessArgs` resolver is invoked, and measure event-loop max delay.\n- Before: 1800 resolver calls for 1800 locks (one per lock).\n- After: 18 resolver calls (3 unique pids × 6 sweeps), with the same set of locks cleaned.\n\n### Real behavior proof\n\n- **Behavior addressed (#86509)**: when a sidecar sweep encounters many locks that share a small set of fresh non-self pids, `cleanStaleLockFiles` must not invoke the expensive owner-args resolver once per lock — and must yield to the event loop between locks so the rest of the gateway (Telegram polling, fetch timers, health monitors) can keep running while the sweep proceeds.\n- **Real environment tested (Linux, Node 22)**: a harness builds 6 agent dirs × 300 lock files each (1800 total) pointing at 3 long-lived sleep PIDs, drives the **real** `cleanStaleLockFiles` against them with a counting resolver, and measures wall time + `monitorEventLoopDelay` p99/max.\n- **Exact steps or command run after this patch**: `tsx /tmp/qmd86509/repro-cluster.mts <worktree-path>` against the pre-fix worktree and the patched worktree.\n- **Evidence after fix (verbatim repro output)**:\n\n```text\n############ BEFORE (no fix) ############\nWall: 1365ms  loop-max: 28.2ms  loop-p99: 27.1ms\nTotal locks: 1800  cleaned: 1800  readOwnerProcessArgs calls: 1800\n\n############ AFTER (with fix) ############\nWall: 1491ms  loop-max: 35.1ms  loop-p99: 27.4ms\nTotal locks: 1800  cleaned: 1800  readOwnerProcessArgs calls: 18\n```\n\n- **Observed result after fix**: the resolver is invoked exactly 18 times across the whole sweep (3 unique pids × 6 cleanStaleLockFiles invocations) instead of 1800 — a 100× reduction in the most expensive per-lock operation. On Linux the resolver itself is cheap so wall time is dominated by `setImmediate` overhead from the new yield (small loss on Linux); on Windows where the resolver is a synchronous PowerShell invocation costing ~0.5–1 s each, the same reduction translates to the sidecar dropping from minutes of blocked main-thread work to seconds. The new yield additionally interleaves the per-lock `isPidAlive` / `getProcessStartTime` syscalls with timer execution so the loop never sits idle on a long stack.\n- **Regression tests**: `node scripts/run-vitest.mjs src/agents/session-write-lock.test.ts` (full file passes) — including a new case that asserts the resolver is invoked exactly once for multiple lock files sharing one pid in a single sweep; existing per-lock cleanup behavior is unchanged.\n- **What was not tested**: I did not run the full reporter scenario on Windows 11 with the 6-agent + Telegram cascade. The Linux harness exercises the real `cleanStaleLockFiles` and the real (mocked-counter) resolver end to end; the Windows magnitude is an extrapolation from the same algorithmic change (`PowerShell Win32_Process` is documented per-invocation overhead, not modified here).\n\n### Risk / Mitigation\n\n- **Risk 1: pid recycling could make memo unsafe.** Mitigation: the memo is scoped to a single `cleanStaleLockFiles` call (the `Map` is created inside the function). A sweep completes well within the OS pid-recycle window — pids are not reissued in milliseconds — so a cached owner-args entry never becomes stale before the sweep finishes.\n- **Risk 2: the new yield could slow short sweeps in tests that depend on synchronous-ish behavior.** Mitigation: yield is via `setImmediate`, which adds ~50 µs per lock; for a small sweep (say 5 locks) overhead is ~0.25 ms — invisible. Existing tests continue to pass.\n- **Risk 3: behavior change in non-OpenClaw-owner detection.** Mitigation: the memo wraps the SAME resolver and returns the SAME values, just cached. There is no semantic change to which locks are classified stale or removed; the new regression test pins this contract.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n\n### Linked Issue/PR\n\nFixes #86509 · Related (closed precursor) #80695\n",
+        "branch": "fix/86509-session-lock-sidecar-yield-and-memo",
+        "head_sha": "378a36e8c2f98586ec408f64bc6d701f04df7565",
+        "author": "openperf",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🦞 diamond lobster",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/session-write-lock.test.ts",
+            "additions": 72,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-write-lock.ts",
+            "additions": 19,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86783",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86783.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 27,
+            "SUCCESS": 72,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 761,
+    "total_ms": 2553,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 404
+        "ms": 348
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2
+        "ms": 1962
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 343
+        "ms": 217
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
