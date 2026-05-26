@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-26T18:20:17.326Z",
+  "generated_at": "2026-05-26T18:20:17.896Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-26T15:20:15.009Z",
+  "since": "2026-05-26T15:20:17.229Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     86433
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4547308249
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -40,148 +42,8 @@
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-25T10:09:58Z",
-      "comment_updated_at": "2026-05-26T18:20:11Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "Human maintainer review is needed to accept the bundled Claude CLI compatibility change and choose one canonical branch with the overlapping PR.; Cleared: No concrete security or supply-chain regression was found; the diff changes existing CLI argv behavior, tests, and live-test sharding without new dependencies, workflow permissions, or secret-handling code. (sha=4e4a65590a234e9ca08fb334304f0090c7ed36f2)",
-      "review_summary": "The PR changes the bundled Anthropic Claude CLI default and CLI runner/live-session argv handling so system prompt files are sent on resumed turns, with unit and opt-in live regression coverage.\n\nPR surface: Source +1, Tests +579, Other +1. Total +581 across 10 files.\n\nReproducibility: yes. Current main is source-reproducible through the `systemPromptWhen: \"first\"` default plus the resumed-run tempfile, argv, and live-session strip gates, and the PR discussion supplies real before/after Claude CLI output.",
-      "review_followup": "Human maintainer review is needed to accept the bundled Claude CLI compatibility change and choose one canonical branch with the overlapping PR.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "4e4a65590a234e9ca08fb334304f0090c7ed36f2",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(anthropic): pass system prompt on every turn for claude-cli backend",
-        "body": "## Problem\n\nRegression introduced in `f7b71abf48` (v2026.4.25, _\"fix(agents): pass Claude system prompt via file\"_).\n\nWhen `--system-prompt` was replaced by `--append-system-prompt-file`, `systemPromptWhen` was hardcoded to `\"first\"` on the Anthropic claude-cli backend. This silently drops the `systemPromptOverride` on every resumed or compacted session — the model receives only the default Claude Code system prompt with zero operator context.\n\nEmpirically confirmed: API payloads captured from a live bot show the operator system prompt present on turn 1 (fresh session, `isNew=true`) and completely absent on turn 2+ (resumed session, `useResume=true`).\n\nTracked in #80374. This PR completes what #81199 started (which only fixes path 1).\n\n## Root cause\n\nFour code paths all gate on `useResume === false` / `isNewSession === true`, assuming the system prompt is only needed once:\n\n| # | File | Gate |\n|---|------|------|\n| 1 | `extensions/anthropic/cli-backend.ts` | `systemPromptWhen: \"first\"` (hardcoded default) |\n| 2 | `src/agents/cli-runner/execute.ts` | `!useResume && systemPromptArg` (file write skipped on resume) |\n| 3 | `src/agents/cli-runner/helpers.ts` | `!params.useResume` (arg not pushed on resume) |\n| 4 | `src/agents/cli-runner/claude-live-session.ts` | `stripLiveProcessArgs(..., useResume)` strips prompt flags on resume (affects stream-json / live-stdio bots) |\n\n## Fix\n\n- **Path 1**: change default to `systemPromptWhen: \"always\"` for the bundled Anthropic backend\n- **Paths 2 & 3**: keep existing `!useResume` logic but also allow through when `systemPromptWhen === \"always\"`\n- **Path 4**: only strip system-prompt flags when `systemPromptWhen !== \"always\"`\n\nNo behaviour change for backends that explicitly set `systemPromptWhen: \"first\"` or `\"never\"` — the legacy mode is preserved and verified by tests.\n\n## Testing\n\nThe fix is verified at two levels, with red-green cycles confirmed against `HEAD~1`:\n\n### Unit tests (run in default CI, fully self-contained)\n\n| File | Coverage |\n|------|----------|\n| `extensions/anthropic/cli-shared.test.ts` | Path 1 — bundled backend default is `systemPromptWhen: \"always\"` |\n| `src/agents/cli-backends.test.ts` | Updates two stale `\"first\"` expectations the ClawSweeper bot flagged (`beforeEach` setup + claude-cli defaults assertion) |\n| `src/agents/cli-runner/helpers.system-prompt-resume.test.ts` | Paths 3 & 4 — `resolveSystemPromptUsage`, `buildCliArgs`, `buildClaudeLiveArgs`. Covers both legacy `\"first\"` (backward-compat) and new `\"always\"` behavior |\n\nRed-green verified locally: **5 specific failures on `HEAD~1`** with exact error messages pointing at each fixed path; **all pass on `HEAD`**.\n\n### Live test (opt-in, excluded from default vitest config)\n\n`src/gateway/gateway-cli-backend.system-prompt-resume.live.test.ts` — changing-marker behavioural proof against real `claude-cli`. The mechanism: each turn's `systemPromptOverride` is a mandatory rule that tells the model **to end every reply with a specific marker token**. By swapping the instructed marker between turns and asserting on which marker the model actually emits, we can tell whether the new system prompt was delivered to the resumed session, or whether the model is just carrying forward Turn 1's instruction from conversation context.\n\n1. **Turn 1** — `systemPromptOverride` = _\"you MUST end every reply with the exact token: `MARKER_ALPHA`\"_. Send a request; assert the reply contains `MARKER_ALPHA` (sanity check for fresh-session behaviour).\n2. **Server restart + config swap** — kill the live claude process and rewrite the config so `systemPromptOverride` now says _\"you MUST end every reply with the exact token: `MARKER_BRAVO`; do NOT emit `MARKER_ALPHA`\"_.\n3. **Turn 2** — resume the prior claude-cli session (same `sessionKey`, claude restarted with `--resume <id>`). Send a request; assert the reply contains `MARKER_BRAVO`.\n\nThis is designed to distinguish pre-fix from post-fix at the **model-response level**, not just the argv level:\n\n- **Pre-fix**: the resumed claude process is spawned with `--resume <id>` but WITHOUT `--append-system-prompt-file`. The model only sees Turn 1's `MARKER_ALPHA` instruction in its restored conversation history and emits `MARKER_ALPHA` on Turn 2. The `MARKER_BRAVO` assertion **fails**.\n- **Post-fix**: the new system prompt file IS delivered to the resumed process. The model sees the new \"emit `MARKER_BRAVO`\" instruction and follows it. The assertion **passes**.\n\nRed-green verified locally on real `claude-cli/claude-haiku-4-5`, ~25-40s wall time per run. See the proof comment for full output and SHAs.\n\n### Type checking and lint\n\n`pnpm tsgo:test` and `pnpm lint` both clean.\n",
-        "branch": "fix/system-prompt-always-on-resume",
-        "head_sha": "4e4a65590a234e9ca08fb334304f0090c7ed36f2",
-        "author": "janusasmussen",
-        "labels": [
-          "gateway",
-          "scripts",
-          "agents",
-          "size: L",
-          "extensions: anthropic",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "extensions/anthropic/cli-backend.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/anthropic/cli-shared.test.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/test-live-shard.mjs",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/cli-backends.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/cli-runner/claude-live-session.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/cli-runner/execute.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/cli-runner/helpers.system-prompt-resume.test.ts",
-            "additions": 220,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/cli-runner/helpers.ts",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/gateway-cli-backend.system-prompt-resume.live.test.ts",
-            "additions": 351,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "test/scripts/test-live-shard.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86433",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86433.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 72,
-            "SKIPPED": 28,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
-        }
-      },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:86433:4547202590:2026-05-26T18:05:05Z:re_review",
-      "comment_id": "4547202590",
-      "comment_version_key": "4547202590:2026-05-26T18:05:05Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86433#issuecomment-4547202590",
-      "repo": "openclaw/openclaw",
-      "issue_number": 86433,
-      "author": "JanusAsmussen",
-      "author_id": 46710143,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-26T18:05:05Z",
-      "comment_updated_at": "2026-05-26T18:05:05Z",
+      "comment_created_at": "2026-05-26T18:19:11Z",
+      "comment_updated_at": "2026-05-26T18:19:11Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -201,140 +63,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(anthropic): pass system prompt on every turn for claude-cli backend",
-        "body": "## Problem\n\nRegression introduced in `f7b71abf48` (v2026.4.25, _\"fix(agents): pass Claude system prompt via file\"_).\n\nWhen `--system-prompt` was replaced by `--append-system-prompt-file`, `systemPromptWhen` was hardcoded to `\"first\"` on the Anthropic claude-cli backend. This silently drops the `systemPromptOverride` on every resumed or compacted session — the model receives only the default Claude Code system prompt with zero operator context.\n\nEmpirically confirmed: API payloads captured from a live bot show the operator system prompt present on turn 1 (fresh session, `isNew=true`) and completely absent on turn 2+ (resumed session, `useResume=true`).\n\nTracked in #80374. This PR completes what #81199 started (which only fixes path 1).\n\n## Root cause\n\nFour code paths all gate on `useResume === false` / `isNewSession === true`, assuming the system prompt is only needed once:\n\n| # | File | Gate |\n|---|------|------|\n| 1 | `extensions/anthropic/cli-backend.ts` | `systemPromptWhen: \"first\"` (hardcoded default) |\n| 2 | `src/agents/cli-runner/execute.ts` | `!useResume && systemPromptArg` (file write skipped on resume) |\n| 3 | `src/agents/cli-runner/helpers.ts` | `!params.useResume` (arg not pushed on resume) |\n| 4 | `src/agents/cli-runner/claude-live-session.ts` | `stripLiveProcessArgs(..., useResume)` strips prompt flags on resume (affects stream-json / live-stdio bots) |\n\n## Fix\n\n- **Path 1**: change default to `systemPromptWhen: \"always\"` for the bundled Anthropic backend\n- **Paths 2 & 3**: keep existing `!useResume` logic but also allow through when `systemPromptWhen === \"always\"`\n- **Path 4**: only strip system-prompt flags when `systemPromptWhen !== \"always\"`\n\nNo behaviour change for backends that explicitly set `systemPromptWhen: \"first\"` or `\"never\"` — the legacy mode is preserved and verified by tests.\n\n## Testing\n\nThe fix is verified at two levels, with red-green cycles confirmed against `HEAD~1`:\n\n### Unit tests (run in default CI, fully self-contained)\n\n| File | Coverage |\n|------|----------|\n| `extensions/anthropic/cli-shared.test.ts` | Path 1 — bundled backend default is `systemPromptWhen: \"always\"` |\n| `src/agents/cli-backends.test.ts` | Updates two stale `\"first\"` expectations the ClawSweeper bot flagged (`beforeEach` setup + claude-cli defaults assertion) |\n| `src/agents/cli-runner/helpers.system-prompt-resume.test.ts` | Paths 3 & 4 — `resolveSystemPromptUsage`, `buildCliArgs`, `buildClaudeLiveArgs`. Covers both legacy `\"first\"` (backward-compat) and new `\"always\"` behavior |\n\nRed-green verified locally: **5 specific failures on `HEAD~1`** with exact error messages pointing at each fixed path; **all pass on `HEAD`**.\n\n### Live test (opt-in, excluded from default vitest config)\n\n`src/gateway/gateway-cli-backend.system-prompt-resume.live.test.ts` — changing-marker behavioural proof against real `claude-cli`. The mechanism: each turn's `systemPromptOverride` is a mandatory rule that tells the model **to end every reply with a specific marker token**. By swapping the instructed marker between turns and asserting on which marker the model actually emits, we can tell whether the new system prompt was delivered to the resumed session, or whether the model is just carrying forward Turn 1's instruction from conversation context.\n\n1. **Turn 1** — `systemPromptOverride` = _\"you MUST end every reply with the exact token: `MARKER_ALPHA`\"_. Send a request; assert the reply contains `MARKER_ALPHA` (sanity check for fresh-session behaviour).\n2. **Server restart + config swap** — kill the live claude process and rewrite the config so `systemPromptOverride` now says _\"you MUST end every reply with the exact token: `MARKER_BRAVO`; do NOT emit `MARKER_ALPHA`\"_.\n3. **Turn 2** — resume the prior claude-cli session (same `sessionKey`, claude restarted with `--resume <id>`). Send a request; assert the reply contains `MARKER_BRAVO`.\n\nThis is designed to distinguish pre-fix from post-fix at the **model-response level**, not just the argv level:\n\n- **Pre-fix**: the resumed claude process is spawned with `--resume <id>` but WITHOUT `--append-system-prompt-file`. The model only sees Turn 1's `MARKER_ALPHA` instruction in its restored conversation history and emits `MARKER_ALPHA` on Turn 2. The `MARKER_BRAVO` assertion **fails**.\n- **Post-fix**: the new system prompt file IS delivered to the resumed process. The model sees the new \"emit `MARKER_BRAVO`\" instruction and follows it. The assertion **passes**.\n\nRed-green verified locally on real `claude-cli/claude-haiku-4-5`, ~25-40s wall time per run. See the proof comment for full output and SHAs.\n\n### Type checking and lint\n\n`pnpm tsgo:test` and `pnpm lint` both clean.\n",
-        "branch": "fix/system-prompt-always-on-resume",
-        "head_sha": "4e4a65590a234e9ca08fb334304f0090c7ed36f2",
-        "author": "janusasmussen",
-        "labels": [
-          "gateway",
-          "scripts",
-          "agents",
-          "size: L",
-          "extensions: anthropic",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "extensions/anthropic/cli-backend.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/anthropic/cli-shared.test.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/test-live-shard.mjs",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/cli-backends.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/cli-runner/claude-live-session.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/cli-runner/execute.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/cli-runner/helpers.system-prompt-resume.test.ts",
-            "additions": 220,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/cli-runner/helpers.ts",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/gateway-cli-backend.system-prompt-resume.live.test.ts",
-            "additions": 351,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "test/scripts/test-live-shard.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86433",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86433.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 72,
-            "SKIPPED": 28,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2575,
+    "total_ms": 1866,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 347
+        "ms": 655
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1953
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 246
+        "ms": 1199
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
