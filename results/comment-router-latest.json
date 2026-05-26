@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-26T09:34:26.598Z",
+  "generated_at": "2026-05-26T09:35:00.565Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-26T06:34:23.780Z",
+  "since": "2026-05-26T06:34:59.842Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4542888147
   ],
-  "status_comment_id": 4542888707,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-05-26T09:33:54Z",
       "comment_updated_at": "2026-05-26T09:33:54Z",
-      "status_comment_id": 4542888707,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,103 +61,30 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-26T09:34:27.351Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 86760
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-26T09:34:28.862Z",
-          "response_comment_id": "4542888707",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(heartbeat): cap pending-final-delivery replay attempts and TTL (#85743)",
-        "body": "## Summary\n\nOrphan sessions with `pendingFinalDelivery: true` re-send the same stale text on every heartbeat tick indefinitely. Production observed **189 attempts over 4 days**.\n\nAdds a fail-safe in the heartbeat replay branch that clears the pending delivery when:\n- `attemptCount > 10` (retry-limit), or\n- the entry is older than 24 hours (expiry)\n\nFixes #85743\n\n## Real Behavior Proof\n\n### Behavior\nOrphan pending-final-delivery entries replay indefinitely without any attempt cap or TTL bound, surfacing the same stale alert text to the user once per heartbeat tick (every 30 minutes by default), day after day.\n\n### Environment\n- openclaw/openclaw main at 7db4b3db\n- macOS arm64, Node v22.22.0\n\n### Steps\n1. Apply the patch on a fresh checkout of `main`.\n2. Run the focused unit tests for the new fail-safe helper.\n3. Run the inline reproducer demonstrating the production-observed scenario plus boundary cases.\n\n### Evidence (after-fix terminal output)\n\n**Unit tests** (`node scripts/run-vitest.mjs src/auto-reply/reply/pending-delivery-expiry.test.ts`):\n```\n ✓ src/auto-reply/reply/pending-delivery-expiry.test.ts (5 tests) 4ms\n   ✓ retry-limit when attempts exceed cap\n   ✓ expiry when created more than 24h ago\n   ✓ not expired when under cap and within TTL\n   ✓ not expired when createdAt is null\n   ✓ boundary: at max is OK, over max triggers\n\n Test Files  1 passed (1)\n      Tests  5 passed (5)\n```\n\n**End-to-end scenario reproducer** (replays the production-observed orphan and key boundaries through the new fail-safe; result drives whether `get-reply.ts` clears the entry vs replays the cached text):\n```\n┌────────────────────────────────────────────────────────────┬─────────┬──────────────────────────────┐\n│ Scenario                                                   │ expired │ reason                       │\n├────────────────────────────────────────────────────────────┼─────────┼──────────────────────────────┤\n│ Production-observed (189 attempts, 4 days old)             │ true    │ retry-limit (190 > 10)       │\n│ Just-over retry-limit (11 attempts, fresh)                 │ true    │ retry-limit (11 > 10)        │\n│ Just-over TTL (3 attempts, 25h old)                        │ true    │ expiry (25h > 24h)           │\n│ Fresh in-bounds (5 attempts, 2h old)                       │ false   │ —                            │\n│ At cap boundary (10 attempts, fresh)                       │ false   │ —                            │\n└────────────────────────────────────────────────────────────┴─────────┴──────────────────────────────┘\n```\n\n**TypeCheck / Lint / Format**:\n```\n$ node scripts/run-tsgo.mjs -p tsconfig.json     # exit 0\n$ pnpm exec oxfmt --check src/auto-reply/reply/get-reply.ts \\\n                          src/auto-reply/reply/pending-delivery-expiry.test.ts\nFinished in 16ms on 2 files using 10 threads.\n$ pnpm exec oxlint src/auto-reply/reply/get-reply.ts \\\n                   src/auto-reply/reply/pending-delivery-expiry.test.ts\nFound 0 warnings and 0 errors.\n```\n\n### Drift proof\n\nReverting the source patch in `get-reply.ts` while keeping the tests causes:\n- The new test file fails to import: `checkPendingDeliveryExpiry` does not exist on `get-reply.js`.\n- The reproducer script fails with the same import error.\n\nRe-applying the patch restores all 5/5 unit tests and the 5/5 reproducer scenarios.\n\n### Observed result\n\nFor every production-observed and boundary scenario, the fail-safe correctly decides whether to clear or replay:\n- The 189-attempt / 4-day orphan that wedged the user is now cleared on its very next heartbeat tick (instead of replaying for another N days).\n- Fresh, in-bounds replays are preserved, so legitimate restart-after-crash recovery still works.\n- The cap-boundary case (exactly 10 attempts) is honored — the 11th attempt fires the guard.\n\n## Choice of bounds\n\nConstants chosen to be conservative — easy to tune if maintainers prefer different policy:\n- `PENDING_FINAL_DELIVERY_MAX_ATTEMPTS = 10` (matches the `suspendPendingFinalDelivery({ reason: \"retry-limit\" })` vocabulary suggested in the issue)\n- `PENDING_FINAL_DELIVERY_TTL_MS = 24h` (fail-safe TTL; legitimate replays after crash/restart complete in seconds, well under bound)\n\nBoth are exported from `get-reply.ts` so they can graduate to config later if needed.\n\n",
-        "branch": "fix/pending-delivery-replay-cap",
-        "head_sha": "904f18de577a591fec2c32e673f160e451a414cd",
-        "author": "1052326311",
-        "labels": [
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/auto-reply/reply/get-reply.ts",
-            "additions": 99,
-            "deletions": 24,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/pending-delivery-expiry.test.ts",
-            "additions": 71,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86760",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86760.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 72,
-            "SKIPPED": 28,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
-        }
-      }
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5629,
+    "total_ms": 1865,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 479
+        "ms": 711
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2325
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 4
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 2800
+        "ms": 1142
       },
       {
         "name": "append_ledger",
