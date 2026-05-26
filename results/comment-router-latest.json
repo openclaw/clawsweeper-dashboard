@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-26T15:25:03.583Z",
-  "repo": "openclaw/plugin-inspector",
+  "generated_at": "2026-05-26T15:25:21.276Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-26T12:25:03.254Z",
+  "since": "2026-05-26T12:25:20.128Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    27
+    86939
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4545600354
+  ],
+  "status_comment_id": 4545602252,
   "max_autoclose_targets": 8,
-  "scanned_comments": 0,
-  "commands_seen": 0,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,26 +31,113 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86939:4545600354:2026-05-26T15:24:41Z:implement_issue",
+      "comment_id": "4545600354",
+      "comment_version_key": "4545600354:2026-05-26T15:24:41Z",
+      "comment_url": "https://github.com/openclaw/openclaw/issues/86939#issuecomment-4545600354",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86939,
+      "author": "Takhoffman",
+      "author_id": 781889,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-26T15:24:41Z",
+      "comment_updated_at": "2026-05-26T15:24:41Z",
+      "status_comment_id": 4545602252,
+      "trigger": "mention",
+      "command": "fix",
+      "intent": "implement_issue",
+      "autoclose_message": null,
+      "implementation_prompt": "",
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "waiting",
+      "actions": [
+        {
+          "action": "ensure_issue_implementation_job",
+          "job_path": "jobs/openclaw/inbox/issue-openclaw-openclaw-86939.md",
+          "status": "executed",
+          "mode": "autonomous",
+          "cluster_id": "issue-openclaw-openclaw-86939",
+          "status_detail": "written"
+        },
+        {
+          "action": "dispatch_repair",
+          "workflow": "repair-cluster-worker.yml",
+          "job_path": "jobs/openclaw/inbox/issue-openclaw-openclaw-86939.md",
+          "mode": "autonomous",
+          "status": "waiting",
+          "reason": "adopted job must be committed before worker dispatch"
+        },
+        {
+          "action": "comment",
+          "status": "pending"
+        }
+      ],
+      "author_repository_permission": "write",
+      "target": {
+        "kind": "issue",
+        "state": "open",
+        "locked": false,
+        "title": "fix(ui): webchat run-status-label stuck on \"In progress\" after model call ends",
+        "body": "## Bug\n\nAfter a model call completes in the webchat dashboard, the `agent-chat__run-status-label` briefly shows \"Done\", then flips back to \"In progress\" and stays there permanently until page refresh.\n\n## Root Cause\n\nRace condition between the terminal chat event and the `sessions.list` / `sessions.changed` response timing:\n\n1. Agent run ends → chat \"final\" event arrives → UI sets `chatRunStatus = { phase: \"done\" }`, clears `chatRunId` → shows \"Done\" ✓\n2. `loadSessions` is triggered (refresh after chat) → sends `sessions.list` RPC to gateway\n3. **Gateway responds with `status: \"running\"`** because its session store hasn't been updated yet (async write)\n4. `loadSessions` replaces `sessionsResult` → current session row gets `status: \"running\"` (overwriting the locally-reconciled \"done\")\n5. 5-second toast timer fires → `chatRunStatus = null`\n6. Now: `isSessionRunActive({status: \"running\"}) = true` → `canAbort = true`, `hasTerminalRunStatus(null) = false` → `showAbortableUi = true` → **\"In progress\" displayed permanently**\n\nThe same race applies to `sessions.changed` events that arrive after the terminal chat event with stale `status: \"running\"`.\n\n## Key insight from debugging\n\n```\n[DEBUG hasAbortableSessionRun] true via session row: {\n  key: 'agent:main:dashboard:...',\n  status: 'running',    ← stale from server\n  hasActiveRun: false   ← correctly cleared\n}\n```\n\n`isSessionRunActive` checks `status` first (line 9-10 of `session-run-state.ts`): if `status === \"running\"` it returns `true` regardless of `hasActiveRun`.\n\n## Minimal Fix\n\nIn `ui/src/ui/controllers/sessions.ts`, after `loadSessions` response and in the `sessions.changed` event handler, if `chatRunId` is already null (local run ended), force-correct stale server values:\n\n```typescript\n// After loadSessions replaces sessionsResult (~line 691):\nif (!state.chatRunId && hasCurrentChatSession(state)) {\n  const currentRow = state.sessionsResult.sessions.find(\n    (row) => row.key === state.sessionKey,\n  );\n  if (currentRow && (currentRow.hasActiveRun === true || currentRow.status === \"running\")) {\n    state.sessionsResult = {\n      ...state.sessionsResult,\n      sessions: state.sessionsResult.sessions.map((row) =>\n        row.key === state.sessionKey\n          ? { ...row, hasActiveRun: false, status: row.status === \"running\" ? \"done\" : row.status }\n          : row,\n      ),\n    };\n  }\n}\n\n// In applySessionsChangedEvent, after the field-copy loop (~line 457):\nif (\n  !state.chatRunId &&\n  hasCurrentChatSession(state) &&\n  nextRow.key === state.sessionKey\n) {\n  if (nextRow.hasActiveRun === true) {\n    nextRow.hasActiveRun = false;\n  }\n  if (nextRow.status === \"running\") {\n    nextRow.status = \"done\";\n  }\n}\n```\n\n## Verified\n\n- Reproduced on source-built gateway (2026.5.26, macOS, Node v25.8.1, model hy3-preview via tencent-tokenhub)\n- Fix confirmed: after applying the above patch, status stays \"Done\" and does not flip back\n- Debug log confirms the issue is `status: \"running\"` from server, not `hasActiveRun`\n\n## Affected files\n\n- `ui/src/ui/controllers/sessions.ts` (both `loadSessions` and `applySessionsChangedEvent` paths)\n\n## Related context\n\n- `ui/src/ui/session-run-state.ts:9-10` — `isSessionRunActive` prioritizes `status` over `hasActiveRun`\n- `ui/src/ui/views/chat.ts:1069-1070` — `showAbortableUi` forces \"in-progress\" when `canAbort && !hasTerminalRunStatus`\n- `ui/src/ui/chat/run-lifecycle.ts:5` — 5-second toast timer (`CHAT_RUN_STATUS_TOAST_DURATION_MS`)",
+        "author": "scotthuang",
+        "labels": [
+          "P2",
+          "clawsweeper:fix-shape-clear",
+          "clawsweeper:queueable-fix",
+          "clawsweeper:source-repro",
+          "impact:session-state",
+          "issue-rating: 🦞 diamond lobster"
+        ],
+        "cluster_id": "issue-openclaw-openclaw-86939",
+        "job_path": "jobs/openclaw/inbox/issue-openclaw-openclaw-86939.md",
+        "open_prs": [],
+        "issue_implementation_cluster_id": "issue-openclaw-openclaw-86939",
+        "issue_implementation_job_path": "jobs/openclaw/inbox/issue-openclaw-openclaw-86939.md",
+        "mode": "autonomous"
+      }
+    }
+  ],
+  "live_worker_capacity_before_dispatch": {
+    "repo": "openclaw/clawsweeper",
+    "workflow": "repair-cluster-worker.yml",
+    "exclude_run_name_prefix": "automerge repair",
+    "active": 0,
+    "requested": 1,
+    "max_live_workers": 22,
+    "available": 22,
+    "active_runs": []
+  },
   "ledger_changed": false,
   "timings": {
-    "total_ms": 546,
+    "total_ms": 2791,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 317
+        "ms": 561
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 518
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 58
       },
       {
         "name": "execute_commands",
-        "ms": 218
+        "ms": 1644
       },
       {
         "name": "append_ledger",
