@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-26T06:05:59.174Z",
+  "generated_at": "2026-05-26T06:06:27.248Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-26T03:05:56.560Z",
+  "since": "2026-05-26T03:06:24.168Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    86759
+    86765
   ],
-  "comment_ids": [
-    4540868689
-  ],
-  "status_comment_id": 4540869099,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 4,
+  "commands_seen": 2,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,18 +31,107 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:86759:4540868689:2026-05-26T06:05:30Z:re_review",
-      "comment_id": "4540868689",
-      "comment_version_key": "4540868689:2026-05-26T06:05:30Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86759#issuecomment-4540868689",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86765:4540457396:2026-05-26T06:06:18Z:clawsweeper_needs_human",
+      "comment_id": "4540457396",
+      "comment_version_key": "4540457396:2026-05-26T06:06:18Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86765#issuecomment-4540457396",
       "repo": "openclaw/openclaw",
-      "issue_number": 86759,
+      "issue_number": 86765,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-26T05:25:26Z",
+      "comment_updated_at": "2026-05-26T06:06:18Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "No repair lane is needed because this PR has supplied runtime proof and I found no concrete patch defect; the next action is ordinary maintainer and CI review.; Cleared: The diff only changes memory-core TypeScript and tests, with no dependency, workflow, secrets, packaging, or code-download surface added. (sha=a26fbba46e64f06c5996ec6b54c0193c7ffb932b)",
+      "review_summary": "The PR changes memory-core sync/close ordering to register provider-initialization-blocked syncs before teardown, track providers observed during shutdown, and add regression tests for pending-sync provider close.\n\nPR surface: Source +19, Tests +62. Total +81 across 2 files.\n\nReproducibility: yes. Source inspection of current main gives a high-confidence interleaving: sync does not register this.syncing until after provider initialization, while close snapshots pending sync before that await; I did not execute tests in this read-only review.",
+      "review_followup": "No repair lane is needed because this PR has supplied runtime proof and I found no concrete patch defect; the next action is ordinary maintainer and CI review.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "a26fbba46e64f06c5996ec6b54c0193c7ffb932b",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "[codex] Fix memory close sync race",
+        "body": "Refs #86702\n\n## Summary\n\n- Register `MemoryIndexManager.sync()` as in-flight before awaiting provider initialization so `close()` can see syncs that are blocked inside provider setup.\n- Delay provider and SQLite teardown until the current sync has settled, while still tracking provider references seen during shutdown so fallback swaps can be closed safely.\n- Update memory-core regression coverage for both existing pending-sync shutdown and the provider-initialization interleaving.\n\n## Root Cause\n\n`close()` captured `this.syncing` before awaiting provider initialization and watcher teardown. A sync that was already started but still awaiting `ensureProviderInitialized()` could attach `this.syncing` after that stale snapshot, letting `close()` proceed to close provider and database resources while the sync continued.\n\n## Real Behavior Proof\n\nBehavior addressed: `MemoryIndexManager.close()` no longer closes embedding providers or the SQLite database before already-started sync work settles, including syncs blocked in provider initialization.\n\nReal environment tested: Local sparse checkout on macOS arm64 with Node v24.13.1 and installed workspace dependencies. The proof runs a standalone Node runtime script against the real `MemoryIndexManager`, real SQLite index, and the public memory embedding provider registry. The script creates a temporary workspace and memory file, starts `sync({ force: true })`, blocks provider creation, calls `close()`, then releases provider init and holds the real `embedBatch()` call before allowing sync to finish.\n\nExact steps or command run after this patch:\n\n```bash\nNODE_NO_WARNINGS=1 node --import tsx /private/tmp/openclaw-86765-proof.mjs\n```\n\nEvidence after fix:\n\n```text\nopenclaw#86765 runtime proof\nnode: v24.13.1\nplatform: darwin arm64\nworkspace: /var/folders/qm/d7_ghh9j1019scbft187ry000000gn/T/openclaw-86765-proof-511y6J\nscenario: sync blocked during provider init, close() called, provider init released, sync held inside real embedBatch\nduring blocked sync:\n  close settled: false\n  provider close calls: 0\n  embedBatch calls: 1\n  sqlite SELECT 1: ok\nafter releasing sync:\n  close error: none\n  provider close calls: 1\n  sqlite after close: database is not open\nevents: provider:create:entered -> provider:create:resolved -> provider:embedBatch:start:1 -> provider:embedBatch:released -> provider:close:1\nPASS: close waited for the in-flight sync before closing provider/database resources\n```\n\nObserved result after fix: While sync was blocked inside the real `embedBatch()` path, `close()` had not settled, the embedding provider had not been closed, and SQLite still answered `SELECT 1`. After releasing sync, `close()` completed without error, the provider closed exactly once, and SQLite reported `database is not open`, which shows resource teardown happened after the in-flight sync settled.\n\nWhat was not tested: The proof uses a local registered provider adapter to make the race deterministic; it does not call external embedding APIs. Full repository lint/check was not run locally. The repo `run-oxlint.mjs` wrapper tries to prepare extension package boundary artifacts for unrelated sparse-checkout extensions, so the PR uses direct touched-file `oxfmt`/`oxlint` plus the relevant memory tests.\n\n## Verification\n\n- `NODE_NO_WARNINGS=1 node --import tsx /private/tmp/openclaw-86765-proof.mjs` - passed, runtime proof above\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.extension-memory.config.ts --configLoader runner extensions/memory-core/src/memory/index.test.ts extensions/memory-core/src/memory/manager.async-search.test.ts extensions/memory-core/src/memory/manager.readonly-recovery.test.ts` - passed, 3 files / 32 tests\n- `./node_modules/.bin/oxfmt --check extensions/memory-core/src/memory/manager.ts extensions/memory-core/src/memory/index.test.ts` - passed\n- `./node_modules/.bin/oxlint --tsconfig config/tsconfig/oxlint.extensions.json extensions/memory-core/src/memory/manager.ts extensions/memory-core/src/memory/index.test.ts` - passed\n- `git diff --check origin/main...HEAD` - passed\n",
+        "branch": "codex/memory-close-sync-race",
+        "head_sha": "a26fbba46e64f06c5996ec6b54c0193c7ffb932b",
+        "author": "spacegeologist",
+        "labels": [
+          "extensions: memory-core",
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-core/src/memory/index.test.ts",
+            "additions": 71,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager.ts",
+            "additions": 33,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86765",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86765.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "counts": {
+            "CANCELLED": 2,
+            "SUCCESS": 64,
+            "SKIPPED": 30,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86765:4540804139:2026-05-26T05:59:15Z:re_review",
+      "comment_id": "4540804139",
+      "comment_version_key": "4540804139:2026-05-26T05:59:15Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86765#issuecomment-4540804139",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86765,
       "author": "spacegeologist",
       "author_id": 228040220,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-26T06:05:30Z",
-      "comment_updated_at": "2026-05-26T06:05:30Z",
-      "status_comment_id": 4540869099,
+      "comment_created_at": "2026-05-26T05:59:15Z",
+      "comment_updated_at": "2026-05-26T05:59:15Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,143 +148,87 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-26T06:05:59.900Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 86759
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-26T06:06:01.333Z",
-          "response_comment_id": "4540869099",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(webchat): broadcast agent TTS media final payloads",
-        "body": "## Summary\n- Fixes #81468.\n- Bridges WebChat-managed agent-run TTS/media supplements into the final `chat` broadcast payload, so the live WebChat path receives the audio attachment that was already appended to the transcript.\n- Keeps media-bearing `block` replies from being saved as the eventual final broadcast snapshot; only actual `final` deliveries can populate that final media message.\n- When a final media reply follows an earlier media block, rewrites the same assistant-media transcript entry so live final delivery and `chat.history` reload show the same final audio attachment.\n- Adds running Gateway proof that sends `chat.send` over WebSocket, first delivers a media block, then delivers the final TTS media reply, verifies the assistant-media HTTP route can serve the MP3, and confirms `chat.history` has the same final audio without duplicate assistant entries.\n\n## Verification\n- `env COREPACK_HOME=/private/tmp/openclaw-corepack node scripts/run-vitest.mjs src/gateway/server-methods/chat.directive-tags.test.ts -t \"agent.*media|auto-TTS final media|media-bearing block\" --reporter verbose`\n  - `Test Files 2 passed (2)`\n  - `Tests 10 passed | 166 skipped (176)`\n  - `Duration 6.30s`\n- `env COREPACK_HOME=/private/tmp/openclaw-corepack node scripts/run-vitest.mjs src/gateway/server.chat.gateway-server-chat.test.ts -t \"chat.send broadcasts agent-run TTS audio over the running gateway\" --reporter verbose`\n  - `Test Files 1 passed (1)`\n  - `Tests 1 passed | 29 skipped (30)`\n  - `Duration 5.26s`\n- `./node_modules/.bin/oxlint src/gateway/server-methods/chat.ts src/gateway/server-methods/chat.directive-tags.test.ts src/gateway/server.chat.gateway-server-chat.test.ts`\n- `git diff --check origin/main...HEAD`\n\n## Real behavior proof\n\nBehavior addressed: Agent-run auto-TTS/audio replies could be persisted as a WebChat assistant-media transcript supplement while the live final WebChat `chat` event omitted the audio attachment. A media-bearing `block` delivery could also be captured as the final media broadcast candidate and mask a later real final media reply. This patch keeps block-media transcript compatibility, only lets actual final media deliveries populate the live final broadcast snapshot, rewrites the same assistant-media transcript entry when a later final replaces an earlier block, and keeps TTS spoken text out of the visible final/history copy.\n\nReal environment tested: Local OpenClaw source checkout on macOS at head `66df95183de3a711a17a736d936112aafbf177fc`, based on `origin/main` `23e9bc8c0b61f37851136dc5da2311935e348f5d`. I ran the repo's connected Control UI Gateway server test, which starts a real local Gateway on `127.0.0.1`, uses a real local WebSocket client to send `chat.send`, and uses real local HTTP fetches against `http://127.0.0.1:<port>/__openclaw__/assistant-media` for metadata and ticketed media download.\n\nExact steps or command run after this patch:\n- `env COREPACK_HOME=/private/tmp/openclaw-corepack node scripts/run-vitest.mjs src/gateway/server.chat.gateway-server-chat.test.ts -t \"chat.send broadcasts agent-run TTS audio over the running gateway\" --reporter verbose`\n- The mocked agent dispatch starts an agent run in the running Gateway, sends a media-bearing `block` reply from `block.mp3`, then sends the final TTS reply from `tts.mp3`.\n- The test waits for the WebSocket final `chat` event, calls the assistant-media metadata route, calls the ticketed media download route, reloads `chat.history`, and verifies history exposes the same final `tts.mp3` attachment rather than the earlier `block.mp3`.\n\nEvidence after fix:\n```txt\n✓ |gateway-server| ../../src/gateway/server.chat.gateway-server-chat.test.ts > gateway server chat > chat.send broadcasts agent-run TTS audio over the running gateway 369ms\n\nTest Files  1 passed (1)\nTests  1 passed | 29 skipped (30)\nDuration  5.26s\n```\n\nThe focused handler regression also passed after the final patch:\n```txt\n✓ |gateway-client| ... persists agent-run audio replies emitted as media-bearing block payloads 122ms\n✓ |gateway-client| ... persists auto-TTS final media as audio-only so webchat does not duplicate assistant text 27ms\n✓ |gateway-client| ... broadcasts final agent media instead of an earlier media-bearing block 21ms\n✓ |gateway-methods| ... persists agent-run audio replies emitted as media-bearing block payloads 71ms\n✓ |gateway-methods| ... persists auto-TTS final media as audio-only so webchat does not duplicate assistant text 22ms\n✓ |gateway-methods| ... broadcasts final agent media instead of an earlier media-bearing block 24ms\n\nTest Files  2 passed (2)\nTests  10 passed | 166 skipped (176)\nDuration  6.30s\n```\n\nObserved result after fix: The WebSocket final event arrived with `runId: idem-running-gateway-agent-tts`, `sessionKey: agent:main:main`, and `state: final`. The final assistant content included `{ type: \"text\", text: \"Audio reply\" }` plus an audio attachment for the final `tts.mp3` path with `kind: \"audio\"`, `mimeType: \"audio/mpeg\"`, and `isVoiceNote: true`. The earlier `block.mp3` payload did not replace the final `tts.mp3` broadcast. The final WebSocket message did not contain the model transcript spoken text. The assistant-media metadata request returned HTTP 200 with `available: true` and a `v1.` media ticket; the ticketed media download returned HTTP 200 and 4 bytes. `chat.history` returned exactly one assistant message for the run, did not contain the spoken TTS text, and contained the same final `tts.mp3` attachment rather than `block.mp3`. The block-only media regression asserted no final broadcast was emitted from a media block by itself.\n\nWhat was not tested: No real Microsoft/Xiaomi TTS credentials were used; the test uses a local MP3 fixture while exercising the actual Gateway WebSocket final event, assistant-media HTTP route, ticketed media download, transcript rewrite, and history dedupe path. Browser autoplay behavior was not tested.\n\n## AI Assistance Disclosure\nThis PR was prepared with AI assistance. I reviewed the changed code path and verified the targeted tests above.\n",
-        "branch": "codex/webchat-tts-agent-final-media",
-        "head_sha": "66df95183de3a711a17a736d936112aafbf177fc",
+        "title": "[codex] Fix memory close sync race",
+        "body": "Refs #86702\n\n## Summary\n\n- Register `MemoryIndexManager.sync()` as in-flight before awaiting provider initialization so `close()` can see syncs that are blocked inside provider setup.\n- Delay provider and SQLite teardown until the current sync has settled, while still tracking provider references seen during shutdown so fallback swaps can be closed safely.\n- Update memory-core regression coverage for both existing pending-sync shutdown and the provider-initialization interleaving.\n\n## Root Cause\n\n`close()` captured `this.syncing` before awaiting provider initialization and watcher teardown. A sync that was already started but still awaiting `ensureProviderInitialized()` could attach `this.syncing` after that stale snapshot, letting `close()` proceed to close provider and database resources while the sync continued.\n\n## Real Behavior Proof\n\nBehavior addressed: `MemoryIndexManager.close()` no longer closes embedding providers or the SQLite database before already-started sync work settles, including syncs blocked in provider initialization.\n\nReal environment tested: Local sparse checkout on macOS arm64 with Node v24.13.1 and installed workspace dependencies. The proof runs a standalone Node runtime script against the real `MemoryIndexManager`, real SQLite index, and the public memory embedding provider registry. The script creates a temporary workspace and memory file, starts `sync({ force: true })`, blocks provider creation, calls `close()`, then releases provider init and holds the real `embedBatch()` call before allowing sync to finish.\n\nExact steps or command run after this patch:\n\n```bash\nNODE_NO_WARNINGS=1 node --import tsx /private/tmp/openclaw-86765-proof.mjs\n```\n\nEvidence after fix:\n\n```text\nopenclaw#86765 runtime proof\nnode: v24.13.1\nplatform: darwin arm64\nworkspace: /var/folders/qm/d7_ghh9j1019scbft187ry000000gn/T/openclaw-86765-proof-511y6J\nscenario: sync blocked during provider init, close() called, provider init released, sync held inside real embedBatch\nduring blocked sync:\n  close settled: false\n  provider close calls: 0\n  embedBatch calls: 1\n  sqlite SELECT 1: ok\nafter releasing sync:\n  close error: none\n  provider close calls: 1\n  sqlite after close: database is not open\nevents: provider:create:entered -> provider:create:resolved -> provider:embedBatch:start:1 -> provider:embedBatch:released -> provider:close:1\nPASS: close waited for the in-flight sync before closing provider/database resources\n```\n\nObserved result after fix: While sync was blocked inside the real `embedBatch()` path, `close()` had not settled, the embedding provider had not been closed, and SQLite still answered `SELECT 1`. After releasing sync, `close()` completed without error, the provider closed exactly once, and SQLite reported `database is not open`, which shows resource teardown happened after the in-flight sync settled.\n\nWhat was not tested: The proof uses a local registered provider adapter to make the race deterministic; it does not call external embedding APIs. Full repository lint/check was not run locally. The repo `run-oxlint.mjs` wrapper tries to prepare extension package boundary artifacts for unrelated sparse-checkout extensions, so the PR uses direct touched-file `oxfmt`/`oxlint` plus the relevant memory tests.\n\n## Verification\n\n- `NODE_NO_WARNINGS=1 node --import tsx /private/tmp/openclaw-86765-proof.mjs` - passed, runtime proof above\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.extension-memory.config.ts --configLoader runner extensions/memory-core/src/memory/index.test.ts extensions/memory-core/src/memory/manager.async-search.test.ts extensions/memory-core/src/memory/manager.readonly-recovery.test.ts` - passed, 3 files / 32 tests\n- `./node_modules/.bin/oxfmt --check extensions/memory-core/src/memory/manager.ts extensions/memory-core/src/memory/index.test.ts` - passed\n- `./node_modules/.bin/oxlint --tsconfig config/tsconfig/oxlint.extensions.json extensions/memory-core/src/memory/manager.ts extensions/memory-core/src/memory/index.test.ts` - passed\n- `git diff --check origin/main...HEAD` - passed\n",
+        "branch": "codex/memory-close-sync-race",
+        "head_sha": "a26fbba46e64f06c5996ec6b54c0193c7ffb932b",
         "author": "spacegeologist",
         "labels": [
-          "app: web-ui",
-          "gateway",
-          "size: M",
+          "extensions: memory-core",
+          "size: S",
           "proof: supplied",
+          "proof: sufficient",
           "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: ⏳ waiting on author"
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "src/gateway/server-methods/chat.directive-tags.test.ts",
-            "additions": 120,
-            "deletions": 3,
+            "path": "extensions/memory-core/src/memory/index.test.ts",
+            "additions": 71,
+            "deletions": 9,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server-methods/chat.ts",
-            "additions": 142,
-            "deletions": 28,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.chat.gateway-server-chat.test.ts",
-            "additions": 162,
-            "deletions": 0,
+            "path": "extensions/memory-core/src/memory/manager.ts",
+            "additions": 33,
+            "deletions": 14,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86759",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86759.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86765",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86765.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 95,
+          "total": 97,
           "counts": {
-            "SUCCESS": 58,
-            "IN_PROGRESS": 12,
-            "SKIPPED": 20,
-            "FAILURE": 4,
+            "CANCELLED": 2,
+            "SUCCESS": 64,
+            "SKIPPED": 30,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (gateway-runtime-boundary):IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-agents:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-prod-types:FAILURE",
-            "check-lint:IN_PROGRESS",
-            "check-test-types:FAILURE",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:FAILURE",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:FAILURE"
+            "Real behavior proof:CANCELLED"
           ],
-          "pending": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (gateway-runtime-boundary):IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-agents:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
-          ],
+          "pending": [],
           "terminalBlockers": [
-            "check-prod-types:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-channels:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
+            "Real behavior proof:CANCELLED"
           ]
         }
-      }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5337,
+    "total_ms": 3424,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 522
+        "ms": 478
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2079
+        "ms": 2584
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 2712
+        "ms": 333
       },
       {
         "name": "append_ledger",
