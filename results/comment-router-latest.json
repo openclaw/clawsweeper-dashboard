@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-26T18:20:46.223Z",
+  "generated_at": "2026-05-26T18:21:23.778Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-26T15:20:42.812Z",
+  "since": "2026-05-26T15:21:23.145Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4547314000
   ],
-  "status_comment_id": 4547314755,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-05-26T18:19:57Z",
       "comment_updated_at": "2026-05-26T18:19:57Z",
-      "status_comment_id": 4547314755,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,152 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-26T18:20:47.263Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 86627
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-26T18:20:48.662Z",
-          "response_comment_id": "4546671482",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "write",
-      "target": {
-        "kind": "pull_request",
-        "title": "Keep core doctor health in contribution order",
-        "body": "## Summary\n\nThis PR integrates structured health checks with the ordered core doctor checks. The goal is to make it cheap and safe to add structured findings, dry-run previews, and diff/effect reporting to existing doctor rules without moving those rules out of the doctor order that already works.\n\nThe model is:\n\n- core doctor checks stay owned by `resolveDoctorHealthContributions()` / `createDoctorHealthContribution(...)`, which remains the source of truth for `openclaw doctor` and `openclaw doctor --fix` ordering\n- core contributions can now declare `healthChecks` directly; for a single inline check the factory derives `id`, `kind: \"core\"`, `source: \"doctor\"`, and `healthCheckIds`\n- if a contribution still has legacy `run`, that legacy path remains authoritative for normal `doctor` and real `doctor --fix` mutation\n- while legacy `run` is still present, the structured health check should usually add `detect`; any structured `repair` / structured `run` should be preview-only for dry-run, diff, and effect reporting\n- the full switchover only happens when legacy `run` is deliberately removed; then the old repair behavior is called from the structured health check and `healthChecks` owns the contribution execution path\n- `doctor --lint` runs structured core checks in contribution order first, then appends non-core bundled/plugin registry checks\n- the shared health registry is now the extension registry surface: bundled/plugin checks register there and run after the ordered core contribution checks\n- core doctor checks do not register into that shared registry for ordering; their order comes from the doctor contribution list\n- the broad structured repair bridge is reserved for extension/plugin registry checks rather than becoming a second core repair runner\n- the temporary doctor health conversion-plan ledger is removed because contribution ordering and contribution/core-check tests now own the invariant directly\n\nThat gives us the migration ladder we wanted: keep existing doctor repair behavior in place while adding structured lint/dry-run/diff data, then move the old repair behavior behind `healthChecks` only when that specific core contribution is ready for full structured ownership. It also keeps the ownership boundary clear: core doctor ordering lives in contributions, while the shared health registry remains the extension point for bundled/plugin checks.\n\n## Real Behavior Proof\n\nBehavior or issue addressed:\nThis PR changes the doctor health execution boundary: ordered core doctor contributions supply core lint checks first, while bundled/plugin registry checks remain the extension surface after core checks.\n\nReal environment tested:\nWSL Ubuntu 24.04 durable OpenClaw worktree at /root/src/openclaw-86627-core-order, rebased signed head aa1f8e479436, isolated OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH under /tmp/openclaw-86627-proof.\n\nExact command run after this patch:\n\n    rm -rf /tmp/openclaw-86627-proof\n    mkdir -p /tmp/openclaw-86627-proof/state /tmp/openclaw-86627-proof/home\n    python3 -c \"import pathlib; pathlib.Path(\\\"/tmp/openclaw-86627-proof/state/openclaw.json\\\").write_text(\\\"{}\\n\\\")\"\n    OPENCLAW_STATE_DIR=/tmp/openclaw-86627-proof/state OPENCLAW_CONFIG_PATH=/tmp/openclaw-86627-proof/state/openclaw.json HOME=/tmp/openclaw-86627-proof/home CI=1 TERM=dumb node --import tsx src/entry.ts doctor --lint --json --only core/doctor/gateway-config --only core/doctor/command-owner\n\nObserved result after fix:\nThe real doctor lint command ran the two selected core doctor checks through the contribution-owned core path, returned them in contribution order, and did not require the shared registry to own core checks.\n\nOutput:\n\n    exit=0\n    {\"ok\":false,\"checksRun\":2,\"checksSkipped\":16,\"findings\":[{\"checkId\":\"core/doctor/gateway-config\",\"severity\":\"warning\",\"message\":\"gateway.mode is unset; gateway start will be blocked.\",\"path\":\"gateway.mode\",\"fixHint\":\"Run openclaw configure and set Gateway mode (local/remote), or openclaw config set gateway.mode local.\"},{\"checkId\":\"core/doctor/command-owner\",\"severity\":\"info\",\"message\":\"No command owner is configured. Owner-only commands (/diagnostics, /export-trajectory, /config, exec approvals) have no allowed sender.\",\"path\":\"commands.ownerAllowFrom\",\"fixHint\":\"Set commands.ownerAllowFrom to your channel user id, e.g. openclaw config set commands.ownerAllowFrom [telegram:123456789].\"}]}\n\nWhat was not tested:\nNo plugin extension was installed for this proof. The extension side is covered by focused tests that assert non-core registry checks are appended after ordered core contribution checks and ID collisions are rejected.\n\n## How A Core Rule Upgrades\n\nBefore an upgrade, a rule is just an ordered doctor contribution:\n\n```ts\ncreateDoctorHealthContribution({\n  id: \"doctor:some-rule\",\n  label: \"Some rule\",\n  run: runSomeRuleHealth,\n})\n```\n\nFor the safe in-place upgrade, the rule keeps its old `run` and adds one inline health check beside it. Legacy `run` still owns real doctor behavior; `healthChecks.detect` supplies structured lint findings:\n\n```ts\ncreateDoctorHealthContribution({\n  id: \"doctor:some-rule\",\n  label: \"Some rule\",\n  run: runSomeRuleHealth,\n  healthChecks: {\n    description: \"Some rule is valid.\",\n    async detect(ctx) {\n      return detectSomeRuleFindings(ctx);\n    },\n  },\n})\n```\n\nIf the rule can provide dry-run/diff/effect detail before the full switchover, it can add structured repair as a preview-only path while legacy `run` still owns real mutation:\n\n```ts\ncreateDoctorHealthContribution({\n  id: \"doctor:some-rule\",\n  label: \"Some rule\",\n  run: runSomeRuleHealth,\n  healthChecks: {\n    description: \"Some rule is valid.\",\n    async detect(ctx) {\n      return detectSomeRuleFindings(ctx);\n    },\n    async repair(ctx, findings) {\n      return previewSomeRuleRepair(ctx, findings);\n    },\n  },\n})\n```\n\nWhen the rule is ready to be fully structured, remove legacy `run` and call the old repair behavior from the structured check. At that point `healthChecks` owns the contribution execution path:\n\n```ts\ncreateDoctorHealthContribution({\n  id: \"doctor:some-rule\",\n  label: \"Some rule\",\n  healthChecks: {\n    description: \"Some rule is valid.\",\n    async run(ctx, scope) {\n      const findings = await detectSomeRuleFindings(ctx, scope);\n      if (!ctx.repair && !ctx.previewRepair) {\n        return { findings };\n      }\n      if (ctx.previewRepair) {\n        return previewSomeRuleRepair(ctx, findings);\n      }\n      return runSomeRuleRepairAsStructured(ctx, findings);\n    },\n  },\n})\n```\n\nWhen one fully structured contribution owns multiple structured checks, each check names its own ID explicitly:\n\n```ts\ncreateDoctorHealthContribution({\n  id: \"doctor:browser\",\n  label: \"Browser\",\n  healthChecks: [\n    {\n      id: \"core/doctor/browser\",\n      description: \"Browser readiness is valid.\",\n      async detect(ctx) {\n        return collectBrowserReadinessFindings(ctx);\n      },\n    },\n    {\n      id: \"core/doctor/browser-clawd-profile-residue\",\n      description: \"Legacy browser profile residue is absent.\",\n      async detect(ctx) {\n        return detectBrowserResidueFindings(ctx);\n      },\n      async repair(ctx, findings) {\n        return previewOrArchiveBrowserResidue(ctx, findings);\n      },\n    },\n  ],\n})\n```\n\nIf a check has repair behavior, it is expected to honor the existing dry-run/diff/effects conventions.\n\n## Validation\n\n- Rebased onto origin/main at 081e29595eba; resolved the doctor-health-conversion-plan.ts modify/delete conflict by preserving this PR deletion of the temporary conversion ledger.\n- pnpm install --frozen-lockfile\n- git diff --check origin/main...HEAD\n- node_modules/.bin/oxfmt --check --threads=1 src/flows/doctor-health-contributions.ts src/flows/doctor-health-contributions.test.ts src/flows/doctor-repair-flow.ts src/commands/doctor-lint.ts src/commands/doctor-lint.test.ts src/flows/doctor-core-checks.ts src/flows/doctor-core-checks.test.ts docs/cli/doctor.md\n- node_modules/.bin/oxlint --tsconfig config/tsconfig/oxlint.core.json src/flows/doctor-health-contributions.ts src/flows/doctor-health-contributions.test.ts src/flows/doctor-repair-flow.ts src/commands/doctor-lint.ts src/commands/doctor-lint.test.ts src/flows/doctor-core-checks.ts src/flows/doctor-core-checks.test.ts\n- CI=1 TERM=dumb node_modules/.bin/vitest run src/flows/doctor-health-contributions.test.ts src/flows/doctor-core-checks.test.ts src/commands/doctor-lint.test.ts src/flows/doctor-repair-flow.test.ts --reporter=dot --pool=forks --testTimeout=30000 --hookTimeout=30000 (4 files, 49 tests)\n- node scripts/run-tsgo.mjs -p tsconfig.core.json --noEmit --incremental false --pretty false\n- node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --noEmit --incremental false --pretty false\n- Rebased signed head: aa1f8e479436.\n\n## Updated In-Place Upgrade Stack\n\nThese are the doctor PRs in the in-place upgrade series. Each one keeps the existing contribution order and preserves legacy real repair unless that PR explicitly removes the legacy run path.\n\n| PR | Area | Shape |\n| --- | --- | --- |\n| #85566 | Shell completion | Structured lint health is owned by the existing doctor:shell-completion contribution. |\n| #84290 | UI freshness | Structured lint/dry-run effects report missing or stale Control UI assets, while real build/rebuild stays on the existing doctor UI freshness path. |\n| #84366 | Session locks | Structured lint/dry-run effects report stale lock cleanup, while real cleanup stays on the existing session-lock doctor path. |\n| #84450 | Config audit scrub | Next small config/state slice: structured lint/dry-run effects report historical config-audit argv redaction cleanup, while real scrub stays on the existing config-audit doctor path. |\n| #84326 | Sandbox registry | Structured lint/dry-run effects report legacy sandbox registry migrate/remove/quarantine work, while real migration stays on the existing sandbox doctor path. |\n| #84340 | Gateway extra services | Structured lint/dry-run effects report extra gateway-like services and legacy cleanup previews, while real cleanup stays on the existing gateway-services doctor path. |\n\nThe remaining older doctor repair drafts should be rebased onto this PR and reduced to this same in-place shape before they are presented as part of the series.\n\n\n\n\n\n",
-        "branch": "doctor-core-contribution-health",
-        "head_sha": "aa1f8e479436bd8f1621cb65a78f4b569a15c9d1",
-        "author": "giodl73-repo",
-        "labels": [
-          "docs",
-          "commands",
-          "maintainer",
-          "size: L",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "docs/cli/doctor.md",
-            "additions": 6,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor-lint.test.ts",
-            "additions": 66,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor-lint.ts",
-            "additions": 20,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/flows/doctor-core-checks.test.ts",
-            "additions": 2,
-            "deletions": 65,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/flows/doctor-core-checks.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/flows/doctor-health-contributions.test.ts",
-            "additions": 254,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/flows/doctor-health-contributions.ts",
-            "additions": 198,
-            "deletions": 15,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/flows/doctor-health-conversion-plan.test.ts",
-            "additions": 0,
-            "deletions": 38,
-            "changeType": "DELETED"
-          },
-          {
-            "path": "src/flows/doctor-health-conversion-plan.ts",
-            "additions": 0,
-            "deletions": 264,
-            "changeType": "DELETED"
-          },
-          {
-            "path": "src/flows/doctor-repair-flow.ts",
-            "additions": 6,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86627",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86627.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "SUCCESS": 73,
-            "CANCELLED": 1,
-            "SKIPPED": 27,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      }
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 6757,
+    "total_ms": 2381,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 669
+        "ms": 620
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2729
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 3182
+        "ms": 1747
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
