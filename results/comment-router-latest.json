@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-26T14:28:50.007Z",
+  "generated_at": "2026-05-26T14:28:55.434Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-26T11:28:46.448Z",
+  "since": "2026-05-26T11:28:52.679Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    86898
+    86926
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,86 +31,130 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86898:4544223918:2026-05-26T14:28:42Z:clawsweeper_auto_repair",
-      "comment_id": "4544223918",
-      "comment_version_key": "4544223918:2026-05-26T14:28:42Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86898#issuecomment-4544223918",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86926:4544793098:2026-05-26T14:28:47Z:clawsweeper_needs_human",
+      "comment_id": "4544793098",
+      "comment_version_key": "4544793098:2026-05-26T14:28:47Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86926#issuecomment-4544793098",
       "repo": "openclaw/openclaw",
-      "issue_number": 86898,
+      "issue_number": 86926,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-26T13:01:46Z",
-      "comment_updated_at": "2026-05-26T14:28:42Z",
+      "comment_created_at": "2026-05-26T14:02:42Z",
+      "comment_updated_at": "2026-05-26T14:28:47Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=83e1c12b6eb1506c9da34f995de7d5fe004c9683)",
-      "review_summary": "The PR removes the session-lane drain wait from deferred context-engine turn maintenance, leaves scheduling on the dedicated maintenance lane, and drops the unused queue-depth polling import and constant.\n\nPR surface: Source -11. Total -11 across 1 file.\n\nReproducibility: yes. from source inspection and the linked report: steady Telegram DM traffic reuses a session lane while deferred maintenance waits on that lane. I did not run a live Telegram reproduction in this read-only review.",
-      "review_followup": "The remaining blocker is maintainer/author revision of the core session-state ordering invariant plus contributor-supplied real Telegram proof, not a safe autonomous cleanup close.",
+      "repair_reason": "No repair job is needed; the remaining action is maintainer acceptance of the 90s generic timeout and required CI completion.; Cleared: No concrete security or supply-chain issue found; the diff changes TypeScript/docs/tests and a bounded timeout default without dependencies, workflows, permissions, or secrets handling. (sha=6b4e3e8818fb5e9e3aa27cfabcc014751e938605)",
+      "review_summary": "The branch raises Codex generic dynamic-tool timeouts to 90s in main and side app-server paths, updates docs/tests, removes image-tool casts, and adds transcripts tool display metadata.\n\nPR surface: Source +23, Tests +31, Docs 0, Other +46. Total +100 across 9 files.\n\nReproducibility: yes. Current main source shows both generic Codex dynamic-tool resolvers fall back to 30_000ms, and the PR body reports red-before assertions for session_status before changing the constants; I did not run tests because this review is read-only.",
+      "review_followup": "No repair job is needed; the remaining action is maintainer acceptance of the 90s generic timeout and required CI completion.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "83e1c12b6eb1506c9da34f995de7d5fe004c9683",
+      "expected_head_sha": "6b4e3e8818fb5e9e3aa27cfabcc014751e938605",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(context-engine): resolve turn-maintenance livelock on Telegram DM sessions (#77340)",
-        "body": "## Problem\n\nCloses #77340.\n\nUnder steady Telegram DM traffic, the deferred turn-maintenance worker livelocks. It waits for `resolveSessionLane(sessionKey)` to reach zero queue depth before committing — but that lane is also used by inference, so it never empties while the user is actively chatting.\n\n**Observable consequence:** monotonically growing trailing-assistant accumulation. Each turn's `bootstrap-context` assembler reads pre-maintenance transcript state, growing `inputMessages` far beyond `outputMessages`. Production evidence from a macOS / Telegram DM deployment running `lossless-claw`:\n\n```\n[lcm] assemble: done inputMessages=778 outputMessages=154 duration=2457ms\n[trace:embedded-run] prep stages: bootstrap-context:14190ms@15162ms\nliveness warning: eventLoopDelayP99Ms=21743 eventLoopUtilization=1 cpuCoreRatio=1.015\n```\n\n14 seconds of `bootstrap-context` assembly per turn → ~2 minute end-to-end response latency. The event loop utilisation hits 1.0 (100%) during each turn.\n\n## Fix (Option B from issue)\n\nReplace the session-lane drain wait with `enqueueCommandInLane` on the dedicated maintenance lane (`resolveDeferredTurnMaintenanceLane`). The maintenance lane is keyed separately from the session/inference lane:\n\n- Maintenance runs serialise **against each other** (no concurrent maintenance for the same session)\n- Maintenance **never contends with inference** — the session lane is no longer blocked\n- Transcript-correctness writes complete before the next read, without the livelock\n\n```ts\n// Before: waits for inference lane — livelocks under steady traffic\nconst sessionLane = resolveSessionLane(params.sessionKey);\nfor (;;) {\n  while (getQueueSize(sessionLane) > 0) {\n    await sleepWithAbort(TURN_MAINTENANCE_WAIT_POLL_MS, ...);\n  }\n  if (getQueueSize(sessionLane) === 0) break;\n}\n\n// After: runs on its own lane — no contention with inference\nawait enqueueCommandInLane(\n  resolveDeferredTurnMaintenanceLane(params.sessionKey),\n  async () => { /* maintenance work */ },\n);\n```\n\n## Testing\n\n- TypeScript: zero errors (`tsc --noEmit`)\n- Pre-existing test setup failure (`@openclaw/fs-safe/config` resolution) exists on upstream `main` before this change — not caused by this PR\n- Manually verified: after applying locally, `inputMessages` converges to `outputMessages` and `bootstrap-context` duration drops from 14s to ~80ms on the affected Telegram DM session\n\n## Repro environment (confirming match with #77340)\n\n- macOS Darwin 25.5.0 arm64\n- OpenClaw 2026.5.22, Node 24.15.0\n- `@martian-engineering/lossless-claw` active\n- Channel: Telegram DM (`agent:main:telegram:direct:<id>`)\n- Pattern: `inputMessages` grew to 778 vs `outputMessages` 154; liveness warnings every turn",
-        "branch": "fix/77340-turn-maintenance-livelock",
-        "head_sha": "83e1c12b6eb1506c9da34f995de7d5fe004c9683",
-        "author": "baghvn",
+        "title": "fix(codex): raise dynamic tool RPC timeout",
+        "body": "## Summary\n\nWhat problem does this PR solve?\n- Raises the generic Codex dynamic-tool RPC watchdog from 30 seconds to 90 seconds in both the main run-attempt path and side-question path.\n- Keeps existing per-call `timeoutMs`, image-generation, media image, message-tool, and 600s clamp behavior unchanged.\n\nWhy does this matter now?\n- `session_status` and other enumeration-heavy MCP tools can exceed the previous 30s generic default, causing Codex agents to lose their canonical status/introspection path.\n\nWhat is the intended outcome?\n- Generic OpenClaw-owned Codex dynamic-tool calls get a default budget aligned with slower real-world enumeration workloads while still timing out deterministically.\n\nWhat is intentionally out of scope?\n- Adding a new operator config knob.\n- Changing `session_status` schema parameters.\n- Changing media/message/image special-case budgets.\n\nWhat does success look like?\n- Generic dynamic tools default to 90s in main and side Codex app-server paths.\n- Existing explicit and special-case timeout behavior remains covered.\n\nWhat should reviewers focus on?\n- Whether 90s is the right narrow default bump for generic dynamic tools.\n- Whether docs and tests cover both main and side paths.\n\n## Linked context\n\nWhich issue does this close?\n\nAddresses #86758\n\nWhich issues, PRs, or discussions are related?\n\nRelated #86758\n\nWas this requested by a maintainer or owner?\n\nAstra P1 autopilot handoff for issue #86758.\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: Generic Codex dynamic-tool calls such as `session_status` used the hardcoded 30000ms default in both main and side app-server paths.\n- Real environment tested: Local OpenClaw source checkout on branch `fix/86758-dynamic-tool-timeout` under `/Users/miya/Desktop/openclaw-issue-86758`.\n- Exact steps or command run after this patch: `node --import tsx -e \"import { testing as main } from './extensions/codex/src/app-server/run-attempt.ts'; import { testing as side } from './extensions/codex/src/app-server/side-question.ts'; const mainTimeout = main.resolveDynamicToolCallTimeoutMs({ call: { threadId: 'thread-1', turnId: 'turn-1', callId: 'call-session-status', namespace: null, tool: 'session_status', arguments: { sessionKey: 'current' } }, config: undefined }); const sideTimeout = side.resolveSideDynamicToolCallTimeoutMs({ call: { threadId: 'side-thread', turnId: 'turn-1', callId: 'call-session-status', tool: 'session_status', arguments: { sessionKey: 'current' } }, config: {} }); console.log(JSON.stringify({ mainTimeout, sideTimeout }));\"`\n- Evidence after fix (screenshot, recording, terminal capture, console output, redacted runtime log, linked artifact, or copied live output): terminal output: `{\"mainTimeout\":90000,\"sideTimeout\":90000}`\n- Observed result after fix: The patched main and side Codex app-server timeout resolvers both returned `90000` for a `session_status` dynamic-tool call that does not provide a per-call timeout.\n- What was not tested: A live large-session-store `session_status` call against a patched installed gateway.\n- Proof limitations or environment constraints: The live installed OpenClaw runtime still has the 30s dynamic-tool watchdog, and Clawpatch itself hit that timeout via the OpenClaw tool path. The CLI fallback then failed provider auth with `401 Unauthorized`, so Clawpatch review could not complete in this environment.\n- Before evidence (optional but encouraged): The same targeted resolver assertion failed before the production change with `expected 90000` and `received 30000` for both main and side generic dynamic-tool defaults.\n\n## Tests and validation\n\nWhich commands did you run?\n- `pnpm install`\n- `node --import tsx -e \"import { testing as main } from './extensions/codex/src/app-server/run-attempt.ts'; import { testing as side } from './extensions/codex/src/app-server/side-question.ts'; const mainTimeout = main.resolveDynamicToolCallTimeoutMs({ call: { threadId: 'thread-1', turnId: 'turn-1', callId: 'call-session-status', namespace: null, tool: 'session_status', arguments: { sessionKey: 'current' } }, config: undefined }); const sideTimeout = side.resolveSideDynamicToolCallTimeoutMs({ call: { threadId: 'side-thread', turnId: 'turn-1', callId: 'call-session-status', tool: 'session_status', arguments: { sessionKey: 'current' } }, config: {} }); console.log(JSON.stringify({ mainTimeout, sideTimeout }));\"`\n- `node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.test.ts extensions/codex/src/app-server/side-question.test.ts` (red before fix: expected 90000, received 30000)\n- `node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.test.ts extensions/codex/src/app-server/side-question.test.ts` (green after fix: 249 passed)\n- `git diff --check`\n- `pnpm docs:list`\n- `clawpatch_doctor`, `clawpatch_status`, `clawpatch_init`, `clawpatch_map`\n- `clawpatch_review` via OpenClaw tool and `/Users/miya/.openclaw/bin/clawpatch review --root /Users/miya/Desktop/openclaw-issue-86758 --provider codex --limit 3 --jobs 1` attempted but blocked as noted above.\n\nWhat regression coverage was added or updated?\n- Added focused assertions for the generic `session_status` dynamic-tool fallback in main run attempts and side questions.\n\nWhat failed before this fix, if known?\n- The new assertions failed because both resolver paths returned `30000`.\n\nIf no test was added, why not?\n- Tests were added.\n\n## Risk checklist\n\nDid user-visible behavior change? (`Yes/No`)\n\nYes.\n\nDid config, environment, or migration behavior change? (`Yes/No`)\n\nNo.\n\nDid security, auth, secrets, network, or tool execution behavior change? (`Yes/No`)\n\nYes, tool execution timeout budget changes for generic Codex dynamic tools.\n\nWhat is the highest-risk area?\n\nLonger-running generic tool calls may consume a session lane longer before returning timeout.\n\nHow is that risk mitigated?\n\nThe new default remains bounded at 90s, per-call timeouts still override it, existing media/message/image special cases remain unchanged, and the 600s maximum clamp still applies.\n\n## Current review state\n\nWhat is the next action?\n\nReview and CI.\n\nWhat is still waiting on author, maintainer, CI, or external proof?\n\nCI and any maintainer-requested live proof against a patched installed gateway.\n\nWhich bot or reviewer comments were addressed?\n\nThe issue's `clawsweeper:needs-live-repro` concern is addressed with source-level red/green proof for the exact 30s fallback path plus local terminal output from the patched resolver path; a full live large-session-store repro remains a stated proof limitation.\n\nAI-assisted: yes, implemented by Vector/Codex with targeted validation.\n",
+        "branch": "fix/86758-dynamic-tool-timeout",
+        "head_sha": "6b4e3e8818fb5e9e3aa27cfabcc014751e938605",
+        "author": "udaymanish6",
         "labels": [
+          "docs",
           "agents",
-          "size: XS",
-          "triage: needs-real-behavior-proof",
-          "mantis: telegram-visible-proof",
+          "size: S",
+          "extensions: codex",
+          "proof: supplied",
+          "proof: sufficient",
           "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
+          "rating: 🐚 platinum hermit",
           "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "src/agents/pi-embedded-runner/context-engine-maintenance.ts",
-            "additions": 17,
-            "deletions": 28,
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
+            "additions": 46,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/codex-harness-reference.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/codex-harness.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/run-attempt.test.ts",
+            "additions": 16,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/run-attempt.ts",
+            "additions": 4,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/side-question.test.ts",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/side-question.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tool-display-config.ts",
+            "additions": 26,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/image-tool.ts",
+            "additions": 2,
+            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86898",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86898.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86926",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86926.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 103,
+          "total": 106,
           "counts": {
-            "FAILURE": 5,
-            "SUCCESS": 69,
-            "SKIPPED": 27,
+            "SUCCESS": 77,
+            "SKIPPED": 26,
+            "IN_PROGRESS": 1,
             "QUEUED": 2
           },
           "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-agentic-agents:FAILURE",
-            "check-guards:FAILURE",
-            "check-lint:FAILURE",
-            "checks-windows-node-test:FAILURE",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
             "CodeQL:QUEUED",
             "Opengrep OSS:QUEUED"
           ],
@@ -118,36 +162,31 @@
             "CodeQL:QUEUED",
             "Opengrep OSS:QUEUED"
           ],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-agentic-agents:FAILURE",
-            "check-guards:FAILURE",
-            "check-lint:FAILURE"
-          ]
+          "terminalBlockers": []
         }
       },
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 3954,
+    "total_ms": 2986,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 462
+        "ms": 433
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 3081
+        "ms": 2307
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 385
+        "ms": 219
       },
       {
         "name": "append_ledger",
