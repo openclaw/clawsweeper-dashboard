@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-26T13:07:33.943Z",
+  "generated_at": "2026-05-26T13:09:15.466Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-26T10:07:33.598Z",
+  "since": "2026-05-26T10:09:12.866Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    86897
+    86889
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 2,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,128 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86889:4544196643:2026-05-26T13:09:09Z:clawsweeper_needs_human",
+      "comment_id": "4544196643",
+      "comment_version_key": "4544196643:2026-05-26T13:09:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86889#issuecomment-4544196643",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86889,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-26T12:58:07Z",
+      "comment_updated_at": "2026-05-26T13:09:09Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "This PR needs contributor runtime proof or a maintainer proof override before merge; there is no narrow automated code repair because review findings are empty.; Cleared: The diff only changes gateway projection logic and colocated tests; it does not touch dependencies, workflows, scripts, secrets, package metadata, or other supply-chain surfaces. (sha=163cd013dee1a2dc3f9c017a32ea6aebd6b59abe)",
+      "review_summary": "The PR adds a gateway chat-history projection branch that hides a subagent_announce inter-session user message together with its immediately adjacent assistant reply, with regression tests for provenance, inline-prefix, and trailing-announce cases.\n\nPR surface: Source +12, Tests +77. Total +89 across 2 files.\n\nReproducibility: yes. from source inspection: current main sends chat.history rows through projectRecentChatDisplayMessages, and the existing filter hides the subagent_announce user row but not the adjacent assistant row. I did not run a live reproduction because this review is read-only and local tests would write artifacts.",
+      "review_followup": "This PR needs contributor runtime proof or a maintainer proof override before merge; there is no narrow automated code repair because review findings are empty.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "163cd013dee1a2dc3f9c017a32ea6aebd6b59abe",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): hide subagent_announce assistant reply alongside its inter-session user message",
+        "body": "### Summary\n\n- **Problem**: After `/new` on a feishu (or any) channel that previously received a `subagent_announce` delivery under the same `sessionKey`, the runtime's `sessions_history(sessionKey=…)` call hydrates the new conversation with the trailing assistant reply from the long-finished announce turn. The assistant model treats it as \"the most recent thing the user just said\" and resumes an unrelated topic. (#85648)\n- **Root Cause**: `src/gateway/chat-display-projection.ts` already hides the user-role inter-session announce message via `shouldHideProjectedHistoryMessage` → `isSubagentAnnounceInterSessionUserMessage` (matches `provenance.kind=inter_session` + `sourceTool=subagent_announce`, or the inline `[Inter-session message] sourceTool=subagent_announce` prefix). Its immediately-following assistant reply carries no announce-specific signal of its own — it is just the agent's text response to that announce turn — so it falls through every filter and lands in the chat-history response, exactly the \"fanfic lore-bible summary\" leak the reporter observed inside a fresh paper-defense conversation.\n- **Fix**: In `filterVisibleProjectedHistoryMessages`, treat the (user inter-session announce, immediately-following assistant) pair as a hidden unit — same pattern as the existing heartbeat-ack pair-hide just above. The user-role match condition is the existing `isSubagentAnnounceInterSessionUserMessage(current)` so detection is consistent with the per-message hide path; the new branch only fires when the next message is role `assistant`. Trailing announces with no paired assistant still fall through to the existing user-only filter and are hidden there.\n- **What changed**:\n  - `src/gateway/chat-display-projection.ts`: one additional branch (12 lines) inside the existing `filterVisibleProjectedHistoryMessages` iteration, between the heartbeat pair-hide and the per-message `shouldHideProjectedHistoryMessage` check.\n  - `src/gateway/server-methods/server-methods.test.ts`: three new cases under `describe(\"projectRecentChatDisplayMessages\", …)` — provenance-tagged announce pair surrounded by real turns, text-prefix-tagged announce pair (no `provenance` field), trailing announce without an assistant reply.\n- **What did NOT change (scope boundary)**:\n  - Detection logic for the user-role announce (`isSubagentAnnounceInterSessionUserMessage`, `shouldHideProjectedHistoryMessage`) is unchanged; the new branch reuses it.\n  - The transcript persistence path, the session-store entry resolution, the `chat.history` sessionKey→sessionId lookup, and the announce-delivery runner are unchanged.\n  - No other projection branch (heartbeat, ACP duplicate, runtime-context, oversized) is touched.\n  - No config keys, protocol, or message-delivery behavior changed.\n\n### Reproduction\n\n1. From a feishu (or any) direct chat, spawn a subagent that finishes a task and emits `subagent_announce`. The announce is persisted under the same `sessionKey` as the user's main session (an inter-session user message + the agent's assistant reply).\n2. Days later, issue `/new` on that chat. The runtime auto-calls `sessions_history(sessionKey=…)` shortly after `session.started`.\n- Before: the announce assistant reply leaks into the `chat.history` response (in the reporter's trace at `seq=2`, alongside the announce user message at `seq=1`); the model resumes the unrelated subagent topic.\n- After: the announce user message AND its assistant reply are both stripped from the projected history; the new session is hydrated only with real prior turns (or empty if none).\n\n### Real behavior proof\n\n- **Behavior addressed (#85648)**: when chat.history reads a session transcript that contains an inter-session `subagent_announce` turn, both the announce user message AND its adjacent assistant reply must be hidden from default hydration; surrounding real user/assistant turns must still come through unaffected.\n- **Real environment tested (Linux, Node 22)**: targeted Vitest run against the real `projectRecentChatDisplayMessages` (the same function `chat.history` invokes), exercising the provenance-tagged, text-prefix-tagged, and trailing-announce shapes the announce-delivery path actually produces in the JSONL transcript.\n- **Exact steps or command run after this patch**: `node_modules/.bin/vitest run src/gateway/server-methods/server-methods.test.ts -t \"projectRecentChatDisplayMessages\"`.\n- **Evidence after fix (verbatim test output)**:\n\n```text\nTest Files  1 passed (1)\n     Tests  13 passed | 93 skipped (106)\n  Start at  20:25:40\n  Duration  18.54s\n```\n\n- **Observed result after fix**: the three new announce-pair cases pass — the provenance-tagged case asserts a 5-turn transcript (real user → real assistant → announce user → announce assistant → next user) projects to exactly 3 turns (real user, real assistant, next user) with both announce messages stripped and the surrounding real turns intact; the text-prefix case asserts the same pair-hide when only the inline `[Inter-session message] sourceTool=subagent_announce` text is present and `provenance` is missing; the trailing-announce case asserts the user-only fall-through still removes a final announce when no assistant follows. The ten pre-existing `projectRecentChatDisplayMessages` cases (heartbeat ack pair-hide, ACP duplicate suppression, runtime-context hidden, TTS supplement merge, media-only preservation, applies-history-limits-after-hide, etc.) still pass unchanged — no regression in any sibling projection branch.\n- **Regression tests**: the three new cases cover both detection branches (`provenance.kind` and inline prefix text) and the trailing-no-assistant edge; the surrounding-real-turns assertion in the provenance case pins that the new branch cannot accidentally skip an unrelated user message adjacent to the announce.\n- **What was not tested**: a live end-to-end gateway run with a real feishu announce-delivery turn was not executed. The projection function is pure (no I/O, no clock, no async), and the unit tests reproduce the exact `chat.history` input shape including both the `provenance` field and the inline `[Inter-session message] sourceTool=subagent_announce` prefix variant the announce-delivery path persists.\n\n### Risk / Mitigation\n\n- **Risk**: the new branch could over-hide a regular user→assistant turn pair.\n- **Mitigation**: the branch is gated on `isSubagentAnnounceInterSessionUserMessage(current)` AND `nextRoleContent.role === \"assistant\"`. A regular user message cannot satisfy `isSubagentAnnounceInterSessionUserMessage` — it requires `provenance.kind=inter_session && provenance.sourceTool=subagent_announce`, or both `[Inter-session message]` and `sourceTool=subagent_announce` to appear in the message text. The provenance-tagged test asserts the `next user turn` real message at `timestamp: 5` survives unchanged (so the new branch only consumes the (user-announce, assistant) pair, not the real user that follows); the existing \"applies history limits after dropping display-hidden messages\" case still passes, so the broader display-hide pipeline is unchanged.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n\n### Linked Issue/PR\n\nFixes #85648\n",
+        "branch": "fix/85648-announce-pair-hide",
+        "head_sha": "163cd013dee1a2dc3f9c017a32ea6aebd6b59abe",
+        "author": "openperf",
+        "labels": [
+          "gateway",
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/chat-display-projection.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/server-methods.test.ts",
+            "additions": 77,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86889",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86889.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 101,
+          "counts": {
+            "SUCCESS": 68,
+            "IN_PROGRESS": 1,
+            "SKIPPED": 28,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Scan changed paths (precise):IN_PROGRESS",
+            "build-artifacts:FAILURE",
+            "checks-node-agentic-gateway-core:FAILURE",
+            "check-lint:FAILURE"
+          ],
+          "pending": [
+            "Scan changed paths (precise):IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "build-artifacts:FAILURE",
+            "checks-node-agentic-gateway-core:FAILURE",
+            "check-lint:FAILURE"
+          ]
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 635,
+    "total_ms": 2906,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 333
+        "ms": 359
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2227
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 291
+        "ms": 294
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
