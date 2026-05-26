@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-26T21:55:39.165Z",
+  "generated_at": "2026-05-26T21:55:39.136Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-26T18:55:37.258Z",
+  "since": "2026-05-26T18:55:38.666Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     70707
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4549300536
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 9,
@@ -40,12 +42,12 @@
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-29T04:28:21Z",
-      "comment_updated_at": "2026-05-26T21:55:34Z",
+      "comment_created_at": "2026-05-26T21:54:40Z",
+      "comment_updated_at": "2026-05-26T21:54:40Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -61,141 +63,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): reject RPCs from invalidated device-token clients durin…",
-        "body": "## Summary\n\n- **Problem:** `device.token.rotate`, `device.token.revoke`, and `device.pair.remove` respond 200 OK then defer `disconnectClientsForDevice` via `queueMicrotask`. RPCs already pipelined in the WS buffer land with the rotated/revoked token before the socket closes.\n- **Why it matters:** An attacker can execute authenticated operations with a token that should already be invalidated — privilege persistence after revocation.\n- **What changed:** Added a synchronous `invalidated` flag on `GatewayWsClient`, set before `respond()` in all three handlers. Added a per-RPC dispatch guard that force-closes flagged clients. Introduced `context.invalidateClientsForDevice()` as a sync companion to the existing async disconnect.\n- **What did NOT change:** Shared-auth re-check path (already guarded at `message-handler.ts:1444-1458`), disconnect scheduling (still `queueMicrotask`), admin response flushing behavior.\n\n## Change Type\n\n- [x] Bug fix\n- [x] Security hardening\n\n## Scope\n\n- [x] Gateway / orchestration\n- [x] Auth / tokens\n\n## Linked Issue/PR\n\n- Related #71156 (documents the race in AGENTS.md as \"open/in-flight\")\n- [x] This PR fixes a bug or regression\n\n## Root Cause\n\n- **Root cause:** `queueMicrotask` deferral of socket close created a window where the rotated/revoked token was still accepted. No per-RPC re-check existed for device-token auth.\n- **Missing detection / guardrail:** No synchronous invalidation mechanism; no test covering pipelined RPCs during the microtask window.\n- **Contributing context:** The shared-auth path already had per-RPC re-check; device-token auth was assumed to be covered by socket close, but socket close is async.\n\n## Regression Test Plan\n\n- Coverage level: [x] Unit test\n- **Scenario:** Pipelined RPCs after `invalidateClientsForDevice()` are rejected; `invalidated` flag is set before `respond()` returns.\n\n## User-visible / Behavior Changes\n\nRPCs arriving on a device-token WS connection after token rotation/revocation are now rejected immediately instead of being processed until socket close completes.\n\n## Diagram\n\n```text\nBefore:\n[rotate/revoke] -> [respond 200] -> [queueMicrotask: disconnect] -> [pipelined RPCs execute ✗]\n\nAfter:\n[rotate/revoke] -> [set invalidated flag] -> [respond 200] -> [pipelined RPCs hit dispatch guard → force-close] -> [queueMicrotask: disconnect]\n```\n\n## Security Impact\n\n- Secrets/tokens handling changed? Yes\n- **Risk + mitigation:** The `invalidated` flag is a new in-memory gate on RPC dispatch. Risk is false-positive invalidation; mitigated by setting the flag only in the three explicit revocation handlers.\n\n## Real behavior proof\n\n**Behavior or issue addressed:** `device.token.rotate`, `device.token.revoke`, and `device.pair.remove` responded 200 OK then deferred `disconnectClientsForDevice` via `queueMicrotask`. RPCs already pipelined in the WS buffer executed with the revoked token before the socket closed — privilege persistence after revocation.\n\n**Real environment tested:** macOS 25.4.0 / Node 23.7.0, project source checkout, `node --import tsx/esm` run directly against the call-chain ordering pattern.\n\n**Exact steps or command run after the patch:**\n```\nnode --import tsx/esm proof-70707.mts\n```\n\n**Evidence after fix:**\n\nBefore the fix (invalidation deferred via queueMicrotask):\n```\n=== BEFORE FIX (invalidation deferred via queueMicrotask) ===\n  [rotate] respond(200 OK)\n  [microtask] invalidation fires — but RPCs already ran\n  Pipelined RPCs executed with revoked token: [sessions.list, agents.run]\n  → Privilege persistence after revocation!\n```\n\nAfter the fix (invalidated flag set synchronously before respond):\n```\n=== AFTER FIX (invalidated flag set synchronously before respond) ===\n  [rotate] invalidated flag SET synchronously\n  [rotate] respond(200 OK)\n  [microtask] socket close fires — but RPCs already blocked\n  Pipelined RPCs executed: none ✓\n  Rejected by dispatch guard: [sessions.list, agents.run] ✓\n  → No privilege persistence after revocation.\n```\n\n**Observed result after fix:** Pipelined RPCs are rejected immediately by the dispatch guard. The synchronous `invalidated` flag closes the microtask window before any buffered RPC can execute.\n\n**What was not tested:** Full integration test with real pipelined WebSocket traffic under load. The `node` script above isolates the exact ordering pattern and produces real before/after output demonstrating the race and its fix.",
-        "branch": "fix/gateway-device-token-rpc-revalidation",
-        "head_sha": "5c2d79f1b677cc3216775ddc2417e5dd9c7d387d",
-        "author": "davidangularme",
-        "labels": [
-          "gateway",
-          "commands",
-          "size: L",
-          "triage: refactor-only",
-          "triage: blank-template",
-          "proof: supplied",
-          "P0",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 security-boundary",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/music-generation-providers.live.test.ts",
-            "additions": 6,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/video-generation-providers.live.test.ts",
-            "additions": 5,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/status.summary.redaction.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/devices.test.ts",
-            "additions": 79,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/devices.ts",
-            "additions": 23,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/shared-types.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-request-context.test.ts",
-            "additions": 134,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-request-context.ts",
-            "additions": 21,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts",
-            "additions": 317,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server/ws-connection/message-handler.ts",
-            "additions": 41,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server/ws-types.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-70707",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-70707.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "counts": {
-            "SUCCESS": 73,
-            "SKIPPED": 21,
-            "IN_PROGRESS": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Critical Quality (gateway-runtime-boundary):IN_PROGRESS"
-          ],
-          "pending": [
-            "Critical Quality (gateway-runtime-boundary):IN_PROGRESS"
-          ],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2159,
+    "total_ms": 1591,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 281
+        "ms": 459
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1612
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 240
+        "ms": 1122
       },
       {
         "name": "append_ledger",
