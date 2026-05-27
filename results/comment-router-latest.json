@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-27T03:24:45.848Z",
+  "generated_at": "2026-05-27T03:24:59.958Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-27T00:24:45.581Z",
+  "since": "2026-05-27T00:24:57.785Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    87136
+    87134
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 2,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,121 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:87134:4550916158:2026-05-27T03:24:53Z:clawsweeper_needs_human",
+      "comment_id": "4550916158",
+      "comment_version_key": "4550916158:2026-05-27T03:24:53Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/87134#issuecomment-4550916158",
+      "repo": "openclaw/openclaw",
+      "issue_number": 87134,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-27T03:18:31Z",
+      "comment_updated_at": "2026-05-27T03:24:53Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "Human review should wait on real Windows proof because automation cannot prove the contributor’s laptop battery transition or Task Scheduler import behavior from mocks alone.; Cleared: No concrete security or supply-chain issue was found; the diff adds local XML generation and tests without new dependencies, workflow changes, or secret handling. (sha=2c62141910af777569238533e0cca1ae2549914e)",
+      "review_summary": "The PR changes Windows Scheduled Task creation and update to import an XML task definition with battery start/continue settings, plus regression tests for fresh install and upgrade refresh paths.\n\nPR surface: Source +113, Tests +100. Total +213 across 2 files.\n\nReproducibility: yes. source-reproducible: current main creates the Windows task through schtasks CLI flags without the battery settings, and Microsoft’s Task Scheduler schema shows those settings default to stopping or blocking battery operation. I did not reproduce the AC-to-battery transition live.",
+      "review_followup": "Human review should wait on real Windows proof because automation cannot prove the contributor’s laptop battery transition or Task Scheduler import behavior from mocks alone.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "2c62141910af777569238533e0cca1ae2549914e",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(daemon): keep Windows Scheduled Task running on battery power (#59299)",
+        "body": "## Summary\n\nOn Windows, the Gateway daemon crashes (or rather is killed by Task Scheduler) every single time the laptop switches from AC to battery power. Reporter on Windows 10 22H2 documented a 100% failure rate over OpenClaw versions 2026.2.x–2026.4.1 (#59299). This change updates the Windows Scheduled Task install/update path to set `<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>` and `<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>` so the Gateway task starts and continues running on battery power. Existing tasks installed by older versions inherit the new battery flags on the next gateway install/refresh.\n\n## Root Cause\n\n- `src/daemon/schtasks.ts:activateScheduledTask` used `schtasks /Create` with CLI flags (`/SC ONLOGON /RL LIMITED /TR ...`). The CLI flag surface of `schtasks /Create` cannot set `<DisallowStartIfOnBatteries>` or `<StopIfGoingOnBatteries>` — those are XML-only settings.\n- When those flags are not explicitly set, Task Scheduler defaults both to `true` (per the Microsoft Task Scheduler settings schema). Default `true` for both means the task is prevented from starting on battery and is killed mid-run when AC power is lost.\n- Execution path: `installScheduledTask` → `activateScheduledTask` → `execSchtasks([\"/Create\", \"/F\", \"/SC\", \"ONLOGON\", ...])` → resulting task has `StopIfGoingOnBatteries=true` → unplugging AC stops the Gateway.\n\n## Changes\n\n- `src/daemon/schtasks.ts`:\n  - Add `buildScheduledTaskXml()` that emits a Task Scheduler XML payload mirroring the prior CLI flags (ONLOGON trigger, LeastPrivilege run level, `InteractiveToken` logon when a `taskUser` is resolved, single-instance policy, no idle restrictions, exec action wired to the existing `gateway.cmd`/`gateway.vbs` launcher) and explicitly sets `<DisallowStartIfOnBatteries>false</...>` and `<StopIfGoingOnBatteries>false</...>`.\n  - Add `writeTaskXmlTempFile()` that writes UTF-16 LE with BOM (what `schtasks /XML` expects on all locales) and returns the temp path; the temp dir is cleaned up in a `finally` block.\n  - Replace the `schtasks /Create <CLI flags>` call in `activateScheduledTask()` with `schtasks /Create /F /TN <name> /XML <tempfile> [/RU <user> /NP]`. The same `taskUser` retry-without-`/RU` fallback is preserved.\n  - Re-apply the XML in `updateExistingScheduledTask()` right after the existing `/Change /TR` call so users upgrading from older versions adopt the battery flags on the next gateway install/refresh, rather than having to fully uninstall and reinstall. The re-apply is best-effort: a non-zero result leaves the existing settings in place instead of removing the task.\n- `src/daemon/schtasks.install.test.ts`:\n  - Capture `/XML` payload contents at mock time (before the production `finally` block deletes the temp file) via a new `xmlPayloadCaptures` array.\n  - Update existing tests that pinned the prior CLI argv shape to the new `/XML` argv shape.\n  - Add 2 new regression tests: one that pins `<DisallowStartIfOnBatteries>false</...>` and `<StopIfGoingOnBatteries>false</...>` on fresh `/Create`, and one that pins the upgrade-path XML re-apply.\n\n## Reproduction (before fix)\n\nSource-reproducible on the install path (live Windows AC-to-battery proof requires hardware that is not present in this checkout):\n\n~~~text\n# Inspect the generated `schtasks /Create` argv on current main:\nsrc/daemon/schtasks.ts:885-896 (baseArgs)\n  [\"/Create\", \"/F\", \"/SC\", \"ONLOGON\", \"/RL\", \"LIMITED\", \"/TN\", <name>, \"/TR\", <launcher>]\n# No `/XML` and no battery flags -> Task Scheduler defaults\n# DisallowStartIfOnBatteries=true, StopIfGoingOnBatteries=true.\n# Effect on Windows: task is killed the moment AC is unplugged.\n~~~\n\n## Verification (after fix)\n\n~~~text\nnode scripts/run-vitest.mjs src/daemon/schtasks.install.test.ts\n  ...\n  ✓ creates the Scheduled Task via XML with battery start/continue enabled (#59299) 12ms\n  ✓ re-applies the XML on /Change so upgraded tasks adopt battery flags (#59299) 8ms\n Test Files  1 passed (1)\n      Tests  12 passed (12)\n~~~\n\n~~~text\nnode scripts/run-vitest.mjs src/daemon/schtasks.test.ts src/daemon/schtasks.startup-fallback.test.ts src/daemon/schtasks.stop.test.ts src/daemon/schtasks-exec.test.ts\n Test Files  4 passed (4)\n      Tests  54 passed (54)\n~~~\n\n~~~text\npnpm tsgo:core  (EXIT=0)\n~~~\n\n## Test\n\n- `node scripts/run-vitest.mjs src/daemon/schtasks.install.test.ts` — 12 passed (incl. 2 new battery-flag regression tests)\n- `node scripts/run-vitest.mjs src/daemon/schtasks.test.ts src/daemon/schtasks.startup-fallback.test.ts src/daemon/schtasks.stop.test.ts src/daemon/schtasks-exec.test.ts` — 54 passed (sibling daemon coverage)\n- `pnpm tsgo:core` — passed\n\n## Notes\n\n- Scope: smallest XML-based repair that can set the two battery flags. CLI-only `/Create` and `/Change` cannot set these settings on any current `schtasks.exe` build, so XML is the only mechanism available without taking a PowerShell dependency.\n- Preserved unchanged:\n  - Startup-folder fallback when `/Create` is denied or times out (the same `shouldFallbackToStartupEntry` branch still runs on `/Create /XML` failures)\n  - Hidden launcher (`.vbs`) selection via `OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER`\n  - `quoteSchtasksArg` quoting strategy for the script launch path\n  - `/Change` update path: still updates `/TR` first; XML re-apply is best-effort and never removes the task\n  - All `runScheduledTaskOrThrow` and fallback launch behavior downstream\n- This follows clawsweeper's direction on #59299: *\"Land a narrow Windows Scheduled Task settings repair that lets the Gateway task start and continue on battery while preserving the current Startup-folder fallback, hidden launcher, quoting, and update behavior.\"*\n- This is a narrower replacement for #68149 (full PowerShell `Register-ScheduledTask` rewrite) which clawsweeper flagged as not a ready closing fix.\n\n## Real behavior proof\n\n- Behavior addressed: Windows Gateway Scheduled Task no longer dies when the laptop unplugs from AC power; the task is also allowed to start while already on battery.\n- Real environment tested: Unit-level proof against the schtasks argv mock that backs the existing install/update test surface. A live macOS Parallels / Windows laptop AC-to-battery proof is not part of this PR — see *What was not tested* below.\n- Exact steps or command run after this patch:\n  - `node scripts/run-vitest.mjs src/daemon/schtasks.install.test.ts`\n  - `node scripts/run-vitest.mjs src/daemon/schtasks.test.ts src/daemon/schtasks.startup-fallback.test.ts src/daemon/schtasks.stop.test.ts src/daemon/schtasks-exec.test.ts`\n  - `pnpm tsgo:core`\n- Evidence after fix: 12/12 install tests and 54/54 sibling tests pass; the new regression test reads the generated XML payload via the mock-capture array and asserts both `<DisallowStartIfOnBatteries>false</...>` and `<StopIfGoingOnBatteries>false</...>` are present, plus that the prior `<LogonTrigger>`, `<RunLevel>LeastPrivilege</RunLevel>`, `<UserId>...</UserId>`, and `<Exec>` semantics are preserved.\n- Observed result after fix: `schtasks /Create /XML <tempfile>` argv shape lands the task with battery start/continue allowed; the upgrade `/Change` path additionally re-applies the XML so existing installs adopt the new flags.\n- What was not tested: live Windows hardware AC-to-battery unplug. The fix is source-reproducible from the Task Scheduler XML schema documented by Microsoft and the existing test surface, but a live battery test is still useful before announcing the fix.\n\nCloses #59299\n",
+        "branch": "fix/schtasks-allow-battery",
+        "head_sha": "2c62141910af777569238533e0cca1ae2549914e",
+        "author": "moerai",
+        "labels": [
+          "gateway",
+          "size: M",
+          "triage: mock-only-proof",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/daemon/schtasks.install.test.ts",
+            "additions": 115,
+            "deletions": 15,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/daemon/schtasks.ts",
+            "additions": 130,
+            "deletions": 17,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-87134",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87134.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 103,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 71,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 436,
+    "total_ms": 2464,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 253
+        "ms": 318
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1838
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 170
+        "ms": 275
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
