@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-27T04:59:29.028Z",
+  "generated_at": "2026-05-27T04:59:28.411Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-27T01:59:27.606Z",
+  "since": "2026-05-27T01:59:26.155Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    80921
+    80823
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,75 +31,84 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:80921:4427897293:2026-05-27T04:59:20Z:clawsweeper_needs_human",
-      "comment_id": "4427897293",
-      "comment_version_key": "4427897293:2026-05-27T04:59:20Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/80921#issuecomment-4427897293",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:80823:4426423119:2026-05-27T04:59:20Z:clawsweeper_auto_repair",
+      "comment_id": "4426423119",
+      "comment_version_key": "4426423119:2026-05-27T04:59:20Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/80823#issuecomment-4426423119",
       "repo": "openclaw/openclaw",
-      "issue_number": 80921,
+      "issue_number": 80823,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-12T06:28:57Z",
+      "comment_created_at": "2026-05-12T01:10:55Z",
       "comment_updated_at": "2026-05-27T04:59:20Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "External PR needs contributor-supplied real behavior proof and a branch refresh; ClawSweeper should not repair or merge it without that proof gate being satisfied.; Cleared: The diff only changes gateway bind-probe behavior and does not add dependencies, secrets handling, CI, package resolution, or other supply-chain surface. (sha=689cbb3125ed7dec0843c0e2817e6ef8b64f9b40)",
-      "review_summary": "The PR adds a 3-second timeout to the temporary gateway bind probe in `src/gateway/net.ts` so a never-settling `::1` probe resolves false and startup can continue with IPv4-only listeners.\n\nPR surface: Source +32. Total +32 across 1 file.\n\nReproducibility: unclear. for live reproduction: current source confirms startup awaits an unbounded `canBindToHost(\"::1\")` probe, but this review did not reproduce the macOS Big Sur no-event behavior itself.",
-      "review_followup": "External PR needs contributor-supplied real behavior proof and a branch refresh; ClawSweeper should not repair or merge it without that proof gate being satisfied.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=8389d28f6038bf1f6640971a54a282ad8f6b1637)",
+      "review_summary": "The PR adds config CLI hint-selection logic and tests so hot-loadable `agents.list` mutations print a next-invocation hint while restart-required paths keep the gateway restart hint.\n\nPR surface: Source +81, Tests +105. Total +186 across 2 files.\n\nReproducibility: yes. from source, not local execution: current main unconditionally logs the restart hint after config mutations, and the linked issue plus PR body show the misleading active-agent case in a real CLI profile.",
+      "review_followup": "Needs maintainer review of the legacy whole-agent runtime semantics before merge; an automated repair would risk choosing the policy direction.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "689cbb3125ed7dec0843c0e2817e6ef8b64f9b40",
+      "expected_head_sha": "8389d28f6038bf1f6640971a54a282ad8f6b1637",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(net): add 3s timeout to canBindToHost to prevent Big Sur startup hang",
-        "body": "## Problem\n\nOn macOS Big Sur (11.x), the gateway hangs indefinitely after logging `\"starting HTTP server...\"`.\n\nThe root cause is in `canBindToHost()` in `src/gateway/net.ts`. When the gateway binds to `127.0.0.1`, `resolveGatewayListenHosts()` probes `::1` to determine whether to also listen on IPv6 loopback. The probe works by creating a temporary TCP server and calling `listen(0, \"::1\")`.\n\nOn macOS Big Sur, when IPv6 is not properly configured, this `listen()` call **never fires either the `\"listening\"` or `\"error\"` event** — the kernel silently accepts the call but the socket never enters LISTEN state. Since `canBindToHost()` has no timeout, the Promise never resolves and gateway startup hangs forever.\n\n```\nstartGatewayServer()\n  → log.info(\"starting HTTP server...\")   // ← last line visible in logs\n  → createGatewayRuntimeState()\n    → resolveGatewayListenHosts(\"127.0.0.1\")\n      → canBindToHost(\"::1\")              // ← hangs forever on Big Sur\n```\n\n## Fix\n\nAdd a 3-second timeout to `canBindToHost`. If neither `\"listening\"` nor `\"error\"` fires within the timeout, the function returns `false` and startup continues with IPv4-only binding.\n\n```typescript\n// Before\nasync function canBindToHost(host: string): Promise<boolean> {\n  return new Promise((resolve) => {\n    const testServer = net.createServer();\n    testServer.once(\"error\", () => { resolve(false); });\n    testServer.once(\"listening\", () => { testServer.close(); resolve(true); });\n    testServer.listen(0, host);\n  });\n}\n\n// After\nasync function canBindToHost(host: string, timeoutMs = 3000): Promise<boolean> {\n  return new Promise((resolve) => {\n    const testServer = net.createServer();\n    const timeout = setTimeout(() => { testServer.close(); resolve(false); }, timeoutMs);\n    testServer.once(\"error\", () => { clearTimeout(timeout); resolve(false); });\n    testServer.once(\"listening\", () => { clearTimeout(timeout); testServer.close(); resolve(true); });\n    testServer.listen(0, host);\n  });\n}\n```\n\nNote: A similar fix for Windows was already applied to `resolveGatewayListenHosts()` (skip `::1` probe entirely on `win32`). This PR extends the protection to macOS Big Sur via a timeout.\n\n## Test Plan\n\n- [ ] Gateway starts successfully on macOS 11.x with `gateway.bind: \"loopback\"` (or default)\n- [ ] Gateway still binds to both `127.0.0.1` and `::1` on macOS 12+ where IPv6 loopback works\n- [ ] Existing `canBindToHost` unit tests continue to pass\n- [ ] `resolveGatewayListenHosts` tests with injectable `canBindToHost` still pass\n\nFixes #80920",
-        "branch": "fix/can-bind-to-host-timeout",
-        "head_sha": "689cbb3125ed7dec0843c0e2817e6ef8b64f9b40",
-        "author": "leegisang",
+        "title": "fix(cli): differentiate gateway-restart hint for hot-loadable agent config sets (#80722)",
+        "body": "## Summary\n\n- `openclaw config set agents.list[N].model.*` now emits `Change will apply on next agent invocation.` for active config paths (no `agentRuntime` override), instead of the misleading `Restart the gateway to apply.`\n- Config entries with `agentRuntime.id` still get the existing `Restart the gateway to apply.` hint, because those runtime plans are cached eagerly.\n- Non-agent paths (`gateway.*`, `channels.*`, etc.) are untouched and keep the existing hint.\n- Paths that touch `agentRuntime` itself (set or unset) keep the restart hint, because removing/changing `agentRuntime` changes runtime structure.\n\n## Why\n\nFrom #80722:\n\n> `openclaw config set` on `agents.list[N].model.*` paths emits an identical `Restart the gateway to apply.` warning regardless of whether the target agent currently has an `agentRuntime` override. The warning is misleading for active agents (no `agentRuntime` field) — these agents config-hot-load on next invocation and never need a restart. The warning is correct for dormant agents with `agentRuntime.id=codex` overrides, which cache runtime plan eagerly and do require a gateway restart to load new model state.\n\nThe reporter (`@islandpreneur007`) demonstrated that swapping `model.primary` on an active config path is picked up by the next invocation in ~7.5s with no gateway restart, and that the undifferentiated warning creates real operational pressure (unnecessary restarts being scheduled, signal-to-noise dropping on warnings that actually matter).\n\n## Implementation\n\nSingle helper `operationCanHotLoad(nextConfig, requestedPath)` in `src/cli/config-cli.ts`. Conservative by design — anything it cannot positively classify as hot-loadable returns `false` (keep restart hint).\n\nReturns `true` only when **all** of the following hold:\n- `requestedPath` starts with `agents`, `list`, `<integer index>`, …\n- The trailing path segments do not include `agentRuntime`\n- `nextConfig.agents.list[index]` is a plain object\n- That config entry has no `agentRuntime.id` set in the post-mutation config\n\nA small wrapper `operationsCanHotLoad` requires that **every** operation in a batch can hot-load before softening the hint — a single runtime-override or non-agent op in a multi-op batch keeps the restart hint.\n\nThe four warning emit sites in `runConfigSet` / `runConfigUnset` switch on this. The wording change is bounded: `Restart the gateway to apply.` → `Change will apply on next agent invocation.` only for hot-loadable cases.\n\n## Changes\n\n| File | Change |\n|---|---|\n| `src/cli/config-cli.ts` | +helper (`operationCanHotLoad`, `operationsCanHotLoad`, `applyHint`); switch 4 emit sites to use `applyHint` |\n| `src/cli/config-cli.test.ts` | +5 tests covering hot-loadable vs runtime-override paths, non-agent path, `agentRuntime`-touching path, and unset on a hot-loadable path |\n\n## Real behavior proof\n\n**Behavior or issue addressed:**\n`openclaw config set` / `openclaw config unset` should not always tell users to restart the gateway. Hot-loadable agent model config writes should say `Change will apply on next agent invocation.`, while runtime-override, non-agent, and `agentRuntime`-touching paths should keep `Restart the gateway to apply.`\n\n**Real environment tested:**\n- macOS 25.3 (arm64)\n- Node v25.6.1\n- OpenClaw 2026.5.7 (eeef486)\n- Installed bundle: `/opt/homebrew/lib/node_modules/openclaw`\n- Isolated test profile: `~/.openclaw-issue80722-test`\n\nTest profile config:\n\n```jsonc\n{\n  \"agents\": {\n    \"list\": [\n      { \"id\": \"default-profile\",  \"default\": true,\n        \"model\": { \"primary\": \"openai/gpt-5.4\", \"fallbacks\": [\"openai/gpt-5.5\"] } },\n      { \"id\": \"runtime-profile\",\n        \"agentRuntime\": { \"id\": \"codex\" },\n        \"model\": { \"primary\": \"openai/gpt-5.5\" } }\n    ]\n  }\n}\n```\n\n**Exact steps or command run after this patch:**\n1. Ran the unmodified installed `openclaw@2026.5.7` CLI against the isolated profile.\n2. Captured current success hints for representative paths:\n   - hot-loadable `agents.list[0].model.primary`\n   - runtime-override `agents.list[1].model.primary`\n   - non-agent `gateway.port`\n   - hot-loadable unset `agents.list[0].model.fallbacks`\n3. Applied the patch logic to the installed compiled bundle for end-to-end CLI proof.\n4. Ran the same representative paths again, plus an `agentRuntime` unset path.\n5. Confirmed the runtime-override entry still had `agentRuntime` after its model swap.\n6. Restored the installed bundle to its original SHA and removed the isolated test profile.\n\n**Evidence after fix:**\nCopied terminal output from the real OpenClaw CLI after applying the patch to the installed bundle:\n\n```console\n$ openclaw --profile issue80722-test config set \"agents.list[0].model.primary\" '\"openai/gpt-5.4\"' --strict-json\nUpdated agents.list.0.model.primary. Change will apply on next agent invocation.\n\n$ openclaw --profile issue80722-test config set \"agents.list[1].model.primary\" '\"openai/gpt-5.5\"' --strict-json\nUpdated agents.list.1.model.primary. Restart the gateway to apply.\n\n$ openclaw --profile issue80722-test config set \"gateway.port\" \"19012\" --strict-json\nUpdated gateway.port. Restart the gateway to apply.\n\n$ openclaw --profile issue80722-test config unset \"agents.list[0].model.fallbacks\"\nRemoved agents.list[0].model.fallbacks. Change will apply on next agent invocation.\n\n$ openclaw --profile issue80722-test config unset \"agents.list[1].agentRuntime\"\nRemoved agents.list[1].agentRuntime. Restart the gateway to apply.\n\n$ openclaw --profile issue80722-test config get \"agents.list[1].agentRuntime\" --json\n{ \"id\": \"codex\" }\n```\n\nBefore patch, the same hot-loadable paths showed the misleading restart hint:\n\n```console\n$ openclaw --profile issue80722-test config set \"agents.list[0].model.primary\" '\"openai/gpt-5.4-mini\"' --strict-json\nUpdated agents.list.0.model.primary. Restart the gateway to apply.\n\n$ openclaw --profile issue80722-test config unset \"agents.list[0].model.fallbacks\"\nRemoved agents.list[0].model.fallbacks. Restart the gateway to apply.\n```\n\n**Observed result after fix:**\nThe patched CLI shows `Change will apply on next agent invocation.` only for positively classified hot-loadable agent config paths. Runtime-override paths, non-agent paths, and paths that touch `agentRuntime` keep `Restart the gateway to apply.`\n\n**What was not tested:**\nMixed batches that span hot-loadable and restart-required paths in a single `config set --batch-file` call were not exercised in the end-to-end proof. The helper handles this by keeping the restart hint if any operation is restart-required. Gateway serving with the patched config was also not retested here; the linked issue already shows a hot-loadable model swap being picked up on the next invocation without a gateway restart.\n\n### Unit + integration tests\n\n```\n$ ./node_modules/.bin/vitest run src/cli/config-cli.test.ts --no-coverage\nTest Files  1 passed (1)\n     Tests  81 passed (81)            # 76 pre-existing + 5 new\n\n$ ./node_modules/.bin/vitest run src/cli/config-cli.integration.test.ts --no-coverage\nTest Files  1 passed (1)\n     Tests  5 passed (5)\n```\n\n### What was not tested\n\n- Mixed batches that span hot-loadable and restart-required paths in a single `config set --batch-file` call. The helper handles this case (any restart-required op keeps the batch on `Restart the gateway to apply.`), but the existing batch-mode tests do not assert on the trailing hint, so this is covered only by the helper logic and the new `operationsCanHotLoad` unit semantics, not a dedicated batch test.\n- Gateway running and serving the patched config (the issue reporter already demonstrated this — model swap on a hot-loadable path live-loaded in ~7.5s without restart on a separate fleet).\n\n## Scope\n\nIntentionally small (+175 / -4). One helper, four call-site swaps, five new tests. No new options, no new flags, no telemetry change, no behavior change for non-agent paths or runtime-override entries.\n\n## Safety\n\n- Conservative default: helper returns `false` (= keep restart hint) for anything not positively classified. Mis-classification can only fall back to the prior wording.\n- No change to write semantics, validation, or exit codes.\n- No new dependencies, no new file system access, no telemetry.\n- American English: `Change will apply on next agent invocation.`\n\n## Review notes\n\n- Verified the helper against the runtime path-handling code (`parsePath` produces string segments, integer-like segments serialize to `\"0\"`/`\"3\"`, etc.) and exercised the live CLI behavior shown above.\n- Happy to address any review findings on the PR.\n\nCloses #80722.\n\n\n\n\n",
+        "branch": "kiran/daily-community-20260512",
+        "head_sha": "8389d28f6038bf1f6640971a54a282ad8f6b1637",
+        "author": "kiranmagic7",
         "labels": [
-          "gateway",
+          "cli",
           "stale",
           "size: S",
-          "triage: needs-real-behavior-proof",
+          "proof: supplied",
+          "proof: sufficient",
           "P2",
-          "rating: 🧂 unranked krab",
-          "status: 📣 needs proof"
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/gateway/net.ts",
-            "additions": 61,
-            "deletions": 29,
+            "path": "src/cli/config-cli.test.ts",
+            "additions": 105,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/config-cli.ts",
+            "additions": 87,
+            "deletions": 6,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-80921",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-80921.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-80823",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-80823.md",
         "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 12,
+          "total": 117,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 8,
-            "SUCCESS": 2
+            "CANCELLED": 1,
+            "SUCCESS": 90,
+            "SKIPPED": 25,
+            "NEUTRAL": 1
           },
           "blockers": [
             "Real behavior proof:CANCELLED"
@@ -110,20 +119,20 @@
           ]
         }
       },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1661,
+    "total_ms": 2470,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 359
+        "ms": 364
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1048
+        "ms": 1877
       },
       {
         "name": "classify_commands",
@@ -135,7 +144,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 227
+        "ms": 201
       },
       {
         "name": "append_ledger",
