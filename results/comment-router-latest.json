@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-27T18:06:12.180Z",
+  "generated_at": "2026-05-27T18:06:08.664Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-27T15:06:11.860Z",
+  "since": "2026-05-27T15:06:04.730Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    87371
+    87230
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4557256986
+  ],
+  "status_comment_id": 4557257412,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 0,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,26 +31,127 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:87230:4557256986:2026-05-27T18:05:27Z:re_review",
+      "comment_id": "4557256986",
+      "comment_version_key": "4557256986:2026-05-27T18:05:27Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/87230#issuecomment-4557256986",
+      "repo": "openclaw/openclaw",
+      "issue_number": 87230,
+      "author": "TurboTheTurtle",
+      "author_id": 35905412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-27T18:05:27Z",
+      "comment_updated_at": "2026-05-27T18:05:27Z",
+      "status_comment_id": 4557257412,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-05-27T18:06:09.918Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 87230
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-27T18:06:12.575Z",
+          "response_comment_id": "4557257412",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): drain probe client close",
+        "body": "## Real behavior proof\nBehavior addressed: `probeGateway()` no longer resolves immediately after requesting WebSocket close; it waits for the client socket teardown path before returning to short-lived CLI callers.\n\nReal environment tested: Local macOS checkout with a real in-process WebSocket server and the real `probeGateway()` / `GatewayClient` implementation. The server completed the normal connect challenge and `hello-ok` handshake; the proof then checked for client sockets still connected to the probe server after `probeGateway()` resolved.\n\nExact steps or command run after this patch:\n```\nnode --import tsx --input-type=module <<'EOF'\nimport net from 'node:net';\nimport { WebSocketServer } from 'ws';\nimport { probeGateway } from './src/gateway/probe.ts';\n\nconst wss = new WebSocketServer({ host: '127.0.0.1', port: 0 });\nlet sawConnect = false;\nwss.on('connection', (ws) => {\n  ws.send(JSON.stringify({ type: 'event', event: 'connect.challenge', payload: { nonce: 'proof-nonce' } }));\n  ws.on('message', (raw) => {\n    const frame = JSON.parse(String(raw));\n    if (frame.type === 'req' && frame.method === 'connect') {\n      sawConnect = true;\n      ws.send(JSON.stringify({ type: 'res', id: frame.id, ok: true, payload: { type: 'hello-ok', protocol: 1, server: { version: 'proof', connId: 'conn-proof' }, features: { methods: [], events: [] }, snapshot: {}, auth: { role: 'operator', scopes: ['operator.read'] }, policy: { maxPayload: 1000000, maxBufferedBytes: 1000000, tickIntervalMs: 30000 } } }));\n    }\n  });\n});\nawait new Promise((resolve) => wss.once('listening', resolve));\nconst { port } = wss.address();\nconst result = await probeGateway({ url: `ws://127.0.0.1:${port}`, timeoutMs: 1000, includeDetails: false, env: process.env });\nconst clientSocketsToServer = process._getActiveHandles().filter((h) => h instanceof net.Socket && h.remotePort === port);\nconsole.log(`probeOk=${result.ok}`);\nconsole.log(`sawConnect=${sawConnect}`);\nconsole.log(`activeClientSocketsToServerAfterProbe=${clientSocketsToServer.length}`);\nconsole.log(`serverVersion=${result.server?.version}`);\nwss.close();\nEOF\n```\n\nEvidence after fix:\n```\nprobeOk=true\nsawConnect=true\nactiveClientSocketsToServerAfterProbe=0\nserverVersion=proof\n```\n\nObserved result after fix: The probe completed successfully and no active client socket to the probed gateway remained after the promise resolved.\n\nWhat was not tested: A reporter-sized production CLI hang; this proof uses a local WebSocket server to exercise the same client/probe teardown path deterministically. Full `pnpm check:changed` was not run because `blacksmith-testbox` could not warm up with `blacksmith` missing on PATH.\n\n## Summary\n- wait for bounded gateway client close-drain before resolving `probeGateway()`\n- fall back to `stop()` if ordered close-drain fails\n- add probe regression coverage for teardown ordering and fallback cleanup\n\n## Verification\n- `node scripts/run-vitest.mjs src/gateway/probe.test.ts src/gateway/client.test.ts src/commands/gateway-status.test.ts`\n- `pnpm exec oxfmt --check --threads=1 src/gateway/probe.ts src/gateway/probe.test.ts`\n- `git diff --check`\n- `pnpm changed:lanes --json --base upstream/main`\n\nCloses #87210\n\nCo-authored-by: Andy Ye <35905412+TurboTheTurtle@users.noreply.github.com>\n",
+        "branch": "fix/gateway-probe-close-drain-87210",
+        "head_sha": "f2e431f9ba105f96420078fb6cbfcad4f7983c35",
+        "author": "turbotheturtle",
+        "labels": [
+          "gateway",
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🦞 diamond lobster",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/probe.test.ts",
+            "additions": 67,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/probe.ts",
+            "additions": 21,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-87230",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87230.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 103,
+          "counts": {
+            "SUCCESS": 73,
+            "SKIPPED": 29,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      }
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 539,
+    "total_ms": 8835,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 306
+        "ms": 943
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 2978
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 219
+        "ms": 4890
       },
       {
         "name": "append_ledger",
