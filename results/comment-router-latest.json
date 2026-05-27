@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-27T21:43:43.569Z",
+  "generated_at": "2026-05-27T21:44:08.482Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-27T18:43:41.327Z",
+  "since": "2026-05-27T18:44:04.324Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    83015
+    70864
   ],
   "comment_ids": [
-    4558904518
+    4558906634
   ],
-  "status_comment_id": 4558904916,
+  "status_comment_id": 4558906940,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:83015:4558904518:2026-05-27T21:43:12Z:re_review",
-      "comment_id": "4558904518",
-      "comment_version_key": "4558904518:2026-05-27T21:43:12Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83015#issuecomment-4558904518",
+      "idempotency_key": "comment-router:openclaw/openclaw:70864:4558906634:2026-05-27T21:43:35Z:re_review",
+      "comment_id": "4558906634",
+      "comment_version_key": "4558906634:2026-05-27T21:43:35Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/70864#issuecomment-4558906634",
       "repo": "openclaw/openclaw",
-      "issue_number": 83015,
-      "author": "Bartok9",
-      "author_id": 259807879,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-27T21:43:12Z",
-      "comment_updated_at": "2026-05-27T21:43:12Z",
-      "status_comment_id": 4558904916,
+      "issue_number": 70864,
+      "author": "patrick-slimelab",
+      "author_id": 257809963,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-27T21:43:35Z",
+      "comment_updated_at": "2026-05-27T21:43:35Z",
+      "status_comment_id": 4558906940,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -67,50 +67,664 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-05-27T21:43:44.322Z",
+          "dispatched_at": "2026-05-27T21:44:09.153Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 83015
+          "item_number": 70864
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-05-27T21:43:46.138Z",
-          "response_comment_id": "4558904916",
+          "commented_at": "2026-05-27T21:44:12.027Z",
+          "response_comment_id": "4558906940",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(memory): resolve memoryFlush 0/0 guard blocking flush on never-flushed sessions (#47143)",
-        "body": "## Summary\n\nFixes #47143 — `memoryFlush` never triggers for sessions where both `compactionCount` and `memoryFlushCompactionCount` are `0` but no flush has actually run.\n\n## Root cause\n\n`hasAlreadyFlushedForCurrentCompaction` uses a simple equality guard:\n```ts\nreturn typeof lastFlushAt === 'number' && lastFlushAt === compactionCount;\n```\n\nWhen both values are `0` this produces a **false positive** — the session is treated as already flushed even if `memoryFlushAt` has never been set. This blocks every memory flush for sessions in this state.\n\nThe ambiguity arises because `0` can mean either:\n1. **Legacy / never-flushed row** — field was written as `0` by an older code path or defaulted before the column existed\n2. **Real cycle-0 flush** — a flush ran before the first compaction and correctly stored `memoryFlushCompactionCount: 0`\n\n## Fix\n\nRequire `memoryFlushAt` to be present when both counters are `0` before treating the row as already flushed:\n\n```ts\n// When the compaction counter is 0 on both sides, the match is ambiguous.\n// Require an explicit memoryFlushAt timestamp to confirm a real flush ran.\nif (compactionCount === 0 && !entry.memoryFlushAt) {\n  return false;\n}\n```\n\n**Why this is safe:**\n- Fresh sessions always clear `memoryFlushAt` at creation (`session.ts:717`) — they will never be falsely gated\n- Sessions where a real cycle-0 flush ran will have `memoryFlushAt` set — once-per-cycle deduplication is preserved for them\n- Sessions with `compactionCount > 0` are unaffected — the equality guard alone is unambiguous for those\n\n## Changes\n\n- `src/auto-reply/reply/memory-flush.ts` — add `memoryFlushAt` to the `Pick<>` type and the zero-counter guard\n- `src/auto-reply/reply/reply-state.test.ts` — update the existing `0/0` test to pass `memoryFlushAt` (correctly represents real cycle-0 flush), add two new cases for legacy/never-flushed rows\n\n## Test verification\n\n```\n✅ non-zero match with memoryFlushAt → true\n✅ counts differ → false\n✅ memoryFlushCompactionCount undefined → false\n✅ 0/0 with memoryFlushAt (real cycle-0 flush) → true\n✅ 0/0 no memoryFlushAt (legacy bug case) → false\n✅ 0/0 memoryFlushAt:undefined → false\n```\n\nAcceptance criteria from ClawSweeper review:\n- `node scripts/run-vitest.mjs src/auto-reply/reply/reply-state.test.ts src/auto-reply/reply/agent-runner-memory.test.ts`\n- `pnpm exec oxfmt --check --threads=1 src/auto-reply/reply/memory-flush.ts src/auto-reply/reply/reply-state.test.ts` ✅ passes\n\n## Real behavior proof\n\n**Behavior or issue addressed:** `memoryFlush` 0/0 guard incorrectly blocks flushes on legacy/never-flushed sessions (issue #47143). Fix in `src/auto-reply/reply/memory-flush.ts` requires explicit `memoryFlushAt` before treating a 0/0 row as already flushed.\n\n**Real environment tested:**\n- Date: 2026-05-27T21:42:39Z\n- Host: Darwin 25.4.0 arm64 (macOS, Apple Silicon)\n- Node: v25.5.0\n- Branch: `fix/47143-memory-flush-zero-compaction-guard` @ `30f7153eec8`\n\n**Exact steps or command run after this patch:**\n```\nnode scripts/run-vitest.mjs run src/auto-reply/reply/reply-state.test.ts --reporter=verbose\n```\n\n**Evidence after fix:**\n\n```text\n RUN  v4.1.7 /Users/bartokmoltbot/clawd/openclaw\n\n ✓ auto-reply  src/auto-reply/reply/reply-state.test.ts > hasAlreadyFlushedForCurrentCompaction > returns true when memoryFlushCompactionCount matches compactionCount 0ms\n ✓ auto-reply  src/auto-reply/reply/reply-state.test.ts > hasAlreadyFlushedForCurrentCompaction > returns false when memoryFlushCompactionCount differs 0ms\n ✓ auto-reply  src/auto-reply/reply/reply-state.test.ts > hasAlreadyFlushedForCurrentCompaction > returns false when memoryFlushCompactionCount is undefined 0ms\n ✓ auto-reply  src/auto-reply/reply/reply-state.test.ts > hasAlreadyFlushedForCurrentCompaction > treats missing compactionCount as 0 when memoryFlushAt confirms a real flush 0ms\n ✓ auto-reply  src/auto-reply/reply/reply-state.test.ts > hasAlreadyFlushedForCurrentCompaction > returns false for persisted 0/0 rows with no memoryFlushAt (legacy / never-flushed) 0ms\n ✓ auto-reply  src/auto-reply/reply/reply-state.test.ts > hasAlreadyFlushedForCurrentCompaction > returns false for 0/0 row where memoryFlushAt is explicitly undefined 0ms\n ✓ auto-reply  src/auto-reply/reply/reply-state.test.ts > shouldRunMemoryFlush > skips when already flushed for current compaction count 0ms\n ✓ auto-reply  src/auto-reply/reply/reply-state.test.ts > shouldRunMemoryFlush > runs when above threshold and not flushed 0ms\n ✓ auto-reply  src/auto-reply/reply/reply-state.test.ts > shouldRunMemoryFlush > runs on consecutive compaction cycles when flush records the pre-increment count 0ms\n (... 33 additional passing tests in same file omitted for brevity ...)\n\n Test Files  1 passed (1)\n      Tests  42 passed (42)\n   Start at  17:42:29\n   Duration  4.18s (transform 2.84s, setup 244ms, import 3.81s, tests 40ms, environment 0ms)\n\nProcess exited with code 0.\n```\n\n**Observed result after fix:**\n\nAll 42 tests in `reply-state.test.ts` pass, including the six `hasAlreadyFlushedForCurrentCompaction` cases that exercise the new guard. Critically, the two new legacy-row cases (\"returns false for persisted 0/0 rows with no memoryFlushAt\" and \"returns false for 0/0 row where memoryFlushAt is explicitly undefined\") both pass — these would have returned `true` before the patch (false positive that blocked all flushes on never-flushed sessions). The cycle-0 real-flush case (\"treats missing compactionCount as 0 when memoryFlushAt confirms a real flush\") still correctly returns `true`, preserving once-per-cycle deduplication.\n\n**What was not tested:**\n\n- The companion `agent-runner-memory.test.ts` file referenced in the original ClawSweeper acceptance criteria — only `reply-state.test.ts` was rerun for this proof. The PR's logic change is fully covered by the file rerun above.\n- End-to-end behavior of a real session compacting and then flushing memory (integration-level); this PR is a unit-level guard fix and the targeted unit tests are the appropriate level of verification.\n",
-        "branch": "fix/47143-memory-flush-zero-compaction-guard",
-        "head_sha": "30f7153eec8b97c0d137e1406d88c0f00ae94092",
-        "author": "bartok9",
+        "title": "feat: add scoped mention pattern policy",
+        "body": "## Summary\n- add a shared scoped mention-pattern policy for global, agent, and provider/channel overrides\n- apply configured mention-pattern gating across channel runtimes while preserving native mentions\n- document raw regex-body syntax and regenerate config/help metadata\n\n## Notes\n- Recreated from a clean `origin/main` branch after #70846 was closed as dirty; this branch has been rebased on current `origin/main` and generated baselines refreshed after upstream movement.\n\n## Validation\n- `pnpm --config.minimum-release-age=0 install --lockfile-only --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true`\n- `pnpm plugin-sdk:api:check`\n- `pnpm config:channels:check`\n- `pnpm config:docs:check`\n- `pnpm test extensions/qa-channel/src/inbound.test.ts src/channels/mention-pattern-policy.test.ts extensions/telegram/src/bot-message-context.body.test.ts`\n- `pnpm check:changed`\n- `git diff --check`\n\n## Real behavior proof\n- **Behavior or issue addressed:** Scoped mention-pattern policy now resolves the effective provider/agent/conversation policy so configured regex mentions are enabled only for explicitly allowed conversations in deny mode and remain disabled for denied or unlisted conversations. Latest follow-up rebased onto current `origin/main`, resolved refreshed Plugin SDK baseline conflicts, and reran the exact-head behavior proof.\n- **Real environment tested:** Local OpenClaw PR checkout on host `patrick`, branch `feature/mention-pattern-policy-clean`, head `0cb16e73b7b0d01a9d78fde5a742a6f31da58ed3`, running the real source resolver, Telegram group peer id helper, mention matcher, and inbound mention decision code through Node/tsx against redacted OpenClaw-style config/message facts. This does not exercise live external delivery.\n- **Exact steps or command run after this patch:** `cd /home/patrick/projects/openclaw-mention-pattern-policy && HEAD_SHA=0cb16e73b7b0d01a9d78fde5a742a6f31da58ed3 HEAD_SHORT=0cb16e73b7 node --import tsx /tmp/pr70864-proof-c770334.mjs`\n- **Evidence after fix:** Terminal output from the real source smoke:\n\n```text\nOpenClaw scoped mention policy Telegram media pre-download proof (0cb16e73b7, 0cb16e73b7b0d01a9d78fde5a742a6f31da58ed3)\n{\"topic\":7,\"conversationId\":\"-1001234567893:topic:7\",\"mentionPatternsEnabled\":true,\"wasMentioned\":true,\"shouldSkip\":false,\"skipReason\":null}\n{\"topic\":9,\"conversationId\":\"-1001234567893:topic:9\",\"mentionPatternsEnabled\":false,\"wasMentioned\":false,\"shouldSkip\":true,\"skipReason\":null}\n{\"topic\":11,\"conversationId\":\"-1001234567893:topic:11\",\"mentionPatternsEnabled\":false,\"wasMentioned\":false,\"shouldSkip\":true,\"skipReason\":null}\n```\n\n- **Observed result after fix:** In inherited `deny` mode, the media pre-download path honors the Telegram account policy rather than the global provider fallback: account-allowed topic `-1001234567893:topic:7` enables configured regex mention `bot` and media pre-download is not skipped, while account-denied topic `:topic:9` and unlisted topic `:topic:11` disable configured regex mentions and skip unaddressed group media before download.\n- **What was not tested:** Full live external Telegram delivery was not exercised in this proof; CI and targeted channel tests cover the integration paths.\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
+        "branch": "feature/mention-pattern-policy-clean",
+        "head_sha": "0cb16e73b7b0d01a9d78fde5a742a6f31da58ed3",
+        "author": "patrick-slimelab",
         "labels": [
-          "size: S",
+          "docs",
+          "channel: bluebubbles",
+          "channel: discord",
+          "channel: imessage",
+          "channel: line",
+          "channel: matrix",
+          "channel: mattermost",
+          "channel: nextcloud-talk",
+          "channel: signal",
+          "channel: slack",
+          "channel: telegram",
+          "channel: whatsapp-web",
+          "channel: zalouser",
+          "gateway",
+          "extensions: diagnostics-otel",
+          "extensions: memory-core",
+          "cli",
+          "scripts",
+          "commands",
+          "agents",
+          "channel: irc",
+          "size: XL",
+          "extensions: huggingface",
+          "channel: qqbot",
+          "channel: qa-channel",
+          "triage: dirty-candidate",
+          "extensions: deepinfra",
           "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "extensions: chutes",
+          "dependencies-changed",
           "P2",
-          "rating: 🧂 unranked krab",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "CHANGELOG.md",
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+            "additions": 27,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "config/knip.config.ts",
+            "additions": 1,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/.generated/config-baseline.sha256",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/channels/discord.md",
             "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/memory-flush.ts",
-            "additions": 24,
+            "path": "docs/channels/groups.md",
+            "additions": 5,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/config-channels.md",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/sdk-channel-plugins.md",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/canvas/src/cli.ts",
+            "additions": 4,
+            "deletions": 35,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/chutes/models.ts",
+            "additions": 16,
+            "deletions": 21,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/deepinfra/image-generation-provider.ts",
+            "additions": 4,
             "deletions": 3,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/reply-state.test.ts",
-            "additions": 27,
+            "path": "extensions/deepinfra/speech-provider.test.ts",
+            "additions": 12,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/deepinfra/speech-provider.ts",
+            "additions": 4,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/deepinfra/surface-model-catalogs.test.ts",
+            "additions": 2,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/deepinfra/surface-model-catalogs.ts",
+            "additions": 3,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/diagnostics-otel/src/service.test.ts",
+            "additions": 17,
+            "deletions": 15,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/diagnostics-otel/src/service.ts",
+            "additions": 5,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/message-handler.preflight.test-helpers.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/message-handler.preflight.test.ts",
+            "additions": 136,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/message-handler.preflight.ts",
+            "additions": 11,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/huggingface/models.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/imessage/src/monitor.gating.test.ts",
+            "additions": 24,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/imessage/src/monitor/inbound-processing.ts",
+            "additions": 11,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/imessage/src/monitor/monitor-provider.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/irc/src/config-schema.test.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/irc/src/config-schema.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/irc/src/inbound.behavior.test.ts",
+            "additions": 8,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/irc/src/inbound.policy.test.ts",
+            "additions": 63,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/irc/src/inbound.ts",
+            "additions": 59,
+            "deletions": 18,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/irc/src/types.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/line/src/bot-handlers.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/line/src/bot-handlers.ts",
+            "additions": 16,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/line/src/config-schema.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/line/src/types.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/matrix/src/config-schema.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/matrix/src/matrix/monitor/handler.test-helpers.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/matrix/src/matrix/monitor/handler.ts",
+            "additions": 14,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/matrix/src/matrix/monitor/index.test.ts",
+            "additions": 26,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/matrix/src/matrix/monitor/index.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/matrix/src/matrix/monitor/mentions.test.ts",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/matrix/src/matrix/monitor/mentions.ts",
+            "additions": 30,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/matrix/src/runtime-api.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/matrix/src/test-runtime.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/matrix/src/types.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/mattermost/src/config-schema-core.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/mattermost/src/mattermost/monitor.ts",
+            "additions": 9,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/mattermost/src/types.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/qmd-manager.test.ts",
+            "additions": 6,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/nextcloud-talk/src/config-schema.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/nextcloud-talk/src/inbound.behavior.test.ts",
+            "additions": 55,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/nextcloud-talk/src/inbound.ts",
+            "additions": 22,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/nextcloud-talk/src/types.ts",
+            "additions": 5,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qa-channel/src/config-schema.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qa-channel/src/inbound.test.ts",
+            "additions": 80,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qa-channel/src/inbound.ts",
+            "additions": 17,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qa-channel/src/types.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qqbot/src/config-schema.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qqbot/src/engine/gateway/stages/group-gate-stage.test.ts",
+            "additions": 206,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/qqbot/src/engine/gateway/stages/group-gate-stage.ts",
+            "additions": 10,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qqbot/src/engine/gateway/types.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qqbot/src/types.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/signal/src/monitor.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/signal/src/monitor/event-handler.mention-gating.test.ts",
+            "additions": 13,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/signal/src/monitor/event-handler.ts",
+            "additions": 10,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/signal/src/monitor/event-handler.types.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/slack/src/monitor/message-handler/prepare.test.ts",
+            "additions": 80,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/slack/src/monitor/message-handler/prepare.ts",
+            "additions": 13,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/bot-handlers.runtime.ts",
+            "additions": 11,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/bot-message-context.body.test.ts",
+            "additions": 37,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/bot-message-context.body.ts",
+            "additions": 15,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/bot-message-context.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/bot-message-context.types.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/accounts.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/auto-reply/monitor/group-gating.runtime.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/auto-reply/monitor/group-gating.ts",
+            "additions": 12,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/auto-reply/monitor/on-message.ts",
+            "additions": 8,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/session.test.ts",
+            "additions": 12,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/test-helpers.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/zalouser/src/config-schema.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/zalouser/src/monitor.group-gating.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/zalouser/src/monitor.ts",
+            "additions": 9,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/zalouser/src/types.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/agent-core/src/agent-loop.ts",
+            "additions": 14,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "pnpm-lock.yaml",
+            "additions": 1,
+            "deletions": 124,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "pnpm-workspace.yaml",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/crabbox-wrapper.mjs",
+            "additions": 13,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/deadcode-unused-files.allowlist.mjs",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/dev/gateway-smoke.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/dev/ios-node-e2e.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/e2e/lib/plugin-update/probe.mjs",
+            "additions": 1,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/resolve-openclaw-package-candidate.mjs",
+            "additions": 26,
+            "deletions": 28,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/run-vitest.mjs",
+            "additions": 1,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-bundle-mcp-runtime.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-bundle-mcp-runtime.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-runner/claude-live-session.ts",
+            "additions": 5,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-runner/helpers.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/compaction-partial-summary.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner.sanitize-session-history.test.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/model.provider-runtime.test-support.ts",
+            "additions": 45,
+            "deletions": 28,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run.overflow-compaction.test.ts",
+            "additions": 12,
             "deletions": 1,
             "changeType": "MODIFIED"
           }
@@ -118,55 +732,193 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83015",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83015.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-70864",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-70864.md",
         "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
         "review_decision": "",
         "checks": {
-          "total": 103,
+          "total": 97,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 28,
-            "SUCCESS": 70,
-            "FAILURE": 2,
+            "SUCCESS": 12,
+            "IN_PROGRESS": 71,
+            "SKIPPED": 12,
+            "QUEUED": 1,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-fast-bundled-protocol:FAILURE",
-            "checks-node-agentic-agents:FAILURE"
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "Scan changed paths (precise):IN_PROGRESS",
+            "Security High (channel-runtime-boundary):IN_PROGRESS",
+            "Security High (network-ssrf-boundary):IN_PROGRESS",
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "Security High (actions):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "Critical Quality (core-auth-secrets):IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "Critical Quality (config-boundary):IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "Critical Quality (gateway-runtime-boundary):IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
+            "checks-node-core-fast:IN_PROGRESS",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
+            "checks-node-core-src-security:IN_PROGRESS",
+            "checks-node-core-ui:IN_PROGRESS",
+            "checks-node-core-support:IN_PROGRESS",
+            "checks-node-core-runtime-infra-state:IN_PROGRESS",
+            "checks-node-core-runtime-infra-process:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-core-runtime-shared:IN_PROGRESS",
+            "checks-node-core-runtime-cron-core:IN_PROGRESS",
+            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
+            "checks-node-core-runtime-cron-service:IN_PROGRESS",
+            "checks-node-agentic-control-plane-agent-chat:IN_PROGRESS",
+            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
+            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
+            "checks-node-agentic-control-plane-http-plugin-ws:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-runtime:IN_PROGRESS",
+            "checks-node-agentic-cli:IN_PROGRESS",
+            "checks-node-agentic-command-support:IN_PROGRESS",
+            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-shared:IN_PROGRESS",
+            "checks-node-agentic-commands-models:IN_PROGRESS",
+            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
+            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
+            "checks-node-agentic-agents:IN_PROGRESS",
+            "checks-node-agentic-gateway-core:IN_PROGRESS",
+            "checks-node-agentic-gateway-methods:IN_PROGRESS",
+            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
+            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
+            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
+            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
+            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
+            "checks-node-auto-reply-reply-session:IN_PROGRESS",
+            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "Critical Quality (mcp-process-runtime-boundary):IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS",
+            "check-docs:IN_PROGRESS",
+            "checks-windows-node-test:QUEUED",
+            "Critical Quality (provider-runtime-boundary):IN_PROGRESS",
+            "Critical Quality (plugin-boundary):IN_PROGRESS",
+            "Critical Quality (plugin-sdk-package-contract):IN_PROGRESS"
           ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-fast-bundled-protocol:FAILURE",
-            "checks-node-agentic-agents:FAILURE"
-          ]
+          "pending": [
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "Scan changed paths (precise):IN_PROGRESS",
+            "Security High (channel-runtime-boundary):IN_PROGRESS",
+            "Security High (network-ssrf-boundary):IN_PROGRESS",
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "Security High (actions):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "Critical Quality (core-auth-secrets):IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "Critical Quality (config-boundary):IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "Critical Quality (gateway-runtime-boundary):IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
+            "checks-node-core-fast:IN_PROGRESS",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
+            "checks-node-core-src-security:IN_PROGRESS",
+            "checks-node-core-ui:IN_PROGRESS",
+            "checks-node-core-support:IN_PROGRESS",
+            "checks-node-core-runtime-infra-state:IN_PROGRESS",
+            "checks-node-core-runtime-infra-process:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-core-runtime-shared:IN_PROGRESS",
+            "checks-node-core-runtime-cron-core:IN_PROGRESS",
+            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
+            "checks-node-core-runtime-cron-service:IN_PROGRESS",
+            "checks-node-agentic-control-plane-agent-chat:IN_PROGRESS",
+            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
+            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
+            "checks-node-agentic-control-plane-http-plugin-ws:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-runtime:IN_PROGRESS",
+            "checks-node-agentic-cli:IN_PROGRESS",
+            "checks-node-agentic-command-support:IN_PROGRESS",
+            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-shared:IN_PROGRESS",
+            "checks-node-agentic-commands-models:IN_PROGRESS",
+            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
+            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
+            "checks-node-agentic-agents:IN_PROGRESS",
+            "checks-node-agentic-gateway-core:IN_PROGRESS",
+            "checks-node-agentic-gateway-methods:IN_PROGRESS",
+            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
+            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
+            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
+            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
+            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
+            "checks-node-auto-reply-reply-session:IN_PROGRESS",
+            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "Critical Quality (mcp-process-runtime-boundary):IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS",
+            "check-docs:IN_PROGRESS",
+            "checks-windows-node-test:QUEUED",
+            "Critical Quality (provider-runtime-boundary):IN_PROGRESS",
+            "Critical Quality (plugin-boundary):IN_PROGRESS",
+            "Critical Quality (plugin-sdk-package-contract):IN_PROGRESS"
+          ],
+          "terminalBlockers": []
         }
       }
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5318,
+    "total_ms": 8244,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 549
+        "ms": 2309
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1679
+        "ms": 1831
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 3062
+        "ms": 4075
       },
       {
         "name": "append_ledger",
