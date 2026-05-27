@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-27T08:45:30.533Z",
+  "generated_at": "2026-05-27T08:46:04.609Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-27T05:45:27.199Z",
+  "since": "2026-05-27T05:46:04.020Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4552933024
   ],
-  "status_comment_id": 4552933439,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-05-27T08:44:54Z",
       "comment_updated_at": "2026-05-27T08:44:54Z",
-      "status_comment_id": 4552933439,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,125 +61,30 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-27T08:45:31.764Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 85305
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-27T08:45:33.669Z",
-          "response_comment_id": "4552933439",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(plugins): prevent openclaw update from silently downgrading managed deps",
-        "body": "## Summary\n\nFixes #85184. Prevents `openclaw update` from silently downgrading a newer already-installed managed direct dependency, and verifies the preserved version through the full install path so the intentional skip does not trigger a rollback.\n\n## What changed\n\n- Add a narrow downgrade guard in installPluginFromManagedNpmRoot: during `update`, if the incoming version is older than the version already recorded in the managed npm root, keep the installed version instead of overwriting it.\n- Verify the post-install result against the preserved version (not the older incoming resolution) when the guard fires, so the kept dependency is not misread as a failed install and rolled back.\n- Scope is intentionally narrow: only the unambiguous downgrade case during `update`. Non-downgrade pin rewrites and the broader respect-all-pins policy are left to maintainer decision.\n\n## Real behavior proof\n\nBehavior or issue addressed: `openclaw update` re-synced externalized bundled-plugin direct dependencies through installPluginFromManagedNpmRoot, which overwrote the managed npm root dependency and could silently downgrade a newer pinned/installed version. An earlier guard alone was insufficient: the post-install verification still compared the on-disk version against the older incoming resolution, so a preserved newer dependency was rolled back. This change guards the downgrade and aligns the verification with the preserved version.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js 24.14.0, current PR head. Exercised the full installPluginFromNpmSpec update path with vitest, plus focused unit tests for the predicate.\n\nExact steps or command run after this patch: ran the plugin install/update test suite under the real runtime via vitest.\n\nEvidence after fix: stdout from the test run against the real runtime:\n\n```\n$ node scripts/run-vitest.mjs src/plugins/install.test.ts\n  install.test.ts (120 tests)\n  shouldPreserveManagedDependencyAgainstDowngrade\n    + preserves a newer installed dependency when update would downgrade it\n    + catches patch-level downgrades / allows upgrade / allows same version / etc.\n  installPluginFromNpmSpec downgrade guard (integration)\n    + preserves a newer installed managed dependency without rollback during update\n    + allows a normal upgrade to rewrite the managed dependency (no false preserve)\n  Test Files  1 passed (1)\n  Tests  120 passed (120)\n\n$ node scripts/run-vitest.mjs src/plugins/update.test.ts src/infra/npm-managed-root.test.ts src/cli/update-cli.test.ts\n  Test Files  3 passed (3)\n  Tests  211 passed (211)\n```\n\nObserved result after fix: The integration test drives the full installPluginFromNpmSpec update path. With an installed 0.11.2 and an update resolving 0.10.0, the run completes successfully (no rollback) and the managed package.json keeps 0.11.2. A normal upgrade (installed 0.11.0, update 0.11.2) still rewrites to the newer version. All managed-root and update-cli acceptance suites pass unchanged.\n\nWhat was not tested: A live mutating `openclaw update --tag` against a real registry was not run; the install/update path is exercised end to end with vitest using the real runtime and a mocked npm transport, matching the source-level reproduction in the issue.\n\n---\n\n## Follow-up: addressed ClawSweeper [P1]/[P2] (commit 9758a00)\n\n### [P1] Fresh-install crash — ENOENT-safe lockfile read\n\n`readManagedNpmRootInstalledDependency` read `package-lock.json` with the strict\n`readJson`, which throws on a missing file. The downgrade guard calls it before\n`npm install` creates the lockfile, so a **fresh** managed root (no lockfile yet)\nthrew instead of returning null, crashing a fresh plugin install. Fixed by using\n`readJsonIfExists` — already used a few lines above in the same file for the same\nlockfile — so a missing lockfile yields `null` (no installed dependency).\n\n**Real environment tested:** Linux (Ubuntu 24.04, WSL2), Node.js 24.14.0, PR head 9758a00.\n\n**Command:** `node scripts/run-vitest.mjs run src/infra/npm-managed-root.test.ts -t \"fresh managed root\"`\n\n**Before (strict `readJson`, the pre-fix state):** the fresh-root reader test fails — the reader throws on the absent lockfile:\n× returns null for a fresh managed root without a package-lock.json\nAssertionError: promise rejected \"JsonFileReadError: Failed to read JSON fi…\" instead of resolving\nCaused by: JsonFileReadError: Failed to read JSON file: /tmp/openclaw-npm-managed-root-XXXX/package-lock.json\n❯ readManagedNpmRootInstalledDependency src/infra/npm-managed-root.ts:1005\nCaused by: Error: File not found: .../package-lock.json\nSerialized Error: { code: 'ENOENT' }\nTests  1 failed | 18 skipped (19)\n\n**After (`readJsonIfExists`, this PR):**\n✓ returns null for a fresh managed root without a package-lock.json\nTests  1 passed | 18 skipped (19)\n\n### [P2] Preserved resolution no longer leaks stale downgrade-target metadata\n\nWhen the guard preserved a newer installed dependency, `expectedNpmResolution`\nspread the older incoming resolution and only overwrote version/integrity,\nleaving stale `resolvedSpec`/`shasum`/`resolvedAt` from the rejected downgrade\ntarget, which then persisted into install records. Fixed by constructing a clean\nresolution carrying only the kept version's name/version/integrity.\n\n**Command:** `node scripts/run-vitest.mjs run src/plugins/install.test.ts -t \"preserves a newer installed managed dependency without rollback\"`\n\n**Before (spread incoming, the pre-fix state):** the integration test fails — the\nrejected downgrade target's `shasum: \"abc\"` leaks into the preserved resolution:\n× preserves a newer installed managed dependency without rollback during update (#85184)\nAssertionError: expected 'abc' to be undefined\n793|  expect(result.npmResolution?.shasum).toBeUndefined();\nTests  1 failed | 120 skipped (121)\n\n**After (clean construction, this PR):**\n✓ preserves a newer installed managed dependency without rollback during update (#85184)\nTests  1 passed | 120 skipped (121)\n\n### Full suites (PR head 9758a00)\n$ node scripts/run-vitest.mjs run src/plugins/install.test.ts src/infra/npm-managed-root.test.ts\nTest Files  2 passed (2)\nTests  140 passed (140)\n\n**What was not tested:** A live mutating `openclaw update --tag` against a real\nregistry was not run (offline environment). The fresh-install crash and the\nstale-metadata leak are both reproduced and verified as focused before/after\nunit/integration tests against the real runtime, matching the source-level\nfindings.\n",
-        "branch": "fix-85184-managed-npm-no-silent-downgrade",
-        "head_sha": "9758a00590c7980ddbc4795557549f115bb33b04",
-        "author": "alkor2000",
-        "labels": [
-          "size: M",
-          "proof: supplied",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/infra/npm-managed-root.test.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/npm-managed-root.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/install.test.ts",
-            "additions": 186,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/install.ts",
-            "additions": 86,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85305",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85305.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 98,
-          "counts": {
-            "IN_PROGRESS": 4,
-            "SUCCESS": 73,
-            "SKIPPED": 19,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Scan changed paths (precise):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-agentic-agents:IN_PROGRESS",
-            "check-prod-types:FAILURE"
-          ],
-          "pending": [
-            "Scan changed paths (precise):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-agentic-agents:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "check-prod-types:FAILURE"
-          ]
-        }
-      }
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 7322,
+    "total_ms": 2248,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 662
+        "ms": 576
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2657
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 3977
+        "ms": 1659
       },
       {
         "name": "append_ledger",
