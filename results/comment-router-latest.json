@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-27T19:30:10.462Z",
+  "generated_at": "2026-05-27T19:30:41.500Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-27T16:30:07.649Z",
+  "since": "2026-05-27T16:30:40.742Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4557981944
   ],
-  "status_comment_id": 4557982278,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-05-27T19:29:34Z",
       "comment_updated_at": "2026-05-27T19:29:34Z",
-      "status_comment_id": 4557982278,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,222 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-27T19:30:11.166Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 68843
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-27T19:30:12.680Z",
-          "response_comment_id": "4557982278",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(acp): treat missing cwd as stale bound session",
-        "body": "## Summary\n\n- Problem: bound ACP sessions can stay attached after the runtime working directory disappears, so retries keep failing against a dead session.\n- Why it matters: affected conversations remain wedged until stale binding state is manually cleared.\n- What changed: share ACP stale-session classification and treat missing-working-directory `ACP_SESSION_INIT_FAILED` messages as stale during the active dispatch cleanup path.\n- Scope boundary: this current head is dispatch-only. Earlier reset-in-place changes were removed because current `main` no longer appears to route the relevant bound `/new` or `/reset` path through that helper.\n\n## Change Type\n\n- [x] Bug fix\n- [x] Refactor required for the fix\n- [ ] Feature\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope\n\n- ACP stale-session classification\n- Auto-reply ACP dispatch stale-binding cleanup\n- Test-only compatibility shim for the current `memory-core` subagent runtime mock contract\n\n## Linked Issue/PR\n\n- Related #60720\n- [x] This PR fixes a bug or regression\n\n## Root Cause\n\nCurrent `main` already removes stale ACP bindings for selected `ACP_SESSION_INIT_FAILED` conditions, but the classifier did not recognize the missing-working-directory failure string. A bound ACP conversation whose persisted `cwd` was gone could therefore keep its stale binding and fail repeatedly instead of unbinding and allowing recovery.\n\n## Regression Test Plan\n\n- `src/auto-reply/reply/dispatch-acp.test.ts` covers the missing-cwd `ACP_SESSION_INIT_FAILED` dispatch path and asserts that the stale session key is unbound.\n- The classifier stays narrow: cleanup still requires an ACP session init failure; generic turn failures are not broadened.\n\n## Real Behavior Proof\n\n- **Behavior or issue addressed**: A bound ACP session whose runtime `cwd` no longer exists should be treated as stale during dispatch cleanup, unbinding the affected conversation instead of keeping retries stuck on the same dead session.\n- **Real environment tested**: Local OpenClaw checkout on NixOS Linux after refresh against current `origin/main`; branch `fix/acp-stale-cwd-replacement`; head `170ef6820ba82ef3f33facc1ae7e5412284fd9fb`.\n- **Exact steps or command run after this patch**:\n\n```sh\nHEAD_SHA=$(git rev-parse HEAD) node_modules/.bin/tsx --eval '\nimport { isAcpStaleSessionError, unbindStaleAcpSessionBindings } from \"./src/acp/runtime/stale-session.ts\";\nvoid (async () => {\nconst targetSessionKey = \"agent:main:main\";\nconst bindings = [{ bindingId: \"telegram:default:<redacted-topic>\", targetSessionKey }];\nconst error = { code: \"ACP_SESSION_INIT_FAILED\", message: \"working directory does not exist: /home/<user>/<deleted-workspace>\" };\nconsole.log(`head=${process.env.HEAD_SHA ?? \"unknown\"}`);\nconsole.log(`before bindings=${bindings.length} target=${targetSessionKey}`);\nconsole.log(`classified stale=${isAcpStaleSessionError(error)}`);\nconst result = await unbindStaleAcpSessionBindings({\n  targetSessionKey,\n  unbind: async ({ targetSessionKey, reason }) => {\n    const removed = bindings.splice(0, bindings.length);\n    console.log(`unbind target=${targetSessionKey} reason=${reason} removed=${removed.length}`);\n    return removed;\n  },\n});\nconsole.log(`cleanup ok=${result.ok} removed=${result.ok ? result.removedCount : 0}`);\nconsole.log(`after bindings=${bindings.length}`);\n})();\n'\n```\n\n- **Evidence after fix**: Terminal capture from the patched OpenClaw checkout:\n\n```txt\nhead=170ef6820ba82ef3f33facc1ae7e5412284fd9fb\nbefore bindings=1 target=agent:main:main\nclassified stale=true\nunbind target=agent:main:main reason=acp-session-init-failed removed=1\ncleanup ok=true removed=1\nafter bindings=0\n```\n\n- **Observed result after fix**: the missing-cwd ACP init failure is classified as stale and the stale binding cleanup removes the affected session binding (`before bindings=1` to `after bindings=0`) using reason `acp-session-init-failed`.\n- **What was not tested**: a fresh live ACP user-session transcript with a physically deleted production workspace. I searched local OpenClaw/ACP session streams and `/tmp/openclaw` gateway logs for `ACP_SESSION_INIT_FAILED`, `working directory does not exist`, and the stale bound-conversation errors and found no qualifying runtime transcript to redact.\n- **Proof limitations or environment constraints**: the after-fix proof is a terminal capture from the actual patched OpenClaw source and cleanup helper with redacted session/conversation identifiers, not a Telegram/Slack screenshot. Unit tests and typechecks below are supplemental.\n- **Before evidence (optional but encouraged)**: the reported user-visible symptom was a bound Codex/OpenClaw conversation that could say it was already bound while later failing with missing thread/session binding; this PR addresses the missing-cwd ACP stale-binding variant of that stuck-binding class.\n\n## Tests and validation\n\nCommands run on head `170ef6820ba82ef3f33facc1ae7e5412284fd9fb`:\n\n```sh\n/tmp/openclaw-pr76920-merge/node_modules/.bin/oxfmt --check --threads=1 \\\n  extensions/memory-core/src/dreaming.test.ts \\\n  src/acp/runtime/stale-session.ts \\\n  src/auto-reply/reply/dispatch-acp.ts \\\n  src/auto-reply/reply/dispatch-acp.test.ts\nnode scripts/test-projects.mjs src/auto-reply/reply/dispatch-acp.test.ts\nnode scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test.tsbuildinfo\nnode scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.extensions.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/extensions-test.tsbuildinfo\n```\n\nResult: formatter passed; focused dispatch ACP tests passed 51/51; core test typecheck passed; extensions test typecheck passed.\n\n## Security Impact\n\nNo new permissions, secrets handling, network calls, command execution surface, or data access scope. The only behavioral expansion is a narrower stale-session cleanup classifier for ACP init failures that mention a missing working directory.\n\n## Compatibility / Migration\n\nNo config or migration required. The change affects only stale ACP init failure recovery.\n\n## AI Assistance\n\nAI-assisted refresh, narrowing, validation, and PR-body update.\n",
-        "branch": "fix/acp-stale-cwd-replacement",
-        "head_sha": "1ad568ba1e0db9051904eacee025ee36ec2f06ee",
-        "author": "kesslerio",
-        "labels": [
-          "size: S",
-          "proof: supplied",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/acp/runtime/stale-session.ts",
-            "additions": 41,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-acp.test.ts",
-            "additions": 79,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-acp.ts",
-            "additions": 29,
-            "deletions": 20,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-68843",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-68843.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 100,
-          "counts": {
-            "IN_PROGRESS": 56,
-            "SKIPPED": 19,
-            "SUCCESS": 24,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Scan changed paths (precise):IN_PROGRESS",
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-src-security:IN_PROGRESS",
-            "checks-node-core-runtime-infra-state:IN_PROGRESS",
-            "checks-node-core-runtime-infra-process:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-shared:IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-core-runtime-cron-service:IN_PROGRESS",
-            "checks-node-agentic-control-plane-agent-chat:IN_PROGRESS",
-            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-plugin-ws:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-command-support:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor:IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS",
-            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
-            "checks-node-agentic-agents:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
-            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS",
-            "checks-windows-node-test:IN_PROGRESS",
-            "macos-node:IN_PROGRESS",
-            "macos-swift:IN_PROGRESS",
-            "android-test-play:IN_PROGRESS",
-            "android-test-third-party:IN_PROGRESS",
-            "android-build-play:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Scan changed paths (precise):IN_PROGRESS",
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-src-security:IN_PROGRESS",
-            "checks-node-core-runtime-infra-state:IN_PROGRESS",
-            "checks-node-core-runtime-infra-process:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-shared:IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-core-runtime-cron-service:IN_PROGRESS",
-            "checks-node-agentic-control-plane-agent-chat:IN_PROGRESS",
-            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-plugin-ws:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-command-support:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor:IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS",
-            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
-            "checks-node-agentic-agents:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
-            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS",
-            "checks-windows-node-test:IN_PROGRESS",
-            "macos-node:IN_PROGRESS",
-            "macos-swift:IN_PROGRESS",
-            "android-test-play:IN_PROGRESS",
-            "android-test-third-party:IN_PROGRESS",
-            "android-build-play:IN_PROGRESS"
-          ],
-          "terminalBlockers": []
-        }
-      }
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5538,
+    "total_ms": 1765,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 828
+        "ms": 747
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1971
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2713
+        "ms": 1008
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
