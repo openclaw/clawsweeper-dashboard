@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-27T05:50:08.694Z",
+  "generated_at": "2026-05-27T05:50:42.692Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-27T02:50:05.248Z",
+  "since": "2026-05-27T02:50:42.479Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    86995
+    87180
   ],
-  "comment_ids": [
-    4551748323
-  ],
-  "status_comment_id": 4551748738,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,326 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:86995:4551748323:2026-05-27T05:49:32Z:re_review",
-      "comment_id": "4551748323",
-      "comment_version_key": "4551748323:2026-05-27T05:49:32Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86995#issuecomment-4551748323",
-      "repo": "openclaw/openclaw",
-      "issue_number": 86995,
-      "author": "SYU8384",
-      "author_id": 62822461,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-27T05:49:32Z",
-      "comment_updated_at": "2026-05-27T05:49:32Z",
-      "status_comment_id": 4551748738,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-27T05:50:09.887Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 86995
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-27T05:50:11.848Z",
-          "response_comment_id": "4551748738",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): keep runtime context before active user turns",
-        "body": "## Summary\n\nThis PR keeps OpenClaw-generated runtime context prompt-local and ordered before the active user turn instead of treating it as next-turn/post-user transcript state.\n\nThe change addresses one concrete stale-reply/runtime-context cause that can make an agent answer already-answered or previous user messages: hidden `openclaw.runtime-context` was queued for the next turn, then preserved after the latest user message at the LLM boundary. The branch now builds a hidden runtime-context custom message for the current prompt, installs it only while submitting that prompt, keeps only runtime context immediately before the active user message at the LLM boundary, and removes the temporary message after submission.\n\nThis matched my local OpenClaw symptom: agents were repeating questions or acting on already-answered context, similar to the reports below. Testing this branch in my own environment appeared to resolve that behavior.\n\n## Related issues\n\nAddresses the runtime-context/user-precedence slice of:\n\n- #32296\n- #86849\n\nRelated context, but not claimed as fully closed by this PR:\n\n- #76629\n- #84662\n- #75726\n\nIn particular, this is not a full fix for the Codex native-history growth tracked in #84662. It fixes the embedded-runner runtime-context ordering and lifetime path.\n\n## Root cause\n\n`resolveRuntimeContextPromptParts()` separated hidden runtime context from the visible prompt, but the embedded runner delivered that runtime context through `queueRuntimeContextForNextTurn()`. That made it durable next-turn context rather than prompt-local context for the current user request.\n\nThe cleanup filter also preserved runtime-context custom messages after the latest user message, which means stale/post-user runtime context could remain model-visible while the latest user request was no longer the strongest final message.\n\n## Behavior after this patch\n\n- Runtime context is formatted with the normal OpenClaw runtime-context header and notice.\n- Runtime context is installed as a hidden custom message only for the active prompt submission.\n- LLM-boundary cleanup keeps only runtime context immediately before the active user message.\n- Runtime context after the latest user message is treated as stale and stripped.\n- The temporary context message is removed after prompt submission, including the retry path that rebuilds session state during Pi overflow recovery.\n- Codex app-server steering now rejects default queued steering once a terminal turn notification has been queued, avoiding too-late steering into a completed turn.\n\n## Real behavior proof\n\n- Behavior or issue addressed: Hidden OpenClaw runtime context for the current turn must stay prompt-local, ordered before the active user message, and absent from persisted visible transcript state so stale/post-user runtime context cannot make an agent answer an already-answered or previous user message.\n- Real environment tested: Local WSL2 source checkout on branch `fix/runtime-context-user-precedence` at `2dc4c02ec4e20757322e87ae6c3d8415c8c1a301`, Node `v24.15.0`, built OpenClaw `dist/` and CLI path. The source checkout is the same local OpenClaw setup where I observed the repeated/stale-reply symptom with Hex.\n- Exact steps or command run after this patch:\n\n```text\n$ git rev-parse --short HEAD\n2dc4c02ec4\n\n$ node scripts/run-vitest.mjs src/agents/pi-embedded-runner/run/attempt.test.ts src/agents/pi-embedded-runner/run/runtime-context-prompt.test.ts src/agents/pi-embedded-runner/run/attempt.spawn-workspace.context-engine.test.ts extensions/codex/src/app-server/run-attempt.test.ts\n\n$ git diff --check upstream/main...HEAD\n$ node scripts/check-no-conflict-markers.mjs\n\n$ bash scripts/e2e/session-runtime-context-docker.sh\n$ npx tsx scripts/e2e/session-runtime-context-docker-client.ts\n```\n\n- Evidence after fix (screenshot, recording, terminal capture, console output, redacted runtime log, linked artifact, or copied live output): Terminal capture from the local OpenClaw checkout after the patch:\n\n```text\n$ node scripts/run-vitest.mjs src/agents/pi-embedded-runner/run/attempt.test.ts src/agents/pi-embedded-runner/run/runtime-context-prompt.test.ts src/agents/pi-embedded-runner/run/attempt.spawn-workspace.context-engine.test.ts extensions/codex/src/app-server/run-attempt.test.ts\nRUN  v4.1.7 <local source checkout>\n\nTest Files  7 passed (7)\nTests  651 passed (651)\nDuration  25.54s\n\n$ git diff --check upstream/main...HEAD\n(no output)\n\n$ node scripts/check-no-conflict-markers.mjs\n(no output)\n\n$ npx tsx scripts/e2e/session-runtime-context-docker-client.ts\nsession runtime context Docker E2E passed\n```\n\nAdditional terminal output from the packaged Docker wrapper before it reached Docker shows the package build and tarball integrity path completed, but the container portion could not run because Docker is not available in this WSL distro:\n\n```text\n$ bash scripts/e2e/session-runtime-context-docker.sh\nBuilding Docker image: openclaw-session-runtime-context-e2e\n==> Building OpenClaw package artifacts\n...\nOpenClaw package tarball integrity passed.\n==> OpenClaw package tarball check finished in 1s\n\nThe command 'docker' could not be found in this WSL 2 distro.\n```\n\n- Observed result after fix: The dist/CLI runtime-context harness passed: hidden runtime context was extracted from the visible prompt, built as hidden `openclaw.runtime-context`, kept out of the persisted visible user transcript, and doctor repair removed the affected duplicated runtime-context branch. The focused existing-session regression proves old user + assistant history keeps the temporary runtime-context message immediately before the active prompt at the LLM boundary. The focused retry regression also passes and proves overflow-retry state rebuild places the temporary runtime-context message immediately before the active user before LLM-boundary cleanup.\n- What was not tested: No full suite, broad Testbox/Crabbox gate, or live external Discord/Telegram channel proof was run. The Docker container wrapper could not complete because Docker is unavailable in this WSL distro; the same client was run directly against the freshly built local `dist/` instead.\n- Proof limitations or environment constraints: The real external-channel symptom was observed in my local OpenClaw operator environment, but I am not attaching raw Discord/channel logs because they include private channel/user/session details. The attached terminal proof is therefore focused on the shipped runtime-context transcript behavior and the regression tests that cover the stale post-user and overflow-retry ordering paths.\n\n## Verification\n\n- `git diff --check upstream/main...HEAD`\n- `node scripts/check-no-conflict-markers.mjs`\n- `node scripts/run-vitest.mjs src/agents/pi-embedded-runner/run/attempt.test.ts src/agents/pi-embedded-runner/run/runtime-context-prompt.test.ts src/agents/pi-embedded-runner/run/attempt.spawn-workspace.context-engine.test.ts extensions/codex/src/app-server/run-attempt.test.ts`\n- `npx tsx scripts/e2e/session-runtime-context-docker-client.ts`\n\nResult: focused Vitest shard passed, 7 files / 651 tests. The dist/CLI session-runtime-context client passed.\n\n\n",
-        "branch": "fix/runtime-context-user-precedence",
-        "head_sha": "2dc4c02ec4e20757322e87ae6c3d8415c8c1a301",
-        "author": "syu8384",
-        "labels": [
-          "scripts",
-          "docker",
-          "agents",
-          "size: M",
-          "extensions: codex",
-          "proof: supplied",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/codex/src/app-server/run-attempt.test.ts",
-            "additions": 17,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/run-attempt.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/e2e/session-runtime-context-docker-client.ts",
-            "additions": 10,
-            "deletions": 19,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/internal-runtime-context.ts",
-            "additions": 14,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run/attempt.spawn-workspace.context-engine.test.ts",
-            "additions": 14,
-            "deletions": 11,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run/attempt.spawn-workspace.test-support.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run/attempt.test.ts",
-            "additions": 112,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
-            "additions": 116,
-            "deletions": 26,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run/runtime-context-prompt.test.ts",
-            "additions": 14,
-            "deletions": 25,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/pi-embedded-runner/run/runtime-context-prompt.ts",
-            "additions": 23,
-            "deletions": 28,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86995",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86995.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 97,
-          "counts": {
-            "IN_PROGRESS": 67,
-            "SUCCESS": 9,
-            "SKIPPED": 18,
-            "QUEUED": 3
-          },
-          "blockers": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Scan changed paths (precise):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "security-fast:IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bundled-protocol:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-src-security:IN_PROGRESS",
-            "checks-node-core-ui:IN_PROGRESS",
-            "checks-node-core-support:IN_PROGRESS",
-            "checks-node-core-runtime-infra-state:IN_PROGRESS",
-            "checks-node-core-runtime-infra-process:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-shared:IN_PROGRESS",
-            "checks-node-core-runtime-cron-core:IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-core-runtime-cron-service:IN_PROGRESS",
-            "checks-node-agentic-control-plane-agent-chat:IN_PROGRESS",
-            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-plugin-ws:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-runtime:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-command-support:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-shared:IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS",
-            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
-            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
-            "checks-node-agentic-agents:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
-            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-session:IN_PROGRESS",
-            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS",
-            "checks-windows-node-test:QUEUED",
-            "macos-node:QUEUED",
-            "macos-swift:QUEUED",
-            "android-test-play:IN_PROGRESS",
-            "android-test-third-party:IN_PROGRESS",
-            "android-build-play:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Scan changed paths (precise):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "security-fast:IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bundled-protocol:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-src-security:IN_PROGRESS",
-            "checks-node-core-ui:IN_PROGRESS",
-            "checks-node-core-support:IN_PROGRESS",
-            "checks-node-core-runtime-infra-state:IN_PROGRESS",
-            "checks-node-core-runtime-infra-process:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-shared:IN_PROGRESS",
-            "checks-node-core-runtime-cron-core:IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-core-runtime-cron-service:IN_PROGRESS",
-            "checks-node-agentic-control-plane-agent-chat:IN_PROGRESS",
-            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-plugin-ws:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-runtime:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-command-support:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-shared:IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS",
-            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
-            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
-            "checks-node-agentic-agents:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
-            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-session:IN_PROGRESS",
-            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS",
-            "checks-windows-node-test:QUEUED",
-            "macos-node:QUEUED",
-            "macos-swift:QUEUED",
-            "android-test-play:IN_PROGRESS",
-            "android-test-third-party:IN_PROGRESS",
-            "android-build-play:IN_PROGRESS"
-          ],
-          "terminalBlockers": []
-        }
-      }
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 7347,
+    "total_ms": 333,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1239
+        "ms": 203
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2193
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 3889
+        "ms": 120
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
