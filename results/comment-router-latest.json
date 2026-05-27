@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-27T01:46:06.986Z",
+  "generated_at": "2026-05-27T01:46:17.910Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-26T22:46:06.635Z",
+  "since": "2026-05-26T22:46:15.603Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    87107
+    87028
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 2,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,167 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:87028:4548500684:2026-05-27T01:46:12Z:clawsweeper_needs_human",
+      "comment_id": "4548500684",
+      "comment_version_key": "4548500684:2026-05-27T01:46:12Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/87028#issuecomment-4548500684",
+      "repo": "openclaw/openclaw",
+      "issue_number": 87028,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-26T20:24:51Z",
+      "comment_updated_at": "2026-05-27T01:46:12Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "No narrow automated repair is needed; the remaining action is maintainer review of a high-impact session recovery and availability change.; Cleared: The diff does not touch dependencies, workflows, lockfiles, permissions, credential handling, or package execution surfaces; no concrete security or supply-chain concern was found. (sha=16668492161260da78e0f717e04576497dfa6b20)",
+      "review_summary": "The branch makes idle queued sessions with stale ownerless model/tool activity recover as `session.stuck`, adds an event-loop yield before synchronous lock-owner inspection during contention callbacks, and updates related diagnostics docs/tests.\n\nPR surface: Source +35, Tests +299, Docs +1. Total +335 across 9 files.\n\nReproducibility: yes. at source level: current main keeps idle queued ownerless model/tool activity outside recoverable `session.stuck`, and the PR adds focused tests that exercise the previously wedged shape. I did not run a live reproduction in this read-only review.",
+      "review_followup": "No narrow automated repair is needed; the remaining action is maintainer review of a high-impact session recovery and availability change.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "16668492161260da78e0f717e04576497dfa6b20",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(diagnostics): recover orphaned session activity and yield event loop during lock contention",
+        "body": "## Summary\n\n- Classify idle sessions with queued work and stale orphaned activity (model_call **or tool_call**) as recoverable `session.stuck` instead of non-recoverable `stalled_agent_run`\n- Yield to the event loop in session write lock `shouldReclaim`/`shouldRemoveStaleLock` callbacks before synchronous process inspection, preventing lock contention retry storms from starving other sessions\n- Add stress test coverage for multiple simultaneous stalled sessions, orphaned tool_call recovery, and idle-state recovery without active abort\n\n## Context\n\nRelated #84903.\n\nThis targets two production failure shapes:\n\n1. **Orphaned activity blocking queue**: When an embedded owner dies but `model_call` or `tool_call` activity remains in the diagnostic tracker, the session sits idle with queued work that never drains. The classifier saw `activeWorkKind` and returned `stalled_agent_run` (non-recoverable) instead of routing to idle-state recovery. This PR threads `state` into the classifier so idle+queued+stale+ownerless activity is classified as `session.stuck` with `recoveryEligible: true`.\n\n2. **Lock contention event loop starvation**: `shouldReclaim` and `shouldRemoveStaleLock` callbacks call `readProcessArgsSync` on every retry attempt. Under high lock contention, repeated synchronous process inspection blocks the event loop entirely. This PR adds `await yieldEventLoop()` (setImmediate) before the sync inspection so other sessions can make progress between retry attempts.\n\n## Safety\n\n- Orphaned activity recovery uses `expectedState: \"idle\"` and does **not** set `allowActiveAbort`, so true active embedded/model work remains protected by existing gates\n- The event loop yield is a no-op under normal (no contention) conditions — it only matters when the lock manager is retrying\n\n## Tests\n\nRan locally on macOS, Node 24.16.0:\n\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.logging.config.ts` — **282 passed**\n- `node scripts/run-vitest.mjs run src/agents/session-write-lock.test.ts` — **78 passed**\n- `node scripts/run-vitest.mjs run src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts` — **68 passed**\n- `node scripts/run-vitest.mjs run src/commands/doctor-session-locks.test.ts` — **4 passed**\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.process.config.ts` — **111 passed**\n- `pnpm build` — clean\n\nNew test coverage added:\n- Classifier: idle queued stale model_call without embedded owner → recoverable\n- Classifier: idle queued stale tool_call without embedded owner → recoverable\n- Classifier: processing session with orphaned activity → still non-recoverable (safety gate)\n- Heartbeat: orphaned model_call triggers idle-state recovery without allowActiveAbort\n- Heartbeat: orphaned tool_call triggers idle-state recovery without allowActiveAbort\n- Heartbeat: two independent stalled sessions recover independently (cross-session isolation)\n- Recovery runtime: idle queued work with orphaned model_call resets lane without abort\n- Recovery runtime: idle queued work with orphaned tool_call resets lane without abort\n\n## Real behavior proof\n\nBehavior addressed: Gateway event loop starvation and session queue deadlock caused by orphaned diagnostic activity blocking idle-state recovery, combined with synchronous lock contention callbacks starving the event loop. Targets the #84903 production shape where one stalled session blocks all others.\n\nReal environment tested: OpenClaw 2026.5.26 (e8f584e) on macOS Darwin 25.5.0, Node v24.16.0, Telegram direct channel, gateway running as LaunchAgent.\n\nExact steps or command run after this patch:\n1. Applied patch to `diagnostic-session-attention.ts`, `diagnostic.ts`, `session-write-lock.ts`\n2. `pnpm build` — clean\n3. `pnpm openclaw gateway restart`\n4. `pnpm openclaw message send --channel telegram --target <redacted> --message \"test\"` — delivered as message ID 430\n5. Monitored gateway logs and process metrics for 15+ minutes\n\nEvidence after fix:\n```\nBefore (gateway frozen, pre-fix):\n  eventLoopMax=12650.0ms\n  provider auth pre-warmed in 114079ms\n  sessions.list: 17467ms\n  agents.list: 3636ms\n  CPU: 100.1%  RSS: 931MB\n\nAfter (gateway healthy, post-fix):\n  eventLoopMax=0.0ms\n  provider auth pre-warmed in 596ms\n  message.action: 1073ms\n  chat.history: 146ms\n  CPU: 0.3%  RSS: 532MB\n```\n\nObserved result after fix: Gateway event loop stays at 0ms max delay. Telegram messages deliver in ~1s. CPU idle at 0.3%. No session queue deadlock observed over the monitoring period.\n\nWhat was not tested: Full multi-agent (47+ agents) production replay with concurrent lock contention was not reproduced. WSL2/Linux and Feishu channel paths were not tested. The broader lock isolation architecture (#84903 long-term fix) is not claimed resolved by this PR.\n\n---\n\n🤖 AI-assisted (Claude Code). Human-tested on real OpenClaw gateway with Telegram channel.",
+        "branch": "fix/session-isolation-event-loop-yield",
+        "head_sha": "16668492161260da78e0f717e04576497dfa6b20",
+        "author": "samuelsoaress",
+        "labels": [
+          "docs",
+          "gateway",
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "docs/concepts/agent-loop.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/concepts/queue.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/opentelemetry.md",
+            "additions": 5,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-write-lock.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/logging/diagnostic-session-attention.test.ts",
+            "additions": 54,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/logging/diagnostic-session-attention.ts",
+            "additions": 18,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/logging/diagnostic-stuck-session-recovery.runtime.test.ts",
+            "additions": 52,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/logging/diagnostic.test.ts",
+            "additions": 194,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/logging/diagnostic.ts",
+            "additions": 10,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-87028",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87028.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 103,
+          "counts": {
+            "SUCCESS": 75,
+            "SKIPPED": 26,
+            "IN_PROGRESS": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS"
+          ],
+          "pending": [
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 690,
+    "total_ms": 2623,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 342
+        "ms": 409
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 1884
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 340
+        "ms": 301
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
