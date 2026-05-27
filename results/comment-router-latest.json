@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-27T21:04:55.471Z",
-  "repo": "openclaw/octopool",
+  "generated_at": "2026-05-27T21:05:03.849Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-27T18:04:54.965Z",
+  "since": "2026-05-27T18:05:01.676Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    1
+    86606
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 16,
+  "commands_seen": 5,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,490 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86606:4536543664:2026-05-27T21:04:58Z:clawsweeper_needs_human",
+      "comment_id": "4536543664",
+      "comment_version_key": "4536543664:2026-05-27T21:04:58Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86606#issuecomment-4536543664",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86606,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-25T19:00:52Z",
+      "comment_updated_at": "2026-05-27T21:04:58Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "Manual follow-up is appropriate because the remaining blocker is proof or maintainer acceptance of the proof gap, not an automatable file-level repair.; Cleared: No concrete security or supply-chain concern found; the diff is limited to agent delivery retry logic and colocated Vitest coverage. (sha=56b8c7a6a0124d815cac5e4eabf56ba6645b7535)",
+      "review_summary": "The PR adds a shared active-wake retry helper and regression tests so subagent requester steering and generated-completion handoff retry `compacting` active runs within the announce timeout before falling back.\n\nPR surface: Source +87, Tests +207. Total +294 across 2 files.\n\nReproducibility: yes. from source, but not from a live run in this review: current main returns a `compacting` queue failure and the two active-wake callers only retry transcript-wait unsupported outcomes, so compaction reaches fallback/dropped handling. The PR's regression tests simulate that queue outcome; no real compacting requester run is attached.",
+      "review_followup": "Manual follow-up is appropriate because the remaining blocker is proof or maintainer acceptance of the proof gap, not an automatable file-level repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "56b8c7a6a0124d815cac5e4eabf56ba6645b7535",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): wait for compaction before requester steering fallback",
+        "body": "## Summary\n\nFixes #86566 (follow-up to #85489). Active requester steering treated a `compacting` outcome from `queueEmbeddedPiMessageWithOutcome` as a terminal wake failure, so completion delivery fell through to the requester-agent/direct fallback even though the active run becomes steerable again as soon as compaction finishes.\n\nThis introduces a shared `resolveActiveWakeWithRetries` helper used by **both** active-wake call sites — the steer path (`maybeSteerSubagentAnnounce`) and the generated-completion active wake (`sendSubagentAnnounceDirectly`). The helper treats `compacting` as transient and waits through compaction, retrying the same wake.\n\nWaiting is **bounded by the active wake's delivery timeout**, not just the backoff schedule: the backoff schedule controls the gap between attempts, and once it is exhausted its last delay is reused until the delivery deadline. So a compaction that finishes after the schedule but still within the delivery timeout is still re-steered, instead of falling back early. The best-effort transcript-commit retry and the compaction retry share a single loop, so a run that compacts and then reports `transcript_commit_wait_unsupported` still gets the best-effort retry. Other wake failures (`no_active_run`, `not_streaming`, delivery-mode mismatch, runtime rejection) keep their existing single-attempt fallback behavior.\n\nThis addresses the earlier review notes: the compaction retry covers the completion wake path, the best-effort fallback is preserved after compaction, and the retry window is now bounded by the delivery timeout rather than a fixed schedule.\n\n## Real behavior proof\n\nBehavior or issue addressed: when an active requester is compacting and compaction finishes within the delivery timeout, both the steer path and the generated-completion wake should wait and re-steer the same active run instead of falling back to direct requester-agent delivery — including when compaction outlasts the fixed backoff schedule but is still within the delivery timeout.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js 24.14.0, current PR head. Exercised the real `maybeSteerSubagentAnnounce` and `sendSubagentAnnounceDirectly` paths through `deliverSubagentAnnouncement` under the repo's vitest runner, with no mocking of the module under test (only the queue-outcome dependency is driven to simulate the compacting-then-ready sequence). Compared the pre-fix and post-fix code.\n\nExact steps or command run after this patch: ran the subagent announce delivery suite, including regression tests that drive the steer queue and the completion-handoff wake to return `compacting` first and a queued success second, a test that returns `compacting` more times than the backoff schedule before succeeding, and a guard test that a non-compacting failure is not retried.\n\nEvidence after fix: stdout from the vitest run against the real steering and completion paths, comparing pre-fix and post-fix:\n$ node scripts/run-vitest.mjs src/agents/subagent-announce-delivery.test.ts -t 86566\n-- BEFORE the fix (compacting terminal / fixed-schedule only): regression tests fail --\nx waits through compaction and re-steers the active requester (86566)\nAssertionError: expected 'direct' to deeply equal 'steered'\nx waits through compaction on the completion handoff wake (86566)\nAssertionError: expected 'direct' to deeply equal 'steered'\nx keeps retrying compaction past the backoff schedule until the delivery timeout (86566)\nAssertionError: expected 'direct' to deeply equal 'steered'\n\ndoes not retry non-compacting steer failures (86566)\n\n-- AFTER the fix (compacting transient, bounded by delivery timeout): all pass --\n\nwaits through compaction and re-steers the active requester (86566)\nwaits through compaction on the completion handoff wake (86566)\nkeeps retrying compaction past the backoff schedule until the delivery timeout (86566)\ndoes not retry non-compacting steer failures (86566)\nTests  8 passed | 126 skipped (134)\n\n\nObserved result after fix: before the fix a compacting outcome on either path routes the completion to the direct fallback (`path: \"direct\"`), and even a partially-fixed schedule-only version falls back when compaction outlasts the fixed schedule; after the fix each path waits through compaction (bounded by the delivery timeout) and re-attempts the same wake, so the completion stays on the steering path (`path: \"steered\"`). A non-compacting failure (`no_active_run`) is attempted only once. The full subagent-announce-delivery suite (134 tests) passes.\n\nWhat was not tested: no live multi-agent run with a real compaction cycle was exercised; the compacting-then-ready transition is simulated through the queue-outcome dependency on the real steering and completion code paths. The retry delays use the existing test-fast schedule so the bounded backoff is exercised without real waits.\n",
+        "branch": "fix-86566-compaction-steer-retry",
+        "head_sha": "56b8c7a6a0124d815cac5e4eabf56ba6645b7535",
+        "author": "alkor2000",
+        "labels": [
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/subagent-announce-delivery.test.ts",
+            "additions": 207,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce-delivery.ts",
+            "additions": 107,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86606",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86606.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "counts": {
+            "SUCCESS": 72,
+            "SKIPPED": 22,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-agents:FAILURE",
+            "checks-node-auto-reply-reply-dispatch:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-agents:FAILURE",
+            "checks-node-auto-reply-reply-dispatch:FAILURE"
+          ]
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86606:4542599517:2026-05-26T09:08:28Z:re_review",
+      "comment_id": "4542599517",
+      "comment_version_key": "4542599517:2026-05-26T09:08:28Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86606#issuecomment-4542599517",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86606,
+      "author": "alkor2000",
+      "author_id": 131229172,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-26T09:08:28Z",
+      "comment_updated_at": "2026-05-26T09:08:28Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): wait for compaction before requester steering fallback",
+        "body": "## Summary\n\nFixes #86566 (follow-up to #85489). Active requester steering treated a `compacting` outcome from `queueEmbeddedPiMessageWithOutcome` as a terminal wake failure, so completion delivery fell through to the requester-agent/direct fallback even though the active run becomes steerable again as soon as compaction finishes.\n\nThis introduces a shared `resolveActiveWakeWithRetries` helper used by **both** active-wake call sites — the steer path (`maybeSteerSubagentAnnounce`) and the generated-completion active wake (`sendSubagentAnnounceDirectly`). The helper treats `compacting` as transient and waits through compaction, retrying the same wake.\n\nWaiting is **bounded by the active wake's delivery timeout**, not just the backoff schedule: the backoff schedule controls the gap between attempts, and once it is exhausted its last delay is reused until the delivery deadline. So a compaction that finishes after the schedule but still within the delivery timeout is still re-steered, instead of falling back early. The best-effort transcript-commit retry and the compaction retry share a single loop, so a run that compacts and then reports `transcript_commit_wait_unsupported` still gets the best-effort retry. Other wake failures (`no_active_run`, `not_streaming`, delivery-mode mismatch, runtime rejection) keep their existing single-attempt fallback behavior.\n\nThis addresses the earlier review notes: the compaction retry covers the completion wake path, the best-effort fallback is preserved after compaction, and the retry window is now bounded by the delivery timeout rather than a fixed schedule.\n\n## Real behavior proof\n\nBehavior or issue addressed: when an active requester is compacting and compaction finishes within the delivery timeout, both the steer path and the generated-completion wake should wait and re-steer the same active run instead of falling back to direct requester-agent delivery — including when compaction outlasts the fixed backoff schedule but is still within the delivery timeout.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js 24.14.0, current PR head. Exercised the real `maybeSteerSubagentAnnounce` and `sendSubagentAnnounceDirectly` paths through `deliverSubagentAnnouncement` under the repo's vitest runner, with no mocking of the module under test (only the queue-outcome dependency is driven to simulate the compacting-then-ready sequence). Compared the pre-fix and post-fix code.\n\nExact steps or command run after this patch: ran the subagent announce delivery suite, including regression tests that drive the steer queue and the completion-handoff wake to return `compacting` first and a queued success second, a test that returns `compacting` more times than the backoff schedule before succeeding, and a guard test that a non-compacting failure is not retried.\n\nEvidence after fix: stdout from the vitest run against the real steering and completion paths, comparing pre-fix and post-fix:\n$ node scripts/run-vitest.mjs src/agents/subagent-announce-delivery.test.ts -t 86566\n-- BEFORE the fix (compacting terminal / fixed-schedule only): regression tests fail --\nx waits through compaction and re-steers the active requester (86566)\nAssertionError: expected 'direct' to deeply equal 'steered'\nx waits through compaction on the completion handoff wake (86566)\nAssertionError: expected 'direct' to deeply equal 'steered'\nx keeps retrying compaction past the backoff schedule until the delivery timeout (86566)\nAssertionError: expected 'direct' to deeply equal 'steered'\n\ndoes not retry non-compacting steer failures (86566)\n\n-- AFTER the fix (compacting transient, bounded by delivery timeout): all pass --\n\nwaits through compaction and re-steers the active requester (86566)\nwaits through compaction on the completion handoff wake (86566)\nkeeps retrying compaction past the backoff schedule until the delivery timeout (86566)\ndoes not retry non-compacting steer failures (86566)\nTests  8 passed | 126 skipped (134)\n\n\nObserved result after fix: before the fix a compacting outcome on either path routes the completion to the direct fallback (`path: \"direct\"`), and even a partially-fixed schedule-only version falls back when compaction outlasts the fixed schedule; after the fix each path waits through compaction (bounded by the delivery timeout) and re-attempts the same wake, so the completion stays on the steering path (`path: \"steered\"`). A non-compacting failure (`no_active_run`) is attempted only once. The full subagent-announce-delivery suite (134 tests) passes.\n\nWhat was not tested: no live multi-agent run with a real compaction cycle was exercised; the compacting-then-ready transition is simulated through the queue-outcome dependency on the real steering and completion code paths. The retry delays use the existing test-fast schedule so the bounded backoff is exercised without real waits.\n",
+        "branch": "fix-86566-compaction-steer-retry",
+        "head_sha": "56b8c7a6a0124d815cac5e4eabf56ba6645b7535",
+        "author": "alkor2000",
+        "labels": [
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/subagent-announce-delivery.test.ts",
+            "additions": 207,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce-delivery.ts",
+            "additions": 107,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86606",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86606.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "counts": {
+            "SUCCESS": 72,
+            "SKIPPED": 22,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-agents:FAILURE",
+            "checks-node-auto-reply-reply-dispatch:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-agents:FAILURE",
+            "checks-node-auto-reply-reply-dispatch:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86606:4539923431:2026-05-26T04:09:11Z:re_review",
+      "comment_id": "4539923431",
+      "comment_version_key": "4539923431:2026-05-26T04:09:11Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86606#issuecomment-4539923431",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86606,
+      "author": "alkor2000",
+      "author_id": 131229172,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-26T04:09:11Z",
+      "comment_updated_at": "2026-05-26T04:09:11Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): wait for compaction before requester steering fallback",
+        "body": "## Summary\n\nFixes #86566 (follow-up to #85489). Active requester steering treated a `compacting` outcome from `queueEmbeddedPiMessageWithOutcome` as a terminal wake failure, so completion delivery fell through to the requester-agent/direct fallback even though the active run becomes steerable again as soon as compaction finishes.\n\nThis introduces a shared `resolveActiveWakeWithRetries` helper used by **both** active-wake call sites — the steer path (`maybeSteerSubagentAnnounce`) and the generated-completion active wake (`sendSubagentAnnounceDirectly`). The helper treats `compacting` as transient and waits through compaction, retrying the same wake.\n\nWaiting is **bounded by the active wake's delivery timeout**, not just the backoff schedule: the backoff schedule controls the gap between attempts, and once it is exhausted its last delay is reused until the delivery deadline. So a compaction that finishes after the schedule but still within the delivery timeout is still re-steered, instead of falling back early. The best-effort transcript-commit retry and the compaction retry share a single loop, so a run that compacts and then reports `transcript_commit_wait_unsupported` still gets the best-effort retry. Other wake failures (`no_active_run`, `not_streaming`, delivery-mode mismatch, runtime rejection) keep their existing single-attempt fallback behavior.\n\nThis addresses the earlier review notes: the compaction retry covers the completion wake path, the best-effort fallback is preserved after compaction, and the retry window is now bounded by the delivery timeout rather than a fixed schedule.\n\n## Real behavior proof\n\nBehavior or issue addressed: when an active requester is compacting and compaction finishes within the delivery timeout, both the steer path and the generated-completion wake should wait and re-steer the same active run instead of falling back to direct requester-agent delivery — including when compaction outlasts the fixed backoff schedule but is still within the delivery timeout.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js 24.14.0, current PR head. Exercised the real `maybeSteerSubagentAnnounce` and `sendSubagentAnnounceDirectly` paths through `deliverSubagentAnnouncement` under the repo's vitest runner, with no mocking of the module under test (only the queue-outcome dependency is driven to simulate the compacting-then-ready sequence). Compared the pre-fix and post-fix code.\n\nExact steps or command run after this patch: ran the subagent announce delivery suite, including regression tests that drive the steer queue and the completion-handoff wake to return `compacting` first and a queued success second, a test that returns `compacting` more times than the backoff schedule before succeeding, and a guard test that a non-compacting failure is not retried.\n\nEvidence after fix: stdout from the vitest run against the real steering and completion paths, comparing pre-fix and post-fix:\n$ node scripts/run-vitest.mjs src/agents/subagent-announce-delivery.test.ts -t 86566\n-- BEFORE the fix (compacting terminal / fixed-schedule only): regression tests fail --\nx waits through compaction and re-steers the active requester (86566)\nAssertionError: expected 'direct' to deeply equal 'steered'\nx waits through compaction on the completion handoff wake (86566)\nAssertionError: expected 'direct' to deeply equal 'steered'\nx keeps retrying compaction past the backoff schedule until the delivery timeout (86566)\nAssertionError: expected 'direct' to deeply equal 'steered'\n\ndoes not retry non-compacting steer failures (86566)\n\n-- AFTER the fix (compacting transient, bounded by delivery timeout): all pass --\n\nwaits through compaction and re-steers the active requester (86566)\nwaits through compaction on the completion handoff wake (86566)\nkeeps retrying compaction past the backoff schedule until the delivery timeout (86566)\ndoes not retry non-compacting steer failures (86566)\nTests  8 passed | 126 skipped (134)\n\n\nObserved result after fix: before the fix a compacting outcome on either path routes the completion to the direct fallback (`path: \"direct\"`), and even a partially-fixed schedule-only version falls back when compaction outlasts the fixed schedule; after the fix each path waits through compaction (bounded by the delivery timeout) and re-attempts the same wake, so the completion stays on the steering path (`path: \"steered\"`). A non-compacting failure (`no_active_run`) is attempted only once. The full subagent-announce-delivery suite (134 tests) passes.\n\nWhat was not tested: no live multi-agent run with a real compaction cycle was exercised; the compacting-then-ready transition is simulated through the queue-outcome dependency on the real steering and completion code paths. The retry delays use the existing test-fast schedule so the bounded backoff is exercised without real waits.\n",
+        "branch": "fix-86566-compaction-steer-retry",
+        "head_sha": "56b8c7a6a0124d815cac5e4eabf56ba6645b7535",
+        "author": "alkor2000",
+        "labels": [
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/subagent-announce-delivery.test.ts",
+            "additions": 207,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce-delivery.ts",
+            "additions": 107,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86606",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86606.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "counts": {
+            "SUCCESS": 72,
+            "SKIPPED": 22,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-agents:FAILURE",
+            "checks-node-auto-reply-reply-dispatch:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-agents:FAILURE",
+            "checks-node-auto-reply-reply-dispatch:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86606:4539669634:2026-05-26T03:16:46Z:re_review",
+      "comment_id": "4539669634",
+      "comment_version_key": "4539669634:2026-05-26T03:16:46Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86606#issuecomment-4539669634",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86606,
+      "author": "alkor2000",
+      "author_id": 131229172,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-26T03:16:46Z",
+      "comment_updated_at": "2026-05-26T03:16:46Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): wait for compaction before requester steering fallback",
+        "body": "## Summary\n\nFixes #86566 (follow-up to #85489). Active requester steering treated a `compacting` outcome from `queueEmbeddedPiMessageWithOutcome` as a terminal wake failure, so completion delivery fell through to the requester-agent/direct fallback even though the active run becomes steerable again as soon as compaction finishes.\n\nThis introduces a shared `resolveActiveWakeWithRetries` helper used by **both** active-wake call sites — the steer path (`maybeSteerSubagentAnnounce`) and the generated-completion active wake (`sendSubagentAnnounceDirectly`). The helper treats `compacting` as transient and waits through compaction, retrying the same wake.\n\nWaiting is **bounded by the active wake's delivery timeout**, not just the backoff schedule: the backoff schedule controls the gap between attempts, and once it is exhausted its last delay is reused until the delivery deadline. So a compaction that finishes after the schedule but still within the delivery timeout is still re-steered, instead of falling back early. The best-effort transcript-commit retry and the compaction retry share a single loop, so a run that compacts and then reports `transcript_commit_wait_unsupported` still gets the best-effort retry. Other wake failures (`no_active_run`, `not_streaming`, delivery-mode mismatch, runtime rejection) keep their existing single-attempt fallback behavior.\n\nThis addresses the earlier review notes: the compaction retry covers the completion wake path, the best-effort fallback is preserved after compaction, and the retry window is now bounded by the delivery timeout rather than a fixed schedule.\n\n## Real behavior proof\n\nBehavior or issue addressed: when an active requester is compacting and compaction finishes within the delivery timeout, both the steer path and the generated-completion wake should wait and re-steer the same active run instead of falling back to direct requester-agent delivery — including when compaction outlasts the fixed backoff schedule but is still within the delivery timeout.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js 24.14.0, current PR head. Exercised the real `maybeSteerSubagentAnnounce` and `sendSubagentAnnounceDirectly` paths through `deliverSubagentAnnouncement` under the repo's vitest runner, with no mocking of the module under test (only the queue-outcome dependency is driven to simulate the compacting-then-ready sequence). Compared the pre-fix and post-fix code.\n\nExact steps or command run after this patch: ran the subagent announce delivery suite, including regression tests that drive the steer queue and the completion-handoff wake to return `compacting` first and a queued success second, a test that returns `compacting` more times than the backoff schedule before succeeding, and a guard test that a non-compacting failure is not retried.\n\nEvidence after fix: stdout from the vitest run against the real steering and completion paths, comparing pre-fix and post-fix:\n$ node scripts/run-vitest.mjs src/agents/subagent-announce-delivery.test.ts -t 86566\n-- BEFORE the fix (compacting terminal / fixed-schedule only): regression tests fail --\nx waits through compaction and re-steers the active requester (86566)\nAssertionError: expected 'direct' to deeply equal 'steered'\nx waits through compaction on the completion handoff wake (86566)\nAssertionError: expected 'direct' to deeply equal 'steered'\nx keeps retrying compaction past the backoff schedule until the delivery timeout (86566)\nAssertionError: expected 'direct' to deeply equal 'steered'\n\ndoes not retry non-compacting steer failures (86566)\n\n-- AFTER the fix (compacting transient, bounded by delivery timeout): all pass --\n\nwaits through compaction and re-steers the active requester (86566)\nwaits through compaction on the completion handoff wake (86566)\nkeeps retrying compaction past the backoff schedule until the delivery timeout (86566)\ndoes not retry non-compacting steer failures (86566)\nTests  8 passed | 126 skipped (134)\n\n\nObserved result after fix: before the fix a compacting outcome on either path routes the completion to the direct fallback (`path: \"direct\"`), and even a partially-fixed schedule-only version falls back when compaction outlasts the fixed schedule; after the fix each path waits through compaction (bounded by the delivery timeout) and re-attempts the same wake, so the completion stays on the steering path (`path: \"steered\"`). A non-compacting failure (`no_active_run`) is attempted only once. The full subagent-announce-delivery suite (134 tests) passes.\n\nWhat was not tested: no live multi-agent run with a real compaction cycle was exercised; the compacting-then-ready transition is simulated through the queue-outcome dependency on the real steering and completion code paths. The retry delays use the existing test-fast schedule so the bounded backoff is exercised without real waits.\n",
+        "branch": "fix-86566-compaction-steer-retry",
+        "head_sha": "56b8c7a6a0124d815cac5e4eabf56ba6645b7535",
+        "author": "alkor2000",
+        "labels": [
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/subagent-announce-delivery.test.ts",
+            "additions": 207,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce-delivery.ts",
+            "additions": 107,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86606",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86606.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "counts": {
+            "SUCCESS": 72,
+            "SKIPPED": 22,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-agents:FAILURE",
+            "checks-node-auto-reply-reply-dispatch:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-agents:FAILURE",
+            "checks-node-auto-reply-reply-dispatch:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86606:4536780697:2026-05-25T19:42:27Z:re_review",
+      "comment_id": "4536780697",
+      "comment_version_key": "4536780697:2026-05-25T19:42:27Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86606#issuecomment-4536780697",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86606,
+      "author": "alkor2000",
+      "author_id": 131229172,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-25T19:42:27Z",
+      "comment_updated_at": "2026-05-25T19:42:27Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): wait for compaction before requester steering fallback",
+        "body": "## Summary\n\nFixes #86566 (follow-up to #85489). Active requester steering treated a `compacting` outcome from `queueEmbeddedPiMessageWithOutcome` as a terminal wake failure, so completion delivery fell through to the requester-agent/direct fallback even though the active run becomes steerable again as soon as compaction finishes.\n\nThis introduces a shared `resolveActiveWakeWithRetries` helper used by **both** active-wake call sites — the steer path (`maybeSteerSubagentAnnounce`) and the generated-completion active wake (`sendSubagentAnnounceDirectly`). The helper treats `compacting` as transient and waits through compaction, retrying the same wake.\n\nWaiting is **bounded by the active wake's delivery timeout**, not just the backoff schedule: the backoff schedule controls the gap between attempts, and once it is exhausted its last delay is reused until the delivery deadline. So a compaction that finishes after the schedule but still within the delivery timeout is still re-steered, instead of falling back early. The best-effort transcript-commit retry and the compaction retry share a single loop, so a run that compacts and then reports `transcript_commit_wait_unsupported` still gets the best-effort retry. Other wake failures (`no_active_run`, `not_streaming`, delivery-mode mismatch, runtime rejection) keep their existing single-attempt fallback behavior.\n\nThis addresses the earlier review notes: the compaction retry covers the completion wake path, the best-effort fallback is preserved after compaction, and the retry window is now bounded by the delivery timeout rather than a fixed schedule.\n\n## Real behavior proof\n\nBehavior or issue addressed: when an active requester is compacting and compaction finishes within the delivery timeout, both the steer path and the generated-completion wake should wait and re-steer the same active run instead of falling back to direct requester-agent delivery — including when compaction outlasts the fixed backoff schedule but is still within the delivery timeout.\n\nReal environment tested: Linux (Ubuntu 24.04, WSL2), Node.js 24.14.0, current PR head. Exercised the real `maybeSteerSubagentAnnounce` and `sendSubagentAnnounceDirectly` paths through `deliverSubagentAnnouncement` under the repo's vitest runner, with no mocking of the module under test (only the queue-outcome dependency is driven to simulate the compacting-then-ready sequence). Compared the pre-fix and post-fix code.\n\nExact steps or command run after this patch: ran the subagent announce delivery suite, including regression tests that drive the steer queue and the completion-handoff wake to return `compacting` first and a queued success second, a test that returns `compacting` more times than the backoff schedule before succeeding, and a guard test that a non-compacting failure is not retried.\n\nEvidence after fix: stdout from the vitest run against the real steering and completion paths, comparing pre-fix and post-fix:\n$ node scripts/run-vitest.mjs src/agents/subagent-announce-delivery.test.ts -t 86566\n-- BEFORE the fix (compacting terminal / fixed-schedule only): regression tests fail --\nx waits through compaction and re-steers the active requester (86566)\nAssertionError: expected 'direct' to deeply equal 'steered'\nx waits through compaction on the completion handoff wake (86566)\nAssertionError: expected 'direct' to deeply equal 'steered'\nx keeps retrying compaction past the backoff schedule until the delivery timeout (86566)\nAssertionError: expected 'direct' to deeply equal 'steered'\n\ndoes not retry non-compacting steer failures (86566)\n\n-- AFTER the fix (compacting transient, bounded by delivery timeout): all pass --\n\nwaits through compaction and re-steers the active requester (86566)\nwaits through compaction on the completion handoff wake (86566)\nkeeps retrying compaction past the backoff schedule until the delivery timeout (86566)\ndoes not retry non-compacting steer failures (86566)\nTests  8 passed | 126 skipped (134)\n\n\nObserved result after fix: before the fix a compacting outcome on either path routes the completion to the direct fallback (`path: \"direct\"`), and even a partially-fixed schedule-only version falls back when compaction outlasts the fixed schedule; after the fix each path waits through compaction (bounded by the delivery timeout) and re-attempts the same wake, so the completion stays on the steering path (`path: \"steered\"`). A non-compacting failure (`no_active_run`) is attempted only once. The full subagent-announce-delivery suite (134 tests) passes.\n\nWhat was not tested: no live multi-agent run with a real compaction cycle was exercised; the compacting-then-ready transition is simulated through the queue-outcome dependency on the real steering and completion code paths. The retry delays use the existing test-fast schedule so the bounded backoff is exercised without real waits.\n",
+        "branch": "fix-86566-compaction-steer-retry",
+        "head_sha": "56b8c7a6a0124d815cac5e4eabf56ba6645b7535",
+        "author": "alkor2000",
+        "labels": [
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/subagent-announce-delivery.test.ts",
+            "additions": 207,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce-delivery.ts",
+            "additions": 107,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86606",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86606.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "counts": {
+            "SUCCESS": 72,
+            "SKIPPED": 22,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-agents:FAILURE",
+            "checks-node-auto-reply-reply-dispatch:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-agents:FAILURE",
+            "checks-node-auto-reply-reply-dispatch:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 865,
+    "total_ms": 2432,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 495
+        "ms": 291
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1863
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 360
+        "ms": 248
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
