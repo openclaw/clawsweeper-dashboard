@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-27T12:18:19.353Z",
+  "generated_at": "2026-05-27T12:24:38.273Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-27T09:18:17.349Z",
+  "since": "2026-05-27T09:24:35.592Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    87271
+    87278
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:87271:4554207345:2026-05-27T11:54:10Z:clawsweeper_needs_human",
-      "comment_id": "4554207345",
-      "comment_version_key": "4554207345:2026-05-27T11:54:10Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/87271#issuecomment-4554207345",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:87278:4554389470:2026-05-27T12:22:13Z:clawsweeper_needs_human",
+      "comment_id": "4554389470",
+      "comment_version_key": "4554389470:2026-05-27T12:22:13Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/87278#issuecomment-4554389470",
       "repo": "openclaw/openclaw",
-      "issue_number": 87271,
+      "issue_number": 87278,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-27T11:45:00Z",
-      "comment_updated_at": "2026-05-27T11:54:10Z",
+      "comment_created_at": "2026-05-27T12:16:18Z",
+      "comment_updated_at": "2026-05-27T12:22:13Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -52,109 +52,103 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=ed8e29e106833cf994603fb4a6b55d2849872424)",
-      "review_summary": null,
-      "review_followup": null,
+      "repair_reason": "No automated repair is needed because there are no line-level findings, but maintainers should settle the session-state risk and failed CI before merge.; Cleared: The diff touches agent session-lock runtime and tests only, with no dependency, workflow, package script, lockfile, credential, or supply-chain changes. (sha=fef2e495e0f2735321f0220d37be25c15b9ea9b5)",
+      "review_summary": "The PR adds a timeout-only release of the embedded-attempt session write lock and a regression test that release-on-abort remains idempotent with later dispose cleanup.\n\nPR surface: Source +13, Tests +22. Total +35 across 2 files.\n\nReproducibility: yes. at component level: current source shows timeout abort does not release the held lock, and the PR body includes a production-component harness that demonstrates before/after lock reacquire behavior. I did not run a live Feishu or full subagent announce reproduction in this read-only review.",
+      "review_followup": "No automated repair is needed because there are no line-level findings, but maintainers should settle the session-state risk and failed CI before merge.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "ed8e29e106833cf994603fb4a6b55d2849872424",
+      "expected_head_sha": "fef2e495e0f2735321f0220d37be25c15b9ea9b5",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(envelope): include seconds in inbound metadata timestamps",
-        "body": "## What changed\n- Added `displaySeconds: true` to all timestamp formatting calls in `formatEnvelopeTimestamp()`\n- Updated test expectations to match new timestamp format with seconds\n\n## Why\nInbound conversation metadata timestamps only showed hours and minutes (e.g., `18:32`), making it impossible to diagnose message delivery delays. Now they include seconds precision (e.g., `18:32:58`).\n\n## Verification\n- Tests: 14 passed in `src/auto-reply/envelope.test.ts`\n- Build: verified\n- Fixes #87257",
-        "branch": "autofix/issue-87257-timestamp-seconds-20260527-192856",
-        "head_sha": "ed8e29e106833cf994603fb4a6b55d2849872424",
-        "author": "warrenjones",
+        "title": "fix(agents): release session write lock on timeout abort (#86816)",
+        "body": "### Summary\n\n- **Problem**: Issue #86816 reports that when a subagent completes and triggers an announce embedded run on the parent session, hitting the embedded-run `timeoutMs` (600000ms in the reporter's environment) leaves the session write lock pinned in memory. All subsequent writes to that session fail with `SessionWriteLockTimeoutError` until the gateway is restarted. Subagent announce retries (limit 3) all fail; the user sees no response on Feishu.\n- **Root Cause**: `runEmbeddedAttempt` already releases the session write lock from its outer `finally` (`releaseRetainedSessionLock?.()` at `src/agents/pi-embedded-runner/run/attempt.ts`, shipped in #86014/#86427), and the in-process session-write-lock module already runs a watchdog that force-releases held locks after `maxHoldMs`. Both safety nets exist. The remaining gap: when the embedded-run timeout fires (`scheduleAbortTimer` → `abortRun(true)` in `src/agents/pi-embedded-runner/run/attempt.ts`), the inner stream / model call can fail to observe the abort signal and never unwind, so `runEmbeddedAttempt` never returns and the outer `finally` never runs. The watchdog still cleans the lock, but its window for the announce-style embedded attempt is `compactionTimeoutMs + 120s grace ≈ 17 min` — too long for a user-facing chat bot. Operators restart the gateway well before the watchdog reclaims the lock, so from the user's view the lock is leaked \"permanently until restart\" (matching the issue's exact wording).\n- **Fix**: Add one branch to `abortRun` in `src/agents/pi-embedded-runner/run/attempt.ts` that, on the `isTimeout === true` path, calls `sessionLockController.releaseHeldLockForAbort()` immediately after the abort signal goes out. The helper already exists at `src/agents/pi-embedded-runner/run/attempt.session-lock.ts` (used by the `sessions_yield` abort cleanup path) and is idempotent: it early-returns when `heldLock` is already cleared. The outer `finally`'s `dispose()` remains the canonical release path; this new branch shrinks the leak window from ~17 min (watchdog) to immediate.\n- **What changed**:\n  - `src/agents/pi-embedded-runner/run/attempt.ts` — `abortRun(isTimeout=true, ...)` now calls `void sessionLockController.releaseHeldLockForAbort().catch(log.warn)` after the abort signal. Branch is gated on `isTimeout === true` so manual cancel and non-timeout abort paths continue to rely on the outer `finally`.\n  - `src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts` — new test `releaseHeldLockForAbort + dispose() are idempotent in succession (#86816)` pins the idempotency contract the fix relies on.\n- **What did NOT change (scope boundary)**:\n  - `src/agents/pi-embedded-runner/run/attempt.session-lock.ts` — controller API surface (`releaseHeldLockForAbort`, `dispose`) untouched; the fix reuses the existing helper.\n  - `src/agents/session-write-lock.ts` — file-lock acquire/release/watchdog logic untouched.\n  - Manual-cancel (non-timeout) abort path — still routes through the outer `finally` only. No change to `abortRun(false, ...)` semantics.\n  - The watchdog continues to be the fallback for any path that bypasses both the outer `finally` and this new branch.\n  - Config surface unchanged (no schema, defaults, doctor migrations, or `docs/reference/config` edits).\n  - Plugin surface unchanged (no plugin SDK, manifest, `extensions/api.ts` / `runtime-api.ts`, registry, or loader edits).\n  - Session store surface unchanged (no `sessions.json` format, transcript jsonl format, or store-loader edits — relevant given the June SQLite migration).\n\n### Reproduction\n\n1. On 2026.5.22, configure an agent with `thinkingDefault: \"adaptive\"` plus multiple subagent spawns (PPT generation, QA workflows).\n2. Have a long-running parent session with queued messages.\n3. A subagent completes; the announce flow starts an embedded run on the parent session.\n4. The model call hangs or runs past 600000ms.\n5. **Before this PR**: the abort signal fires but the inner stream does not observe it; `runEmbeddedAttempt` never returns; outer `finally` never runs; session write lock stays pinned in memory; all subsequent session writes fail with `SessionWriteLockTimeoutError` for ~17 min (until the watchdog) — operators restart the gateway in the meantime, so the lock looks permanent.\n6. **After this PR**: when the timeout aborts the run, `abortRun(true, ...)` calls `releaseHeldLockForAbort()` immediately, the session write lock is released, and the next subagent announce / inbound message succeeds without waiting for the watchdog or a restart.\n\n### Real behavior proof\n\n**Behavior addressed (#86816)**: session write lock is released as soon as a timeout aborts a `runEmbeddedAttempt`, even when the inner stream does not observe the abort and `runEmbeddedAttempt` never returns; non-timeout abort paths and the outer `finally`'s `dispose()` remain canonical.\n\n**Real environment tested (Linux, Node 22, real-component tsx harness driving production session-write-lock + createEmbeddedAttemptSessionLockController)**: tsx-resolved imports of production `acquireSessionWriteLock`, `createEmbeddedAttemptSessionLockController`, and `isSessionWriteLockTimeoutError`. The harness mirrors the `abortRun` call-sequence by creating a real controller, then for each scenario either calling or omitting `releaseHeldLockForAbort()`, and probing the lock state via same-process re-acquire with a 1.5s timeout.\n\n**Exact steps or command run after this patch**:\n\n1. `node_modules/.bin/tsx /tmp/qmd86816/repro.mts` (real-component BEFORE/AFTER lock-state sweep)\n2. `node scripts/run-vitest.mjs src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts`\n3. `pnpm exec oxfmt --check --threads=1 src/agents/pi-embedded-runner/run/attempt.ts src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts`\n\n**Evidence after fix (verbatim real-component harness output)**:\n\n```text\n================ #86816 real-component lock-leak BEFORE/AFTER sweep ================\n\nDrives production createEmbeddedAttemptSessionLockController + acquireSessionWriteLock.\n\n--- SCENARIO A: BEFORE FIX (abortRun(true) does NOT release lock) ---\n  controllerA created (heldLock acquired)\n  simulating abortRun(true) without lock-release call...\n  same-process re-acquire (1.5s timeout): held=true (1505ms)\n  >>> BEFORE FIX RESULT: lock LEAKED (matches issue #86816 — gateway dead until watchdog ~17min or restart)\n\n--- SCENARIO B: AFTER FIX (abortRun(true) calls releaseHeldLockForAbort) ---\n  controllerB created (heldLock acquired)\n  simulating abortRun(true) WITH lock-release call...\n  same-process re-acquire (1.5s timeout): held=false (3ms)\n  >>> AFTER FIX RESULT: lock released (matches expected — gateway recovers immediately)\n  controllerB.dispose() called (idempotent — should be safe even after release-on-abort)\n\n--- SCENARIO C: non-timeout abort (isTimeout=false) NOT affected ---\n  controllerC created (heldLock acquired)\n  simulating abortRun(false) — manual cancel, NOT timeout...\n  same-process re-acquire (1.5s timeout): held=true (1505ms)\n  >>> SAFETY: manual-cancel path lock still held (correct — outer-finally is responsible)\n\n================ VERDICT ================\nScenario A (BEFORE FIX, timeout abort):  lock leaked = true  OK\nScenario B (AFTER FIX, timeout abort):   lock leaked = false  OK\nScenario C (manual cancel, not timeout): lock leaked = true  OK (outer-finally owns it)\n\nPASS — fix changes timeout-abort behavior; non-timeout abort behavior preserved.\n```\n\n**Vitest output for the touched test file**:\n\n```text\n RUN  v4.1.7 /root/main/openclaw/.worktrees/pr-87107\n\n Test Files  2 passed (2)\n      Tests  78 passed (78)\n   Duration  7.91s\n```\n\n**Observed result after fix**:\n\n- Timeout-aborted embedded runs release the session write lock immediately (3ms in the harness vs the 1505ms re-acquire timeout BEFORE fix).\n- Manual-cancel abort (`isTimeout === false`) continues to rely on the outer `finally` and the watchdog — no behavioral change for that path (Scenario C).\n- The new `releaseHeldLockForAbort + dispose() are idempotent in succession (#86816)` test verifies that the outer `finally`'s `dispose()` remains a safe no-op when the lock has already been released by the timeout branch.\n\n**What was not tested**:\n\n- End-to-end live Feishu / PPT-workflow subagent announce. The real-component harness drives the production lock controller and lock helpers end-to-end but does not start a real announce / model HTTP call. The bug's necessary conditions (controller + abort + missing release) are reproduced deterministically.\n- Watchdog interaction (`runLockWatchdogCheck`) — the fix bypasses the watchdog for the timeout path; the watchdog continues to be the safety net for any future code path that bypasses both the outer `finally` and this new branch.\n- Other `acquireSessionWriteLock` callers (`src/agents/command/attempt-execution.ts`, `src/agents/pi-embedded-runner/tool-result-truncation.ts`, `src/agents/sandbox/registry.ts`) — these are short-hold acquires with their own `try/finally`; not part of the announce-embedded-run hang scenario.\n\n**Regression tests**:\n\n- `attempt.session-lock.test.ts` → new `releaseHeldLockForAbort + dispose() are idempotent in succession (#86816)` test plus the preserved `defensively releases the coarse attempt lock on sessions_yield abort cleanup` and `keeps the session fence active after releasing for sessions_yield abort cleanup` tests pin the controller-level contract this PR relies on.\n\n### Risk / Mitigation\n\n- **Risk**: `releaseHeldLockForAbort()` is called eagerly before the inner stream unwinds; any inner `withSessionWriteLock` that has captured the lock by reference could in theory race with the new release. **Mitigation**: `controller.acquireWriteLock()` returns `{ lock, owned: false }` when the call shares the controller's `heldLock`, and the inner `withSessionWriteLock`'s `finally` only releases when `owned === true`. The new release runs on the controller-owned path; the inner closure cannot double-release because its `owned: false` branch never calls `lock.release()`.\n- **Risk**: The fix only addresses the `isTimeout === true` branch. A non-timeout abort that hangs the inner stream would still leak the lock until the watchdog reclaims it. **Mitigation**: non-timeout aborts are user-initiated cancellations and follow a different lifecycle (the outer `finally` is reached because the caller awaits and unwinds normally). The watchdog continues to be the fallback. Adding the same release call to the non-timeout branch was considered but deferred — it would broaden the scope without a reported regression.\n- **Risk**: Calling `releaseHeldLockForAbort()` from `abortRun` could surface a previously-hidden double-release error path. **Mitigation**: pinned by the new idempotency test (`releaseHeldLockForAbort + dispose()` called four times in succession with one acquire and one release expected).\n- **Risk**: The fix lives in `src/agents/pi-embedded-runner/run/attempt.ts`, an active area. **Mitigation**: change is 13 lines, additive, gated on `isTimeout === true`, uses an existing controller method already exercised by the `sessions_yield` abort cleanup path. Recent main commits on `pi-embedded-runner` (`cc704caa08`, `1710dac5eb`, `8c644ee611`) confirm the module is under active maintenance.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [x] Sessions / storage\n\n### Linked Issue/PR\n\nFixes #86816\n",
+        "branch": "fix/86816-session-lock-leak-subagent-announce-timeout",
+        "head_sha": "fef2e495e0f2735321f0220d37be25c15b9ea9b5",
+        "author": "openperf",
         "labels": [
-          "extensions: memory-core",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
+          "size: XS",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 session-state",
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "extensions/memory-core/src/memory/qmd-manager.test.ts",
-            "additions": 82,
-            "deletions": 5,
+            "path": "src/agents/pi-embedded-runner/run/attempt.session-lock.test.ts",
+            "additions": 22,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/memory-core/src/memory/qmd-manager.ts",
-            "additions": 24,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/envelope.test.ts",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/envelope.ts",
-            "additions": 3,
-            "deletions": 3,
+            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
+            "additions": 13,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-87271",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87271.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-87278",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87278.md",
         "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 13,
+          "total": 112,
           "counts": {
             "FAILURE": 3,
-            "SUCCESS": 1,
-            "SKIPPED": 9
+            "SUCCESS": 76,
+            "CANCELLED": 1,
+            "SKIPPED": 31,
+            "NEUTRAL": 1
           },
           "blockers": [
             "dependency-change-awareness:FAILURE",
-            "Real behavior proof:FAILURE"
+            "Real behavior proof:CANCELLED",
+            "checks-fast-bun-launcher:FAILURE",
+            "checks-fast-contracts-plugins-b:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
             "dependency-change-awareness:FAILURE",
-            "Real behavior proof:FAILURE"
+            "Real behavior proof:CANCELLED",
+            "checks-fast-bun-launcher:FAILURE",
+            "checks-fast-contracts-plugins-b:FAILURE"
           ]
         }
       },
-      "reason": "target is not open"
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2438,
+    "total_ms": 2958,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 393
+        "ms": 376
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1595
+        "ms": 2291
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 421
+        "ms": 265
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
