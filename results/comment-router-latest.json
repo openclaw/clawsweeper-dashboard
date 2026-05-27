@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-27T18:53:53.225Z",
+  "generated_at": "2026-05-27T18:54:35.274Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-27T15:53:48.997Z",
+  "since": "2026-05-27T15:54:33.082Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4557671032
   ],
-  "status_comment_id": 4557671525,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-05-27T18:53:14Z",
       "comment_updated_at": "2026-05-27T18:53:14Z",
-      "status_comment_id": 4557671525,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,114 +61,22 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-27T18:53:54.475Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 87375
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-27T18:53:56.270Z",
-          "response_comment_id": "4557671525",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(codex): preserve shared app-server when spawned helper run fails logically (#72574)",
-        "body": "## Summary\n\nFixes #72574 by narrowing the Codex app-server startup-failure cleanup policy. Spawned/helper runs that fail for logical reasons (auth, thread/start 401) no longer retire the shared app-server client used by the main session. Only real transport/process failures still clear the shared singleton.\n\nCloses #72812 (multi-app-server topology was the wrong direction per maintainer; this PR uses the requested cleanup-policy approach instead).\n\n## Behavior change\n\n`extensions/codex/src/app-server/attempt-startup.ts` — outer startup catch:\n- **Before**: any error reaching the outer catch (auth, thread/start, transport) called `clearSharedCodexAppServerClientIfCurrent(startupClientForCleanup)`, wiping the main session's shared client.\n- **After**: `clearSharedCodexAppServerClientIfCurrent` only fires when `isCodexAppServerConnectionClosedError(error)` (transport poisoned) OR the run is not spawned (`!params.spawnedBy?.trim()`). Spawned + logical failure → lease releases via the existing `finally`, shared singleton survives.\n\nInner retry-loop cleanup on connection-closed errors is unchanged (still clears + retries on real transport failure regardless of spawn topology).\n\n`spawnedBy` is the only new field threaded through `startCodexAttemptThread`. No topology change, no new app-server processes, no isolated-client construction. Single shared leased Codex app-server is preserved.\n\n## Diff size\n\n```\nextensions/codex/src/app-server/attempt-startup.ts |  7 ++-\nextensions/codex/src/app-server/run-attempt.test.ts | 60 ++++++++++++++++++++++\nextensions/codex/src/app-server/run-attempt.ts     |  1 +\n3 files changed, 67 insertions(+), 1 deletion(-)\n```\n\n## Test plan\n\n- [x] New regression test: spawned helper thread/start 401 leaves shared client current.\n- [x] New regression test: top-level run thread/start 401 still retires shared client (baseline preserved for non-spawned runs).\n- [x] Focused suite: `node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.test.ts` → 67/67 passed.\n- [x] Full app-server suite: `node scripts/run-vitest.mjs extensions/codex/src/app-server/` → 68 files / 949 tests passed.\n- [ ] Live invalid-token spawn against real `@openai/codex` binary — see *What was not tested*.\n\n## Real behavior proof\n\nBehavior addressed: shared Codex app-server client retired by spawned helper run thread/start auth failure (#72574). After fix, a spawned helper's 401 only fails that attempt; the parent session's shared client and its in-flight turns are untouched.\n\nReal environment tested: Node 24, vitest 4.1.7, macOS local checkout at `upstream/main@11ca150a1ba` + this PR's commit `cc424a24123`. Tests exercise the production `startCodexAttemptThread` path through `runCodexAppServerAttempt` with a stubbed `attemptClientFactory` whose returned client throws on `thread/start` (the same error shape Codex emits for invalid bearer tokens).\n\nExact steps or command run after this patch:\n```\ngit checkout fix/72574-shared-client-cleanup-policy\npnpm install --frozen-lockfile\nnode scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.test.ts -t \"logical thread/start error\"\nnode scripts/run-vitest.mjs extensions/codex/src/app-server/\n```\n\nEvidence after fix:\n- `-t \"logical thread/start error\"` → 2 tests pass (spawned does NOT clear shared; top-level still clears).\n- Full app-server suite → 68 files / 949 tests pass.\n- `vi.spyOn(sharedClientModule, \"clearSharedCodexAppServerClientIfCurrent\")` asserts `clearSpy.mock.calls.some(([arg]) => arg === failedClient)` is `false` for the spawned case and `true` for the top-level case. Same factory and error shape across both — only `params.spawnedBy` differs.\n\nObserved result after fix: spawned helper thread/start 401 rejects its own attempt without invoking `clearSharedCodexAppServerClientIfCurrent(failedClient)`. Top-level thread/start 401 still invokes it (regression baseline for non-spawned runs preserved). Inner connection-closed retry loop unchanged.\n\nWhat was not tested: live `@openai/codex` binary with a real invalid bearer token spawning a helper from a long-running parent session; relies on programmatic factory injection rather than a real `CodexAppServerClient.start` subprocess. Closed PR #72812 has live Fedora 43 proof for the bug repro itself — this PR's cleanup-policy narrowing is the maintainer-requested fix shape for the same bug.\n\n## Refs\n\n- Fixes #72574\n- Closes/supersedes #72812 (multi-app-server topology rejected; this PR uses cleanup-policy narrowing per maintainer direction)",
-        "branch": "fix/72574-shared-client-cleanup-policy",
-        "head_sha": "5a810fddfc4a12d0c56524f67cd1e78f50e5f1fd",
-        "author": "yetval",
-        "labels": [
-          "size: S",
-          "extensions: codex",
-          "proof: override",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/codex/src/app-server/attempt-startup.ts",
-            "additions": 6,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/run-attempt.test.ts",
-            "additions": 60,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/run-attempt.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-87375",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87375.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 97,
-          "counts": {
-            "SUCCESS": 62,
-            "SKIPPED": 28,
-            "FAILURE": 5,
-            "IN_PROGRESS": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "build-artifacts:FAILURE",
-            "checks-fast-contracts-plugins-a:FAILURE",
-            "checks-node-agentic-agents:IN_PROGRESS",
-            "check-lint:FAILURE",
-            "check-additional-boundaries-bcd:FAILURE",
-            "check-additional-runtime-topology-architecture:FAILURE"
-          ],
-          "pending": [
-            "checks-node-agentic-agents:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "build-artifacts:FAILURE",
-            "checks-fast-contracts-plugins-a:FAILURE",
-            "check-lint:FAILURE",
-            "check-additional-boundaries-bcd:FAILURE",
-            "check-additional-runtime-topology-architecture:FAILURE"
-          ]
-        }
-      }
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 8076,
+    "total_ms": 3697,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 649
+        "ms": 2180
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 3563
+        "ms": 0
       },
       {
         "name": "classify_commands",
@@ -176,7 +84,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3834
+        "ms": 1504
       },
       {
         "name": "append_ledger",
