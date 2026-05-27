@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-27T03:17:08.942Z",
+  "generated_at": "2026-05-27T03:17:24.029Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-27T00:17:08.526Z",
+  "since": "2026-05-27T00:17:21.207Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    87133
+    86900
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4550909237
+  ],
+  "status_comment_id": 4550909406,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 0,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,30 +31,155 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86900:4550909237:2026-05-27T03:16:47Z:re_review",
+      "comment_id": "4550909237",
+      "comment_version_key": "4550909237:2026-05-27T03:16:47Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86900#issuecomment-4550909237",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86900,
+      "author": "tanshanshan",
+      "author_id": 22539261,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-27T03:16:47Z",
+      "comment_updated_at": "2026-05-27T03:16:47Z",
+      "status_comment_id": 4550909406,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-05-27T03:17:25.185Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 86900
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-27T03:17:27.111Z",
+          "response_comment_id": "4550909406",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(compaction): add circuit breaker to stop token burn when summarizer unavailable",
+        "body": "## Summary\n\nWhen the summarizer model is persistently unavailable (rate-limited, overloaded,\nmisconfigured), `summarizeInStages` calls `summarizeWithFallback` for every split,\neach burning 3 first-attempt + 3 oversize-fallback retries per call. With N splits,\nthis burns N × 6 × chunkTokens before finally returning an unusable result.\n\nThis adds a circuit breaker in the `summarizeInStages` split loop:\n- Track consecutive generic fallback results (`\"Context contained\"` prefix)\n- After 2 consecutive fallback splits, stop the loop\n- Return partial summaries collected so far\n- Reset counter on successful split response\n\n## What changed\n\n- Added `consecutiveFallbackSplits` counter in `summarizeInStages` split loop\n- Detects generic fallback via `summary.startsWith(\"Context contained\")`\n- Circuit breaker opens at 2 consecutive fallback splits, breaking the loop\n- Counter resets to 0 on successful split (intermittent failures are fine)\n- 3 new tests in `compaction.circuit-breaker.test.ts`\n\n## Review iteration\n\n**v1 → v2**: moved the circuit breaker from `summarizeChunks` to `summarizeInStages`.\n`summarizeChunks` has all catch paths throwing, so the loop never reaches a second\nchunk after the first failure — a counter inside that loop can never reach the\nthreshold. The actual cross-split token burn happens at the `summarizeInStages`\nsplit-loop level where each `summarizeWithFallback` call independently burns\nretries.\n\nAlso fixed the annotation overcount (reviewed by @clawsweeper) — the previous\n`chunks 1-${completedChunks}` annotation counted the currently-failing chunk.\nThis is no longer applicable in the new approach.\n\n## Real behavior proof\n\n**Behavior addressed**: Compaction summarizer model unavailable → `summarizeInStages`\ncalls `summarizeWithFallback` for every split, each burning 3 initial + 3 oversize\nretries. 5 splits waste ~120K tokens with no progress.\n\n**Real environment tested**: Linux Node 22.22.0, proof script simulating\nsummarizeInStages split loop with circuit breaker.\n\n**Exact steps or command run after this patch**:\n```sh\nnode src/agents/compaction.circuit-breaker.proof.mjs\n```\n\n**Evidence after fix**:\n```\n=== WITHOUT circuit breaker (5 splits, summarizer unavailable) ===\nsummarizeInStages iterates over 5 splits:\n  split-1: summarizeWithFallback → 3 retries → fail → oversize retry → fail\n  split-2: summarizeWithFallback → 3 retries → fail → oversize retry → fail\n  split-3: summarizeWithFallback → 3 retries → fail → oversize retry → fail\n  split-4: summarizeWithFallback → 3 retries → fail → oversize retry → fail\n  split-5: summarizeWithFallback → 3 retries → fail → oversize retry → fail\n  Result: 5 splits × (3 + 3) retries × 4K tokens = ~120K tokens wasted\n\n=== WITH circuit breaker (threshold=2 consecutive fallbacks) ===\nsummarizeInStages split loop:\n  split-1: summarizeWithFallback → fail → \"Context contained...\" (consecutive: 1/2)\n  split-2: summarizeWithFallback → fail → \"Context contained...\" (consecutive: 2/2)\n  ⚡ CIRCUIT BREAKER stopped after 2 consecutive fallback splits\n  remaining 2 splits skipped → ~48K tokens saved\n```\n\n**Observed result after fix**: Without the circuit breaker, all 5 splits burn\ntokens independently (~120K tokens wasted). With the circuit breaker, after 2\nconsecutive generic fallbacks the loop stops — saving ~48K tokens.\n\n**What was not tested**: Live compaction with real summarizer model switching\nbetween available/unavailable. The circuit breaker logic is deterministic\n(consecutive counter + threshold), covered by unit tests.\n\n## Verification\n\n```\nOPENCLAW_VITEST_MAX_WORKERS=1 npx vitest run src/agents/compaction.circuit-breaker.test.ts\n```\n\nFixes #58838",
+        "branch": "fix/compaction-circuit-breaker-58838",
+        "head_sha": "0a95b6a892e6e651e9b6084697edb715c3cbcff9",
+        "author": "tanshanshan",
+        "labels": [
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/compaction-partial-summary.test.ts",
+            "additions": 18,
+            "deletions": 18,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/compaction.circuit-breaker.test.ts",
+            "additions": 148,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/compaction.summarize-fallback.test.ts",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/compaction.tool-result-details.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/compaction.ts",
+            "additions": 61,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86900",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86900.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 101,
+          "counts": {
+            "SUCCESS": 71,
+            "SKIPPED": 28,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "check-test-types:FAILURE"
+          ]
+        }
+      }
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 747,
+    "total_ms": 6707,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 403
+        "ms": 653
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2153
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 331
+        "ms": 3874
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
