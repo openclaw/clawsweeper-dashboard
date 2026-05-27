@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-27T10:01:50.524Z",
+  "generated_at": "2026-05-27T10:01:54.984Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-27T07:01:47.546Z",
+  "since": "2026-05-27T07:01:54.360Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,7 +14,7 @@
   "comment_ids": [
     4553505030
   ],
-  "status_comment_id": 4553505422,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -42,9 +42,9 @@
       "author": "MoerAI",
       "author_id": 26067127,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-27T10:01:17Z",
-      "comment_updated_at": "2026-05-27T10:01:17Z",
-      "status_comment_id": 4553505422,
+      "comment_created_at": "2026-05-27T10:00:38Z",
+      "comment_updated_at": "2026-05-27T10:00:38Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,105 +61,30 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-27T10:01:51.522Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 86852
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-27T10:01:53.399Z",
-          "response_comment_id": "4553505422",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(ui): render direct tool-result image blocks inline in chat (#50779)",
-        "body": "## Summary\n\nTool results emitted by `imageResult()` / `imageResultFromFile()` in `src/agents/tools/common.ts` produce content blocks in the bare `{type: \"image\", data, mimeType}` shape — the same shape `normalizeReadImageResult()` in `src/agents/pi-tools.read.ts` already validates for the `read` tool. The Control UI grouped renderer only recognised the `source.type === \"base64\"` envelope shape and the `b.url` fallback, so a read-image result (or any tool surface emitting this shape) rendered as text-only (\"Read image file [image/png]\") with the actual image silently dropped from the chat transcript.\n\nThis PR adds the missing branch in `extractImages()` so Control UI renders the same image inline that the tool helpers and the read-tool validator already produce and accept.\n\n## Root Cause\n\n- `ui/src/ui/chat/grouped-render.ts:230-298` — `extractImages()` inspects each `content` block. For `b.type === \"image\"` it only recognises two shapes:\n  1. `source.type === \"base64\"` + `source.data` + `source.media_type` (line 251)\n  2. Bare `b.url` (line 259)\n  No branch handles the direct `{type: \"image\", data, mimeType}` shape, which is the exact shape produced by the tool helpers below.\n- `src/agents/tools/common.ts:309-316` — `imageResult()` emits:\n  ```typescript\n  { type: \"image\", data: params.base64, mimeType: params.mimeType }\n  ```\n  with no `source` wrapper.\n- `src/agents/pi-tools.read.ts` — `normalizeReadImageResult()` validates exactly this shape (`type === \"image\"` + `typeof data === \"string\"` + `typeof mimeType === \"string\"`).\n- Execution path: `read` tool / image-generation tool → `imageResult()` → assistant message `content[]` block with direct shape → `extractImages()` drops it (no matching branch) → grouped renderer shows tool text only.\n\nThis follows the conservative direction in clawsweeper's review on #50779:\n*\"Preserve direct tool-result image blocks through live and history rendering, then render them inline or as a clear preview using the existing Control UI media safety paths.\"*\n*\"It should not expand into the broader remote preview/audio/video work tracked separately.\"*\n\n## Changes\n\n- `ui/src/ui/chat/grouped-render.ts`: Add a `typeof b.data === \"string\" && typeof b.mimeType === \"string\"` branch inside the existing `type: \"image\"` handler, reusing the existing `buildBase64ImageUrl()` helper (which already passes through pre-encoded `data:` URIs untouched). The new branch is gated on the same `b.type === \"image\"` check, so it cannot affect other content-block kinds. The two earlier branches (`source.type=base64`, `b.url` fallback) and the `image_url` / `input_image` branches are preserved unchanged.\n- `ui/src/ui/chat/grouped-render.test.ts`: Add two regression tests:\n  - bare base64 `data` + `mimeType` (the read-tool shape) → renders as `data:image/png;base64,…`\n  - pre-encoded `data:` URI in the `data` field → passes through unchanged\n\n## Reproduction (before fix)\n\nThe bug is structural on current `upstream/main` (`f2ad94ec9a`): a content array with a direct `{type:\"image\", data, mimeType}` block falls through every existing branch in `extractImages()` and never reaches `appendImageBlock()`. Verified by pure-JS replication of the production logic against current main:\n\n~~~text\nPASS: source.type=base64 envelope (existing branch)\nPASS: url fallback (existing branch)\nFAIL: direct image block from imageResult() — extractImages() returned []\n~~~\n\n## Verification (after fix)\n\nPure-JS replication of the patched logic (no test runner required for this validation since the function is a pure synchronous reducer over the content array):\n\n~~~text\nPASS: direct image block from imageResult()\nPASS: data: URL passthrough\nPASS: source.type=base64 envelope\nPASS: url fallback\nPASS: empty image block ignored\nPASS: text + direct image preserved\nRESULTS: 6 pass / 0 fail / 6 total\n~~~\n\nThe six cases cover the new branch, all pre-existing branches (regression check), the no-data degenerate case, and a mixed `text + image` content array.\n\n## Test\n\n- `pnpm test ui/src/ui/chat/grouped-render.test.ts` — adds 2 new `it()` cases (`renders direct tool-result image blocks inline (data + mimeType shape from #50779)` and `passes through fully-formed data: URLs in direct image blocks`), each asserting on the `<img class=\"chat-message-image\">` `src` (and `alt` for the first). Tests use the existing `renderAssistantMessage` helper and the established `jsdom` pattern from the file's surrounding image tests (line 1252, 1313, 1357).\n- Local vitest could not be executed in this `git worktree`-style linked checkout without a fresh `pnpm install`; CI will run the full Control UI test suite on this PR.\n\n## Notes\n\n- Scope: single-file UI fix in `extractImages()`; the read tool's image-result validation, the tool helper's emission shape, and the existing `buildBase64ImageUrl()` helper all remain untouched. No new exports, no new types, no API surface change.\n- Compatibility: purely additive — the new branch is checked AFTER the existing `source.type=base64` branch and BEFORE the `b.url` fallback, so neither pre-existing branch can be reached by a different message and produce a different result. The base64/url tests in the existing test suite cover that no regression occurs.\n- Out-of-scope per clawsweeper review: live tool-streaming text projection in `app-tool-stream.ts:148` (`extractToolOutputText()`) was flagged as a sibling surface but is the broader inline-media work tracked separately. This PR stays scoped to the grouped-render gap that is the source-level reproduction.\n\nCloses #50779\n\n\n## Real behavior proof\n\n- Behavior addressed: Control UI grouped renderer dropped direct `{type:\"image\", data, mimeType}` tool-result blocks (the exact shape emitted by `imageResult()` / `imageResultFromFile()` in `src/agents/tools/common.ts` and validated by `normalizeReadImageResult()` in `src/agents/pi-tools.read.ts`). After the fix the image renders inline next to the assistant text.\n- Real environment tested: Local jsdom-backed `pnpm test ui/src/ui/chat/grouped-render.test.ts` exercises the actual production `renderAssistantMessage()` and the patched `extractImages()` reducer; the new test cases assert on `<img class=\"chat-message-image\">` `src`/`alt` attributes produced by the production DOM construction path. The grouped-render test surface is the same one steipete already accepts as real-behavior proof for prior Control UI chat-render fixes (see for example the existing `fetches managed chat images with auth and renders blob previews` test in the same file).\n- Exact steps or command run after this patch:\n  - `pnpm test ui/src/ui/chat/grouped-render.test.ts` (added 2 new `it()` cases covering the bare-base64 and pre-encoded data-URL paths)\n  - Pure-JS replication of the patched `extractImages()` reducer against current `upstream/main` (`f2ad94ec9a`) and against the new branch, capturing 6/6 cases (new branch + all existing branches as regression checks + empty + mixed)\n- Evidence after fix:\n  ~~~text\n  Before fix (upstream/main f2ad94ec9a):\n    PASS: source.type=base64 envelope\n    PASS: url fallback\n    FAIL: direct image block from imageResult() — extractImages() returned []\n  After fix (patched extractImages):\n    PASS: direct image block from imageResult()\n    PASS: data: URL passthrough\n    PASS: source.type=base64 envelope\n    PASS: url fallback\n    PASS: empty image block ignored\n    PASS: text + direct image preserved\n    RESULTS: 6 pass / 0 fail / 6 total\n  ~~~\n- Observed result after fix: the Control UI grouped renderer attaches an `<img class=\"chat-message-image\">` with `src=\"data:image/png;base64,…\"` (or passes through a complete `data:` URL) so tool-emitted images render inline next to the assistant message instead of being dropped.\n- What was not tested: live Mac/Linux browser session with the Gateway daemon piping a real `read` tool image into the Control UI dashboard. The DOM construction path is unit-covered end-to-end through the existing `renderAssistantMessage` helper, and the unrelated `build-artifacts` CI failure (`core-support-boundary` assertion about `docker stats --no-stream` in a CLI script) is pre-existing and unrelated to this UI-only change.\n",
-        "branch": "fix/control-ui-tool-image-render",
-        "head_sha": "f1da6982b50b4005c9aa6e106a20b748177acfbc",
-        "author": "moerai",
-        "labels": [
-          "app: web-ui",
-          "size: S",
-          "triage: mock-only-proof",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "ui/src/ui/chat/grouped-render.test.ts",
-            "additions": 56,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/ui/chat/grouped-render.ts",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86852",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86852.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 77,
-          "counts": {
-            "FAILURE": 2,
-            "CANCELLED": 1,
-            "SKIPPED": 15,
-            "SUCCESS": 59
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "build-artifacts:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "build-artifacts:FAILURE"
-          ]
-        }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 6526,
+    "total_ms": 2082,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 620
+        "ms": 611
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2344
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 3537
+        "ms": 1459
       },
       {
         "name": "append_ledger",
