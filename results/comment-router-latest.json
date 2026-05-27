@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-27T06:26:19.005Z",
+  "generated_at": "2026-05-27T06:28:17.779Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-27T03:26:18.774Z",
+  "since": "2026-05-27T03:28:15.335Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    87191
+    87097
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 3,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +29,130 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:87097:4550309731:2026-05-27T06:28:07Z:clawsweeper_needs_human",
+      "comment_id": "4550309731",
+      "comment_version_key": "4550309731:2026-05-27T06:28:07Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/87097#issuecomment-4550309731",
+      "repo": "openclaw/openclaw",
+      "issue_number": 87097,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-27T00:57:05Z",
+      "comment_updated_at": "2026-05-27T06:28:07Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=571349c9d155efd86f84fe627d17a1b005b06e6e)",
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "571349c9d155efd86f84fe627d17a1b005b06e6e",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cli): bound local CLI lifetime after completion and finite timeout",
+        "body": "## Problem\n\n`openclaw agent --local` can finish the agent turn and still keep the CLI process alive indefinitely. The completed command is visible in stdout, but ref'd background handles can prevent Node from exiting.\n\nPR #70691, merged on 2026-04-23 by @Takhoffman, fixed the gateway WebSocket teardown path by waiting for gateway client shutdown. This PR covers the remaining local-agent CLI lifetime gap where work has completed but non-gateway handles, such as compaction loops, telemetry exporter timers, or plugin loops, still keep the process alive.\n\n## Change and value\n\nThis is an availability workaround for `agent --local`, not a full lifecycle cleanup of every background subsystem.\n\n- Adds a local-agent lifetime helper for CLI entry points.\n- After a completed `agent --local` command, drains stdout/stderr, calls the optional otel pre-exit hook if registered, then exits with `process.exitCode ?? 0`.\n- Arms a 3s SIGKILL fallback before awaiting the otel hook so a hung flush cannot hang the CLI forever.\n- Adds a wall-clock hard timeout only when the operator passed an explicit positive `--timeout N`; `--timeout 0` disables it, and omitted `--timeout` does not arm a new hard kill.\n\nThe otel contract is intentionally optional:\n\n```ts\nglobalThis[Symbol.for(\"openclaw.otel.preExit\")]\n```\n\nIf the hook is absent or from an older plugin, the CLI falls through to immediate forced exit. If the hook rejects, the CLI still exits.\n\n## Who is affected, and who is not\n\nAffected:\n\n- `openclaw agent --local ...` runs where the agent turn completes but ref'd background handles keep the process alive.\n- Automation that already supplies `--timeout N` and needs a bounded outer CLI lifetime if the command promise itself never resolves.\n\nNot affected:\n\n- Non-local agent runs.\n- Help/version invocations.\n- Other CLI subcommands.\n- Local-agent runs without explicit `--timeout`; these still get the post-completion forced exit, but no new wall-clock kill is added. That preserves the existing agent timeout contract, including the configured/default agent timeout path.\n\n## Why now\n\n#86264 and #86276 were aimed closer to the root cause, but that route grew into cross-subsystem lifecycle work and async config import hazards. This PR deliberately takes the smaller, easier-to-review path: release the caller once the local agent work is done, while leaving deeper subsystem teardown work to follow-up fixes.\n\nOnce the root cause is fixed, this becomes mostly redundant: the post-completion exit fires after successful work, and the wall-clock timer never matters if the promise resolves. The main residual risk is that `process.exit()` bypasses future arbitrary exit-time drains; this PR handles the known telemetry case through the optional pre-exit hook.\n\n## Relationship to related PRs\n\n- #70691 fixed the gateway WebSocket teardown path and is already merged.\n- #86264 and #86276 explored broader/root-cause cleanup paths but are not the approach taken here.\n- This PR is scoped to local-agent CLI lifetime behavior and keeps the root-cause cleanup concern explicit.\n\n## Verification\n\n- Local, after rebasing onto `main` at `96bd939995873d6e6a24fe7d0e6e7779e669c8ff`:\n  - `pnpm exec oxfmt --check src/cli/local-agent-lifetime.ts src/cli/local-agent-lifetime.test.ts src/entry.ts src/index.ts`\n  - `timeout 180s pnpm exec vitest run --config test/vitest/vitest.cli.config.ts src/cli/local-agent-lifetime.test.ts --reporter=verbose` (`14 passed`)\n  - `pnpm tsgo:core`\n- Crabbox/GCP exact-head validation:\n  - GCP Spot, `us-east1-b`, `e2-standard-8`\n  - Node `v24.15.0`, npm `11.12.1`, pnpm `11.2.2`\n  - Base `96bd939995873d6e6a24fe7d0e6e7779e669c8ff`\n  - Head `9549c867a64fd87fdb9edba89142c9ce492dae9a`\n  - `PR87097_HEAD_VALIDATION=passed`\n  - `PR87097_BEHAVIOR_PROOF=passed`\n- Post-proof rebase:\n  - `main` advanced again while the full proof was running.\n  - Rebased onto `ebe09be500c50a2708750d8c51235c2f24a828f4`, producing head `571349c9d155efd86f84fe627d17a1b005b06e6e`.\n  - No PR-owned files changed across the rebase; it picked up an upstream lint fix outside this PR.\n  - Rechecked direct core oxlint, `oxfmt`, focused Vitest (`14 passed`), and `pnpm tsgo:core` on `571349c9d155efd86f84fe627d17a1b005b06e6e`.\n- Review gates:\n  - Subagent review: no actionable findings.\n  - Claude review: no blocking findings; static argv option-list drift and SIGKILL fallback lifetime were triaged as maintenance/intentional residual risks.\n  - Codex review: flagged omitted-timeout hard kill as a concern; triaged as intentional because this PR now preserves the configured/default agent timeout contract unless the operator explicitly passed `--timeout N`.\n\nAI-assisted: yes.\n\n## Real behavior proof\n\nBehavior or issue addressed: `openclaw agent --local` can complete the agent turn and still not exit because a ref'd background handle keeps the Node process alive. The patch forces exit after completed local-agent work, while flushing the optional otel pre-exit hook first.\n\nReal environment tested: Crabbox on GCP Spot `us-east1-b`, `e2-standard-8`; Node `v24.15.0`; npm `11.12.1`; pnpm `11.2.2`; main at proof time `96bd939995873d6e6a24fe7d0e6e7779e669c8ff`; PR head `9549c867a64fd87fdb9edba89142c9ce492dae9a`.\n\nExact steps or command run after this patch: Built current main and the PR head from fresh shallow checkouts, then ran the real CLI entry point with a ref'd preload handle plus an otel pre-exit hook. The after-patch command was:\n\n```bash\ntimeout 90s env HOME=/tmp/openclaw-pr87097-proof/after-pr/home OPENCLAW_HOME=/tmp/openclaw-pr87097-proof/after-pr/home/.openclaw OPENCLAW_STATE_DIR=/tmp/openclaw-pr87097-proof/after-pr/state OPENCLAW_CONFIG_PATH=/tmp/openclaw-pr87097-proof/after-pr/state/openclaw.json OPENAI_API_KEY=qa-mock-not-a-real-key NODE_DISABLE_COMPILE_CACHE=1 NODE_OPTIONS=--import=/tmp/openclaw-pr87097-proof/after-pr/openclaw-pr87097-ref-handle-and-otel.mjs OPENCLAW_PR87097_OTEL_PROOF_FILE=/tmp/openclaw-pr87097-proof/after-pr/output/otel-pre-exit.log node /tmp/openclaw-pr87097-proof/after-pr/repo/openclaw.mjs agent --local --agent main --session-id pr87097-after-pr-1779860799 --message Return marker OPENCLAW_PR87097_AFTER_PR_OK --thinking off --json\n```\n\nEvidence after fix: Terminal output from the exact-head Crabbox run:\n\n```text\nBASE_REF_REQUESTED=96bd939995873d6e6a24fe7d0e6e7779e669c8ff\nPATCHED_REF_REQUESTED=9549c867a64fd87fdb9edba89142c9ce492dae9a\n\n===== PR87097 before-main scenario =====\nREF=96bd939995873d6e6a24fe7d0e6e7779e669c8ff\nOPENCLAW_VERSION=OpenClaw 2026.5.26 (96bd939)\nEXIT_CODE=124\nELAPSED_SEC=92\nASSERT_EXIT_CODE=passed expected=124 actual=124\nASSERT_MARKER_IN_AGENT_LOG=passed\nASSERT_MOCK_REQUEST_LOG=passed\nASSERT_OTEL_PRE_EXIT_HOOK=skipped-before-hook-not-called\nASSERT_AGENT_TURN=skipped-timeout-preserved-before-hang\nPR87097_before-main_SCENARIO=passed\n\n===== PR87097 after-pr scenario =====\nREF=9549c867a64fd87fdb9edba89142c9ce492dae9a\nOPENCLAW_VERSION=OpenClaw 2026.5.26 (9549c86)\nEXIT_CODE=0\nELAPSED_SEC=14\nASSERT_EXIT_CODE=passed expected=0 actual=0\nASSERT_MARKER_IN_AGENT_LOG=passed\nASSERT_MOCK_REQUEST_LOG=passed\nASSERT_OTEL_PRE_EXIT_HOOK=passed\nASSERT_AGENT_TURN=passed\nPR87097_after-pr_SCENARIO=passed\n\n===== PR87097 final exact-head validation =====\nVALIDATION_REF=9549c867a64fd87fdb9edba89142c9ce492dae9a\nVALIDATION_COMMAND=pnpm exec oxfmt --check src/cli/local-agent-lifetime.ts src/cli/local-agent-lifetime.test.ts src/entry.ts src/index.ts\nAll matched files use the correct format.\nVALIDATION_COMMAND=timeout 180s pnpm exec vitest run --config test/vitest/vitest.cli.config.ts src/cli/local-agent-lifetime.test.ts --reporter=verbose\nTest Files  1 passed (1)\nTests  14 passed (14)\nVALIDATION_COMMAND=pnpm build\nVALIDATION_COMMAND=pnpm tsgo:core\nPR87097_HEAD_VALIDATION=passed\nPR87097_BEHAVIOR_PROOF=passed\nrun summary sync=0s command=12m41.728s total=12m41.811s sync_skipped=true exit=0\n```\n\nObserved result after fix: Current `main` completed the agent turn but did not exit before the outer timeout, so it returned `124` after 92s. The PR head completed the same agent turn, called the otel pre-exit hook, and exited `0` after 14s despite the deliberately ref'd background handle.\n\nWhat was not tested: No changed-path behavior gap remains for this PR. This proof does not claim to fix every subsystem root handle; it proves the local-agent CLI lifetime workaround and the optional otel pre-exit hook under a real CLI invocation with a ref'd background handle.\n",
+        "branch": "fix/cli-force-exit-on-completion",
+        "head_sha": "571349c9d155efd86f84fe627d17a1b005b06e6e",
+        "author": "kaspre",
+        "labels": [
+          "cli",
+          "size: L",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/cli/local-agent-lifetime.test.ts",
+            "additions": 308,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cli/local-agent-lifetime.ts",
+            "additions": 320,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/entry.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/index.ts",
+            "additions": 26,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-87097",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87097.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 101,
+          "counts": {
+            "SUCCESS": 70,
+            "SKIPPED": 29,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-agents:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-agents:FAILURE"
+          ]
+        }
+      },
+      "reason": "target is not open"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 435,
+    "total_ms": 2867,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 219
+        "ms": 418
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2009
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 203
+        "ms": 411
       },
       {
         "name": "append_ledger",
