@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-27T05:37:34.802Z",
+  "generated_at": "2026-05-27T05:37:44.369Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-27T02:37:32.648Z",
+  "since": "2026-05-27T02:37:42.404Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    85612
+    86458
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
-  "commands_seen": 2,
+  "scanned_comments": 22,
+  "commands_seen": 10,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:85612:4524083818:2026-05-27T05:37:29Z:clawsweeper_needs_human",
-      "comment_id": "4524083818",
-      "comment_version_key": "4524083818:2026-05-27T05:37:29Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/85612#issuecomment-4524083818",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86458:4533989432:2026-05-27T05:37:39Z:clawsweeper_needs_human",
+      "comment_id": "4533989432",
+      "comment_version_key": "4533989432:2026-05-27T05:37:39Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86458#issuecomment-4533989432",
       "repo": "openclaw/openclaw",
-      "issue_number": 85612,
+      "issue_number": 86458,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-23T03:55:07Z",
-      "comment_updated_at": "2026-05-27T05:37:29Z",
+      "comment_created_at": "2026-05-25T11:45:01Z",
+      "comment_updated_at": "2026-05-27T05:37:39Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -52,87 +52,262 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "No repair lane is needed; the remaining action is maintainer review plus current-check resolution for an already-focused implementation PR.; Cleared: No security or supply-chain concern was found; the diff only changes Slack dispatch logic and colocated tests, with no dependency, workflow, secret, or package metadata changes. (sha=41e304addf6805e4ca0ceda848f9ec1aaa0f3cc7)",
-      "review_summary": "The PR makes Slack progress-mode (`status_final`) draft-boundary callbacks a no-op and adds preview fallback tests for progress and non-progress modes.\n\nPR surface: Source +10, Tests +77. Total +87 across 2 files.\n\nReproducibility: yes. Source inspection shows current main calls `forceNewMessage()` from assistant/reasoning boundaries and that helper clears Slack message ids; the inspected before screenshot shows the resulting stack of orphaned progress drafts.",
-      "review_followup": "No repair lane is needed; the remaining action is maintainer review plus current-check resolution for an already-focused implementation PR.",
+      "repair_reason": "Human maintainer handling is needed because the PR has a blocking session/security regression, stale real behavior proof, and compatibility-sensitive protocol default changes.; Needs attention: The patch bypasses an existing user-message redaction/blocking hook on fallback transcript handling.; Review finding: [P1] Persist fallback user turns before emitting updates — src/gateway/server-methods/chat.ts:3034-3041 (sha=429affb082170ba7537b0ab7b7c01d95e77e0745)",
+      "review_summary": "The PR adds bounded `chat.history` display projections, `messages`/`turns`/`raw-messages` protocol modes, admin-gated raw history access, UI/docs/Swift updates, transcript-read instrumentation, and focused gateway/script tests.\n\nPR surface: Source +1042, Tests +904, Docs +3, Other +43. Total +1992 across 17 files.\n\nReproducibility: yes. for the blocking review finding: current main source and tests show fallback user turns must be persisted through the recorder and `before_message_write` hook, while the PR head emits raw transcript updates directly. I did not run the PR test suite in this read-only review.",
+      "review_followup": "Human maintainer handling is needed because the PR has a blocking session/security regression, stale real behavior proof, and compatibility-sensitive protocol default changes.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "41e304addf6805e4ca0ceda848f9ec1aaa0f3cc7",
+      "expected_head_sha": "429affb082170ba7537b0ab7b7c01d95e77e0745",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(slack): keep one draft message in progress mode",
-        "body": "## Summary\n\nIn `channels.slack.streaming.mode = \"progress\"` (internally `status_final`) the Slack draft preview is supposed to be a single rolling message that gets finalised in place by `finalizeSlackPreviewEdit` when the final reply lands. In practice, multi-segment assistant turns (text → tool → text → tool → text) ended up posting **one new draft message per assistant segment**, each individually edited, with the final reply edited into only the *last* one — leaving the earlier drafts as orphaned progress messages in the channel.\n\n## Root cause\n\n`onDraftBoundary` is wired to every `onAssistantMessageStart` and `onReasoningEnd` event in `extensions/slack/src/monitor/message-handler/dispatch.ts`. The boundary unconditionally calls `draftStream.forceNewMessage()` — which clears `messageId` so the next `draftStream.update()` falls back to `chat.postMessage` instead of editing the existing preview.\n\nThat behaviour is correct for `partial` / `block` modes where each assistant segment is its own delivered chunk. In `status_final` it actively breaks the single-rolling-preview contract.\n\n## Fix\n\nMake `onDraftBoundary` a no-op in `status_final` mode. Other modes are unchanged.\n\n```ts\nconst onDraftBoundary = !shouldUseDraftStream\n  ? undefined\n  : async () => {\n      if (streamMode === \"status_final\") {\n        return;                          // <-- new\n      }\n      if (hasStreamedMessage) {\n        draftStream?.forceNewMessage();\n        ...\n      }\n      ...\n    };\n```\n\n## Tests\n\nTwo new cases in `dispatch.preview-fallback.test.ts`:\n\n1. **Regression**: in progress mode, `forceNewMessage` is **never** called even when `onAssistantMessageStart` / `onReasoningEnd` fire mid-turn.\n2. **Sanity**: in `partial`/`replace` mode, `forceNewMessage` is still called on the assistant boundary so we haven't silenced non-progress modes.\n\nAll 67 tests in `dispatch.preview-fallback.test.ts` + `dispatch.streaming.test.ts` pass.\n\n## How we found it\n\nProduction Slack bot was posting multiple progress messages per turn instead of one editable preview. Traced through `pipeline.runtime` / `dispatch.ts` to the unconditional `forceNewMessage()` call on the assistant boundary.\n\n## Real behavior proof\n\n**Behavior or issue addressed:** In `channels.slack.streaming.mode = \"progress\"` (internally `status_final`), a multi-segment assistant turn (text → tool → text → tool → text) was posting one new draft message per assistant segment instead of editing a single rolling preview in place. The earlier drafts were left as orphaned progress messages above the final reply.\n\n**Real environment tested:** Production Slack workspace, real Slack bot identity connecting via socket mode, OpenClaw agent running the patched bundle on the same EC2 host that previously reproduced the bug. Slack streaming config in use: `channels.slack.streaming = { mode: \"progress\" }` per account, agent identity emoji as the ack reaction, replies threaded (`replyToMode: \"all\"`). No other Slack-side config or workspace settings changed between the before/after runs.\n\n**Exact steps or command run after this patch:**\n1. Built the patched extension bundle from this branch and deployed it onto the production agent host (replacing the previously running bundle in place; same gateway, same account credentials, same Slack app).\n2. Restarted the agent so the Slack monitor reconnected with the new dispatch wiring.\n3. From the same Slack channel that reproduced the original bug, sent the same kind of prompt that triggers a tool-using turn (multiple assistant text segments interleaved with tool calls).\n4. Watched the channel from iOS Slack while the turn streamed, then again after the final reply landed.\n\n**Evidence after fix:**\n\nBefore — same single turn produced a stack of separate progress messages (one per assistant segment between tool calls), each individually edited, with the final reply landing as yet another message:\n\n![before — multiple orphaned progress messages](https://github.com/mycarrysun/openclaw/releases/download/slack-progress-proof/slack-progress-before.jpg)\n\nAfter — same agent on the patched bundle, same workflow: one rolling progress draft that gets edited in place and finalised into the answer (highlighted in red). No orphaned progress messages above the final reply:\n\n![after — single rolling preview, finalised in place](https://github.com/mycarrysun/openclaw/releases/download/slack-progress-proof/slack-progress-after.jpg)\n\niOS Slack screenshots, redacted by the workspace owner.\n\n**Observed result after fix:** The Slack channel showed exactly one draft preview message for the whole multi-segment turn. As each assistant text segment streamed, that single message updated in place (`chat.update`) instead of a new one being posted. When the final reply arrived, `finalizeSlackPreviewEdit` edited the same message into the final answer. No orphaned progress messages were left above the final reply. The \"after\" screenshot is the live channel state, not a staged repro.\n\n**What was not tested:** `partial` and `block`/`replace` streaming modes were not exercised against a live Slack workspace in this run — they're covered by the new `dispatch.preview-fallback.test.ts` sanity case that asserts `forceNewMessage` is still called on the assistant boundary in those modes, so the no-op is scoped to `status_final` only.\n",
-        "branch": "fix/slack-progress-single-draft",
-        "head_sha": "41e304addf6805e4ca0ceda848f9ec1aaa0f3cc7",
-        "author": "mycarrysun",
+        "title": "AI-assisted: fix(chat): bound chat history display payloads",
+        "body": "## Summary\n\nThis PR fixes `chat.history` display payload growth by adding bounded display projections before history responses are returned to callers.\n\nIt covers text, tool payloads, image/media blocks, canvas media references, Swift protocol surfaces, UI/controller handling, gateway tests, and public protocol docs. The branch has been rebased and retargeted onto the current `release/2026.5.26` line and includes the later P2 raw-mode alignment fix.\n\nAI-assisted change: yes. Forge/Codex produced the implementation and PR publication using OpenAI Codex `gpt-5.5` in the OpenClaw workspace. Operator reviewed the findings, evidence packet, and remediation plan before this update.\n\n## Problem\n\n`chat.history` could return oversized visible history payloads when transcripts contained large tool results, media blocks, or long message content. That created an availability risk for WebChat and gateway callers because history reads could become large enough to stall UI/session flows.\n\nA late review pass also found that normal `messages` mode was capped to 64 KiB after safe tool redaction, which could unnecessarily drop safe text even when the caller configured a larger history budget.\n\n## Root Cause\n\nHistory projection and redaction were not consistently separated from raw transcript preservation. The display path needed bounded, caller-safe projections while keeping raw transcript data out of normal UI responses.\n\nThe final `messages` mode budget also applied a hard 64 KiB cap after redaction, rather than honoring the configured history budget for safe text.\n\n## Solution\n\n- Adds bounded chat display projection helpers for text, tool payloads, media, and canvas blocks.\n- Routes `chat.history` display responses through bounded projections instead of exposing unbounded raw payload shape.\n- Adds `mode: \"messages\" | \"turns\" | \"raw-messages\"` and gates raw payload inspection behind `operator.admin`.\n- Keeps `unsafeRawToolPayloads` schema-compatible, but it does not unlock raw payloads without explicit `mode: \"raw-messages\"`.\n- Preserves safe `messages` mode text up to the configured `maxHistoryBytes` budget after tool payload omission.\n- Regenerates Swift protocol models from the canonical schema output.\n- Documents the new history modes and raw-history admin guard in public WebChat/Gateway protocol docs.\n- Adds gateway regression tests for bounded tool payloads, visible media shaping, recent visible turn preservation, placeholder semantics, large safe text preservation, saturated scan-window metadata, and raw-mode authorization.\n\n## Real Behavior Proof\n\n**Behavior addressed:** `chat.history` was returning oversized display payloads. Production logs showed >=88 KB responses and `readMs=1715-1893` even for tiny sessions, plus an 11050 ms WebSocket response. Normal display history could also expose raw tool-call arguments or tool-result payloads. This PR bounds display payloads, collapses tool turns by default, gates raw payloads behind `operator.admin`, and adds `mode=messages|turns|raw-messages` with omitted-mode defaulting to `turns` for display clients.\n\n**Current patch tested:** `b169090c0924c2be716b8eb6872ca79fe6964c47`, based on `e0bc8efde3ef7348b9ff5b8f48e9515e670fcb65` from `release/2026.5.26`.\n\n**Exact steps or command run after this patch:**\n\n```bash\ncorepack pnpm install --frozen-lockfile\ncorepack pnpm tsgo:core\ncorepack pnpm exec vitest run \\\n  src/gateway/server.chat.gateway-server-chat-b.test.ts \\\n  src/gateway/server.chat.gateway-server-chat.test.ts \\\n  src/gateway/session-utils.fs.test.ts \\\n  ui/src/ui/controllers/chat.test.ts \\\n  ui/src/ui/app-chat.test.ts \\\n  test/scripts/list-prod-store-packages.test.ts\ngit diff --check origin/release/2026.5.26...HEAD\n```\n\n**Observed result after this patch:**\n\n```text\ncorepack pnpm install --frozen-lockfile: PASS\ncorepack pnpm tsgo:core: PASS\nFocused chat-history suite: PASS, 8 files, 395 tests\ngit diff --check origin/release/2026.5.26...HEAD: PASS\nCurrent scoped diff: 17 files, 2083 insertions, 68 deletions\nDependency-related files in current scoped diff: 0\nGitHub PR base: release/2026.5.26\n```\n\n**Raw-mode authorization behavior verified on current patch stack:**\n\nThe focused suite includes the raw-mode and compatibility regressions for:\n\n```text\nchat.history messages mode omits raw tool payloads\nchat.history messages mode ignores unsafeRawToolPayloads for admin callers\nchat.history raw-messages requires an admin or debug caller\nchat.history raw-messages preserves raw tool payloads\n```\n\nExpected behavior remains:\n\n```text\nmode=messages + unsafeRawToolPayloads=true -> safe display projection, raw tool payloads omitted\nmode=raw-messages without operator.admin -> INVALID_REQUEST\nmode=raw-messages with operator.admin -> raw diagnostic transcript path\n```\n\n**Live/dogfood telemetry from the affected surface:**\n\nPost-restart `chat.history` telemetry showed display clients using the bounded turns path:\n\n```text\nmode=turns responseMode=turns rawToolPayloads=false\n```\n\nRepresentative large-history sample after the beta1 rebase:\n\n```text\nsessionHash=52d4d0e214e0\nmode=turns responseMode=turns rawToolPayloads=false\nrequestedLimit=20\nlocalMessages=412\nreturnedItems=10\ntoolRecordsCollapsed=395\nreadFileBytes=1130353\nresponseBytesReturned=29150\nreadMs=13\ntotalMs=21\nhasMoreBefore=false\n```\n\nPost-hotfix sampled window:\n\n```text\nsamples: 50\ntotalMs: min 0, p50 3, p90 24, max 605\nreadMs:  min 0, p50 1, p90 14, max 593\nresponseBytesReturned: min 212, p50 2690, p90 29150, max 29150\nreadFileBytes: min 1400, p50 5076, p90 1130353, max 1130353\ntoolRecordsCollapsed: min 0, p50 2, p90 395, max 395\n```\n\nTwo roughly 600 ms outliers remained in the checked window. The new telemetry attributes those to read-path components while response size stays bounded. This is evidence that the display payload/serialization outage path is fixed, not a claim that all filesystem/read jitter is solved by this PR.\n\nProduction before-evidence from the affected surface, redacted to session hashes, from the May 24 OpenClaw logs:\n\n```text\n2026-05-24T23:13:35.952Z chat.history metrics mode=messages sessionHash=ac38af406fed ... messagesBytesReturned=87915 responseBytesReturned=88104 readMs=1838 totalMs=1840\n2026-05-24T23:13:35.947Z chat.history metrics mode=messages sessionHash=75794a8e1d45 ... messagesBytesReturned=57617 responseBytesReturned=57810 readMs=1890 totalMs=1893\n2026-05-24T23:01:46.498Z chat.history metrics mode=messages sessionHash=a6923f4da653 ... localMessages=0 messagesBytesReturned=2 responseBytesReturned=128 readMs=1715 totalMs=1716\n2026-05-24T06:19:28.690Z WebSocket chat.history response took 11050ms\n```\n\n**Observed result after fix:** Display clients return `mode=turns` by default, collapse tool activity, bound response bytes, and do not expose raw tool payloads. Explicit `mode=messages` remains message-shaped and display-safe. Non-admin `mode=raw-messages` rejects with `INVALID_REQUEST`. Admin `mode=raw-messages` is the explicit raw diagnostic path. Admin callers sending `mode: \"messages\", unsafeRawToolPayloads: true` still get the safe display projection with tool payloads omitted.\n\n**Not tested:** Control UI / WebChat browser surface was not driven through a browser or screen-recording session in this proof. Compatibility was exercised at the Gateway WebSocket protocol layer and through UI controller/app tests.\n\n## Validation\n\n| Command / Gate | Result | Notes |\n|---|---:|---|\n| 2026.5.26 current-tip rebase | PASS | Current head `b169090c09` is based on `e0bc8efde3` |\n| `corepack pnpm tsgo:core` | PASS | Current rebased patch stack |\n| Focused chat-history suite | PASS | 8 files, 395 tests on current rebased patch stack |\n| 2026.5.26 diff whitespace check | PASS | `git diff --check origin/release/2026.5.26...HEAD` |\n| Dependency scope check | PASS | No package, lockfile, or shrinkwrap files in current scoped diff |\n| Swift protocol generation | PASS | `GatewayModels.swift` regenerated to canonical output |\n\n## Review Findings Addressed\n\n- ClawSweeper real-behavior-proof block: PR body now includes the exact current-head command field, current-head test result, and raw-mode authorization proof.\n- ClawSweeper P2 docs finding: documented `chat.history` modes and raw-history admin guard in `docs/web/webchat.md` and `docs/gateway/protocol.md`.\n- ClawSweeper P3 stale beta report finding: removed `docs/plan/chat-history-beta2-fix-report-2026-05-25.md` from the PR.\n- Bundled Swift protocol check: regenerated `GatewayModels.swift` instead of hand-editing optional defaults.\n- Agent-chat tests: updated the gateway-callable helper expectations so placeholder redaction does not break semantic assertions.\n- Dependency/deadcode check: current scoped diff has no dependency-related files and current-head diff hygiene was rerun.\n- Copilot hot-path nits: avoided a second `augmentChatHistoryWithCanvasBlocks()` pass for non-raw history responses and cached `extractToolCallIds()` in turn aggregation.\n- Saturated scan-window `meta.hasMoreBefore` handling: fixed with a 1001-turn regression test verifying earlier history is reported when the scan window saturates.\n- ClawSweeper P2 `unsafeRawToolPayloads` contract: raw-payload branch now requires `mode === \"raw-messages\"`. Admin callers using `mode: \"messages\"` with the flag get the safe display projection.\n\n## Non-goals and Follow-Up\n\nThis PR intentionally does not address Codex/WebChat message-tool delivery hints, Codex pretool/tool-loop latency, provider failover, gateway startup auth prewarm, or reconnect/warmup read coalescing. Those have separate symptoms and should remain separate PRs.\n\nBrowser visual proof can be added if maintainers want it, but the current proof covers Gateway protocol behavior, UI controller/app behavior, current-head regression tests, and live dogfood telemetry for the bounded display path.\n\n## Risk Before Merge\n\n- Compatibility: `chat.history` response shape is intentionally bounded for display modes. Raw/debug access remains behind the explicit admin raw path.\n- Availability: this reduces large-history response pressure, but maintainers should still watch WebChat history latency on beta/release builds.\n- Session-state: history display output changes should be checked against existing UI expectations and Swift clients.\n\n## Changelog\n\nNo `CHANGELOG.md` entry was added. OpenClaw contributor guidance leaves changelog handling to maintainers or landing automation.",
+        "branch": "forge/chat-history-display-bounds-v2",
+        "head_sha": "429affb082170ba7537b0ab7b7c01d95e77e0745",
+        "author": "ragesaq",
         "labels": [
-          "channel: slack",
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦞 diamond lobster",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look",
-          "proof: 📸 screenshot"
+          "docs",
+          "app: web-ui",
+          "gateway",
+          "scripts",
+          "size: XL",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "extensions/slack/src/monitor/message-handler/dispatch.preview-fallback.test.ts",
-            "additions": 78,
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+            "additions": 9,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/slack/src/monitor/message-handler/dispatch.ts",
-            "additions": 10,
+            "path": "docs/gateway/protocol.md",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/web/webchat.md",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/list-prod-store-packages.mjs",
+            "additions": 48,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/chat-display-projection.ts",
+            "additions": 227,
             "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/chat-history-turns.ts",
+            "additions": 481,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/protocol/schema/logs-chat.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/chat.ts",
+            "additions": 483,
+            "deletions": 267,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.chat.gateway-server-chat-b.test.ts",
+            "additions": 828,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.chat.gateway-server-chat.test.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.fs.test.ts",
+            "additions": 33,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.fs.ts",
+            "additions": 118,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/list-prod-store-packages.test.ts",
+            "additions": 42,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/app-chat.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/controllers/chat.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/controllers/chat.ts",
+            "additions": 12,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85612",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85612.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86458",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86458.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 95,
+          "total": 103,
           "counts": {
             "CANCELLED": 2,
-            "SKIPPED": 28,
-            "SUCCESS": 64,
-            "NEUTRAL": 1
+            "SKIPPED": 27,
+            "SUCCESS": 67,
+            "FAILURE": 5,
+            "IN_PROGRESS": 2
           },
           "blockers": [
-            "Real behavior proof:CANCELLED"
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-fast:FAILURE",
+            "checks-node-agentic-gateway-core:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "Socket Security: Project Report:IN_PROGRESS",
+            "Socket Security: Pull Request Alerts:IN_PROGRESS"
           ],
-          "pending": [],
+          "pending": [
+            "Socket Security: Project Report:IN_PROGRESS",
+            "Socket Security: Pull Request Alerts:IN_PROGRESS"
+          ],
           "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-fast:FAILURE",
+            "checks-node-agentic-gateway-core:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
           ]
         }
       },
       "reason": "PR is not opted into ClawSweeper autofix or automerge"
     },
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:85612:4524382217:2026-05-23T06:16:32Z:re_review",
-      "comment_id": "4524382217",
-      "comment_version_key": "4524382217:2026-05-23T06:16:32Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/85612#issuecomment-4524382217",
+      "idempotency_key": "comment-router:openclaw/openclaw:86458:4551614620:2026-05-27T05:29:53Z:re_review",
+      "comment_id": "4551614620",
+      "comment_version_key": "4551614620:2026-05-27T05:29:53Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86458#issuecomment-4551614620",
       "repo": "openclaw/openclaw",
-      "issue_number": 85612,
-      "author": "mycarrysun",
-      "author_id": 9121901,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-23T06:16:32Z",
-      "comment_updated_at": "2026-05-23T06:16:32Z",
+      "issue_number": 86458,
+      "author": "ragesaq",
+      "author_id": 11304287,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-27T05:29:53Z",
+      "comment_updated_at": "2026-05-27T05:29:53Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86458:4550040219:2026-05-27T00:01:13Z:re_review",
+      "comment_id": "4550040219",
+      "comment_version_key": "4550040219:2026-05-27T00:01:13Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86458#issuecomment-4550040219",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86458,
+      "author": "ragesaq",
+      "author_id": 11304287,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-27T00:00:47Z",
+      "comment_updated_at": "2026-05-27T00:01:13Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86458:4549876033:2026-05-26T23:27:46Z:re_review",
+      "comment_id": "4549876033",
+      "comment_version_key": "4549876033:2026-05-26T23:27:46Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86458#issuecomment-4549876033",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86458,
+      "author": "ragesaq",
+      "author_id": 11304287,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-26T23:27:46Z",
+      "comment_updated_at": "2026-05-26T23:27:46Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -155,59 +330,1206 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(slack): keep one draft message in progress mode",
-        "body": "## Summary\n\nIn `channels.slack.streaming.mode = \"progress\"` (internally `status_final`) the Slack draft preview is supposed to be a single rolling message that gets finalised in place by `finalizeSlackPreviewEdit` when the final reply lands. In practice, multi-segment assistant turns (text → tool → text → tool → text) ended up posting **one new draft message per assistant segment**, each individually edited, with the final reply edited into only the *last* one — leaving the earlier drafts as orphaned progress messages in the channel.\n\n## Root cause\n\n`onDraftBoundary` is wired to every `onAssistantMessageStart` and `onReasoningEnd` event in `extensions/slack/src/monitor/message-handler/dispatch.ts`. The boundary unconditionally calls `draftStream.forceNewMessage()` — which clears `messageId` so the next `draftStream.update()` falls back to `chat.postMessage` instead of editing the existing preview.\n\nThat behaviour is correct for `partial` / `block` modes where each assistant segment is its own delivered chunk. In `status_final` it actively breaks the single-rolling-preview contract.\n\n## Fix\n\nMake `onDraftBoundary` a no-op in `status_final` mode. Other modes are unchanged.\n\n```ts\nconst onDraftBoundary = !shouldUseDraftStream\n  ? undefined\n  : async () => {\n      if (streamMode === \"status_final\") {\n        return;                          // <-- new\n      }\n      if (hasStreamedMessage) {\n        draftStream?.forceNewMessage();\n        ...\n      }\n      ...\n    };\n```\n\n## Tests\n\nTwo new cases in `dispatch.preview-fallback.test.ts`:\n\n1. **Regression**: in progress mode, `forceNewMessage` is **never** called even when `onAssistantMessageStart` / `onReasoningEnd` fire mid-turn.\n2. **Sanity**: in `partial`/`replace` mode, `forceNewMessage` is still called on the assistant boundary so we haven't silenced non-progress modes.\n\nAll 67 tests in `dispatch.preview-fallback.test.ts` + `dispatch.streaming.test.ts` pass.\n\n## How we found it\n\nProduction Slack bot was posting multiple progress messages per turn instead of one editable preview. Traced through `pipeline.runtime` / `dispatch.ts` to the unconditional `forceNewMessage()` call on the assistant boundary.\n\n## Real behavior proof\n\n**Behavior or issue addressed:** In `channels.slack.streaming.mode = \"progress\"` (internally `status_final`), a multi-segment assistant turn (text → tool → text → tool → text) was posting one new draft message per assistant segment instead of editing a single rolling preview in place. The earlier drafts were left as orphaned progress messages above the final reply.\n\n**Real environment tested:** Production Slack workspace, real Slack bot identity connecting via socket mode, OpenClaw agent running the patched bundle on the same EC2 host that previously reproduced the bug. Slack streaming config in use: `channels.slack.streaming = { mode: \"progress\" }` per account, agent identity emoji as the ack reaction, replies threaded (`replyToMode: \"all\"`). No other Slack-side config or workspace settings changed between the before/after runs.\n\n**Exact steps or command run after this patch:**\n1. Built the patched extension bundle from this branch and deployed it onto the production agent host (replacing the previously running bundle in place; same gateway, same account credentials, same Slack app).\n2. Restarted the agent so the Slack monitor reconnected with the new dispatch wiring.\n3. From the same Slack channel that reproduced the original bug, sent the same kind of prompt that triggers a tool-using turn (multiple assistant text segments interleaved with tool calls).\n4. Watched the channel from iOS Slack while the turn streamed, then again after the final reply landed.\n\n**Evidence after fix:**\n\nBefore — same single turn produced a stack of separate progress messages (one per assistant segment between tool calls), each individually edited, with the final reply landing as yet another message:\n\n![before — multiple orphaned progress messages](https://github.com/mycarrysun/openclaw/releases/download/slack-progress-proof/slack-progress-before.jpg)\n\nAfter — same agent on the patched bundle, same workflow: one rolling progress draft that gets edited in place and finalised into the answer (highlighted in red). No orphaned progress messages above the final reply:\n\n![after — single rolling preview, finalised in place](https://github.com/mycarrysun/openclaw/releases/download/slack-progress-proof/slack-progress-after.jpg)\n\niOS Slack screenshots, redacted by the workspace owner.\n\n**Observed result after fix:** The Slack channel showed exactly one draft preview message for the whole multi-segment turn. As each assistant text segment streamed, that single message updated in place (`chat.update`) instead of a new one being posted. When the final reply arrived, `finalizeSlackPreviewEdit` edited the same message into the final answer. No orphaned progress messages were left above the final reply. The \"after\" screenshot is the live channel state, not a staged repro.\n\n**What was not tested:** `partial` and `block`/`replace` streaming modes were not exercised against a live Slack workspace in this run — they're covered by the new `dispatch.preview-fallback.test.ts` sanity case that asserts `forceNewMessage` is still called on the assistant boundary in those modes, so the no-op is scoped to `status_final` only.\n",
-        "branch": "fix/slack-progress-single-draft",
-        "head_sha": "41e304addf6805e4ca0ceda848f9ec1aaa0f3cc7",
-        "author": "mycarrysun",
+        "title": "AI-assisted: fix(chat): bound chat history display payloads",
+        "body": "## Summary\n\nThis PR fixes `chat.history` display payload growth by adding bounded display projections before history responses are returned to callers.\n\nIt covers text, tool payloads, image/media blocks, canvas media references, Swift protocol surfaces, UI/controller handling, gateway tests, and public protocol docs. The branch has been rebased and retargeted onto the current `release/2026.5.26` line and includes the later P2 raw-mode alignment fix.\n\nAI-assisted change: yes. Forge/Codex produced the implementation and PR publication using OpenAI Codex `gpt-5.5` in the OpenClaw workspace. Operator reviewed the findings, evidence packet, and remediation plan before this update.\n\n## Problem\n\n`chat.history` could return oversized visible history payloads when transcripts contained large tool results, media blocks, or long message content. That created an availability risk for WebChat and gateway callers because history reads could become large enough to stall UI/session flows.\n\nA late review pass also found that normal `messages` mode was capped to 64 KiB after safe tool redaction, which could unnecessarily drop safe text even when the caller configured a larger history budget.\n\n## Root Cause\n\nHistory projection and redaction were not consistently separated from raw transcript preservation. The display path needed bounded, caller-safe projections while keeping raw transcript data out of normal UI responses.\n\nThe final `messages` mode budget also applied a hard 64 KiB cap after redaction, rather than honoring the configured history budget for safe text.\n\n## Solution\n\n- Adds bounded chat display projection helpers for text, tool payloads, media, and canvas blocks.\n- Routes `chat.history` display responses through bounded projections instead of exposing unbounded raw payload shape.\n- Adds `mode: \"messages\" | \"turns\" | \"raw-messages\"` and gates raw payload inspection behind `operator.admin`.\n- Keeps `unsafeRawToolPayloads` schema-compatible, but it does not unlock raw payloads without explicit `mode: \"raw-messages\"`.\n- Preserves safe `messages` mode text up to the configured `maxHistoryBytes` budget after tool payload omission.\n- Regenerates Swift protocol models from the canonical schema output.\n- Documents the new history modes and raw-history admin guard in public WebChat/Gateway protocol docs.\n- Adds gateway regression tests for bounded tool payloads, visible media shaping, recent visible turn preservation, placeholder semantics, large safe text preservation, saturated scan-window metadata, and raw-mode authorization.\n\n## Real Behavior Proof\n\n**Behavior addressed:** `chat.history` was returning oversized display payloads. Production logs showed >=88 KB responses and `readMs=1715-1893` even for tiny sessions, plus an 11050 ms WebSocket response. Normal display history could also expose raw tool-call arguments or tool-result payloads. This PR bounds display payloads, collapses tool turns by default, gates raw payloads behind `operator.admin`, and adds `mode=messages|turns|raw-messages` with omitted-mode defaulting to `turns` for display clients.\n\n**Current patch tested:** `b169090c0924c2be716b8eb6872ca79fe6964c47`, based on `e0bc8efde3ef7348b9ff5b8f48e9515e670fcb65` from `release/2026.5.26`.\n\n**Exact steps or command run after this patch:**\n\n```bash\ncorepack pnpm install --frozen-lockfile\ncorepack pnpm tsgo:core\ncorepack pnpm exec vitest run \\\n  src/gateway/server.chat.gateway-server-chat-b.test.ts \\\n  src/gateway/server.chat.gateway-server-chat.test.ts \\\n  src/gateway/session-utils.fs.test.ts \\\n  ui/src/ui/controllers/chat.test.ts \\\n  ui/src/ui/app-chat.test.ts \\\n  test/scripts/list-prod-store-packages.test.ts\ngit diff --check origin/release/2026.5.26...HEAD\n```\n\n**Observed result after this patch:**\n\n```text\ncorepack pnpm install --frozen-lockfile: PASS\ncorepack pnpm tsgo:core: PASS\nFocused chat-history suite: PASS, 8 files, 395 tests\ngit diff --check origin/release/2026.5.26...HEAD: PASS\nCurrent scoped diff: 17 files, 2083 insertions, 68 deletions\nDependency-related files in current scoped diff: 0\nGitHub PR base: release/2026.5.26\n```\n\n**Raw-mode authorization behavior verified on current patch stack:**\n\nThe focused suite includes the raw-mode and compatibility regressions for:\n\n```text\nchat.history messages mode omits raw tool payloads\nchat.history messages mode ignores unsafeRawToolPayloads for admin callers\nchat.history raw-messages requires an admin or debug caller\nchat.history raw-messages preserves raw tool payloads\n```\n\nExpected behavior remains:\n\n```text\nmode=messages + unsafeRawToolPayloads=true -> safe display projection, raw tool payloads omitted\nmode=raw-messages without operator.admin -> INVALID_REQUEST\nmode=raw-messages with operator.admin -> raw diagnostic transcript path\n```\n\n**Live/dogfood telemetry from the affected surface:**\n\nPost-restart `chat.history` telemetry showed display clients using the bounded turns path:\n\n```text\nmode=turns responseMode=turns rawToolPayloads=false\n```\n\nRepresentative large-history sample after the beta1 rebase:\n\n```text\nsessionHash=52d4d0e214e0\nmode=turns responseMode=turns rawToolPayloads=false\nrequestedLimit=20\nlocalMessages=412\nreturnedItems=10\ntoolRecordsCollapsed=395\nreadFileBytes=1130353\nresponseBytesReturned=29150\nreadMs=13\ntotalMs=21\nhasMoreBefore=false\n```\n\nPost-hotfix sampled window:\n\n```text\nsamples: 50\ntotalMs: min 0, p50 3, p90 24, max 605\nreadMs:  min 0, p50 1, p90 14, max 593\nresponseBytesReturned: min 212, p50 2690, p90 29150, max 29150\nreadFileBytes: min 1400, p50 5076, p90 1130353, max 1130353\ntoolRecordsCollapsed: min 0, p50 2, p90 395, max 395\n```\n\nTwo roughly 600 ms outliers remained in the checked window. The new telemetry attributes those to read-path components while response size stays bounded. This is evidence that the display payload/serialization outage path is fixed, not a claim that all filesystem/read jitter is solved by this PR.\n\nProduction before-evidence from the affected surface, redacted to session hashes, from the May 24 OpenClaw logs:\n\n```text\n2026-05-24T23:13:35.952Z chat.history metrics mode=messages sessionHash=ac38af406fed ... messagesBytesReturned=87915 responseBytesReturned=88104 readMs=1838 totalMs=1840\n2026-05-24T23:13:35.947Z chat.history metrics mode=messages sessionHash=75794a8e1d45 ... messagesBytesReturned=57617 responseBytesReturned=57810 readMs=1890 totalMs=1893\n2026-05-24T23:01:46.498Z chat.history metrics mode=messages sessionHash=a6923f4da653 ... localMessages=0 messagesBytesReturned=2 responseBytesReturned=128 readMs=1715 totalMs=1716\n2026-05-24T06:19:28.690Z WebSocket chat.history response took 11050ms\n```\n\n**Observed result after fix:** Display clients return `mode=turns` by default, collapse tool activity, bound response bytes, and do not expose raw tool payloads. Explicit `mode=messages` remains message-shaped and display-safe. Non-admin `mode=raw-messages` rejects with `INVALID_REQUEST`. Admin `mode=raw-messages` is the explicit raw diagnostic path. Admin callers sending `mode: \"messages\", unsafeRawToolPayloads: true` still get the safe display projection with tool payloads omitted.\n\n**Not tested:** Control UI / WebChat browser surface was not driven through a browser or screen-recording session in this proof. Compatibility was exercised at the Gateway WebSocket protocol layer and through UI controller/app tests.\n\n## Validation\n\n| Command / Gate | Result | Notes |\n|---|---:|---|\n| 2026.5.26 current-tip rebase | PASS | Current head `b169090c09` is based on `e0bc8efde3` |\n| `corepack pnpm tsgo:core` | PASS | Current rebased patch stack |\n| Focused chat-history suite | PASS | 8 files, 395 tests on current rebased patch stack |\n| 2026.5.26 diff whitespace check | PASS | `git diff --check origin/release/2026.5.26...HEAD` |\n| Dependency scope check | PASS | No package, lockfile, or shrinkwrap files in current scoped diff |\n| Swift protocol generation | PASS | `GatewayModels.swift` regenerated to canonical output |\n\n## Review Findings Addressed\n\n- ClawSweeper real-behavior-proof block: PR body now includes the exact current-head command field, current-head test result, and raw-mode authorization proof.\n- ClawSweeper P2 docs finding: documented `chat.history` modes and raw-history admin guard in `docs/web/webchat.md` and `docs/gateway/protocol.md`.\n- ClawSweeper P3 stale beta report finding: removed `docs/plan/chat-history-beta2-fix-report-2026-05-25.md` from the PR.\n- Bundled Swift protocol check: regenerated `GatewayModels.swift` instead of hand-editing optional defaults.\n- Agent-chat tests: updated the gateway-callable helper expectations so placeholder redaction does not break semantic assertions.\n- Dependency/deadcode check: current scoped diff has no dependency-related files and current-head diff hygiene was rerun.\n- Copilot hot-path nits: avoided a second `augmentChatHistoryWithCanvasBlocks()` pass for non-raw history responses and cached `extractToolCallIds()` in turn aggregation.\n- Saturated scan-window `meta.hasMoreBefore` handling: fixed with a 1001-turn regression test verifying earlier history is reported when the scan window saturates.\n- ClawSweeper P2 `unsafeRawToolPayloads` contract: raw-payload branch now requires `mode === \"raw-messages\"`. Admin callers using `mode: \"messages\"` with the flag get the safe display projection.\n\n## Non-goals and Follow-Up\n\nThis PR intentionally does not address Codex/WebChat message-tool delivery hints, Codex pretool/tool-loop latency, provider failover, gateway startup auth prewarm, or reconnect/warmup read coalescing. Those have separate symptoms and should remain separate PRs.\n\nBrowser visual proof can be added if maintainers want it, but the current proof covers Gateway protocol behavior, UI controller/app behavior, current-head regression tests, and live dogfood telemetry for the bounded display path.\n\n## Risk Before Merge\n\n- Compatibility: `chat.history` response shape is intentionally bounded for display modes. Raw/debug access remains behind the explicit admin raw path.\n- Availability: this reduces large-history response pressure, but maintainers should still watch WebChat history latency on beta/release builds.\n- Session-state: history display output changes should be checked against existing UI expectations and Swift clients.\n\n## Changelog\n\nNo `CHANGELOG.md` entry was added. OpenClaw contributor guidance leaves changelog handling to maintainers or landing automation.",
+        "branch": "forge/chat-history-display-bounds-v2",
+        "head_sha": "429affb082170ba7537b0ab7b7c01d95e77e0745",
+        "author": "ragesaq",
         "labels": [
-          "channel: slack",
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦞 diamond lobster",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look",
-          "proof: 📸 screenshot"
+          "docs",
+          "app: web-ui",
+          "gateway",
+          "scripts",
+          "size: XL",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "extensions/slack/src/monitor/message-handler/dispatch.preview-fallback.test.ts",
-            "additions": 78,
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+            "additions": 9,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/slack/src/monitor/message-handler/dispatch.ts",
-            "additions": 10,
+            "path": "docs/gateway/protocol.md",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/web/webchat.md",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/list-prod-store-packages.mjs",
+            "additions": 48,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/chat-display-projection.ts",
+            "additions": 227,
             "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/chat-history-turns.ts",
+            "additions": 481,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/protocol/schema/logs-chat.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/chat.ts",
+            "additions": 483,
+            "deletions": 267,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.chat.gateway-server-chat-b.test.ts",
+            "additions": 828,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.chat.gateway-server-chat.test.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.fs.test.ts",
+            "additions": 33,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.fs.ts",
+            "additions": 118,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/list-prod-store-packages.test.ts",
+            "additions": 42,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/app-chat.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/controllers/chat.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/controllers/chat.ts",
+            "additions": 12,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85612",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85612.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86458",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86458.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 95,
+          "total": 103,
           "counts": {
             "CANCELLED": 2,
-            "SKIPPED": 28,
-            "SUCCESS": 64,
-            "NEUTRAL": 1
+            "SKIPPED": 27,
+            "SUCCESS": 67,
+            "FAILURE": 5,
+            "IN_PROGRESS": 2
           },
           "blockers": [
-            "Real behavior proof:CANCELLED"
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-fast:FAILURE",
+            "checks-node-agentic-gateway-core:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "Socket Security: Project Report:IN_PROGRESS",
+            "Socket Security: Pull Request Alerts:IN_PROGRESS"
           ],
-          "pending": [],
+          "pending": [
+            "Socket Security: Project Report:IN_PROGRESS",
+            "Socket Security: Pull Request Alerts:IN_PROGRESS"
+          ],
           "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-fast:FAILURE",
+            "checks-node-agentic-gateway-core:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86458:4547425593:2026-05-26T18:33:45Z:re_review",
+      "comment_id": "4547425593",
+      "comment_version_key": "4547425593:2026-05-26T18:33:45Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86458#issuecomment-4547425593",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86458,
+      "author": "ragesaq",
+      "author_id": 11304287,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-26T18:33:45Z",
+      "comment_updated_at": "2026-05-26T18:33:45Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86458:4538680272:2026-05-26T01:05:13Z:re_review",
+      "comment_id": "4538680272",
+      "comment_version_key": "4538680272:2026-05-26T01:05:13Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86458#issuecomment-4538680272",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86458,
+      "author": "ragesaq",
+      "author_id": 11304287,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-26T01:05:13Z",
+      "comment_updated_at": "2026-05-26T01:05:13Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "AI-assisted: fix(chat): bound chat history display payloads",
+        "body": "## Summary\n\nThis PR fixes `chat.history` display payload growth by adding bounded display projections before history responses are returned to callers.\n\nIt covers text, tool payloads, image/media blocks, canvas media references, Swift protocol surfaces, UI/controller handling, gateway tests, and public protocol docs. The branch has been rebased and retargeted onto the current `release/2026.5.26` line and includes the later P2 raw-mode alignment fix.\n\nAI-assisted change: yes. Forge/Codex produced the implementation and PR publication using OpenAI Codex `gpt-5.5` in the OpenClaw workspace. Operator reviewed the findings, evidence packet, and remediation plan before this update.\n\n## Problem\n\n`chat.history` could return oversized visible history payloads when transcripts contained large tool results, media blocks, or long message content. That created an availability risk for WebChat and gateway callers because history reads could become large enough to stall UI/session flows.\n\nA late review pass also found that normal `messages` mode was capped to 64 KiB after safe tool redaction, which could unnecessarily drop safe text even when the caller configured a larger history budget.\n\n## Root Cause\n\nHistory projection and redaction were not consistently separated from raw transcript preservation. The display path needed bounded, caller-safe projections while keeping raw transcript data out of normal UI responses.\n\nThe final `messages` mode budget also applied a hard 64 KiB cap after redaction, rather than honoring the configured history budget for safe text.\n\n## Solution\n\n- Adds bounded chat display projection helpers for text, tool payloads, media, and canvas blocks.\n- Routes `chat.history` display responses through bounded projections instead of exposing unbounded raw payload shape.\n- Adds `mode: \"messages\" | \"turns\" | \"raw-messages\"` and gates raw payload inspection behind `operator.admin`.\n- Keeps `unsafeRawToolPayloads` schema-compatible, but it does not unlock raw payloads without explicit `mode: \"raw-messages\"`.\n- Preserves safe `messages` mode text up to the configured `maxHistoryBytes` budget after tool payload omission.\n- Regenerates Swift protocol models from the canonical schema output.\n- Documents the new history modes and raw-history admin guard in public WebChat/Gateway protocol docs.\n- Adds gateway regression tests for bounded tool payloads, visible media shaping, recent visible turn preservation, placeholder semantics, large safe text preservation, saturated scan-window metadata, and raw-mode authorization.\n\n## Real Behavior Proof\n\n**Behavior addressed:** `chat.history` was returning oversized display payloads. Production logs showed >=88 KB responses and `readMs=1715-1893` even for tiny sessions, plus an 11050 ms WebSocket response. Normal display history could also expose raw tool-call arguments or tool-result payloads. This PR bounds display payloads, collapses tool turns by default, gates raw payloads behind `operator.admin`, and adds `mode=messages|turns|raw-messages` with omitted-mode defaulting to `turns` for display clients.\n\n**Current patch tested:** `b169090c0924c2be716b8eb6872ca79fe6964c47`, based on `e0bc8efde3ef7348b9ff5b8f48e9515e670fcb65` from `release/2026.5.26`.\n\n**Exact steps or command run after this patch:**\n\n```bash\ncorepack pnpm install --frozen-lockfile\ncorepack pnpm tsgo:core\ncorepack pnpm exec vitest run \\\n  src/gateway/server.chat.gateway-server-chat-b.test.ts \\\n  src/gateway/server.chat.gateway-server-chat.test.ts \\\n  src/gateway/session-utils.fs.test.ts \\\n  ui/src/ui/controllers/chat.test.ts \\\n  ui/src/ui/app-chat.test.ts \\\n  test/scripts/list-prod-store-packages.test.ts\ngit diff --check origin/release/2026.5.26...HEAD\n```\n\n**Observed result after this patch:**\n\n```text\ncorepack pnpm install --frozen-lockfile: PASS\ncorepack pnpm tsgo:core: PASS\nFocused chat-history suite: PASS, 8 files, 395 tests\ngit diff --check origin/release/2026.5.26...HEAD: PASS\nCurrent scoped diff: 17 files, 2083 insertions, 68 deletions\nDependency-related files in current scoped diff: 0\nGitHub PR base: release/2026.5.26\n```\n\n**Raw-mode authorization behavior verified on current patch stack:**\n\nThe focused suite includes the raw-mode and compatibility regressions for:\n\n```text\nchat.history messages mode omits raw tool payloads\nchat.history messages mode ignores unsafeRawToolPayloads for admin callers\nchat.history raw-messages requires an admin or debug caller\nchat.history raw-messages preserves raw tool payloads\n```\n\nExpected behavior remains:\n\n```text\nmode=messages + unsafeRawToolPayloads=true -> safe display projection, raw tool payloads omitted\nmode=raw-messages without operator.admin -> INVALID_REQUEST\nmode=raw-messages with operator.admin -> raw diagnostic transcript path\n```\n\n**Live/dogfood telemetry from the affected surface:**\n\nPost-restart `chat.history` telemetry showed display clients using the bounded turns path:\n\n```text\nmode=turns responseMode=turns rawToolPayloads=false\n```\n\nRepresentative large-history sample after the beta1 rebase:\n\n```text\nsessionHash=52d4d0e214e0\nmode=turns responseMode=turns rawToolPayloads=false\nrequestedLimit=20\nlocalMessages=412\nreturnedItems=10\ntoolRecordsCollapsed=395\nreadFileBytes=1130353\nresponseBytesReturned=29150\nreadMs=13\ntotalMs=21\nhasMoreBefore=false\n```\n\nPost-hotfix sampled window:\n\n```text\nsamples: 50\ntotalMs: min 0, p50 3, p90 24, max 605\nreadMs:  min 0, p50 1, p90 14, max 593\nresponseBytesReturned: min 212, p50 2690, p90 29150, max 29150\nreadFileBytes: min 1400, p50 5076, p90 1130353, max 1130353\ntoolRecordsCollapsed: min 0, p50 2, p90 395, max 395\n```\n\nTwo roughly 600 ms outliers remained in the checked window. The new telemetry attributes those to read-path components while response size stays bounded. This is evidence that the display payload/serialization outage path is fixed, not a claim that all filesystem/read jitter is solved by this PR.\n\nProduction before-evidence from the affected surface, redacted to session hashes, from the May 24 OpenClaw logs:\n\n```text\n2026-05-24T23:13:35.952Z chat.history metrics mode=messages sessionHash=ac38af406fed ... messagesBytesReturned=87915 responseBytesReturned=88104 readMs=1838 totalMs=1840\n2026-05-24T23:13:35.947Z chat.history metrics mode=messages sessionHash=75794a8e1d45 ... messagesBytesReturned=57617 responseBytesReturned=57810 readMs=1890 totalMs=1893\n2026-05-24T23:01:46.498Z chat.history metrics mode=messages sessionHash=a6923f4da653 ... localMessages=0 messagesBytesReturned=2 responseBytesReturned=128 readMs=1715 totalMs=1716\n2026-05-24T06:19:28.690Z WebSocket chat.history response took 11050ms\n```\n\n**Observed result after fix:** Display clients return `mode=turns` by default, collapse tool activity, bound response bytes, and do not expose raw tool payloads. Explicit `mode=messages` remains message-shaped and display-safe. Non-admin `mode=raw-messages` rejects with `INVALID_REQUEST`. Admin `mode=raw-messages` is the explicit raw diagnostic path. Admin callers sending `mode: \"messages\", unsafeRawToolPayloads: true` still get the safe display projection with tool payloads omitted.\n\n**Not tested:** Control UI / WebChat browser surface was not driven through a browser or screen-recording session in this proof. Compatibility was exercised at the Gateway WebSocket protocol layer and through UI controller/app tests.\n\n## Validation\n\n| Command / Gate | Result | Notes |\n|---|---:|---|\n| 2026.5.26 current-tip rebase | PASS | Current head `b169090c09` is based on `e0bc8efde3` |\n| `corepack pnpm tsgo:core` | PASS | Current rebased patch stack |\n| Focused chat-history suite | PASS | 8 files, 395 tests on current rebased patch stack |\n| 2026.5.26 diff whitespace check | PASS | `git diff --check origin/release/2026.5.26...HEAD` |\n| Dependency scope check | PASS | No package, lockfile, or shrinkwrap files in current scoped diff |\n| Swift protocol generation | PASS | `GatewayModels.swift` regenerated to canonical output |\n\n## Review Findings Addressed\n\n- ClawSweeper real-behavior-proof block: PR body now includes the exact current-head command field, current-head test result, and raw-mode authorization proof.\n- ClawSweeper P2 docs finding: documented `chat.history` modes and raw-history admin guard in `docs/web/webchat.md` and `docs/gateway/protocol.md`.\n- ClawSweeper P3 stale beta report finding: removed `docs/plan/chat-history-beta2-fix-report-2026-05-25.md` from the PR.\n- Bundled Swift protocol check: regenerated `GatewayModels.swift` instead of hand-editing optional defaults.\n- Agent-chat tests: updated the gateway-callable helper expectations so placeholder redaction does not break semantic assertions.\n- Dependency/deadcode check: current scoped diff has no dependency-related files and current-head diff hygiene was rerun.\n- Copilot hot-path nits: avoided a second `augmentChatHistoryWithCanvasBlocks()` pass for non-raw history responses and cached `extractToolCallIds()` in turn aggregation.\n- Saturated scan-window `meta.hasMoreBefore` handling: fixed with a 1001-turn regression test verifying earlier history is reported when the scan window saturates.\n- ClawSweeper P2 `unsafeRawToolPayloads` contract: raw-payload branch now requires `mode === \"raw-messages\"`. Admin callers using `mode: \"messages\"` with the flag get the safe display projection.\n\n## Non-goals and Follow-Up\n\nThis PR intentionally does not address Codex/WebChat message-tool delivery hints, Codex pretool/tool-loop latency, provider failover, gateway startup auth prewarm, or reconnect/warmup read coalescing. Those have separate symptoms and should remain separate PRs.\n\nBrowser visual proof can be added if maintainers want it, but the current proof covers Gateway protocol behavior, UI controller/app behavior, current-head regression tests, and live dogfood telemetry for the bounded display path.\n\n## Risk Before Merge\n\n- Compatibility: `chat.history` response shape is intentionally bounded for display modes. Raw/debug access remains behind the explicit admin raw path.\n- Availability: this reduces large-history response pressure, but maintainers should still watch WebChat history latency on beta/release builds.\n- Session-state: history display output changes should be checked against existing UI expectations and Swift clients.\n\n## Changelog\n\nNo `CHANGELOG.md` entry was added. OpenClaw contributor guidance leaves changelog handling to maintainers or landing automation.",
+        "branch": "forge/chat-history-display-bounds-v2",
+        "head_sha": "429affb082170ba7537b0ab7b7c01d95e77e0745",
+        "author": "ragesaq",
+        "labels": [
+          "docs",
+          "app: web-ui",
+          "gateway",
+          "scripts",
+          "size: XL",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+            "additions": 9,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/protocol.md",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/web/webchat.md",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/list-prod-store-packages.mjs",
+            "additions": 48,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/chat-display-projection.ts",
+            "additions": 227,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/chat-history-turns.ts",
+            "additions": 481,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/protocol/schema/logs-chat.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/chat.ts",
+            "additions": 483,
+            "deletions": 267,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.chat.gateway-server-chat-b.test.ts",
+            "additions": 828,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.chat.gateway-server-chat.test.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.fs.test.ts",
+            "additions": 33,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.fs.ts",
+            "additions": 118,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/list-prod-store-packages.test.ts",
+            "additions": 42,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/app-chat.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/controllers/chat.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/controllers/chat.ts",
+            "additions": 12,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86458",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86458.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 103,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 27,
+            "SUCCESS": 67,
+            "FAILURE": 5,
+            "IN_PROGRESS": 2
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-fast:FAILURE",
+            "checks-node-agentic-gateway-core:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "Socket Security: Project Report:IN_PROGRESS",
+            "Socket Security: Pull Request Alerts:IN_PROGRESS"
+          ],
+          "pending": [
+            "Socket Security: Project Report:IN_PROGRESS",
+            "Socket Security: Pull Request Alerts:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-fast:FAILURE",
+            "checks-node-agentic-gateway-core:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86458:4538418150:2026-05-26T00:27:41Z:re_review",
+      "comment_id": "4538418150",
+      "comment_version_key": "4538418150:2026-05-26T00:27:41Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86458#issuecomment-4538418150",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86458,
+      "author": "ragesaq",
+      "author_id": 11304287,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-26T00:27:41Z",
+      "comment_updated_at": "2026-05-26T00:27:41Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "AI-assisted: fix(chat): bound chat history display payloads",
+        "body": "## Summary\n\nThis PR fixes `chat.history` display payload growth by adding bounded display projections before history responses are returned to callers.\n\nIt covers text, tool payloads, image/media blocks, canvas media references, Swift protocol surfaces, UI/controller handling, gateway tests, and public protocol docs. The branch has been rebased and retargeted onto the current `release/2026.5.26` line and includes the later P2 raw-mode alignment fix.\n\nAI-assisted change: yes. Forge/Codex produced the implementation and PR publication using OpenAI Codex `gpt-5.5` in the OpenClaw workspace. Operator reviewed the findings, evidence packet, and remediation plan before this update.\n\n## Problem\n\n`chat.history` could return oversized visible history payloads when transcripts contained large tool results, media blocks, or long message content. That created an availability risk for WebChat and gateway callers because history reads could become large enough to stall UI/session flows.\n\nA late review pass also found that normal `messages` mode was capped to 64 KiB after safe tool redaction, which could unnecessarily drop safe text even when the caller configured a larger history budget.\n\n## Root Cause\n\nHistory projection and redaction were not consistently separated from raw transcript preservation. The display path needed bounded, caller-safe projections while keeping raw transcript data out of normal UI responses.\n\nThe final `messages` mode budget also applied a hard 64 KiB cap after redaction, rather than honoring the configured history budget for safe text.\n\n## Solution\n\n- Adds bounded chat display projection helpers for text, tool payloads, media, and canvas blocks.\n- Routes `chat.history` display responses through bounded projections instead of exposing unbounded raw payload shape.\n- Adds `mode: \"messages\" | \"turns\" | \"raw-messages\"` and gates raw payload inspection behind `operator.admin`.\n- Keeps `unsafeRawToolPayloads` schema-compatible, but it does not unlock raw payloads without explicit `mode: \"raw-messages\"`.\n- Preserves safe `messages` mode text up to the configured `maxHistoryBytes` budget after tool payload omission.\n- Regenerates Swift protocol models from the canonical schema output.\n- Documents the new history modes and raw-history admin guard in public WebChat/Gateway protocol docs.\n- Adds gateway regression tests for bounded tool payloads, visible media shaping, recent visible turn preservation, placeholder semantics, large safe text preservation, saturated scan-window metadata, and raw-mode authorization.\n\n## Real Behavior Proof\n\n**Behavior addressed:** `chat.history` was returning oversized display payloads. Production logs showed >=88 KB responses and `readMs=1715-1893` even for tiny sessions, plus an 11050 ms WebSocket response. Normal display history could also expose raw tool-call arguments or tool-result payloads. This PR bounds display payloads, collapses tool turns by default, gates raw payloads behind `operator.admin`, and adds `mode=messages|turns|raw-messages` with omitted-mode defaulting to `turns` for display clients.\n\n**Current patch tested:** `b169090c0924c2be716b8eb6872ca79fe6964c47`, based on `e0bc8efde3ef7348b9ff5b8f48e9515e670fcb65` from `release/2026.5.26`.\n\n**Exact steps or command run after this patch:**\n\n```bash\ncorepack pnpm install --frozen-lockfile\ncorepack pnpm tsgo:core\ncorepack pnpm exec vitest run \\\n  src/gateway/server.chat.gateway-server-chat-b.test.ts \\\n  src/gateway/server.chat.gateway-server-chat.test.ts \\\n  src/gateway/session-utils.fs.test.ts \\\n  ui/src/ui/controllers/chat.test.ts \\\n  ui/src/ui/app-chat.test.ts \\\n  test/scripts/list-prod-store-packages.test.ts\ngit diff --check origin/release/2026.5.26...HEAD\n```\n\n**Observed result after this patch:**\n\n```text\ncorepack pnpm install --frozen-lockfile: PASS\ncorepack pnpm tsgo:core: PASS\nFocused chat-history suite: PASS, 8 files, 395 tests\ngit diff --check origin/release/2026.5.26...HEAD: PASS\nCurrent scoped diff: 17 files, 2083 insertions, 68 deletions\nDependency-related files in current scoped diff: 0\nGitHub PR base: release/2026.5.26\n```\n\n**Raw-mode authorization behavior verified on current patch stack:**\n\nThe focused suite includes the raw-mode and compatibility regressions for:\n\n```text\nchat.history messages mode omits raw tool payloads\nchat.history messages mode ignores unsafeRawToolPayloads for admin callers\nchat.history raw-messages requires an admin or debug caller\nchat.history raw-messages preserves raw tool payloads\n```\n\nExpected behavior remains:\n\n```text\nmode=messages + unsafeRawToolPayloads=true -> safe display projection, raw tool payloads omitted\nmode=raw-messages without operator.admin -> INVALID_REQUEST\nmode=raw-messages with operator.admin -> raw diagnostic transcript path\n```\n\n**Live/dogfood telemetry from the affected surface:**\n\nPost-restart `chat.history` telemetry showed display clients using the bounded turns path:\n\n```text\nmode=turns responseMode=turns rawToolPayloads=false\n```\n\nRepresentative large-history sample after the beta1 rebase:\n\n```text\nsessionHash=52d4d0e214e0\nmode=turns responseMode=turns rawToolPayloads=false\nrequestedLimit=20\nlocalMessages=412\nreturnedItems=10\ntoolRecordsCollapsed=395\nreadFileBytes=1130353\nresponseBytesReturned=29150\nreadMs=13\ntotalMs=21\nhasMoreBefore=false\n```\n\nPost-hotfix sampled window:\n\n```text\nsamples: 50\ntotalMs: min 0, p50 3, p90 24, max 605\nreadMs:  min 0, p50 1, p90 14, max 593\nresponseBytesReturned: min 212, p50 2690, p90 29150, max 29150\nreadFileBytes: min 1400, p50 5076, p90 1130353, max 1130353\ntoolRecordsCollapsed: min 0, p50 2, p90 395, max 395\n```\n\nTwo roughly 600 ms outliers remained in the checked window. The new telemetry attributes those to read-path components while response size stays bounded. This is evidence that the display payload/serialization outage path is fixed, not a claim that all filesystem/read jitter is solved by this PR.\n\nProduction before-evidence from the affected surface, redacted to session hashes, from the May 24 OpenClaw logs:\n\n```text\n2026-05-24T23:13:35.952Z chat.history metrics mode=messages sessionHash=ac38af406fed ... messagesBytesReturned=87915 responseBytesReturned=88104 readMs=1838 totalMs=1840\n2026-05-24T23:13:35.947Z chat.history metrics mode=messages sessionHash=75794a8e1d45 ... messagesBytesReturned=57617 responseBytesReturned=57810 readMs=1890 totalMs=1893\n2026-05-24T23:01:46.498Z chat.history metrics mode=messages sessionHash=a6923f4da653 ... localMessages=0 messagesBytesReturned=2 responseBytesReturned=128 readMs=1715 totalMs=1716\n2026-05-24T06:19:28.690Z WebSocket chat.history response took 11050ms\n```\n\n**Observed result after fix:** Display clients return `mode=turns` by default, collapse tool activity, bound response bytes, and do not expose raw tool payloads. Explicit `mode=messages` remains message-shaped and display-safe. Non-admin `mode=raw-messages` rejects with `INVALID_REQUEST`. Admin `mode=raw-messages` is the explicit raw diagnostic path. Admin callers sending `mode: \"messages\", unsafeRawToolPayloads: true` still get the safe display projection with tool payloads omitted.\n\n**Not tested:** Control UI / WebChat browser surface was not driven through a browser or screen-recording session in this proof. Compatibility was exercised at the Gateway WebSocket protocol layer and through UI controller/app tests.\n\n## Validation\n\n| Command / Gate | Result | Notes |\n|---|---:|---|\n| 2026.5.26 current-tip rebase | PASS | Current head `b169090c09` is based on `e0bc8efde3` |\n| `corepack pnpm tsgo:core` | PASS | Current rebased patch stack |\n| Focused chat-history suite | PASS | 8 files, 395 tests on current rebased patch stack |\n| 2026.5.26 diff whitespace check | PASS | `git diff --check origin/release/2026.5.26...HEAD` |\n| Dependency scope check | PASS | No package, lockfile, or shrinkwrap files in current scoped diff |\n| Swift protocol generation | PASS | `GatewayModels.swift` regenerated to canonical output |\n\n## Review Findings Addressed\n\n- ClawSweeper real-behavior-proof block: PR body now includes the exact current-head command field, current-head test result, and raw-mode authorization proof.\n- ClawSweeper P2 docs finding: documented `chat.history` modes and raw-history admin guard in `docs/web/webchat.md` and `docs/gateway/protocol.md`.\n- ClawSweeper P3 stale beta report finding: removed `docs/plan/chat-history-beta2-fix-report-2026-05-25.md` from the PR.\n- Bundled Swift protocol check: regenerated `GatewayModels.swift` instead of hand-editing optional defaults.\n- Agent-chat tests: updated the gateway-callable helper expectations so placeholder redaction does not break semantic assertions.\n- Dependency/deadcode check: current scoped diff has no dependency-related files and current-head diff hygiene was rerun.\n- Copilot hot-path nits: avoided a second `augmentChatHistoryWithCanvasBlocks()` pass for non-raw history responses and cached `extractToolCallIds()` in turn aggregation.\n- Saturated scan-window `meta.hasMoreBefore` handling: fixed with a 1001-turn regression test verifying earlier history is reported when the scan window saturates.\n- ClawSweeper P2 `unsafeRawToolPayloads` contract: raw-payload branch now requires `mode === \"raw-messages\"`. Admin callers using `mode: \"messages\"` with the flag get the safe display projection.\n\n## Non-goals and Follow-Up\n\nThis PR intentionally does not address Codex/WebChat message-tool delivery hints, Codex pretool/tool-loop latency, provider failover, gateway startup auth prewarm, or reconnect/warmup read coalescing. Those have separate symptoms and should remain separate PRs.\n\nBrowser visual proof can be added if maintainers want it, but the current proof covers Gateway protocol behavior, UI controller/app behavior, current-head regression tests, and live dogfood telemetry for the bounded display path.\n\n## Risk Before Merge\n\n- Compatibility: `chat.history` response shape is intentionally bounded for display modes. Raw/debug access remains behind the explicit admin raw path.\n- Availability: this reduces large-history response pressure, but maintainers should still watch WebChat history latency on beta/release builds.\n- Session-state: history display output changes should be checked against existing UI expectations and Swift clients.\n\n## Changelog\n\nNo `CHANGELOG.md` entry was added. OpenClaw contributor guidance leaves changelog handling to maintainers or landing automation.",
+        "branch": "forge/chat-history-display-bounds-v2",
+        "head_sha": "429affb082170ba7537b0ab7b7c01d95e77e0745",
+        "author": "ragesaq",
+        "labels": [
+          "docs",
+          "app: web-ui",
+          "gateway",
+          "scripts",
+          "size: XL",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+            "additions": 9,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/protocol.md",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/web/webchat.md",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/list-prod-store-packages.mjs",
+            "additions": 48,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/chat-display-projection.ts",
+            "additions": 227,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/chat-history-turns.ts",
+            "additions": 481,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/protocol/schema/logs-chat.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/chat.ts",
+            "additions": 483,
+            "deletions": 267,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.chat.gateway-server-chat-b.test.ts",
+            "additions": 828,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.chat.gateway-server-chat.test.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.fs.test.ts",
+            "additions": 33,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.fs.ts",
+            "additions": 118,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/list-prod-store-packages.test.ts",
+            "additions": 42,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/app-chat.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/controllers/chat.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/controllers/chat.ts",
+            "additions": 12,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86458",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86458.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 103,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 27,
+            "SUCCESS": 67,
+            "FAILURE": 5,
+            "IN_PROGRESS": 2
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-fast:FAILURE",
+            "checks-node-agentic-gateway-core:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "Socket Security: Project Report:IN_PROGRESS",
+            "Socket Security: Pull Request Alerts:IN_PROGRESS"
+          ],
+          "pending": [
+            "Socket Security: Project Report:IN_PROGRESS",
+            "Socket Security: Pull Request Alerts:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-fast:FAILURE",
+            "checks-node-agentic-gateway-core:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86458:4537795313:2026-05-25T22:54:36Z:re_review",
+      "comment_id": "4537795313",
+      "comment_version_key": "4537795313:2026-05-25T22:54:36Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86458#issuecomment-4537795313",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86458,
+      "author": "ragesaq",
+      "author_id": 11304287,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-25T22:54:36Z",
+      "comment_updated_at": "2026-05-25T22:54:36Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "AI-assisted: fix(chat): bound chat history display payloads",
+        "body": "## Summary\n\nThis PR fixes `chat.history` display payload growth by adding bounded display projections before history responses are returned to callers.\n\nIt covers text, tool payloads, image/media blocks, canvas media references, Swift protocol surfaces, UI/controller handling, gateway tests, and public protocol docs. The branch has been rebased and retargeted onto the current `release/2026.5.26` line and includes the later P2 raw-mode alignment fix.\n\nAI-assisted change: yes. Forge/Codex produced the implementation and PR publication using OpenAI Codex `gpt-5.5` in the OpenClaw workspace. Operator reviewed the findings, evidence packet, and remediation plan before this update.\n\n## Problem\n\n`chat.history` could return oversized visible history payloads when transcripts contained large tool results, media blocks, or long message content. That created an availability risk for WebChat and gateway callers because history reads could become large enough to stall UI/session flows.\n\nA late review pass also found that normal `messages` mode was capped to 64 KiB after safe tool redaction, which could unnecessarily drop safe text even when the caller configured a larger history budget.\n\n## Root Cause\n\nHistory projection and redaction were not consistently separated from raw transcript preservation. The display path needed bounded, caller-safe projections while keeping raw transcript data out of normal UI responses.\n\nThe final `messages` mode budget also applied a hard 64 KiB cap after redaction, rather than honoring the configured history budget for safe text.\n\n## Solution\n\n- Adds bounded chat display projection helpers for text, tool payloads, media, and canvas blocks.\n- Routes `chat.history` display responses through bounded projections instead of exposing unbounded raw payload shape.\n- Adds `mode: \"messages\" | \"turns\" | \"raw-messages\"` and gates raw payload inspection behind `operator.admin`.\n- Keeps `unsafeRawToolPayloads` schema-compatible, but it does not unlock raw payloads without explicit `mode: \"raw-messages\"`.\n- Preserves safe `messages` mode text up to the configured `maxHistoryBytes` budget after tool payload omission.\n- Regenerates Swift protocol models from the canonical schema output.\n- Documents the new history modes and raw-history admin guard in public WebChat/Gateway protocol docs.\n- Adds gateway regression tests for bounded tool payloads, visible media shaping, recent visible turn preservation, placeholder semantics, large safe text preservation, saturated scan-window metadata, and raw-mode authorization.\n\n## Real Behavior Proof\n\n**Behavior addressed:** `chat.history` was returning oversized display payloads. Production logs showed >=88 KB responses and `readMs=1715-1893` even for tiny sessions, plus an 11050 ms WebSocket response. Normal display history could also expose raw tool-call arguments or tool-result payloads. This PR bounds display payloads, collapses tool turns by default, gates raw payloads behind `operator.admin`, and adds `mode=messages|turns|raw-messages` with omitted-mode defaulting to `turns` for display clients.\n\n**Current patch tested:** `b169090c0924c2be716b8eb6872ca79fe6964c47`, based on `e0bc8efde3ef7348b9ff5b8f48e9515e670fcb65` from `release/2026.5.26`.\n\n**Exact steps or command run after this patch:**\n\n```bash\ncorepack pnpm install --frozen-lockfile\ncorepack pnpm tsgo:core\ncorepack pnpm exec vitest run \\\n  src/gateway/server.chat.gateway-server-chat-b.test.ts \\\n  src/gateway/server.chat.gateway-server-chat.test.ts \\\n  src/gateway/session-utils.fs.test.ts \\\n  ui/src/ui/controllers/chat.test.ts \\\n  ui/src/ui/app-chat.test.ts \\\n  test/scripts/list-prod-store-packages.test.ts\ngit diff --check origin/release/2026.5.26...HEAD\n```\n\n**Observed result after this patch:**\n\n```text\ncorepack pnpm install --frozen-lockfile: PASS\ncorepack pnpm tsgo:core: PASS\nFocused chat-history suite: PASS, 8 files, 395 tests\ngit diff --check origin/release/2026.5.26...HEAD: PASS\nCurrent scoped diff: 17 files, 2083 insertions, 68 deletions\nDependency-related files in current scoped diff: 0\nGitHub PR base: release/2026.5.26\n```\n\n**Raw-mode authorization behavior verified on current patch stack:**\n\nThe focused suite includes the raw-mode and compatibility regressions for:\n\n```text\nchat.history messages mode omits raw tool payloads\nchat.history messages mode ignores unsafeRawToolPayloads for admin callers\nchat.history raw-messages requires an admin or debug caller\nchat.history raw-messages preserves raw tool payloads\n```\n\nExpected behavior remains:\n\n```text\nmode=messages + unsafeRawToolPayloads=true -> safe display projection, raw tool payloads omitted\nmode=raw-messages without operator.admin -> INVALID_REQUEST\nmode=raw-messages with operator.admin -> raw diagnostic transcript path\n```\n\n**Live/dogfood telemetry from the affected surface:**\n\nPost-restart `chat.history` telemetry showed display clients using the bounded turns path:\n\n```text\nmode=turns responseMode=turns rawToolPayloads=false\n```\n\nRepresentative large-history sample after the beta1 rebase:\n\n```text\nsessionHash=52d4d0e214e0\nmode=turns responseMode=turns rawToolPayloads=false\nrequestedLimit=20\nlocalMessages=412\nreturnedItems=10\ntoolRecordsCollapsed=395\nreadFileBytes=1130353\nresponseBytesReturned=29150\nreadMs=13\ntotalMs=21\nhasMoreBefore=false\n```\n\nPost-hotfix sampled window:\n\n```text\nsamples: 50\ntotalMs: min 0, p50 3, p90 24, max 605\nreadMs:  min 0, p50 1, p90 14, max 593\nresponseBytesReturned: min 212, p50 2690, p90 29150, max 29150\nreadFileBytes: min 1400, p50 5076, p90 1130353, max 1130353\ntoolRecordsCollapsed: min 0, p50 2, p90 395, max 395\n```\n\nTwo roughly 600 ms outliers remained in the checked window. The new telemetry attributes those to read-path components while response size stays bounded. This is evidence that the display payload/serialization outage path is fixed, not a claim that all filesystem/read jitter is solved by this PR.\n\nProduction before-evidence from the affected surface, redacted to session hashes, from the May 24 OpenClaw logs:\n\n```text\n2026-05-24T23:13:35.952Z chat.history metrics mode=messages sessionHash=ac38af406fed ... messagesBytesReturned=87915 responseBytesReturned=88104 readMs=1838 totalMs=1840\n2026-05-24T23:13:35.947Z chat.history metrics mode=messages sessionHash=75794a8e1d45 ... messagesBytesReturned=57617 responseBytesReturned=57810 readMs=1890 totalMs=1893\n2026-05-24T23:01:46.498Z chat.history metrics mode=messages sessionHash=a6923f4da653 ... localMessages=0 messagesBytesReturned=2 responseBytesReturned=128 readMs=1715 totalMs=1716\n2026-05-24T06:19:28.690Z WebSocket chat.history response took 11050ms\n```\n\n**Observed result after fix:** Display clients return `mode=turns` by default, collapse tool activity, bound response bytes, and do not expose raw tool payloads. Explicit `mode=messages` remains message-shaped and display-safe. Non-admin `mode=raw-messages` rejects with `INVALID_REQUEST`. Admin `mode=raw-messages` is the explicit raw diagnostic path. Admin callers sending `mode: \"messages\", unsafeRawToolPayloads: true` still get the safe display projection with tool payloads omitted.\n\n**Not tested:** Control UI / WebChat browser surface was not driven through a browser or screen-recording session in this proof. Compatibility was exercised at the Gateway WebSocket protocol layer and through UI controller/app tests.\n\n## Validation\n\n| Command / Gate | Result | Notes |\n|---|---:|---|\n| 2026.5.26 current-tip rebase | PASS | Current head `b169090c09` is based on `e0bc8efde3` |\n| `corepack pnpm tsgo:core` | PASS | Current rebased patch stack |\n| Focused chat-history suite | PASS | 8 files, 395 tests on current rebased patch stack |\n| 2026.5.26 diff whitespace check | PASS | `git diff --check origin/release/2026.5.26...HEAD` |\n| Dependency scope check | PASS | No package, lockfile, or shrinkwrap files in current scoped diff |\n| Swift protocol generation | PASS | `GatewayModels.swift` regenerated to canonical output |\n\n## Review Findings Addressed\n\n- ClawSweeper real-behavior-proof block: PR body now includes the exact current-head command field, current-head test result, and raw-mode authorization proof.\n- ClawSweeper P2 docs finding: documented `chat.history` modes and raw-history admin guard in `docs/web/webchat.md` and `docs/gateway/protocol.md`.\n- ClawSweeper P3 stale beta report finding: removed `docs/plan/chat-history-beta2-fix-report-2026-05-25.md` from the PR.\n- Bundled Swift protocol check: regenerated `GatewayModels.swift` instead of hand-editing optional defaults.\n- Agent-chat tests: updated the gateway-callable helper expectations so placeholder redaction does not break semantic assertions.\n- Dependency/deadcode check: current scoped diff has no dependency-related files and current-head diff hygiene was rerun.\n- Copilot hot-path nits: avoided a second `augmentChatHistoryWithCanvasBlocks()` pass for non-raw history responses and cached `extractToolCallIds()` in turn aggregation.\n- Saturated scan-window `meta.hasMoreBefore` handling: fixed with a 1001-turn regression test verifying earlier history is reported when the scan window saturates.\n- ClawSweeper P2 `unsafeRawToolPayloads` contract: raw-payload branch now requires `mode === \"raw-messages\"`. Admin callers using `mode: \"messages\"` with the flag get the safe display projection.\n\n## Non-goals and Follow-Up\n\nThis PR intentionally does not address Codex/WebChat message-tool delivery hints, Codex pretool/tool-loop latency, provider failover, gateway startup auth prewarm, or reconnect/warmup read coalescing. Those have separate symptoms and should remain separate PRs.\n\nBrowser visual proof can be added if maintainers want it, but the current proof covers Gateway protocol behavior, UI controller/app behavior, current-head regression tests, and live dogfood telemetry for the bounded display path.\n\n## Risk Before Merge\n\n- Compatibility: `chat.history` response shape is intentionally bounded for display modes. Raw/debug access remains behind the explicit admin raw path.\n- Availability: this reduces large-history response pressure, but maintainers should still watch WebChat history latency on beta/release builds.\n- Session-state: history display output changes should be checked against existing UI expectations and Swift clients.\n\n## Changelog\n\nNo `CHANGELOG.md` entry was added. OpenClaw contributor guidance leaves changelog handling to maintainers or landing automation.",
+        "branch": "forge/chat-history-display-bounds-v2",
+        "head_sha": "429affb082170ba7537b0ab7b7c01d95e77e0745",
+        "author": "ragesaq",
+        "labels": [
+          "docs",
+          "app: web-ui",
+          "gateway",
+          "scripts",
+          "size: XL",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+            "additions": 9,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/protocol.md",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/web/webchat.md",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/list-prod-store-packages.mjs",
+            "additions": 48,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/chat-display-projection.ts",
+            "additions": 227,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/chat-history-turns.ts",
+            "additions": 481,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/protocol/schema/logs-chat.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/chat.ts",
+            "additions": 483,
+            "deletions": 267,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.chat.gateway-server-chat-b.test.ts",
+            "additions": 828,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.chat.gateway-server-chat.test.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.fs.test.ts",
+            "additions": 33,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.fs.ts",
+            "additions": 118,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/list-prod-store-packages.test.ts",
+            "additions": 42,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/app-chat.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/controllers/chat.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/controllers/chat.ts",
+            "additions": 12,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86458",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86458.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 103,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 27,
+            "SUCCESS": 67,
+            "FAILURE": 5,
+            "IN_PROGRESS": 2
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-fast:FAILURE",
+            "checks-node-agentic-gateway-core:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "Socket Security: Project Report:IN_PROGRESS",
+            "Socket Security: Pull Request Alerts:IN_PROGRESS"
+          ],
+          "pending": [
+            "Socket Security: Project Report:IN_PROGRESS",
+            "Socket Security: Pull Request Alerts:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-fast:FAILURE",
+            "checks-node-agentic-gateway-core:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86458:4536947011:2026-05-25T20:13:49Z:re_review",
+      "comment_id": "4536947011",
+      "comment_version_key": "4536947011:2026-05-25T20:13:49Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86458#issuecomment-4536947011",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86458,
+      "author": "ragesaq",
+      "author_id": 11304287,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-25T20:13:49Z",
+      "comment_updated_at": "2026-05-25T20:13:49Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "AI-assisted: fix(chat): bound chat history display payloads",
+        "body": "## Summary\n\nThis PR fixes `chat.history` display payload growth by adding bounded display projections before history responses are returned to callers.\n\nIt covers text, tool payloads, image/media blocks, canvas media references, Swift protocol surfaces, UI/controller handling, gateway tests, and public protocol docs. The branch has been rebased and retargeted onto the current `release/2026.5.26` line and includes the later P2 raw-mode alignment fix.\n\nAI-assisted change: yes. Forge/Codex produced the implementation and PR publication using OpenAI Codex `gpt-5.5` in the OpenClaw workspace. Operator reviewed the findings, evidence packet, and remediation plan before this update.\n\n## Problem\n\n`chat.history` could return oversized visible history payloads when transcripts contained large tool results, media blocks, or long message content. That created an availability risk for WebChat and gateway callers because history reads could become large enough to stall UI/session flows.\n\nA late review pass also found that normal `messages` mode was capped to 64 KiB after safe tool redaction, which could unnecessarily drop safe text even when the caller configured a larger history budget.\n\n## Root Cause\n\nHistory projection and redaction were not consistently separated from raw transcript preservation. The display path needed bounded, caller-safe projections while keeping raw transcript data out of normal UI responses.\n\nThe final `messages` mode budget also applied a hard 64 KiB cap after redaction, rather than honoring the configured history budget for safe text.\n\n## Solution\n\n- Adds bounded chat display projection helpers for text, tool payloads, media, and canvas blocks.\n- Routes `chat.history` display responses through bounded projections instead of exposing unbounded raw payload shape.\n- Adds `mode: \"messages\" | \"turns\" | \"raw-messages\"` and gates raw payload inspection behind `operator.admin`.\n- Keeps `unsafeRawToolPayloads` schema-compatible, but it does not unlock raw payloads without explicit `mode: \"raw-messages\"`.\n- Preserves safe `messages` mode text up to the configured `maxHistoryBytes` budget after tool payload omission.\n- Regenerates Swift protocol models from the canonical schema output.\n- Documents the new history modes and raw-history admin guard in public WebChat/Gateway protocol docs.\n- Adds gateway regression tests for bounded tool payloads, visible media shaping, recent visible turn preservation, placeholder semantics, large safe text preservation, saturated scan-window metadata, and raw-mode authorization.\n\n## Real Behavior Proof\n\n**Behavior addressed:** `chat.history` was returning oversized display payloads. Production logs showed >=88 KB responses and `readMs=1715-1893` even for tiny sessions, plus an 11050 ms WebSocket response. Normal display history could also expose raw tool-call arguments or tool-result payloads. This PR bounds display payloads, collapses tool turns by default, gates raw payloads behind `operator.admin`, and adds `mode=messages|turns|raw-messages` with omitted-mode defaulting to `turns` for display clients.\n\n**Current patch tested:** `b169090c0924c2be716b8eb6872ca79fe6964c47`, based on `e0bc8efde3ef7348b9ff5b8f48e9515e670fcb65` from `release/2026.5.26`.\n\n**Exact steps or command run after this patch:**\n\n```bash\ncorepack pnpm install --frozen-lockfile\ncorepack pnpm tsgo:core\ncorepack pnpm exec vitest run \\\n  src/gateway/server.chat.gateway-server-chat-b.test.ts \\\n  src/gateway/server.chat.gateway-server-chat.test.ts \\\n  src/gateway/session-utils.fs.test.ts \\\n  ui/src/ui/controllers/chat.test.ts \\\n  ui/src/ui/app-chat.test.ts \\\n  test/scripts/list-prod-store-packages.test.ts\ngit diff --check origin/release/2026.5.26...HEAD\n```\n\n**Observed result after this patch:**\n\n```text\ncorepack pnpm install --frozen-lockfile: PASS\ncorepack pnpm tsgo:core: PASS\nFocused chat-history suite: PASS, 8 files, 395 tests\ngit diff --check origin/release/2026.5.26...HEAD: PASS\nCurrent scoped diff: 17 files, 2083 insertions, 68 deletions\nDependency-related files in current scoped diff: 0\nGitHub PR base: release/2026.5.26\n```\n\n**Raw-mode authorization behavior verified on current patch stack:**\n\nThe focused suite includes the raw-mode and compatibility regressions for:\n\n```text\nchat.history messages mode omits raw tool payloads\nchat.history messages mode ignores unsafeRawToolPayloads for admin callers\nchat.history raw-messages requires an admin or debug caller\nchat.history raw-messages preserves raw tool payloads\n```\n\nExpected behavior remains:\n\n```text\nmode=messages + unsafeRawToolPayloads=true -> safe display projection, raw tool payloads omitted\nmode=raw-messages without operator.admin -> INVALID_REQUEST\nmode=raw-messages with operator.admin -> raw diagnostic transcript path\n```\n\n**Live/dogfood telemetry from the affected surface:**\n\nPost-restart `chat.history` telemetry showed display clients using the bounded turns path:\n\n```text\nmode=turns responseMode=turns rawToolPayloads=false\n```\n\nRepresentative large-history sample after the beta1 rebase:\n\n```text\nsessionHash=52d4d0e214e0\nmode=turns responseMode=turns rawToolPayloads=false\nrequestedLimit=20\nlocalMessages=412\nreturnedItems=10\ntoolRecordsCollapsed=395\nreadFileBytes=1130353\nresponseBytesReturned=29150\nreadMs=13\ntotalMs=21\nhasMoreBefore=false\n```\n\nPost-hotfix sampled window:\n\n```text\nsamples: 50\ntotalMs: min 0, p50 3, p90 24, max 605\nreadMs:  min 0, p50 1, p90 14, max 593\nresponseBytesReturned: min 212, p50 2690, p90 29150, max 29150\nreadFileBytes: min 1400, p50 5076, p90 1130353, max 1130353\ntoolRecordsCollapsed: min 0, p50 2, p90 395, max 395\n```\n\nTwo roughly 600 ms outliers remained in the checked window. The new telemetry attributes those to read-path components while response size stays bounded. This is evidence that the display payload/serialization outage path is fixed, not a claim that all filesystem/read jitter is solved by this PR.\n\nProduction before-evidence from the affected surface, redacted to session hashes, from the May 24 OpenClaw logs:\n\n```text\n2026-05-24T23:13:35.952Z chat.history metrics mode=messages sessionHash=ac38af406fed ... messagesBytesReturned=87915 responseBytesReturned=88104 readMs=1838 totalMs=1840\n2026-05-24T23:13:35.947Z chat.history metrics mode=messages sessionHash=75794a8e1d45 ... messagesBytesReturned=57617 responseBytesReturned=57810 readMs=1890 totalMs=1893\n2026-05-24T23:01:46.498Z chat.history metrics mode=messages sessionHash=a6923f4da653 ... localMessages=0 messagesBytesReturned=2 responseBytesReturned=128 readMs=1715 totalMs=1716\n2026-05-24T06:19:28.690Z WebSocket chat.history response took 11050ms\n```\n\n**Observed result after fix:** Display clients return `mode=turns` by default, collapse tool activity, bound response bytes, and do not expose raw tool payloads. Explicit `mode=messages` remains message-shaped and display-safe. Non-admin `mode=raw-messages` rejects with `INVALID_REQUEST`. Admin `mode=raw-messages` is the explicit raw diagnostic path. Admin callers sending `mode: \"messages\", unsafeRawToolPayloads: true` still get the safe display projection with tool payloads omitted.\n\n**Not tested:** Control UI / WebChat browser surface was not driven through a browser or screen-recording session in this proof. Compatibility was exercised at the Gateway WebSocket protocol layer and through UI controller/app tests.\n\n## Validation\n\n| Command / Gate | Result | Notes |\n|---|---:|---|\n| 2026.5.26 current-tip rebase | PASS | Current head `b169090c09` is based on `e0bc8efde3` |\n| `corepack pnpm tsgo:core` | PASS | Current rebased patch stack |\n| Focused chat-history suite | PASS | 8 files, 395 tests on current rebased patch stack |\n| 2026.5.26 diff whitespace check | PASS | `git diff --check origin/release/2026.5.26...HEAD` |\n| Dependency scope check | PASS | No package, lockfile, or shrinkwrap files in current scoped diff |\n| Swift protocol generation | PASS | `GatewayModels.swift` regenerated to canonical output |\n\n## Review Findings Addressed\n\n- ClawSweeper real-behavior-proof block: PR body now includes the exact current-head command field, current-head test result, and raw-mode authorization proof.\n- ClawSweeper P2 docs finding: documented `chat.history` modes and raw-history admin guard in `docs/web/webchat.md` and `docs/gateway/protocol.md`.\n- ClawSweeper P3 stale beta report finding: removed `docs/plan/chat-history-beta2-fix-report-2026-05-25.md` from the PR.\n- Bundled Swift protocol check: regenerated `GatewayModels.swift` instead of hand-editing optional defaults.\n- Agent-chat tests: updated the gateway-callable helper expectations so placeholder redaction does not break semantic assertions.\n- Dependency/deadcode check: current scoped diff has no dependency-related files and current-head diff hygiene was rerun.\n- Copilot hot-path nits: avoided a second `augmentChatHistoryWithCanvasBlocks()` pass for non-raw history responses and cached `extractToolCallIds()` in turn aggregation.\n- Saturated scan-window `meta.hasMoreBefore` handling: fixed with a 1001-turn regression test verifying earlier history is reported when the scan window saturates.\n- ClawSweeper P2 `unsafeRawToolPayloads` contract: raw-payload branch now requires `mode === \"raw-messages\"`. Admin callers using `mode: \"messages\"` with the flag get the safe display projection.\n\n## Non-goals and Follow-Up\n\nThis PR intentionally does not address Codex/WebChat message-tool delivery hints, Codex pretool/tool-loop latency, provider failover, gateway startup auth prewarm, or reconnect/warmup read coalescing. Those have separate symptoms and should remain separate PRs.\n\nBrowser visual proof can be added if maintainers want it, but the current proof covers Gateway protocol behavior, UI controller/app behavior, current-head regression tests, and live dogfood telemetry for the bounded display path.\n\n## Risk Before Merge\n\n- Compatibility: `chat.history` response shape is intentionally bounded for display modes. Raw/debug access remains behind the explicit admin raw path.\n- Availability: this reduces large-history response pressure, but maintainers should still watch WebChat history latency on beta/release builds.\n- Session-state: history display output changes should be checked against existing UI expectations and Swift clients.\n\n## Changelog\n\nNo `CHANGELOG.md` entry was added. OpenClaw contributor guidance leaves changelog handling to maintainers or landing automation.",
+        "branch": "forge/chat-history-display-bounds-v2",
+        "head_sha": "429affb082170ba7537b0ab7b7c01d95e77e0745",
+        "author": "ragesaq",
+        "labels": [
+          "docs",
+          "app: web-ui",
+          "gateway",
+          "scripts",
+          "size: XL",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+            "additions": 9,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/protocol.md",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/web/webchat.md",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/list-prod-store-packages.mjs",
+            "additions": 48,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/chat-display-projection.ts",
+            "additions": 227,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/chat-history-turns.ts",
+            "additions": 481,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/protocol/schema/logs-chat.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/chat.ts",
+            "additions": 483,
+            "deletions": 267,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.chat.gateway-server-chat-b.test.ts",
+            "additions": 828,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.chat.gateway-server-chat.test.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.fs.test.ts",
+            "additions": 33,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.fs.ts",
+            "additions": 118,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/list-prod-store-packages.test.ts",
+            "additions": 42,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/app-chat.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/controllers/chat.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/controllers/chat.ts",
+            "additions": 12,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86458",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86458.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 103,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 27,
+            "SUCCESS": 67,
+            "FAILURE": 5,
+            "IN_PROGRESS": 2
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-fast:FAILURE",
+            "checks-node-agentic-gateway-core:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "Socket Security: Project Report:IN_PROGRESS",
+            "Socket Security: Pull Request Alerts:IN_PROGRESS"
+          ],
+          "pending": [
+            "Socket Security: Project Report:IN_PROGRESS",
+            "Socket Security: Pull Request Alerts:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-fast:FAILURE",
+            "checks-node-agentic-gateway-core:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86458:4536679441:2026-05-25T19:27:04Z:re_review",
+      "comment_id": "4536679441",
+      "comment_version_key": "4536679441:2026-05-25T19:27:04Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86458#issuecomment-4536679441",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86458,
+      "author": "ragesaq",
+      "author_id": 11304287,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-25T19:27:04Z",
+      "comment_updated_at": "2026-05-25T19:27:04Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "AI-assisted: fix(chat): bound chat history display payloads",
+        "body": "## Summary\n\nThis PR fixes `chat.history` display payload growth by adding bounded display projections before history responses are returned to callers.\n\nIt covers text, tool payloads, image/media blocks, canvas media references, Swift protocol surfaces, UI/controller handling, gateway tests, and public protocol docs. The branch has been rebased and retargeted onto the current `release/2026.5.26` line and includes the later P2 raw-mode alignment fix.\n\nAI-assisted change: yes. Forge/Codex produced the implementation and PR publication using OpenAI Codex `gpt-5.5` in the OpenClaw workspace. Operator reviewed the findings, evidence packet, and remediation plan before this update.\n\n## Problem\n\n`chat.history` could return oversized visible history payloads when transcripts contained large tool results, media blocks, or long message content. That created an availability risk for WebChat and gateway callers because history reads could become large enough to stall UI/session flows.\n\nA late review pass also found that normal `messages` mode was capped to 64 KiB after safe tool redaction, which could unnecessarily drop safe text even when the caller configured a larger history budget.\n\n## Root Cause\n\nHistory projection and redaction were not consistently separated from raw transcript preservation. The display path needed bounded, caller-safe projections while keeping raw transcript data out of normal UI responses.\n\nThe final `messages` mode budget also applied a hard 64 KiB cap after redaction, rather than honoring the configured history budget for safe text.\n\n## Solution\n\n- Adds bounded chat display projection helpers for text, tool payloads, media, and canvas blocks.\n- Routes `chat.history` display responses through bounded projections instead of exposing unbounded raw payload shape.\n- Adds `mode: \"messages\" | \"turns\" | \"raw-messages\"` and gates raw payload inspection behind `operator.admin`.\n- Keeps `unsafeRawToolPayloads` schema-compatible, but it does not unlock raw payloads without explicit `mode: \"raw-messages\"`.\n- Preserves safe `messages` mode text up to the configured `maxHistoryBytes` budget after tool payload omission.\n- Regenerates Swift protocol models from the canonical schema output.\n- Documents the new history modes and raw-history admin guard in public WebChat/Gateway protocol docs.\n- Adds gateway regression tests for bounded tool payloads, visible media shaping, recent visible turn preservation, placeholder semantics, large safe text preservation, saturated scan-window metadata, and raw-mode authorization.\n\n## Real Behavior Proof\n\n**Behavior addressed:** `chat.history` was returning oversized display payloads. Production logs showed >=88 KB responses and `readMs=1715-1893` even for tiny sessions, plus an 11050 ms WebSocket response. Normal display history could also expose raw tool-call arguments or tool-result payloads. This PR bounds display payloads, collapses tool turns by default, gates raw payloads behind `operator.admin`, and adds `mode=messages|turns|raw-messages` with omitted-mode defaulting to `turns` for display clients.\n\n**Current patch tested:** `b169090c0924c2be716b8eb6872ca79fe6964c47`, based on `e0bc8efde3ef7348b9ff5b8f48e9515e670fcb65` from `release/2026.5.26`.\n\n**Exact steps or command run after this patch:**\n\n```bash\ncorepack pnpm install --frozen-lockfile\ncorepack pnpm tsgo:core\ncorepack pnpm exec vitest run \\\n  src/gateway/server.chat.gateway-server-chat-b.test.ts \\\n  src/gateway/server.chat.gateway-server-chat.test.ts \\\n  src/gateway/session-utils.fs.test.ts \\\n  ui/src/ui/controllers/chat.test.ts \\\n  ui/src/ui/app-chat.test.ts \\\n  test/scripts/list-prod-store-packages.test.ts\ngit diff --check origin/release/2026.5.26...HEAD\n```\n\n**Observed result after this patch:**\n\n```text\ncorepack pnpm install --frozen-lockfile: PASS\ncorepack pnpm tsgo:core: PASS\nFocused chat-history suite: PASS, 8 files, 395 tests\ngit diff --check origin/release/2026.5.26...HEAD: PASS\nCurrent scoped diff: 17 files, 2083 insertions, 68 deletions\nDependency-related files in current scoped diff: 0\nGitHub PR base: release/2026.5.26\n```\n\n**Raw-mode authorization behavior verified on current patch stack:**\n\nThe focused suite includes the raw-mode and compatibility regressions for:\n\n```text\nchat.history messages mode omits raw tool payloads\nchat.history messages mode ignores unsafeRawToolPayloads for admin callers\nchat.history raw-messages requires an admin or debug caller\nchat.history raw-messages preserves raw tool payloads\n```\n\nExpected behavior remains:\n\n```text\nmode=messages + unsafeRawToolPayloads=true -> safe display projection, raw tool payloads omitted\nmode=raw-messages without operator.admin -> INVALID_REQUEST\nmode=raw-messages with operator.admin -> raw diagnostic transcript path\n```\n\n**Live/dogfood telemetry from the affected surface:**\n\nPost-restart `chat.history` telemetry showed display clients using the bounded turns path:\n\n```text\nmode=turns responseMode=turns rawToolPayloads=false\n```\n\nRepresentative large-history sample after the beta1 rebase:\n\n```text\nsessionHash=52d4d0e214e0\nmode=turns responseMode=turns rawToolPayloads=false\nrequestedLimit=20\nlocalMessages=412\nreturnedItems=10\ntoolRecordsCollapsed=395\nreadFileBytes=1130353\nresponseBytesReturned=29150\nreadMs=13\ntotalMs=21\nhasMoreBefore=false\n```\n\nPost-hotfix sampled window:\n\n```text\nsamples: 50\ntotalMs: min 0, p50 3, p90 24, max 605\nreadMs:  min 0, p50 1, p90 14, max 593\nresponseBytesReturned: min 212, p50 2690, p90 29150, max 29150\nreadFileBytes: min 1400, p50 5076, p90 1130353, max 1130353\ntoolRecordsCollapsed: min 0, p50 2, p90 395, max 395\n```\n\nTwo roughly 600 ms outliers remained in the checked window. The new telemetry attributes those to read-path components while response size stays bounded. This is evidence that the display payload/serialization outage path is fixed, not a claim that all filesystem/read jitter is solved by this PR.\n\nProduction before-evidence from the affected surface, redacted to session hashes, from the May 24 OpenClaw logs:\n\n```text\n2026-05-24T23:13:35.952Z chat.history metrics mode=messages sessionHash=ac38af406fed ... messagesBytesReturned=87915 responseBytesReturned=88104 readMs=1838 totalMs=1840\n2026-05-24T23:13:35.947Z chat.history metrics mode=messages sessionHash=75794a8e1d45 ... messagesBytesReturned=57617 responseBytesReturned=57810 readMs=1890 totalMs=1893\n2026-05-24T23:01:46.498Z chat.history metrics mode=messages sessionHash=a6923f4da653 ... localMessages=0 messagesBytesReturned=2 responseBytesReturned=128 readMs=1715 totalMs=1716\n2026-05-24T06:19:28.690Z WebSocket chat.history response took 11050ms\n```\n\n**Observed result after fix:** Display clients return `mode=turns` by default, collapse tool activity, bound response bytes, and do not expose raw tool payloads. Explicit `mode=messages` remains message-shaped and display-safe. Non-admin `mode=raw-messages` rejects with `INVALID_REQUEST`. Admin `mode=raw-messages` is the explicit raw diagnostic path. Admin callers sending `mode: \"messages\", unsafeRawToolPayloads: true` still get the safe display projection with tool payloads omitted.\n\n**Not tested:** Control UI / WebChat browser surface was not driven through a browser or screen-recording session in this proof. Compatibility was exercised at the Gateway WebSocket protocol layer and through UI controller/app tests.\n\n## Validation\n\n| Command / Gate | Result | Notes |\n|---|---:|---|\n| 2026.5.26 current-tip rebase | PASS | Current head `b169090c09` is based on `e0bc8efde3` |\n| `corepack pnpm tsgo:core` | PASS | Current rebased patch stack |\n| Focused chat-history suite | PASS | 8 files, 395 tests on current rebased patch stack |\n| 2026.5.26 diff whitespace check | PASS | `git diff --check origin/release/2026.5.26...HEAD` |\n| Dependency scope check | PASS | No package, lockfile, or shrinkwrap files in current scoped diff |\n| Swift protocol generation | PASS | `GatewayModels.swift` regenerated to canonical output |\n\n## Review Findings Addressed\n\n- ClawSweeper real-behavior-proof block: PR body now includes the exact current-head command field, current-head test result, and raw-mode authorization proof.\n- ClawSweeper P2 docs finding: documented `chat.history` modes and raw-history admin guard in `docs/web/webchat.md` and `docs/gateway/protocol.md`.\n- ClawSweeper P3 stale beta report finding: removed `docs/plan/chat-history-beta2-fix-report-2026-05-25.md` from the PR.\n- Bundled Swift protocol check: regenerated `GatewayModels.swift` instead of hand-editing optional defaults.\n- Agent-chat tests: updated the gateway-callable helper expectations so placeholder redaction does not break semantic assertions.\n- Dependency/deadcode check: current scoped diff has no dependency-related files and current-head diff hygiene was rerun.\n- Copilot hot-path nits: avoided a second `augmentChatHistoryWithCanvasBlocks()` pass for non-raw history responses and cached `extractToolCallIds()` in turn aggregation.\n- Saturated scan-window `meta.hasMoreBefore` handling: fixed with a 1001-turn regression test verifying earlier history is reported when the scan window saturates.\n- ClawSweeper P2 `unsafeRawToolPayloads` contract: raw-payload branch now requires `mode === \"raw-messages\"`. Admin callers using `mode: \"messages\"` with the flag get the safe display projection.\n\n## Non-goals and Follow-Up\n\nThis PR intentionally does not address Codex/WebChat message-tool delivery hints, Codex pretool/tool-loop latency, provider failover, gateway startup auth prewarm, or reconnect/warmup read coalescing. Those have separate symptoms and should remain separate PRs.\n\nBrowser visual proof can be added if maintainers want it, but the current proof covers Gateway protocol behavior, UI controller/app behavior, current-head regression tests, and live dogfood telemetry for the bounded display path.\n\n## Risk Before Merge\n\n- Compatibility: `chat.history` response shape is intentionally bounded for display modes. Raw/debug access remains behind the explicit admin raw path.\n- Availability: this reduces large-history response pressure, but maintainers should still watch WebChat history latency on beta/release builds.\n- Session-state: history display output changes should be checked against existing UI expectations and Swift clients.\n\n## Changelog\n\nNo `CHANGELOG.md` entry was added. OpenClaw contributor guidance leaves changelog handling to maintainers or landing automation.",
+        "branch": "forge/chat-history-display-bounds-v2",
+        "head_sha": "429affb082170ba7537b0ab7b7c01d95e77e0745",
+        "author": "ragesaq",
+        "labels": [
+          "docs",
+          "app: web-ui",
+          "gateway",
+          "scripts",
+          "size: XL",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+            "additions": 9,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/protocol.md",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/web/webchat.md",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/list-prod-store-packages.mjs",
+            "additions": 48,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/chat-display-projection.ts",
+            "additions": 227,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/chat-history-turns.ts",
+            "additions": 481,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/protocol/schema/logs-chat.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/chat.ts",
+            "additions": 483,
+            "deletions": 267,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.chat.gateway-server-chat-b.test.ts",
+            "additions": 828,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.chat.gateway-server-chat.test.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.fs.test.ts",
+            "additions": 33,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.fs.ts",
+            "additions": 118,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/list-prod-store-packages.test.ts",
+            "additions": 42,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/app-chat.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/controllers/chat.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/controllers/chat.ts",
+            "additions": 12,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86458",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86458.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 103,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 27,
+            "SUCCESS": 67,
+            "FAILURE": 5,
+            "IN_PROGRESS": 2
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-fast:FAILURE",
+            "checks-node-agentic-gateway-core:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "Socket Security: Project Report:IN_PROGRESS",
+            "Socket Security: Pull Request Alerts:IN_PROGRESS"
+          ],
+          "pending": [
+            "Socket Security: Project Report:IN_PROGRESS",
+            "Socket Security: Pull Request Alerts:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-core-fast:FAILURE",
+            "checks-node-agentic-gateway-core:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
           ]
         }
       },
@@ -216,27 +1538,27 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2461,
+    "total_ms": 4539,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 396
+        "ms": 312
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1745
+        "ms": 1633
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 4
       },
       {
         "name": "execute_commands",
-        "ms": 298
+        "ms": 2557
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
