@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-27T05:30:44.760Z",
+  "generated_at": "2026-05-27T05:30:45.596Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-27T02:30:44.191Z",
+  "since": "2026-05-27T02:30:43.682Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    84748
+    86737
   ],
   "comment_ids": [
-    4551613324
+    4551613253
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,17 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:84748:4551613324:2026-05-27T05:29:35Z:re_review",
-      "comment_id": "4551613324",
-      "comment_version_key": "4551613324:2026-05-27T05:29:35Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84748#issuecomment-4551613324",
+      "idempotency_key": "comment-router:openclaw/openclaw:86737:4551613253:2026-05-27T05:29:34Z:re_review",
+      "comment_id": "4551613253",
+      "comment_version_key": "4551613253:2026-05-27T05:29:34Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86737#issuecomment-4551613253",
       "repo": "openclaw/openclaw",
-      "issue_number": 84748,
+      "issue_number": 86737,
       "author": "yetval",
       "author_id": 102706514,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-27T05:29:35Z",
-      "comment_updated_at": "2026-05-27T05:29:35Z",
+      "comment_created_at": "2026-05-27T05:29:34Z",
+      "comment_updated_at": "2026-05-27T05:29:34Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -63,28 +63,101 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(ios): subscribe to per-session transcripts so group chats update in real time (#80231)",
+        "body": "## Summary\n\nFixes #80231 — Aight (iOS) group chats never surface assistant replies in real time. The user must exit the chat and re-enter for the next agent message to appear. 1-on-1 chats stream normally.\n\nThree compounding causes, all in the iOS/shared event path:\n\n1. **iOS active-session hook is a no-op.** `IOSGatewayChatTransport.setActiveSessionKey` is a comment-only stub. The macOS native transport already calls `sessions.messages.subscribe` with the active session key (`apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift:140`), but iOS never opts into the per-session transcript stream, so the gateway has no reason to push `session.message` frames to this conn.\n2. **iOS drops `session.message` frames.** The iOS event switch maps `tick`/`seqGap`/`health`/`chat`/`agent` and falls through on everything else, so even if the gateway did push transcripts, the iOS transport never decodes them into the shared `OpenClawChatTransportEvent.sessionMessage` case the view model already understands.\n3. **Shared `ChatViewModel.handleSessionMessageEvent` filters out assistant transcripts.** `handleSessionMessageEvent` returns early unless the decoded role is `user`, and also short-circuits while `pendingRunCount > 0`. In a group chat the user's send creates one pending run, but N agent replies arrive in parallel as `session.message` events — both guards drop them. The 1-on-1 happy path masked this because the local `chat` final event triggers a full history refresh after the single agent reply, but in group chats the assistant transcripts never made it into `vm.messages` until the next bootstrap (exit/re-enter the chat).\n\nThis change wires iOS through the existing gateway contract — `sessions.messages.subscribe` + `session.message` — exactly the way macOS already does, and stops the shared model from discarding assistant transcript updates for the active session. The gateway-side path is unchanged; `src/gateway/server-session-events.ts:142` already emits `session.message` for every role and rolls back to `sessions.changed` when there is nothing to display.\n\n## What changed\n\n- `apps/ios/Sources/Chat/IOSGatewayChatTransport.swift`\n  - `setActiveSessionKey` now sends `sessions.messages.subscribe { key }` instead of being a no-op comment.\n  - The `events()` event loop now delegates to a static `mapEventFrame(_:)` that maps `session.message` payloads into `.sessionMessage(OpenClawSessionMessageEventPayload)` alongside the existing `tick`/`seqGap`/`health`/`chat`/`agent` cases. The static entry point keeps the mapping unit-testable without standing up a live gateway.\n- `apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift`\n  - `handleSessionMessageEvent` no longer returns early on `role != \"user\"` or on `pendingRunCount > 0`. The remaining `matchesCurrentSessionKey` guard, `stripInboundMetadata`, `reconcileMessageIDs`, and `dedupeMessages` already collapse overlap with the chat-final history refresh, so removing the two guards is what unblocks assistant transcripts without duplicating them.\n- `apps/ios/Tests/IOSGatewayChatTransportTests.swift` (stays in `apps/ios/Tests/` so it lives in the existing `OpenClawTests` app-test target — `@testable import OpenClaw` is required to reach `IOSGatewayChatTransport`)\n  - Existing `requestsFailFastWhenGatewayNotConnected` case now also asserts `setActiveSessionKey` throws when the gateway is disconnected (regression guard for the new RPC).\n  - New `mapsSessionMessageEventToSessionMessage`, `mapsChatEventToChat`, `mapsUnknownEventToNil` cases exercise `IOSGatewayChatTransport.mapEventFrame(_:)` directly. The session.message case decodes an `assistant` role payload — the exact failure mode the bug report describes.\n- `apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatViewModelTests.swift`\n  - New `appendsExternalSessionAssistantMessageWhileRunPending` test reproduces the group-chat shape end-to-end on the real shared view model: bootstrap empty history, send a user message (creates a pending run), emit a `session.message` with `role: \"assistant\"`, assert the assistant message lands in `vm.messages` without leaving the chat.\n\n## Real behavior proof\n\n**Behavior addressed:** in Aight, agent replies inside a group chat do not appear until the user exits and re-enters the conversation. 1-on-1 chats stream normally. (#80231)\n\n**Real environment tested:** two environments, both running the patched branch (`fix/ios-group-chat-realtime-80231` @ `5835eafc54a`).\n\n(A) macOS arm64 (Darwin 25.3.0, macOS 26.3 25D125), Apple Swift version 6.3.2 (swift-driver 1.148.6). Real `swift test` against the production `OpenClawChatUI` module (`apps/shared/OpenClawKit`, target macos14) and the production `MacGatewayChatTransport` (`apps/macos`). The view model, transport-event mapping, decoders, and AnyCodable plumbing are exercised as shipped; the shared `TestChatTransport` stands in for the network layer so the view model can drive its real `OpenClawChatTransportEvent` handling. Baseline run was the same `swift test` invocation against unpatched `main` (commit `5a33378f9c5`) with the two source-file diffs stashed.\n\n(B) GitHub Actions `macos-26` runner (Xcode 26 + iOS 26 simulator runtime), real `xcodebuild` against the patched branch. Workflow lives on a separate `ci/ios-proof-80231` branch on the fork (not on the PR branch) and runs `xcodegen generate` + `xcodebuild -scheme OpenClaw -destination \"platform=iOS Simulator,...\" -configuration Debug build` to produce `OpenClaw.app` for `Debug-iphonesimulator`, then `xcrun simctl install` + `xcrun simctl launch` against a booted iPhone simulator, plus `xcrun simctl io booted screenshot`. Build log + screenshot + sim log are uploaded as a workflow artifact. The runner matches the same lane the repo's existing `macos-swift` CI uses (see `.github/workflows/ci.yml:1605`). The workflow installs no-op `swiftlint` and `swiftformat` shims in `/opt/homebrew/bin` and `/usr/local/bin` before `xcodebuild` runs, so the `SwiftLint` and `SwiftFormat (lint)` Run Script build phases exit 0 without running real checks. This was a deliberate, documented workaround to bypass pre-existing redundant-Sendable swiftlint findings on unrelated iOS source (`apps/ios/Sources/Voice/TalkRealtimeClientSession.swift`, `apps/ios/Sources/Voice/TalkModeManager.swift`) that reproduce on unpatched `main` under the Xcode 26 toolchain; the proof here is the iOS app compiling, linking, installing, and launching on a real iOS simulator with the patched transport/view-model code in the bundle, not a clean repo lint pass.\n\n**Exact steps or command run after this patch:**\n\nPatched-branch focused 3-case run (real view model + transport-event handling):\n\n```\n( cd apps/shared/OpenClawKit && \\\n  swift test --filter 'ChatViewModelTests/(appendsExternalSessionAssistantMessageWhileRunPending|appendsExternalSessionUserMessageForActiveSession|ignoresExternalSessionUserMessageForOtherSession)' )\n```\n\nPatched-branch full ChatViewModelTests suite (catches dedupe/refresh regressions):\n\n```\n( cd apps/shared/OpenClawKit && swift test --filter ChatViewModelTests )\n```\n\nmacOS native transport mapping (sibling-surface proof for the existing `session.message` decode):\n\n```\n( cd apps/macos && swift test --filter MacGatewayChatTransportMappingTests )\n```\n\n**Evidence after fix:** live `swift test` terminal output from the patched branch on a real macOS arm64 host (Darwin 25.3.0, Swift 6.3.2). The runs below exercise the real `OpenClawChatUI` view model end-to-end on top of the real `MacGatewayChatTransport.mapPushToTransportEvent` decode path; no source mocked. Baseline transcript is the same focused run against unpatched upstream `main` (`5a33378f9c5`) with the two src-file diffs stashed, showing the timeout that reproduces the issue symptom.\n\nPatched-branch focused 3-case run, real terminal output:\n\n```\nBuild complete! (4.19s)\nTest Suite 'Selected tests' started at 2026-05-25 23:06:27.519.\nTest Suite 'OpenClawKitPackageTests.xctest' started at 2026-05-25 23:06:27.520.\nTest Suite 'OpenClawKitPackageTests.xctest' passed at 2026-05-25 23:06:27.520.\n\t Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.000) seconds\nTest Suite 'Selected tests' passed at 2026-05-25 23:06:27.520.\n\t Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.001) seconds\n◇ Test run started.\n↳ Testing Library Version: 1902\n↳ Target Platform: arm64e-apple-macos14.0\n◇ Suite ChatViewModelTests started.\n◇ Test ignoresExternalSessionUserMessageForOtherSession() started.\n◇ Test appendsExternalSessionUserMessageForActiveSession() started.\n◇ Test appendsExternalSessionAssistantMessageWhileRunPending() started.\n✔ Test appendsExternalSessionAssistantMessageWhileRunPending() passed after 0.014 seconds.\n✔ Test appendsExternalSessionUserMessageForActiveSession() passed after 0.014 seconds.\n✔ Test ignoresExternalSessionUserMessageForOtherSession() passed after 0.051 seconds.\n✔ Suite ChatViewModelTests passed after 0.051 seconds.\n✔ Test run with 3 tests in 1 suite passed after 0.051 seconds.\n```\n\nPatched-branch full ChatViewModelTests suite, real terminal output (last lines):\n\n```\n✔ Test staleThinkingPatchCompletionReappliesLatestSelection() passed after 0.218 seconds.\n✔ Test failedLatestModelSelectionDoesNotReplayAfterOlderCompletionFinishes() passed after 0.218 seconds.\n✔ Test lateModelCompletionDoesNotReplayCurrentSessionSelectionIntoPreviousSession() passed after 0.218 seconds.\n✔ Suite ChatViewModelTests passed after 0.219 seconds.\n✔ Test run with 45 tests in 1 suite passed after 0.219 seconds.\n```\n\nPatched-branch macOS transport mapping, real terminal output:\n\n```\n◇ Suite MacGatewayChatTransportMappingTests started.\n◇ Test \"session message event maps to session message\" started.\n✔ Test \"session message event maps to session message\" passed after 0.003 seconds.\n✔ Test \"chat event maps to chat\" passed after 0.002 seconds.\n✔ Test \"tick event maps to tick\" passed after 0.001 seconds.\n✔ Test \"seq gap maps to seq gap\" passed after 0.001 seconds.\n✔ Test \"unknown event maps to nil\" passed after 0.001 seconds.\n✔ Test \"health event maps to health\" passed after 0.002 seconds.\n✔ Test \"snapshot maps to health\" passed after 0.002 seconds.\n✔ Suite MacGatewayChatTransportMappingTests passed after 0.003 seconds.\n✔ Test run with 7 tests in 1 suite passed after 0.003 seconds.\n```\n\nBaseline run against unpatched upstream `main` (`5a33378f9c5`) with the two src-file diffs stashed — the new view-model test is present so the failure mode is the bug itself, captured live:\n\n```\nBuild complete! (3.77s)\n◇ Test run started.\n↳ Testing Library Version: 1902\n↳ Target Platform: arm64e-apple-macos14.0\n◇ Suite ChatViewModelTests started.\n◇ Test appendsExternalSessionUserMessageForActiveSession() started.\n◇ Test appendsExternalSessionAssistantMessageWhileRunPending() started.\n◇ Test ignoresExternalSessionUserMessageForOtherSession() started.\n✔ Test appendsExternalSessionUserMessageForActiveSession() passed after 0.013 seconds.\n✔ Test ignoresExternalSessionUserMessageForOtherSession() passed after 0.054 seconds.\n✘ Test appendsExternalSessionAssistantMessageWhileRunPending() recorded an issue at ChatViewModelTests.swift:855:6: Caught error: Timeout waiting for: assistant transcript visible while pending\n✘ Test appendsExternalSessionAssistantMessageWhileRunPending() failed after 3.014 seconds with 1 issue.\n✘ Suite ChatViewModelTests failed after 3.014 seconds with 1 issue.\n✘ Test run with 3 tests in 1 suite failed after 3.014 seconds with 1 issue.\n```\n\nThe 3.014 s timeout on unpatched `main` is the issue's exact symptom replayed live: the assistant `session.message` is delivered to the real shared view model and never lands in `vm.messages`, so the test waits the full `waitUntil` budget. After the patch the same emit lands the assistant transcript in `vm.messages` within 14 ms — that is the actual observed runtime difference, not a derived claim.\n\n**Observed result after fix:**\n\n- `appendsExternalSessionAssistantMessageWhileRunPending` (the issue's exact shape — assistant `session.message` during a pending run): observed runtime drops from 3.014 s timeout on unpatched `main` to 14 ms passing on patched branch. Assistant transcript is now visible in `vm.messages` without exiting the chat.\n- `appendsExternalSessionUserMessageForActiveSession` and `ignoresExternalSessionUserMessageForOtherSession`: existing user-role and cross-session guards still hold (no regression on the original session-message paths).\n- Full `ChatViewModelTests` suite passes 45/45 in 0.219 s — dedupe, message-id reconciliation, and chat-final refresh paths are not regressed.\n- `MacGatewayChatTransportMappingTests` passes 7/7 in 0.003 s — the macOS sibling surface that already implements the same `sessions.messages.subscribe` + `session.message` contract continues to decode correctly, and the iOS `mapEventFrame(_:)` change mirrors it line-for-line.\n- Environment (B), `macos-26` GitHub Actions runner: `xcodebuild ... build` for the iOS app target finishes with `** BUILD SUCCEEDED **`, `xcrun simctl install` + `xcrun simctl launch` exit 0 against a booted iPhone simulator, and `xcrun simctl io booted screenshot` captures the real running `OpenClaw.app` on-screen. Workflow run: https://github.com/yetval/openclaw/actions/runs/26431726436 — final status `success`. Artifact `ios-proof-80231` (https://github.com/yetval/openclaw/actions/runs/26431726436/artifacts/7208802217, expires 2026-08-24) contains `launch.png` (the rendered onboarding screen of the patched Aight build), `openclaw.log` (sim log tail filtered to `ai.openclaw` subsystem), and `apps/ios/build.log` (full `xcodebuild` transcript ending in `** BUILD SUCCEEDED **`). The patched `IOSGatewayChatTransport.setActiveSessionKey`, `mapEventFrame(_:)`, and `ChatViewModel.handleSessionMessageEvent` ship inside that built `OpenClaw.app`.\n\n**What was not tested:**\n\n- Live multi-agent Aight group-chat repro against a running Gateway with two or more agents replying in parallel. Environment (B) builds, installs, and launches the patched `OpenClaw.app` to its onboarding screen on a clean simulator with no Gateway configured — that proves the patched code compiles and launches, not that an end-to-end group-chat exchange streams correctly. The functional behavior is exercised on the real `ChatViewModel` in environment (A) via `appendsExternalSessionAssistantMessageWhileRunPending`, but the actual on-device animation/UI of an agent reply landing without leaving the chat is not captured here. Recommend a maintainer with a Gateway-paired device or simulator run `pnpm ios:run` against a 2+ agent group chat after this lands to capture that end-to-end visual proof if a stricter bar is required.\n- Local `xcodebuild -sdk iphonesimulator` on the standalone `OpenClawLogicTests` target on this MacBook (macOS 26.3) failed with `unable to resolve module dependency: 'ElevenLabsKit'` on unpatched `main` — a pre-existing explicit-modules iOS build issue under the local Xcode toolchain; the iOS app build proof above runs on the `macos-26` GitHub Actions runner instead, where the same checkout builds cleanly. The iOS transport mapping is also unit-tested via `IOSGatewayChatTransport.mapEventFrame(_:)` in `apps/ios/Tests/IOSGatewayChatTransportTests.swift`, structurally mirroring the (live-passing) macOS mapping test.\n",
+        "branch": "fix/ios-group-chat-realtime-80231",
+        "head_sha": "98eb1c53a6b53e9df0248cd2932109394c83a8b7",
+        "author": "yetval",
+        "labels": [
+          "app: ios",
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "apps/ios/Sources/Chat/IOSGatewayChatTransport.swift",
+            "additions": 54,
+            "deletions": 32,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/ios/Tests/IOSGatewayChatTransportTests.swift",
+            "additions": 72,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
+            "additions": 0,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatViewModelTests.swift",
+            "additions": 38,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86737",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86737.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 25,
+          "counts": {
+            "IN_PROGRESS": 4,
+            "SUCCESS": 12,
+            "SKIPPED": 9
+          },
+          "blockers": [
+            "Scan changed paths (precise):IN_PROGRESS",
+            "macos-swift:IN_PROGRESS",
+            "android-test-third-party:IN_PROGRESS",
+            "android-build-play:IN_PROGRESS"
+          ],
+          "pending": [
+            "Scan changed paths (precise):IN_PROGRESS",
+            "macos-swift:IN_PROGRESS",
+            "android-test-third-party:IN_PROGRESS",
+            "android-build-play:IN_PROGRESS"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 1547,
+    "total_ms": 2165,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 556
+        "ms": 552
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1347
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 979
+        "ms": 252
       },
       {
         "name": "append_ledger",
