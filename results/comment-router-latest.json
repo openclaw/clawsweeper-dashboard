@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-27T15:51:34.412Z",
+  "generated_at": "2026-05-27T15:52:13.162Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-27T12:51:32.746Z",
+  "since": "2026-05-27T12:52:12.844Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    87337
+    87340
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 2,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,123 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:87337:4556154220:2026-05-27T15:51:25Z:clawsweeper_needs_human",
-      "comment_id": "4556154220",
-      "comment_version_key": "4556154220:2026-05-27T15:51:25Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/87337#issuecomment-4556154220",
-      "repo": "openclaw/openclaw",
-      "issue_number": 87337,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-27T15:45:49Z",
-      "comment_updated_at": "2026-05-27T15:51:25Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=317bbd32f403e3f6a4b7a3715c49184bfe3c7a9a)",
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "317bbd32f403e3f6a4b7a3715c49184bfe3c7a9a",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "docs(gateway): troubleshoot macOS Maintenance Sleep / ENETDOWN / launchd silent-park",
-        "body": "## Summary\n\nAdds a troubleshooting section to `docs/gateway/troubleshooting.md` for the symptom pattern that prompted #86688: on a macOS host, the gateway goes silent on all channels (Telegram, WhatsApp, etc.) for minutes to hours at a time, and only resumes when the operator opens the Control UI, SSHs in, or otherwise interacts with the host. There is usually no obvious symptom in `openclaw status` because by the time the operator looks, the gateway is alive again.\n\nThe code-level fix for the actual exception (`ENETDOWN` propagating as an uncaught exception out of the SSRF guard's outbound `connect`) has already landed via #86762, which classifies `ENETDOWN` as a benign transient network error so it no longer terminates the gateway process. This PR is the operational/docs companion to that fix and covers the two other layers of the same outage:\n\n1. The macOS-specific power-management layer (`pmset` Maintenance Sleep / Power Nap) that drove the `ENETDOWN`s in the first place, and which still produces some sleep activity even with all the user-facing flags off.\n2. The macOS launchd respawn-protection gate that turned what should have been a 2-second blip into multi-hour silent outages, by silently parking the LaunchAgent after a crash burst even with `KeepAlive=true`. This was the operator-visible half of #86688 and is not addressed by the `ENETDOWN` classification change alone — any future crash burst (from a different root cause) can still trigger the same parking behavior.\n\nAlso adds a one-line breadcrumb from `docs/platforms/macos.md` (Launchd control section) pointing at the new troubleshooting entry.\n\nNo code changes, no test changes, no UI changes. Docs-only.\n\n## Why operational docs rather than another code patch\n\nThe shipped fix in #86762 correctly handles the `ENETDOWN` family at the `isBenignUncaughtExceptionError` layer. The remaining gap from the original issue (#86688) is twofold:\n\n- Operators hitting this for the first time will not have the vocabulary to recognize the pattern. The symptom presents as \"channels stop responding,\" not as \"transient network errors,\" and the actual evidence is in `~/.openclaw/logs/stability/`, `pmset -g log`, and `launchctl print` — all places an operator is unlikely to look on their own.\n- The launchd silent-park-after-crash-burst behavior is independent of any particular error code. Even now that `ENETDOWN` is classified as benign, the same launchd behavior will park the agent on the next unrelated crash burst. The doc captures the diagnostic workflow and an external watchdog snippet so operators are not relying on `KeepAlive=true` alone.\n\nI considered adding an internal launchctl-aware watchdog, but the project has previously closed two attempts at supervisor-side caffeinate/keep-awake helpers (#15444 stale, #40846 closed), so operator-side documentation is the lower-risk contribution.\n\n## Changes\n\n- **`docs/gateway/troubleshooting.md`**: New section \"macOS: gateway silently stops responding, then resumes when you touch the dashboard.\" Lists the diagnostic commands (`ls ~/.openclaw/logs/stability/`, `pmset -g log`, `launchctl print`), the `pmset -g log` evidence pattern that correlates with `ENETDOWN` crashes, the launchd `state = not running` / multi-run signature, and a three-step recovery sequence (upgrade, `pmset` flags, optional liveness watchdog snippet).\n- **`docs/platforms/macos.md`**: Single sentence added under \"Launchd control\" linking to the new troubleshooting section.\n\n## Real behavior proof\n\nThis is the same host that originally surfaced #86688's symptom pattern. Three stability bundles in the operator's `~/.openclaw/logs/stability/` directory all with `error.code: ENETDOWN`, against the SSRF guard's outbound connect path, on Apple Silicon Mac mini, OpenClaw `2026.5.22`:\n\n```\nopenclaw-stability-2026-05-26T00-39-54-975Z-56031-uncaught_exception.json\n  reason: uncaught_exception\n  error.code: ENETDOWN\n  error.message: connect ENETDOWN 160.79.104.10:443 - Local (192.168.1.161:62056)\n  process.uptimeMs: 7586482\n\nopenclaw-stability-2026-05-26T13-01-00-188Z-58232-uncaught_exception.json\n  reason: uncaught_exception\n  error.code: ENETDOWN\n  error.message: connect ENETDOWN 149.154.167.220:443 - Local (192.168.1.161:63404)\n  process.uptimeMs: 29705727\n```\n\n`160.79.104.10` is Anthropic's API; `149.154.167.220` is a Telegram CDN edge. Both align with `pmset -g log` Maintenance Sleep entries inside the same second on this host. The matching launchd behavior was observed too: `runs` count incrementing across the day with no `received SIG*; shutting down` line in `~/Library/Logs/openclaw/gateway.log`, and gaps between crash time and next visible startup well in excess of the normal launchd `ThrottleInterval`.\n\nSteps run after writing the docs:\n\n```bash\n# Rendered the new section in a local Mintlify-equivalent markdown preview to confirm\n# the code blocks, headings, and anchor render correctly.\n# Anchor verified: /gateway/troubleshooting#macos-gateway-silently-stops-responding-then-resumes-when-you-touch-the-dashboard\n# (slug matches the Mintlify heading-to-anchor convention used elsewhere in this file).\n\n# Confirmed the diagnostic commands in the doc all return expected output on the affected\n# host (or expected empty output now that the ENETDOWN classification has shipped):\nls ~/.openclaw/logs/stability/\npmset -g log | grep -iE \"sleep|wake|maintenance\" | tail -50\nlaunchctl print gui/$UID/ai.openclaw.gateway | grep -E \"state|last exit|runs\"\n```\n\nResult after the operator workarounds described in the doc were applied to this host on 2026-05-26:\n\n- Maintenance Sleep events (`pmset -g log | grep 'Entering Sleep state'`): zero across the next ~20 hours.\n- New `*-uncaught_exception.json` bundles: zero across the next ~20 hours.\n- Gateway uptime continuous across the overnight window with no respawns.\n\nWhat I did not test:\n\n- I did not exercise the new troubleshooting section against a Mintlify production build of the docs site; only verified locally that the heading slug, internal links, and code-block syntax are consistent with the surrounding sections of `docs/gateway/troubleshooting.md`.\n- The `launchctl print | awk` snippet was sanity-checked against the running LaunchAgent on this host; I did not test it against every supported macOS release.\n\n## Related\n\n- Original issue: #86688\n- Code-level fix (already merged): #86762\n- Earlier supervisor-side approaches that did not land, for context on why this PR is docs-only: #15444 (stale), #40846 (closed)\n\n## AI-assisted disclosure\n\nThis PR was drafted with AI assistance. The diagnostic narrative, the `pmset` / `launchctl` recovery snippets, and the wording were drafted by an assistant working from the operator's own stability bundles, `pmset -g log` output, and the existing language in `docs/gateway/troubleshooting.md`. The operator (me) reviewed the diff in full, confirmed the diagnostic commands match what is actually on this host, and confirmed the symptom-pattern description matches their real-world experience. I understand exactly what each line of the new section says and can defend it on review.\n",
-        "branch": "docs/macos-launchd-silent-park-troubleshooting",
-        "head_sha": "317bbd32f403e3f6a4b7a3715c49184bfe3c7a9a",
-        "author": "arunjeetsingh",
-        "labels": [
-          "docs",
-          "app: macos",
-          "gateway",
-          "size: XS",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "docs/gateway/troubleshooting.md",
-            "additions": 47,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/platforms/macos.md",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-87337",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87337.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 27,
-          "counts": {
-            "CANCELLED": 1,
-            "SUCCESS": 9,
-            "SKIPPED": 16,
-            "FAILURE": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "check-docs:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "check-docs:FAILURE"
-          ]
-        }
-      },
-      "reason": "target is not open"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1882,
+    "total_ms": 524,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 306
+        "ms": 307
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1345
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 205
+        "ms": 206
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
