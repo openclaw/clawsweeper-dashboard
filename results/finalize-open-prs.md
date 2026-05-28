@@ -1,6 +1,6 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-05-28T12:01:55.442Z
+Generated: 2026-05-28T15:08:52.295Z
 
 ## Summary
 
@@ -9,7 +9,7 @@ Generated: 2026-05-28T12:01:55.442Z
 | open_prs | 5 |
 | ready_candidates | 0 |
 | security_hold | 1 |
-| needs_rebase | 1 |
+| needs_rebase | 0 |
 | mergeability_unknown | 0 |
 | needs_checks | 5 |
 | needs_review | 0 |
@@ -30,8 +30,8 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| [#87682](https://github.com/openclaw/openclaw/pull/87682) | fix(ui): preserve session picker on empty search blur | automerge-openclaw-openclaw-87659 | MERGEABLE | UNSTABLE | CANCELLED:10 QUEUED:1 IN_PROGRESS:3 SKIPPED:81 SUCCESS:59 FAILURE:1; blockers:10 | needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
 | [#87576](https://github.com/openclaw/openclaw/pull/87576) | fix: Replayed Twilio webhook mints a fresh realtime stream token | automerge-openclaw-openclaw-87498 | MERGEABLE | UNSTABLE | CANCELLED:3 SKIPPED:33 SUCCESS:66 FAILURE:1 NEUTRAL:1; blockers:3 | security_route, needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; CI / check-guards:FAILURE, needs_merge_preflight | route to central security triage |
 | [#87550](https://github.com/openclaw/openclaw/pull/87550) | fix(diagnostics): clear stale session activity | automerge-openclaw-openclaw-87374 | MERGEABLE | CLEAN | CANCELLED:4 SKIPPED:38 SUCCESS:77 NEUTRAL:1; blockers:2 | needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
 | [#87523](https://github.com/openclaw/openclaw/pull/87523) | fix(images): skip CLI image cache refs | automerge-openclaw-openclaw-87501 | MERGEABLE | CLEAN | CANCELLED:2 SKIPPED:32 SUCCESS:76 NEUTRAL:1; blockers:1 | needs_checks:Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
 | [#87423](https://github.com/openclaw/openclaw/pull/87423) | fix(tui): force repaint final chat events | automerge-openclaw-openclaw-87348 | MERGEABLE | UNSTABLE | CANCELLED:11 SKIPPED:86 SUCCESS:75 FAILURE:2 NEUTRAL:1; blockers:7 | needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
-| [#86954](https://github.com/openclaw/openclaw/pull/86954) | fix(ui): keep terminal webchat run status after stale session rows | issue-openclaw-openclaw-86939 | CONFLICTING | DIRTY | CANCELLED:10 SKIPPED:86 SUCCESS:75 FAILURE:1 NEUTRAL:1; blockers:6 | needs_rebase:CONFLICTING, needs_merge_state:DIRTY, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | resume branch, rebase onto current main, repair conflicts, run changed checks, rerun review |
