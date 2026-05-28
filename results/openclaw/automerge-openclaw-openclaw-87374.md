@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-87374"
 mode: "autonomous"
-run_id: "26567841424"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26567841424"
-head_sha: "ca8a8d4f30a243609adf112ca2b34ee63bceb83b"
+run_id: "26587759741"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26587759741"
+head_sha: "c01469876a8575896e3d81bc94daafdfaea1efca"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-28T10:34:49.469Z"
+published_at: "2026-05-28T16:55:00.340Z"
 canonical: "https://github.com/openclaw/openclaw/pull/87550"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/87310"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/87550"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/26567841424](https://github.com/openclaw/clawsweeper/actions/runs/26567841424)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/26587759741](https://github.com/openclaw/clawsweeper/actions/runs/26587759741)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/87550
 
 ## Summary
 
-Hydrated state shows source PR #87374 is already closed and was replaced by writable same-repo PR #87550. #87550 is the active canonical repair path for issue #87310, but merge is disabled and the current head still has an unstable merge state plus a failed `Scan changed paths (precise)` check, so the next deterministic step is a branch repair/fix pass, not merge or close.
+Hydrated state shows source PR #87374 is already closed and was replaced by writable same-repo PR #87550. #87550 is the canonical repair path but still needs changes because the latest ClawSweeper/Codex review blocks merge on gateway reset diagnostic cleanup ordering. No close or merge actions are emitted because the job blocks both.
 
 ## Impact
 
@@ -66,10 +66,10 @@ Hydrated state shows source PR #87374 is already closed and was replaced by writ
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #87310 | keep_related | planned | fixed_by_candidate | Keep the issue open as covered by the active repair PR; no closure is allowed in this job. |
-| #87374 | keep_closed | skipped | superseded | Closed source PR is historical evidence and credit source only; active repair continues in #87550. |
-| #87550 | fix_needed | planned | canonical | Repair the active writable PR branch, address the failed changed-path/check feedback and any exact-head review findings, then rerun validation. |
-| cluster:automerge-openclaw-openclaw-87374 | build_fix_artifact | planned |  | Executor needs a deterministic repair plan for #87550. |
+| #87310 | keep_related | planned | fixed_by_candidate | Leave the issue open while the canonical replacement PR is repaired and validated. |
+| #87374 | keep_closed | skipped | superseded | Historical source PR only; the active repair path is #87550. |
+| #87550 | fix_needed | planned | canonical | Repair the writable replacement PR branch; merge is blocked by job policy and by the unresolved review finding. |
+| cluster:automerge-openclaw-openclaw-87374 | build_fix_artifact | planned |  | A narrow branch repair is required before the automerge loop can request another review. |
 
 ## Needs Human
 
