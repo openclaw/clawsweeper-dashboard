@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-87374"
 mode: "autonomous"
-run_id: "26591906376"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26591906376"
+run_id: "26593233922"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26593233922"
 head_sha: "8db024ba0503b6c8368d0b699367e0f321d740b1"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-28T18:13:18.203Z"
+published_at: "2026-05-28T18:38:00.983Z"
 canonical: "https://github.com/openclaw/openclaw/pull/87550"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/87310"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/87550"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/26591906376](https://github.com/openclaw/clawsweeper/actions/runs/26591906376)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/26593233922](https://github.com/openclaw/clawsweeper/actions/runs/26593233922)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/87550
 
 ## Summary
 
-Canonical repair path is the open ClawSweeper replacement PR #87550. The original source PR #87374 is already closed and credited after branch update failed, and issue #87310 should remain open until #87550 is repaired, re-reviewed, and merged by the deterministic automerge path. No merge or close action is emitted because this job blocks merge/close and #87550 still has a relevant failing exact-head check.
+#87550 is the current canonical repair path for the stale diagnostic session activity bug. #87374 was already closed as a credited superseded source PR because its fork branch was not writable, and #87550 is a same-repo writable replacement, but it is not merge-ready because the hydrated exact-head checks show checks-node-agentic-agents failing.
 
 ## Impact
 
@@ -68,10 +68,10 @@ Canonical repair path is the open ClawSweeper replacement PR #87550. The origina
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #87310 | keep_canonical | planned | canonical | Keep the issue open as the canonical report until #87550 lands and post-merge closeout is permitted. |
-| #87374 | keep_closed | skipped | superseded | Already closed source PR was superseded by credited replacement #87550. |
-| #87550 | fix_needed | planned | canonical | Repair #87550 in place; do not merge from this worker. |
-| cluster:automerge-openclaw-openclaw-87374 | build_fix_artifact | planned |  | A narrow executable repair artifact is needed because #87550 is useful and writable but not merge-ready. |
+| #87310 | keep_canonical | planned | canonical | Keep the issue open until the canonical replacement PR is repaired and lands; post-merge closeout is disabled for this job. |
+| #87374 | keep_closed | skipped | superseded | Historical source PR only; it is already superseded by the writable replacement #87550. |
+| #87550 | fix_needed | planned | canonical | Repair the writable #87550 branch, address the failing relevant CI lane, rerun review/validation, and only then let the deterministic automerge gate decide merge. |
+| cluster:automerge-openclaw-openclaw-87374 | build_fix_artifact | planned |  | Emit an executable repair artifact for the existing same-repo replacement PR rather than opening another replacement. |
 
 ## Needs Human
 
