@@ -2,21 +2,21 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-86953"
 mode: "autonomous"
-run_id: "26501663509"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26501663509"
-head_sha: "e48915a6b06c528cbb2e637276902264853c4af4"
+run_id: "26606849779"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26606849779"
+head_sha: "9f434e810ec9abdbd20fc3d8927a97a10b994995"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-27T09:41:20.812Z"
+published_at: "2026-05-28T23:33:38.964Z"
 canonical: "#86953"
 canonical_issue: null
 canonical_pr: "#86953"
 actions_total: 1
 fix_executed: 0
-fix_failed: 0
-fix_blocked: 0
+fix_failed: 1
+fix_blocked: 1
 apply_executed: 0
-apply_blocked: 1
+apply_blocked: 0
 apply_skipped: 0
 needs_human_count: 0
 ---
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/26501663509](https://github.com/openclaw/clawsweeper/actions/runs/26501663509)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/26606849779](https://github.com/openclaw/clawsweeper/actions/runs/26606849779)
 
 Workflow conclusion: success
 
@@ -43,10 +43,10 @@ Make PR #86953 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 | --- | ---: |
 | Worker actions | 1 |
 | Fix executed | 0 |
-| Fix failed | 0 |
-| Fix blocked | 0 |
+| Fix failed | 1 |
+| Fix blocked | 1 |
 | Applied executions | 0 |
-| Apply blocked | 1 |
+| Apply blocked | 0 |
 | Apply skipped | 0 |
 | Needs human | 0 |
 
@@ -54,13 +54,15 @@ Make PR #86953 merge-ready for ClawSweeper automerge. Rebase onto latest main, a
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | pushed | https://github.com/openclaw/openclaw/pull/86953 |  |  |
+| repair_contributor_branch | failed |  |  | Codex review-fix worker timed out after 76180ms |
+| execute_fix | blocked |  |  | Codex review-fix worker timed out after 76180ms |
+| automerge_repair_outcome_comment | updated | #86953 |  |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #86953 | merge_canonical | blocked | fix_pr | job does not allow merge |
+| _None_ |  |  |  |  |
 
 ## Worker Action Matrix
 
