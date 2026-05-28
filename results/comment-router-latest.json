@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-28T16:07:17.560Z",
+  "generated_at": "2026-05-28T16:08:20.435Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-28T13:07:13.137Z",
+  "since": "2026-05-28T13:08:18.053Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    70864
+    75662
   ],
-  "comment_ids": [
-    4565984067
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 4,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,21 +31,173 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:70864:4565984067:2026-05-28T16:06:29Z:status",
-      "comment_id": "4565984067",
-      "comment_version_key": "4565984067:2026-05-28T16:06:29Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/70864#issuecomment-4565984067",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:75662:4359535639:2026-05-28T16:08:14Z:clawsweeper_auto_repair",
+      "comment_id": "4359535639",
+      "comment_version_key": "4359535639:2026-05-28T16:08:14Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/75662#issuecomment-4359535639",
       "repo": "openclaw/openclaw",
-      "issue_number": 70864,
-      "author": "patrick-slimelab",
-      "author_id": 257809963,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-28T16:06:29Z",
-      "comment_updated_at": "2026-05-28T16:06:29Z",
+      "issue_number": 75662,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-01T13:36:58Z",
+      "comment_updated_at": "2026-05-28T16:08:14Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=3d0cb75106487f4fba5e81165557d8f8affe3530)",
+      "review_summary": "The PR persists yielded main-session lifecycle ends as paused with a `sessions_yield` pause reason, exposes that state through session rows/tools, skips restart recovery for paused entries, and adds focused tests plus a changelog entry.\n\nPR surface: Source +42, Tests +176, Docs +1. Total +219 across 12 files.\n\nReproducibility: yes. at source level, but not by a live run in this review. Current main maps yielded lifecycle end events to `done`, while the runner and wait-dedupe paths already propagate `yielded` metadata.",
+      "review_followup": "- [P1] Needs maintainer/API compatibility review plus contributor or maintainer runtime proof; the remaining blockers are not a safe standalone automation repair while the proof gate and public status contract remain unresolved.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "3d0cb75106487f4fba5e81165557d8f8affe3530",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): pause yielded main-session runs",
+        "body": "## Summary\n\nExtend the subagent yield-pause fix from [6f3b5f86](https://github.com/openclaw/openclaw/commit/6f3b5f8666f3a3877b62d9019b8842455fdf62e1) to top-level (non-subagent) sessions.\n\nWhen a main session ends via the `sessions_yield` tool, the runner already emits a lifecycle event with `yielded: true` and `livenessState: \"paused\"`. The runner's terminal lifecycle metadata, the agent-job snapshot cache, and the agent.wait dedupe entry all propagate those flags generically, so subagent and non-subagent runs benefit equally from those parts of 6f3b5f86.\n\nThe gap is in `gateway/session-lifecycle-state.ts`. `deriveGatewaySessionLifecycleSnapshot` does not look at the `yielded` flag, so the session entry is persisted with `status: \\\"done\\\"` even though the runner has queued a post-yield continuation that drains on the next turn. Dashboards, restart recovery, and follow-up turns then treat the session as finished and race the continuation, producing the in-context overflow and out-of-order events the user reports.\n\n## Why the same fix needs to apply to the top-level session\n\nThe subagent registry tracks active subagent runs in memory and uses `pauseReason: \\\"sessions_yield\\\"` to keep yielded entries in a paused state instead of marking them complete. The main session has no equivalent in-memory registry; its lifecycle state is persisted directly through `persistGatewaySessionLifecycleEvent` into the on-disk session entry. The gap shows up in three places:\n\n1. The persisted session entry says `status: \\\"done\\\"`, so `sessions_list`, `sessions.changed` broadcasts, and dashboard UI all show the session as finished.\n2. `main-session-restart-recovery` is keyed off `entry.abortedLastRun` and `entry.status === \\\"running\\\"`. With status=done it leaves the entry alone, but on a clean restart-mid-yield the yielded session can also end up `abortedLastRun=true` (the cleaned-lock path), at which point recovery would force a `[System] Your previous turn was interrupted...` resume that races the queued continuation.\n3. A new user message arrives at a session that is internally paused but externally \\\"done\\\" — the gateway dispatches a fresh agent.run, and the queued steered yield-interrupt drains alongside the new user input, producing out-of-order assistant text.\n\n## Shape of the change\n\n- Recognize the lifecycle `yielded` flag in `deriveGatewaySessionLifecycleSnapshot` and derive `status: \\\"paused\\\"` with `pauseReason: \\\"sessions_yield\\\"` instead of `done`. Yielded short-circuits before the `aborted`/`stopReason` branches so partial classifications cannot mask the paused state.\n- Clear `pauseReason` on the next lifecycle `start` event so a fresh run reactivates the session, mirroring how `subagent-registry-lifecycle.ts` clears `pauseReason` on completion.\n- Add `\\\"paused\\\"` to `SessionRunStatus` in both `gateway/session-utils.types.ts` and `agents/tools/sessions-helpers.ts`, and add `pauseReason?: \\\"sessions_yield\\\"` to `SessionEntry` and `GatewaySessionRow`.\n- Surface `pauseReason` on the `sessions.changed` broadcast snapshot and the `loadGatewaySessionRow` builder so consumers (UI, sessions_list tool) see the paused state.\n- Tighten `isTerminalSessionStatus` so the type predicate stays accurate after \\\"paused\\\" joins the union (paused is not terminal).\n- Skip `main-session-restart-recovery` for entries with `pauseReason: \\\"sessions_yield\\\"` so they are not re-prompted with the generic interrupted-turn message.\n\nThe runner-level changes (yieldDetected -> livenessState=paused/yielded=true) and the gateway agent-job/agent-wait-dedupe propagation that 6f3b5f86 already added are unchanged. This PR plugs the missing seam between those generic signals and the persisted session entry.\n\n## Test coverage\n\n- `src/gateway/session-lifecycle-state.test.ts`:\n  - `marks yielded lifecycle end events as paused with sessions_yield reason` (persisted patch).\n  - `treats yielded as paused even when aborted is set` (yield short-circuit).\n  - `clears pauseReason when a fresh run starts on a paused session` (start-phase reactivation).\n  - Existing terminal-mapping tests updated to include explicit `pauseReason: undefined` on non-yield ends.\n- `src/agents/main-session-restart-recovery.test.ts`:\n  - `skips sessions paused via sessions_yield instead of forcing a resume`.\n  - `does not mark sessions with sessions_yield pauseReason as restart-aborted from cleaned locks`.\n\n## Local validation\n\n- `pnpm tsgo:core`, `pnpm tsgo:core:test`, `pnpm tsgo:extensions`, `pnpm tsgo:extensions:test` — clean.\n- `pnpm test src/gateway/session-lifecycle-state.test.ts src/agents/main-session-restart-recovery.test.ts src/gateway/server-chat.agent-events.test.ts src/config/sessions.test.ts src/agents/tools/sessions-list-tool.test.ts src/gateway/server-methods/agent.test.ts src/gateway/server-methods/agent.create-event.test.ts src/gateway/server-methods/agent-wait-dedupe.test.ts src/agents/subagent-registry.test.ts src/agents/subagent-announce-output.test.ts src/agents/pi-embedded-runner/sessions-yield.orchestration.test.ts` — all green (235 tests).\n- `pnpm exec oxfmt --check`, `node scripts/run-oxlint.mjs`, `pnpm format:docs:check`, `pnpm check:changelog-attributions` — all clean on changed files.\n\n## Test plan\n\n- [ ] CI green on \\`fix(agents): pause yielded main-session runs\\`.\n- [ ] Manual smoke: trigger `sessions_yield` from a main-session conversation; confirm the session entry persists `status: paused` and `pauseReason: sessions_yield`, and that a follow-up turn flips back to `running` with `pauseReason: undefined`.\n- [ ] Restart-recovery smoke: kill the gateway while a main session is paused via yield; confirm restart-recovery skips it instead of re-prompting with the interrupted-turn message.\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Before this PR, when a top-level (non-subagent) embedded `openclaw` run ended via the `sessions_yield` tool, the runner emitted `yielded=true` and `livenessState=paused` but the gateway treated it as a clean completion and wrote `status=done`. The session displayed as finished while awaiting a queued post-yield continuation, racing dashboards, restart-recovery, and follow-up turns. After this PR, the lifecycle persistence derives `status=paused` with `pauseReason=sessions_yield`, restart-recovery skips paused sessions, and `SessionRunStatus` adds `\"paused\"` so consumers can distinguish a yielded run from a completed one.\n- **Real environment tested**: Verified against the PR branch from upstream `openclaw/openclaw#75662`. Patch sits on top of upstream/main; the upgrade-2026.5.12 deployment branch on `mac-mini.lan` does not yet carry the cherry-pick, so the proof is against the PR diff as it would land on upstream main.\n- **Exact steps or command run after this patch**:\n  ```bash\n  gh pr diff 75662 -- src/config/sessions/types.ts\n  gh pr diff 75662 -- src/agents/main-session-restart-recovery.ts\n  ```\n- **Evidence after fix**: Captured live from the `openclaw/openclaw#75662` PR head via `gh pr diff 75662` against the upstream-tracked branch (also available locally under `~/.openclaw/openclaw` worktree for the PR branch):\n  ```\n  -export type SessionRunStatus = \"running\" | \"done\" | \"failed\" | \"killed\" | \"timeout\";\n  +export type SessionRunStatus = \"running\" | \"done\" | \"failed\" | \"killed\" | \"timeout\" | \"paused\";\n  ```\n  And in the recovery-skip path:\n  ```\n  +  // Sessions paused via `sessions_yield` are intentionally awaiting a queued\n  +  // continuation. Restart recovery would otherwise re-prompt them with the\n  +  // generic \"previous turn was interrupted\" message and race the follow-up.\n  +  if (entry.pauseReason === \"sessions_yield\") {\n  +    return true;\n  +  }\n  ```\n  The `paused` status surfaces through `~/.openclaw/sessions/<id>.json` `SessionEntry` shape, and `shouldSkipMainRecovery` in `~/.openclaw/openclaw/src/agents/main-session-restart-recovery.ts` short-circuits restart recovery for those entries. The mirror commit `6f3b5f8666f3a3877b62d9019b8842455fdf62e1` already lands the subagent half of this fix on upstream main; this PR generalizes the same logic to top-level sessions.\n- **Observed result after fix**: On a gateway carrying this patch, `openclaw`-managed main sessions that end via `sessions_yield` persist as `status=paused` with `pauseReason=sessions_yield` in `~/.openclaw/sessions/<key>.json` and are NOT re-prompted on the next gateway restart. The companion subagent fix has been running on `mac-mini.lan` since the upgrade-2026.5.12 deploy; this PR brings the same behavior to top-level runs once cherry-picked or merged.\n- **What was not tested**: Direct live capture from a host carrying this exact patch (the cherry-pick to `upgrade-2026.5.12` has not yet been performed, intentionally -- this PR is still in review). Behavior under a race between a fresh user turn and a sessions_yield-paused entry (covered by the new test case in `main-session-restart-recovery.test.ts` but not deliberately reproduced live).\n",
+        "branch": "fix/main-session-yield-pause",
+        "head_sha": "3d0cb75106487f4fba5e81165557d8f8affe3530",
+        "author": "amittell",
+        "labels": [
+          "gateway",
+          "agents",
+          "size: M",
+          "triage: dirty-candidate",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/main-session-restart-recovery.test.ts",
+            "additions": 55,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/main-session-restart-recovery.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/sessions-helpers.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/sessions-list-tool.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/types.ts",
+            "additions": 7,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-chat.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-lifecycle-state.test.ts",
+            "additions": 121,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-lifecycle-state.ts",
+            "additions": 25,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-utils.types.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/session-entry-slot-keys.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-75662",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-75662.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "counts": {
+            "IN_PROGRESS": 1,
+            "SUCCESS": 75,
+            "SKIPPED": 19,
+            "NEUTRAL": 2
+          },
+          "blockers": [
+            "Security High (core-auth-secrets):IN_PROGRESS"
+          ],
+          "pending": [
+            "Security High (core-auth-secrets):IN_PROGRESS"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:75662:4520294803:2026-05-22T15:58:11Z:re_review",
+      "comment_id": "4520294803",
+      "comment_version_key": "4520294803:2026-05-22T15:58:11Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/75662#issuecomment-4520294803",
+      "repo": "openclaw/openclaw",
+      "issue_number": 75662,
+      "author": "amittell",
+      "author_id": 1388680,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T15:58:11Z",
+      "comment_updated_at": "2026-05-22T15:58:11Z",
       "status_comment_id": null,
       "trigger": "mention",
-      "command": "status",
-      "intent": "status",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -61,657 +211,97 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "ignored",
+      "status": "skipped",
       "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "feat: add scoped mention pattern policy",
-        "body": "## Summary\n- add a shared scoped mention-pattern policy for global, agent, and provider/channel overrides\n- apply configured mention-pattern gating across channel runtimes while preserving native mentions\n- document raw regex-body syntax and regenerate config/help metadata\n\n## Notes\n- Recreated from a clean `origin/main` branch after #70846 was closed as dirty; this branch has been rebased on current `origin/main` and generated baselines refreshed after upstream movement.\n\n## Validation\n- `pnpm --config.minimum-release-age=0 install --lockfile-only --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true`\n- `pnpm plugin-sdk:api:check`\n- `pnpm config:channels:check`\n- `pnpm config:docs:check`\n- `pnpm test extensions/qa-channel/src/inbound.test.ts src/channels/mention-pattern-policy.test.ts extensions/telegram/src/bot-message-context.body.test.ts`\n- `pnpm check:changed`\n- `git diff --check`\n\n## Real behavior proof\n- **Behavior or issue addressed:** Scoped mention-pattern policy now resolves the effective provider/agent/conversation policy so configured regex mentions are enabled only for explicitly allowed conversations in deny mode and remain disabled for denied or unlisted conversations. Latest follow-up rebased onto current `origin/main`, resolved refreshed Plugin SDK baseline conflicts, and reran the exact-head behavior proof.\n- **Real environment tested:** Local OpenClaw PR checkout on host `patrick`, branch `feature/mention-pattern-policy-clean`, head `ff90f9f9ab47f71bb3054c03186f9f3743f24210`, running the real source resolver, Telegram group peer id helper, mention matcher, and inbound mention decision code through Node/tsx against redacted OpenClaw-style config/message facts. This does not exercise live external delivery.\n- **Exact steps or command run after this patch:** `cd /home/patrick/projects/openclaw-mention-pattern-policy && HEAD_SHA=ff90f9f9ab47f71bb3054c03186f9f3743f24210 HEAD_SHORT=ff90f9f9ab node --import tsx /tmp/pr70864-proof-c770334.mjs`\n- **Evidence after fix:** Terminal output from the real source smoke:\n\n```text\nOpenClaw scoped mention policy Telegram media pre-download proof (ff90f9f9ab, ff90f9f9ab47f71bb3054c03186f9f3743f24210)\n{\"topic\":7,\"conversationId\":\"-1001234567893:topic:7\",\"mentionPatternsEnabled\":true,\"wasMentioned\":true,\"shouldSkip\":false,\"skipReason\":null}\n{\"topic\":9,\"conversationId\":\"-1001234567893:topic:9\",\"mentionPatternsEnabled\":false,\"wasMentioned\":false,\"shouldSkip\":true,\"skipReason\":null}\n{\"topic\":11,\"conversationId\":\"-1001234567893:topic:11\",\"mentionPatternsEnabled\":false,\"wasMentioned\":false,\"shouldSkip\":true,\"skipReason\":null}\n```\n\n- **Observed result after fix:** In inherited `deny` mode, the media pre-download path honors the Telegram account policy rather than the global provider fallback: account-allowed topic `-1001234567893:topic:7` enables configured regex mention `bot` and media pre-download is not skipped, while account-denied topic `:topic:9` and unlisted topic `:topic:11` disable configured regex mentions and skip unaddressed group media before download.\n- **What was not tested:** Full live external Telegram delivery was not exercised in this proof; CI and targeted channel tests cover the integration paths.\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
-        "branch": "feature/mention-pattern-policy-clean",
-        "head_sha": "f3e14deafe1ddba7bf6a4e0c2b3f457228d5687b",
-        "author": "patrick-slimelab",
+        "title": "fix(agents): pause yielded main-session runs",
+        "body": "## Summary\n\nExtend the subagent yield-pause fix from [6f3b5f86](https://github.com/openclaw/openclaw/commit/6f3b5f8666f3a3877b62d9019b8842455fdf62e1) to top-level (non-subagent) sessions.\n\nWhen a main session ends via the `sessions_yield` tool, the runner already emits a lifecycle event with `yielded: true` and `livenessState: \"paused\"`. The runner's terminal lifecycle metadata, the agent-job snapshot cache, and the agent.wait dedupe entry all propagate those flags generically, so subagent and non-subagent runs benefit equally from those parts of 6f3b5f86.\n\nThe gap is in `gateway/session-lifecycle-state.ts`. `deriveGatewaySessionLifecycleSnapshot` does not look at the `yielded` flag, so the session entry is persisted with `status: \\\"done\\\"` even though the runner has queued a post-yield continuation that drains on the next turn. Dashboards, restart recovery, and follow-up turns then treat the session as finished and race the continuation, producing the in-context overflow and out-of-order events the user reports.\n\n## Why the same fix needs to apply to the top-level session\n\nThe subagent registry tracks active subagent runs in memory and uses `pauseReason: \\\"sessions_yield\\\"` to keep yielded entries in a paused state instead of marking them complete. The main session has no equivalent in-memory registry; its lifecycle state is persisted directly through `persistGatewaySessionLifecycleEvent` into the on-disk session entry. The gap shows up in three places:\n\n1. The persisted session entry says `status: \\\"done\\\"`, so `sessions_list`, `sessions.changed` broadcasts, and dashboard UI all show the session as finished.\n2. `main-session-restart-recovery` is keyed off `entry.abortedLastRun` and `entry.status === \\\"running\\\"`. With status=done it leaves the entry alone, but on a clean restart-mid-yield the yielded session can also end up `abortedLastRun=true` (the cleaned-lock path), at which point recovery would force a `[System] Your previous turn was interrupted...` resume that races the queued continuation.\n3. A new user message arrives at a session that is internally paused but externally \\\"done\\\" — the gateway dispatches a fresh agent.run, and the queued steered yield-interrupt drains alongside the new user input, producing out-of-order assistant text.\n\n## Shape of the change\n\n- Recognize the lifecycle `yielded` flag in `deriveGatewaySessionLifecycleSnapshot` and derive `status: \\\"paused\\\"` with `pauseReason: \\\"sessions_yield\\\"` instead of `done`. Yielded short-circuits before the `aborted`/`stopReason` branches so partial classifications cannot mask the paused state.\n- Clear `pauseReason` on the next lifecycle `start` event so a fresh run reactivates the session, mirroring how `subagent-registry-lifecycle.ts` clears `pauseReason` on completion.\n- Add `\\\"paused\\\"` to `SessionRunStatus` in both `gateway/session-utils.types.ts` and `agents/tools/sessions-helpers.ts`, and add `pauseReason?: \\\"sessions_yield\\\"` to `SessionEntry` and `GatewaySessionRow`.\n- Surface `pauseReason` on the `sessions.changed` broadcast snapshot and the `loadGatewaySessionRow` builder so consumers (UI, sessions_list tool) see the paused state.\n- Tighten `isTerminalSessionStatus` so the type predicate stays accurate after \\\"paused\\\" joins the union (paused is not terminal).\n- Skip `main-session-restart-recovery` for entries with `pauseReason: \\\"sessions_yield\\\"` so they are not re-prompted with the generic interrupted-turn message.\n\nThe runner-level changes (yieldDetected -> livenessState=paused/yielded=true) and the gateway agent-job/agent-wait-dedupe propagation that 6f3b5f86 already added are unchanged. This PR plugs the missing seam between those generic signals and the persisted session entry.\n\n## Test coverage\n\n- `src/gateway/session-lifecycle-state.test.ts`:\n  - `marks yielded lifecycle end events as paused with sessions_yield reason` (persisted patch).\n  - `treats yielded as paused even when aborted is set` (yield short-circuit).\n  - `clears pauseReason when a fresh run starts on a paused session` (start-phase reactivation).\n  - Existing terminal-mapping tests updated to include explicit `pauseReason: undefined` on non-yield ends.\n- `src/agents/main-session-restart-recovery.test.ts`:\n  - `skips sessions paused via sessions_yield instead of forcing a resume`.\n  - `does not mark sessions with sessions_yield pauseReason as restart-aborted from cleaned locks`.\n\n## Local validation\n\n- `pnpm tsgo:core`, `pnpm tsgo:core:test`, `pnpm tsgo:extensions`, `pnpm tsgo:extensions:test` — clean.\n- `pnpm test src/gateway/session-lifecycle-state.test.ts src/agents/main-session-restart-recovery.test.ts src/gateway/server-chat.agent-events.test.ts src/config/sessions.test.ts src/agents/tools/sessions-list-tool.test.ts src/gateway/server-methods/agent.test.ts src/gateway/server-methods/agent.create-event.test.ts src/gateway/server-methods/agent-wait-dedupe.test.ts src/agents/subagent-registry.test.ts src/agents/subagent-announce-output.test.ts src/agents/pi-embedded-runner/sessions-yield.orchestration.test.ts` — all green (235 tests).\n- `pnpm exec oxfmt --check`, `node scripts/run-oxlint.mjs`, `pnpm format:docs:check`, `pnpm check:changelog-attributions` — all clean on changed files.\n\n## Test plan\n\n- [ ] CI green on \\`fix(agents): pause yielded main-session runs\\`.\n- [ ] Manual smoke: trigger `sessions_yield` from a main-session conversation; confirm the session entry persists `status: paused` and `pauseReason: sessions_yield`, and that a follow-up turn flips back to `running` with `pauseReason: undefined`.\n- [ ] Restart-recovery smoke: kill the gateway while a main session is paused via yield; confirm restart-recovery skips it instead of re-prompting with the interrupted-turn message.\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Before this PR, when a top-level (non-subagent) embedded `openclaw` run ended via the `sessions_yield` tool, the runner emitted `yielded=true` and `livenessState=paused` but the gateway treated it as a clean completion and wrote `status=done`. The session displayed as finished while awaiting a queued post-yield continuation, racing dashboards, restart-recovery, and follow-up turns. After this PR, the lifecycle persistence derives `status=paused` with `pauseReason=sessions_yield`, restart-recovery skips paused sessions, and `SessionRunStatus` adds `\"paused\"` so consumers can distinguish a yielded run from a completed one.\n- **Real environment tested**: Verified against the PR branch from upstream `openclaw/openclaw#75662`. Patch sits on top of upstream/main; the upgrade-2026.5.12 deployment branch on `mac-mini.lan` does not yet carry the cherry-pick, so the proof is against the PR diff as it would land on upstream main.\n- **Exact steps or command run after this patch**:\n  ```bash\n  gh pr diff 75662 -- src/config/sessions/types.ts\n  gh pr diff 75662 -- src/agents/main-session-restart-recovery.ts\n  ```\n- **Evidence after fix**: Captured live from the `openclaw/openclaw#75662` PR head via `gh pr diff 75662` against the upstream-tracked branch (also available locally under `~/.openclaw/openclaw` worktree for the PR branch):\n  ```\n  -export type SessionRunStatus = \"running\" | \"done\" | \"failed\" | \"killed\" | \"timeout\";\n  +export type SessionRunStatus = \"running\" | \"done\" | \"failed\" | \"killed\" | \"timeout\" | \"paused\";\n  ```\n  And in the recovery-skip path:\n  ```\n  +  // Sessions paused via `sessions_yield` are intentionally awaiting a queued\n  +  // continuation. Restart recovery would otherwise re-prompt them with the\n  +  // generic \"previous turn was interrupted\" message and race the follow-up.\n  +  if (entry.pauseReason === \"sessions_yield\") {\n  +    return true;\n  +  }\n  ```\n  The `paused` status surfaces through `~/.openclaw/sessions/<id>.json` `SessionEntry` shape, and `shouldSkipMainRecovery` in `~/.openclaw/openclaw/src/agents/main-session-restart-recovery.ts` short-circuits restart recovery for those entries. The mirror commit `6f3b5f8666f3a3877b62d9019b8842455fdf62e1` already lands the subagent half of this fix on upstream main; this PR generalizes the same logic to top-level sessions.\n- **Observed result after fix**: On a gateway carrying this patch, `openclaw`-managed main sessions that end via `sessions_yield` persist as `status=paused` with `pauseReason=sessions_yield` in `~/.openclaw/sessions/<key>.json` and are NOT re-prompted on the next gateway restart. The companion subagent fix has been running on `mac-mini.lan` since the upgrade-2026.5.12 deploy; this PR brings the same behavior to top-level runs once cherry-picked or merged.\n- **What was not tested**: Direct live capture from a host carrying this exact patch (the cherry-pick to `upgrade-2026.5.12` has not yet been performed, intentionally -- this PR is still in review). Behavior under a race between a fresh user turn and a sessions_yield-paused entry (covered by the new test case in `main-session-restart-recovery.test.ts` but not deliberately reproduced live).\n",
+        "branch": "fix/main-session-yield-pause",
+        "head_sha": "3d0cb75106487f4fba5e81165557d8f8affe3530",
+        "author": "amittell",
         "labels": [
-          "docs",
-          "channel: bluebubbles",
-          "channel: discord",
-          "channel: imessage",
-          "channel: line",
-          "channel: matrix",
-          "channel: mattermost",
-          "channel: msteams",
-          "channel: nextcloud-talk",
-          "channel: signal",
-          "channel: slack",
-          "channel: telegram",
-          "channel: whatsapp-web",
-          "channel: zalouser",
           "gateway",
-          "extensions: diagnostics-otel",
-          "extensions: memory-core",
-          "cli",
-          "scripts",
-          "commands",
-          "docker",
           "agents",
-          "channel: twitch",
-          "channel: irc",
-          "size: XL",
-          "extensions: huggingface",
-          "channel: qqbot",
-          "channel: qa-channel",
-          "extensions: qa-lab",
-          "extensions: codex",
+          "size: M",
           "triage: dirty-candidate",
-          "extensions: deepinfra",
           "proof: supplied",
-          "mantis: telegram-visible-proof",
-          "extensions: chutes",
-          "dependencies-changed",
           "P2",
           "rating: 🦪 silver shellfish",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "merge-risk: 🚨 security-boundary",
+          "merge-risk: 🚨 session-state",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "docs/.generated/config-baseline.sha256",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/channels/discord.md",
+            "path": "CHANGELOG.md",
             "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "docs/channels/groups.md",
-            "additions": 5,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/gateway/config-channels.md",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/plugins/sdk-channel-plugins.md",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/chutes/models.ts",
-            "additions": 16,
-            "deletions": 21,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/dynamic-tools.test.ts",
-            "additions": 6,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/dynamic-tools.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/deepinfra/image-generation-provider.ts",
-            "additions": 4,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/deepinfra/speech-provider.test.ts",
-            "additions": 12,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/deepinfra/speech-provider.ts",
-            "additions": 4,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/deepinfra/surface-model-catalogs.test.ts",
-            "additions": 2,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/deepinfra/surface-model-catalogs.ts",
-            "additions": 3,
-            "deletions": 11,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/diagnostics-otel/src/service.test.ts",
-            "additions": 17,
-            "deletions": 15,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/diagnostics-otel/src/service.ts",
-            "additions": 5,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/monitor/message-handler.preflight.test-helpers.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/monitor/message-handler.preflight.test.ts",
-            "additions": 136,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/monitor/message-handler.preflight.ts",
-            "additions": 11,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/huggingface/models.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor.gating.test.ts",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/inbound-processing.ts",
-            "additions": 11,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/monitor-provider.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/irc/src/config-schema.test.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/irc/src/config-schema.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/irc/src/inbound.behavior.test.ts",
-            "additions": 8,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/irc/src/inbound.policy.test.ts",
-            "additions": 63,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/irc/src/inbound.ts",
-            "additions": 59,
-            "deletions": 18,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/irc/src/types.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/line/src/bot-handlers.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/line/src/bot-handlers.ts",
-            "additions": 16,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/line/src/config-schema.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/line/src/types.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/matrix/src/config-schema.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/matrix/src/matrix/monitor/handler.test-helpers.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/matrix/src/matrix/monitor/handler.ts",
-            "additions": 14,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/matrix/src/matrix/monitor/index.test.ts",
-            "additions": 26,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/matrix/src/matrix/monitor/index.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/matrix/src/matrix/monitor/mentions.test.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/matrix/src/matrix/monitor/mentions.ts",
-            "additions": 30,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/matrix/src/runtime-api.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/matrix/src/test-runtime.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/matrix/src/types.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/config-schema-core.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/monitor.ts",
-            "additions": 9,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/types.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/qmd-manager.test.ts",
-            "additions": 6,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/msteams/npm-shrinkwrap.json",
-            "additions": 24,
-            "deletions": 43,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/msteams/src/graph.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/msteams/src/oauth.token.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/msteams/src/sso.ts",
-            "additions": 1,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/nextcloud-talk/src/config-schema.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/nextcloud-talk/src/inbound.behavior.test.ts",
+            "path": "src/agents/main-session-restart-recovery.test.ts",
             "additions": 55,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/nextcloud-talk/src/inbound.ts",
-            "additions": 22,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/nextcloud-talk/src/types.ts",
-            "additions": 5,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-channel/src/config-schema.ts",
-            "additions": 2,
+            "path": "src/agents/main-session-restart-recovery.ts",
+            "additions": 6,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/qa-channel/src/inbound.test.ts",
-            "additions": 80,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-channel/src/inbound.ts",
-            "additions": 17,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-channel/src/types.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/child-output.ts",
+            "path": "src/agents/tools/sessions-helpers.ts",
             "additions": 1,
-            "deletions": 3,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts",
-            "additions": 4,
+            "path": "src/agents/tools/sessions-list-tool.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/types.ts",
+            "additions": 7,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-chat.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-lifecycle-state.test.ts",
+            "additions": 121,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-lifecycle-state.ts",
+            "additions": 25,
             "deletions": 4,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/qa-lab/src/live-transports/shared/live-gateway.runtime.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts",
+            "path": "src/gateway/session-utils.ts",
             "additions": 4,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime.ts",
-            "additions": 5,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/model-catalog.runtime.ts",
-            "additions": 10,
-            "deletions": 14,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/qa-gateway-config.test.ts",
-            "additions": 2,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/suite-runtime-agent-process.test.ts",
-            "additions": 1,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/qa-lab/src/suite-runtime-agent-process.ts",
-            "additions": 1,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/suite-runtime-agent-tools.test.ts",
-            "additions": 1,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qqbot/src/config-schema.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qqbot/src/engine/gateway/stages/group-gate-stage.test.ts",
-            "additions": 206,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/qqbot/src/engine/gateway/stages/group-gate-stage.ts",
-            "additions": 10,
+            "path": "src/gateway/session-utils.types.ts",
+            "additions": 4,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/qqbot/src/engine/gateway/types.ts",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qqbot/src/types.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/signal/src/monitor.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/signal/src/monitor/event-handler.mention-gating.test.ts",
-            "additions": 13,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/signal/src/monitor/event-handler.ts",
-            "additions": 10,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/signal/src/monitor/event-handler.types.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/monitor/message-handler/prepare.test.ts",
-            "additions": 80,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/monitor/message-handler/prepare.ts",
-            "additions": 13,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-handlers.runtime.ts",
-            "additions": 11,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message-context.body.test.ts",
-            "additions": 37,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message-context.body.ts",
-            "additions": 15,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message-context.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message-context.types.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/twitch/npm-shrinkwrap.json",
-            "additions": 3,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/whatsapp/src/accounts.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/whatsapp/src/auto-reply/monitor/group-gating.runtime.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/whatsapp/src/auto-reply/monitor/group-gating.ts",
-            "additions": 12,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/whatsapp/src/auto-reply/monitor/on-message.ts",
-            "additions": 8,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/whatsapp/src/session.test.ts",
-            "additions": 12,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/whatsapp/src/test-helpers.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/zalouser/src/config-schema.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/zalouser/src/monitor.group-gating.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/zalouser/src/monitor.ts",
-            "additions": 9,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/zalouser/src/types.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "npm-shrinkwrap.json",
-            "additions": 21,
-            "deletions": 70,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/agent-core/src/agent-loop.ts",
-            "additions": 14,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/check-gateway-watch-regression.mjs",
-            "additions": 3,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/deadcode-unused-files.allowlist.mjs",
+            "path": "src/plugins/session-entry-slot-keys.ts",
             "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
@@ -720,147 +310,55 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-70864",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-70864.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-75662",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-75662.md",
         "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
         "review_decision": "",
         "checks": {
-          "total": 102,
+          "total": 97,
           "counts": {
-            "SUCCESS": 34,
-            "IN_PROGRESS": 45,
-            "SKIPPED": 20,
-            "FAILURE": 1,
+            "IN_PROGRESS": 1,
+            "SUCCESS": 75,
+            "SKIPPED": 19,
             "NEUTRAL": 2
           },
           "blockers": [
-            "Scan changed paths (precise):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (core-auth-secrets):IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "Critical Quality (config-boundary):IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-runtime-infra-state:IN_PROGRESS",
-            "checks-node-core-runtime-infra-process:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-core-runtime-cron-service:IN_PROGRESS",
-            "checks-node-agentic-control-plane-agent-chat:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor:IN_PROGRESS",
-            "checks-node-agentic-agents:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
-            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-session:IN_PROGRESS",
-            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "check-prod-types:FAILURE",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "Critical Quality (mcp-process-runtime-boundary):IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS",
-            "Critical Quality (provider-runtime-boundary):IN_PROGRESS",
-            "Critical Quality (plugin-boundary):IN_PROGRESS"
+            "Security High (core-auth-secrets):IN_PROGRESS"
           ],
           "pending": [
-            "Scan changed paths (precise):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (core-auth-secrets):IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "Critical Quality (config-boundary):IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "checks-node-core-runtime-infra-state:IN_PROGRESS",
-            "checks-node-core-runtime-infra-process:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-core-runtime-cron-service:IN_PROGRESS",
-            "checks-node-agentic-control-plane-agent-chat:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor:IN_PROGRESS",
-            "checks-node-agentic-agents:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
-            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-session:IN_PROGRESS",
-            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "Critical Quality (mcp-process-runtime-boundary):IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS",
-            "Critical Quality (provider-runtime-boundary):IN_PROGRESS",
-            "Critical Quality (plugin-boundary):IN_PROGRESS"
+            "Security High (core-auth-secrets):IN_PROGRESS"
           ],
-          "terminalBlockers": [
-            "check-prod-types:FAILURE"
-          ]
+          "terminalBlockers": []
         }
       },
-      "reason": "author association NONE and repository permission read are not allowed"
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 4791,
+    "total_ms": 2804,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 670
+        "ms": 529
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 3738
+        "ms": 1835
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 369
+        "ms": 410
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
