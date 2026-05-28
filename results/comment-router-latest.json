@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-28T15:09:00.799Z",
+  "generated_at": "2026-05-28T15:09:17.627Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-28T12:09:00.354Z",
+  "since": "2026-05-28T12:09:15.247Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    87680
+    87681
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,137 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:87681:4565422787:2026-05-28T15:09:11Z:clawsweeper_auto_repair",
+      "comment_id": "4565422787",
+      "comment_version_key": "4565422787:2026-05-28T15:09:11Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/87681#issuecomment-4565422787",
+      "repo": "openclaw/openclaw",
+      "issue_number": 87681,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-28T15:03:38Z",
+      "comment_updated_at": "2026-05-28T15:09:11Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=c41510ee2d079f1f25b7ece2d1227b1ec0370d34)",
+      "review_summary": "The PR adds a Linux OOM-score-aware SIGKILL hint to exec failure formatting and regression tests for the new message path.\n\nPR surface: Source +60, Tests +129. Total +189 across 4 files.\n\nReproducibility: no. for the original live cgroup OOM path; the PR only provides mocked/unit reproduction. The PTY signal gap is source-reproducible from the adapter and formatter types because PTY exits can carry numeric signal `9`.",
+      "review_followup": "- [P1] Contributor or maintainer follow-up is needed for the numeric SIGKILL fix and real Linux proof; this should not enter repair automation while contributor-environment proof is the merge gate.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "c41510ee2d079f1f25b7ece2d1227b1ec0370d34",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(exec): surface oom_score_adj raise when SIGKILLs hit broad find/grep on Linux (#69242)",
+        "body": "## Summary\n\nWhat problem does this PR solve?\n\n- On Linux, broad `find` / `grep -R` discovery commands intermittently terminate with SIGKILL and the exec tool reports the bare `Command aborted by signal SIGKILL` reason. `journalctl -k` shows no system OOM line, so users cannot correlate the kills with memory pressure (issue #69242).\n- The real cause is the per-child `oom_score_adj=1000` wrap added in #70404 to protect the long-lived gateway: it makes the exec child the preferred cgroup OOM victim, and cgroup/memcg OOM kills do not always emit the classic `Killed process` kernel line that `journalctl -k` shows. So the supervisor sees `result.signal === \"SIGKILL\"`, classifies the failure as `failureKind: \"signal\"`, and prints the generic reason with no diagnostic.\n\nWhy does this matter now?\n\n- The crash-loop label is correct: the same agent step retries the same broad command, hits the same memory ceiling, gets killed again. Without a hint about the raised score, users tune timeouts and disk caches instead of the actual lever.\n\nWhat is the intended outcome?\n\n- When the exec failure is a kernel-driven bare SIGKILL on Linux and the OOM-score wrap is active, augment the reason with: a one-line root-cause explanation, a pointer to `docs/platforms/linux.md`, scope/limit remedies, and the `OPENCLAW_CHILD_OOM_SCORE_ADJ=0` opt-out. Leave every other failure shape (supervisor cancels, timeouts, other signals, non-Linux) untouched.\n\nWhat is intentionally out of scope?\n\n- No change to the OOM-score wrap itself (#70404 still ships its child-side raise).\n- No change to kill behavior - the kernel still kills the child; we only relabel the reason so the user can act.\n- No new config surface. The fix piggybacks on the existing `OPENCLAW_CHILD_OOM_SCORE_ADJ` knob.\n- No cgroup probe / no /proc/PID/oom_score read after the fact. We use the wrap-eligibility predicate, which is both faster and matches what we *did* to the child at spawn time.\n\nWhat does success look like?\n\n- A Linux user who hits SIGKILL on `find /home/.../work -maxdepth 6 ...` now reads \"Likely an unprivileged cgroup OOM kill: OpenClaw raises this exec child's oom_score_adj to 1000 ... set OPENCLAW_CHILD_OOM_SCORE_ADJ=0 ...\" in the tool result, and can either narrow the search or opt out per env.\n\nWhat should reviewers focus on?\n\n- The classifier path: `failureKind === \"signal\"` only fires when the supervisor saw an external signal exit with no `forcedReason` (see `src/process/supervisor/supervisor.ts:257-258`). User cancels, overall-timeout, and no-output-timeout all set `forcedReason`, so they do not pass through this branch even though they end up sending SIGKILL after the 5s graceful window - which is what we want, because those reasons already render useful messages.\n- `isLinuxChildOomScoreRaiseActive` deliberately mirrors `shouldWrapChildForOomScore` (Linux + not opted out + `/bin/sh` available) so a wrap that actually happened maps to a hint that's relevant.\n- The hint is gated on `exitSignal === \"SIGKILL\"` so SIGSEGV/SIGINT/SIGPIPE/SIGTERM keep their original messages and aren't misattributed.\n\n## Linked context\n\nWhich issue does this close?\n\nCloses #69242\n\nWhich issues, PRs, or discussions are related?\n\nRelated #70404 (introduced the `oom_score_adj=1000` wrap whose silent killings this PR explains).\n\nWas this requested by a maintainer or owner?\n\nNo - external contribution against the `clawsweeper:source-repro` issue.\n\n## Real behavior proof (required for external PRs)\n\n- Behavior addressed: Linux exec tool reports bare `Command aborted by signal SIGKILL` for broad `find`/`grep -R` discovery commands with no journalctl OOM evidence. After this patch the same code path surfaces the raised-`oom_score_adj` root cause and the opt-out.\n- Real environment tested: macOS host running the worktree against a mocked supervisor that emits the kernel-shaped `exit.reason === \"signal\"` / `exit.exitSignal === \"SIGKILL\"` payload. Cross-platform branch coverage uses the explicit `linuxOomKillLikely` test parameter.\n- Exact steps or command run after this patch: `node scripts/run-vitest.mjs src/process/linux-oom-score.test.ts src/agents/bash-tools.exec-runtime.test.ts`.\n- Evidence after fix: `Test Files 3 passed (3), Tests 109 passed (109)` including the new `#69242` cases that assert the reason contains `oom_score_adj`, `OPENCLAW_CHILD_OOM_SCORE_ADJ=0`, and `journalctl -k`, plus negative cases for non-Linux / opted-out / non-SIGKILL signals. Adjacent suites also pass: `src/agents/bash-tools.exec-*.test.ts` (62 tests across 8 files) and `src/process/supervisor/*.test.ts` (37 tests across 3 files).\n- Observed result after fix: `buildExecExitOutcome` for `{ reason: \"signal\", exitSignal: \"SIGKILL\" }` returns a reason that contains the new diagnostic on Linux-with-raise-active, and the original bare message everywhere else.\n- What was not tested: I did not reproduce the OOM kill on a real Linux host with a large filesystem under cgroup memory pressure. The unit tests cover the rendering path; the actual SIGKILL trigger is the kernel and unchanged. Manual VPS verification (set tight `MemoryMax=` on the gateway slice, run `find /` against a large tree, confirm the new hint appears) would be a useful follow-up before backport.\n- Proof limitations or environment constraints: no Linux VPS with cgroup limits handy for live repro. The diagnostic is a string-rendering change downstream of the kill, so this is the highest-value layer to unit-test.\n- Before evidence: pre-fix `formatExecFailureReason` and `buildExecExitOutcome` returned `\"Command aborted by signal SIGKILL\"` with no further context (existing tests covered that exact shape; see `src/agents/bash-tools.exec-runtime.test.ts` `formatExecFailureReason`).\n\n## Tests and validation\n\nWhich commands did you run?\n\n- `node scripts/run-vitest.mjs src/process/linux-oom-score.test.ts src/agents/bash-tools.exec-runtime.test.ts` -> 109 passed.\n- `node scripts/run-vitest.mjs src/agents/bash-tools.exec-foreground-failures.test.ts src/agents/bash-tools.exec-host-shared.test.ts src/agents/bash-tools.exec-host-node.test.ts src/agents/exec-defaults.test.ts` -> 62 passed.\n- `node scripts/run-vitest.mjs src/process/supervisor/supervisor.test.ts src/process/supervisor/adapters/child.test.ts src/process/supervisor/adapters/pty.test.ts` -> 37 passed.\n- `npx oxlint --config .oxlintrc.json` on the four touched files -> clean.\n- `npx oxfmt --check` on the four touched files -> all formatted.\n- `tsgo` on `tsconfig.core.json` -> the only TS errors reported (`src/plugin-sdk/approval-reaction-runtime.ts`, `src/plugins/discovery.ts`) are pre-existing on `upstream/main` and reproduce with my changes stashed; my diff introduces no new TS errors.\n\nWhat regression coverage was added or updated?\n\n- `src/process/linux-oom-score.test.ts`: 4 new cases for `isLinuxChildOomScoreRaiseActive` (Linux-with-shell positive, non-Linux negative, no-shell negative, opt-out values negative).\n- `src/agents/bash-tools.exec-runtime.test.ts`: 3 new `formatExecFailureReason` cases (positive hint, opted-out bare message, non-SIGKILL signals untouched) and 2 new `buildExecExitOutcome` cases (hint flag plumbed through, hint omitted when flag false).\n\nWhat failed before this fix, if known?\n\n- No prior assertion on the SIGKILL reason text included the OOM hint - that was the gap. The existing `formatExecFailureReason` test only covered timeout and shell-failure shapes, so a regression where SIGKILL became a silent crash-loop signal had no test cover.\n\nIf no test was added, why not?\n\n- N/A - tests were added.\n\n## Risk checklist\n\nDid user-visible behavior change? (`Yes/No`)\n\nYes - the tool result text for a Linux-bare-SIGKILL exec failure now ends with the OOM hint instead of a single sentence. Every other failure shape is byte-identical.\n\nDid config, environment, or migration behavior change? (`Yes/No`)\n\nNo - the fix reuses the existing `OPENCLAW_CHILD_OOM_SCORE_ADJ` knob from #70404. No new config keys, defaults, or migrations.\n\nDid security, auth, secrets, network, or tool execution behavior change? (`Yes/No`)\n\nNo - kill behavior is unchanged. The supervisor still spawns through the same wrap shim, the kernel still drives the kill, the supervisor still classifies it as `failureKind: \"signal\"`. Only the rendered `reason` string changes.\n\nWhat is the highest-risk area?\n\nMisclassifying a non-OOM SIGKILL as OOM-related (for example a legitimate `kill -9 <pid>` from outside the gateway). The hint is phrased as \"Likely an unprivileged cgroup OOM kill\" rather than asserting it, and explicitly mentions the opt-out as a remedy if the user knows the cause is something else.\n\nHow is that risk mitigated?\n\n- `failureKind === \"signal\"` already excludes user/timeout-driven cancels (those set `forcedReason` upstream).\n- The hint is gated on `exitSignal === \"SIGKILL\"` specifically, so SIGSEGV/SIGINT/SIGPIPE/SIGTERM keep their original messages.\n- The hint is gated on `isLinuxChildOomScoreRaiseActive()`, so non-Linux hosts and `OPENCLAW_CHILD_OOM_SCORE_ADJ=0` deployments never see it.\n\n## Current review state\n\nWhat is the next action?\n\nMaintainer review.\n\nWhat is still waiting on author, maintainer, CI, or external proof?\n\n- Optional live Linux VPS repro before backport. The fix is render-only, so I do not consider this a merge blocker.\n\nWhich bot or reviewer comments were addressed?\n\nNone yet - first push.",
+        "branch": "fix/69242-exec-tool-linux-sigkill-find",
+        "head_sha": "c41510ee2d079f1f25b7ece2d1227b1ec0370d34",
+        "author": "sweetcornna",
+        "labels": [
+          "agents",
+          "size: S",
+          "triage: mock-only-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/bash-tools.exec-runtime.test.ts",
+            "additions": 99,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.exec-runtime.ts",
+            "additions": 37,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/linux-oom-score.test.ts",
+            "additions": 30,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/linux-oom-score.ts",
+            "additions": 25,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-87681",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87681.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 45,
+          "counts": {
+            "CANCELLED": 2,
+            "IN_PROGRESS": 2,
+            "SKIPPED": 23,
+            "SUCCESS": 17,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "preflight:IN_PROGRESS",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS"
+          ],
+          "pending": [
+            "preflight:IN_PROGRESS",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 725,
+    "total_ms": 2640,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 435
+        "ms": 457
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1909
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 280
+        "ms": 248
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
