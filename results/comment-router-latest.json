@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-28T08:34:57.941Z",
+  "generated_at": "2026-05-28T08:35:19.866Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-28T05:34:57.644Z",
+  "since": "2026-05-28T05:35:18.160Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    87584
+    87563
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 3,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,119 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:87563:4561757978:2026-05-28T08:35:14Z:clawsweeper_auto_repair",
+      "comment_id": "4561757978",
+      "comment_version_key": "4561757978:2026-05-28T08:35:14Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/87563#issuecomment-4561757978",
+      "repo": "openclaw/openclaw",
+      "issue_number": 87563,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-28T07:35:52Z",
+      "comment_updated_at": "2026-05-28T08:35:14Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=0d6d3a7757a1d4cf589f7ccfac91d19382514749)",
+      "review_summary": "The PR adds registration-time cleanup in `src/agents/harness/native-hook-relay.ts` that removes native hook relay bridge `.json` records whose stored PID differs from the current process.\n\nPR surface: Source +29. Total +29 across 1 file.\n\nReproducibility: yes. source inspection gives a high-confidence reproduction path for the patch regression: create a live bridge record from one same-user gateway/profile, then have another process register and prune records where `pid !== process.pid`. The original stale-record failure also has useful reporter live output, but I did not run a current-main live repro in this read-only review.",
+      "review_followup": "- [P1] Needs contributor or maintainer revision plus submitted-branch proof; ClawSweeper repair should not be requested while the external proof gate remains insufficient.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "0d6d3a7757a1d4cf589f7ccfac91d19382514749",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(native-hook-relay): prune stale bridge files on registration",
+        "body": "> **AI-assisted PR** — diagnostic instrumentation, repro analysis, and patch authoring were done in a co-working session with Claude (Anthropic) on top of Cowork, and with ARC (a local OpenClaw agent on my install) as a second pair of eyes. All real-behavior tests below were run by me against my own gateway. I understand what the code does and have reviewed every line of the diff manually.\n\n## Summary\n\nFixes the root cause behind issues #87536 and #73723: every native tool call in a Codex-backed session can return `Native hook relay unavailable` because Codex picks a stale bridge registration file from a dead prior gateway process.\n\nAfter a crash, `SIGUSR1` supervisor-restart, or any non-graceful shutdown, the file in `/tmp/openclaw-native-hook-relays-<uid>/<hash>.json` is left pointing to a dead PID and an unbound port. The current gateway's bridge then competes with these zombies in the directory, and Codex clients can pick a stale entry. Once a client locks onto a stale entry, every hook invocation for that session fails until the next clean restart.\n\n## Fix\n\nIn `registerNativeHookRelayBridge`, before doing anything else, scan the bridge directory and `rmSync` any `.json` record whose `pid` field does not match `process.pid`. Only the current gateway process should ever own a record in there; anything else is by definition stale.\n\nTotal: +28 / −1 lines in `src/agents/harness/native-hook-relay.ts`.\n\n```ts\nfunction registerNativeHookRelayBridge(registration: ActiveNativeHookRelayRegistration): void {\n  try {\n    const staleDir = ensureNativeHookRelayBridgeDir();\n    for (const name of readdirSync(staleDir)) {\n      if (!name.endsWith(\".json\")) continue;\n      const full = path.join(staleDir, name);\n      try {\n        const rec = JSON.parse(readFileSync(full, \"utf8\")) as { pid?: number };\n        if (rec && typeof rec.pid === \"number\" && rec.pid !== process.pid) {\n          rmSync(full, { force: true });\n          log.debug(\"pruned stale native hook relay bridge file\", {\n            file: name, stalePid: rec.pid, currentPid: process.pid,\n          });\n        }\n      } catch { /* ignore unparseable / racing files */ }\n    }\n  } catch (error) {\n    log.debug(\"native hook relay bridge dir prune skipped\", { error });\n  }\n  // ... rest unchanged ...\n}\n```\n\n## Real behavior proof\n\n### The real setup I tested\n\n- OpenClaw `2026.5.26` running as a systemd user service (`openclaw-gateway.service`)\n- Ubuntu 22.04 in WSL2 on Windows 11\n- Node 24.15.0 (bundled with the gateway runtime)\n- Codex plugin enabled with: `transport: stdio`, `mode: yolo`, `approvalPolicy: never`, `sandbox: danger-full-access`\n- A real ARC-named agent operating over the Discord channel surface, with real Codex subagent tool invocations\n\n### The exact commands and steps I ran after the patch\n\nI applied the equivalent of this patch to the bundled `dist/native-hook-relay-AN6S_wz5.js` on my live install, restarted the gateway via `systemctl --user restart openclaw-gateway.service`, then drove the failure surface from ARC by asking it to run native shell commands across multiple turns and multiple Codex subagent sessions.\n\n### After-fix evidence\n\n**1. Bridge directory snapshot, before patch (5 zombies + 1 live):**\n\n```\n$ ls -la /tmp/openclaw-native-hook-relays-1000/\ntotal 16\ndrwx------  2 user user 120 May 28 02:44 .\n-rw-------  pid=11601  port=37109   # dead from prior session\n-rw-------  pid=17733  port=46593   # dead\n-rw-------  pid=90952  port=38385   # dead\n-rw-------  pid=211925 port=44387   # dead\n-rw-------  pid=240009 port=43303   # dead\n-rw-------  pid=243162 port=46523   # <-- live gateway\n\n$ ss -ltn | grep 127.0.0.1\n# only port 46523 (the live one) is bound\n# zombie ports 44387, 37109, 46593, 38385, 43303 -- not listening\n```\n\n**2. Before patch, every native tool call from ARC was blocked:**\n\n```\n> run date\nCommand blocked by PreToolUse hook: Native hook relay unavailable.\nCommand: date\n\n> run time date\nCommand blocked by PreToolUse hook: Native hook relay unavailable.\nCommand: time date\n```\n\n**3. After patch, prune output on first registration after restart:**\n\n```\n[HOOKPATCH] pruned stale bridge files {\"removed\":5,\"currentPid\":243162}\n# 5 dead PIDs removed: 240009, 211925, 90952, 17733, 11601\n# 1 file kept: the current live gateway record\n```\n\n(The `[HOOKPATCH]` prefix is local diagnostic logging I used during root-cause analysis; the upstream patch in this PR uses `log.debug` so it stays silent on the happy path.)\n\n**4. After patch, native tool calls succeed across multiple turns and time intervals:**\n\n```\n> run date\nThu May 28 02:55:15 EDT 2026\n\n> run date\nThu May 28 02:55:19 EDT 2026\n\n> run date\nThu May 28 03:18:41 EDT 2026\n\n> run time date\nThu May 28 03:21:04 EDT 2026\nreal    0m0.001s\nuser    0m0.000s\nsys     0m0.001s\n```\n\nFive consecutive native calls in one shell process passed. Separate Codex tool invocations across multiple runs also passed. `time date` composite commands passed. File reads and AgentMemory MCP queries from agent turns also passed.\n\n**5. After patch, bridge directory stays clean across the gateway restart cycle:**\n\n```\n$ ls -la /tmp/openclaw-native-hook-relays-1000/\n-rw-------  pid=243162 port=46523   # only the live one\n```\n\n### Observed result\n\nBefore this fix the failure was 100% reproducible after a SIGUSR1 supervisor restart or a non-graceful gateway exit had left even one zombie behind. After this fix the same workflow shows zero \"Native hook relay unavailable\" responses across the test cycle described above.\n\n### What I did not test\n\n- I did not test on macOS or native Linux (only Ubuntu/WSL2 Node 24.15.0).\n- I did not test the interaction with concurrent gateways running for the same UID (e.g., two `openclaw-gateway.service` profiles colliding on `/tmp/openclaw-native-hook-relays-<uid>/`); this is an existing concern of the directory design, not specific to this PR.\n- I did not run the repo's full `pnpm build && pnpm check && pnpm test` matrix from the fork (this is a 30+ minute pipeline locally and CI will exercise it); local unit-test coverage for the relay module would be a useful follow-up.\n\n## Why this is safe\n\n- **No public API change.** The function signature is unchanged; behavior is purely additive.\n- **No effect on the happy path.** When the bridge dir is already clean, the loop is a no-op (~ms cost).\n- **The guard is correct.** Only the current Node process can ever legitimately own a record in this dir, because `writeNativeHookRelayBridgeRecordForRegistration` always writes `pid: process.pid`. So `rec.pid !== process.pid` is both necessary and sufficient to identify staleness.\n- **Errors are swallowed.** A racing read/delete or unparseable file just gets skipped — the registration of the current bridge proceeds regardless.\n- **Idempotent.** Running registration multiple times produces the same final state.\n\n## What this PR does NOT do\n\nThis PR is intentionally scoped to the defensive fix. The broader architectural question of whether `renderNativeHookRelayUnavailableResponse` should fail-open instead of fail-closed (suggested in #73723 and discussed in #87536) is a separate decision about safety contract and should land in its own PR with an explicit config knob and a maintainer discussion of the default.\n\nI also have local-only patches that defer the dedup file delete by 200ms and suppress the timer-fired `handle.unregister` from the Codex plugin's run-attempt module; both are useful as defense in depth but are not strictly necessary once this prune lands, so they are not included here.\n\n## Refs\n\n- Closes the recurring symptom in #87536\n- Addresses the same underlying cause as #73723\n- I checked `release/2026.5.27` (source of `2026.5.27-beta.1`) — this fix is complementary, not duplicative; happy to retarget the PR there if maintainers prefer\n\n— Adam Houk, Applied AI Solutions",
+        "branch": "fix/native-hook-relay-stale-prune",
+        "head_sha": "0d6d3a7757a1d4cf589f7ccfac91d19382514749",
+        "author": "applied-ai-solutions-hub",
+        "labels": [
+          "agents",
+          "size: XS",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/harness/native-hook-relay.ts",
+            "additions": 30,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-87563",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87563.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "counts": {
+            "FAILURE": 3,
+            "SUCCESS": 71,
+            "SKIPPED": 22,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "checks-node-agentic-control-plane-runtime:FAILURE",
+            "checks-node-auto-reply-reply-agent-runner:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "checks-node-agentic-control-plane-runtime:FAILURE",
+            "checks-node-auto-reply-reply-agent-runner:FAILURE"
+          ]
+        }
+      },
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 526,
+    "total_ms": 1904,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 287
+        "ms": 309
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1378
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 229
+        "ms": 186
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
