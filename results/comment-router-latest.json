@@ -1,23 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-28T18:19:24.754Z",
+  "generated_at": "2026-05-28T18:19:29.920Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-28T15:19:24.014Z",
+  "since": "2026-05-28T15:19:27.804Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    84814
-  ],
-  "comment_ids": [
-    4505030692
+    83988
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 27,
+  "commands_seen": 7,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,26 +28,775 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:83988:4484464185:2026-05-28T18:19:24Z:clawsweeper_auto_repair",
+      "comment_id": "4484464185",
+      "comment_version_key": "4484464185:2026-05-28T18:19:24Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83988#issuecomment-4484464185",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83988,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-19T04:42:23Z",
+      "comment_updated_at": "2026-05-28T18:19:24Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=2233601785a7b9f44b9ee5573eeb8f8f360d569c)",
+      "review_summary": "The PR defers ACP final-mode TTS visible-text settlement for caption-capable voice sends, includes accumulated text as the TTS caption, tracks final delivery failures, and adds dispatch tests.\n\nPR surface: Source +32, Tests +213. Total +245 across 3 files.\n\nReproducibility: yes. Source inspection shows `projector.flush(true)` can send or queue visible text before `finalizeAcpTurnOutput()` runs, while the PR only defers settlement inside finalization; I did not run a live Telegram repro in this read-only review.",
+      "review_followup": "- [P1] Human review is needed for the live Telegram proof gate and the channel-capability direction; automation cannot supply the contributor's real Telegram setup evidence.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "2233601785a7b9f44b9ee5573eeb8f8f360d569c",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(tts): defer text settlement for final-mode TTS to eliminate churn (#83511)",
+        "body": "## Summary\n\nWhen `messages.tts.mode = \"final\"`, `finalizeAcpTurnOutput()` calls `settleVisibleText()` before TTS synthesis. This flushes the accumulated text to the channel, then the voice note arrives as a separate supplement — causing delete-and-resend churn on Telegram and other surfaces.\n\nThis PR defers `settleVisibleText()` until after the TTS outcome is known, and includes the visible text in the TTS payload so Telegram can deliver it as a voice-note caption.\n\n## Root cause\n\n```\nCurrent main flow:\n  1. settleVisibleText()     → text message sent to Telegram\n  2. maybeApplyTtsToPayload  → voice note synthesized\n  3. deliver(voice + supplement) → voice note sent separately\n  Result: user sees text, then voice note, then text deleted = churn\n\nFixed flow:\n  1. Skip settleVisibleText()\n  2. maybeApplyTtsToPayload  → voice note synthesized\n  3. deliver(voice + text as caption) → one combined message\n  4. (If TTS fails → settleVisibleText() fallback)\n  Result: user sees one voice note with caption = no churn\n```\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `dispatch-acp.ts` | Defer `settleVisibleText()` when `ttsMode === \"final\"` + include text in TTS payload + fallback on failure |\n| `dispatch-acp.test.ts` | 4 new tests: deferred settlement for Telegram, eager settlement for non-caption channels, fallback on failure, immediate settlement for non-final |\n\n## Tests\n\n```\n$ node scripts/run-vitest.mjs src/auto-reply/reply/dispatch-acp.test.ts\n ✓ auto-reply (54 tests) 30ms\n Test Files  1 passed (1)\n      Tests  54 passed (54)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: `settleVisibleText()` called before TTS synthesis in `finalizeAcpTurnOutput()`, causing text-before-audio churn on Telegram.\n- **Real environment tested**: Local patched OpenClaw checkout at `6de206309d`, macOS arm64, Node.js `v24.10.0`.\n- **Failing proof before fix**: Applied PR test file (`dispatch-acp.test.ts` with 54 tests) to unpatched `upstream/main` (`a002c416c7`) source. 1 test fails:\n\n```\n ❯ auto-reply dispatch-acp.test.ts (54 tests | 1 failed) 47ms\n\n FAIL  auto-reply > tryDispatchAcpReply > does not call settleVisibleText before TTS synthesis when mode is final\n AssertionError: expected true to be false // Object.is equality\n\n - Expected\n + Received\n\n - false\n + true\n\n ❯ dispatch-acp.test.ts:1928:35\n\n Test Files  1 failed (1)\n      Tests  1 failed | 53 passed (54)\n```\n\nThe failing test proves that without this patch, `settleVisibleText()` is called **before** TTS synthesis (`settleCalledBeforeTts === true`), confirming the churn bug.\n\n- **Exact steps or command run after this patch**:\n\n```\ngit checkout origin/fix/tts-final-text-before-audio-83511\nnode scripts/run-vitest.mjs src/auto-reply/reply/dispatch-acp.test.ts\n```\n\n- **Evidence after fix**:\n\n```\n ✓ auto-reply dispatch-acp.test.ts (54 tests) 30ms\n Test Files  1 passed (1)\n      Tests  54 passed (54)\n```\n\n- **Observed result after fix**: All 54 tests pass including the 4 new tests covering: deferred settlement for Telegram (caption-capable channel), eager settlement for non-caption channels (Discord), text fallback when TTS synthesis fails, and immediate settlement when TTS mode is not \"final\".\n- **What was not tested**: Live Telegram TTS session (requires TTS provider credentials and a live conversation). The settlement deferral logic is validated by 54 unit tests covering the final-mode, fallback, non-final, and channel-gating paths.\n\nCloses #83511\n",
+        "branch": "fix/tts-final-text-before-audio-83511",
+        "head_sha": "2233601785a7b9f44b9ee5573eeb8f8f360d569c",
+        "author": "jerry-xin",
+        "labels": [
+          "size: M",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/dispatch-acp-delivery.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-acp.test.ts",
+            "additions": 213,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-acp.ts",
+            "additions": 31,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83988",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83988.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 95,
+          "counts": {
+            "SUCCESS": 67,
+            "SKIPPED": 21,
+            "FAILURE": 6,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-agents:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-agents:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ]
+        }
+      },
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83988:4525894163:2026-05-23T16:08:16Z:re_review",
+      "comment_id": "4525894163",
+      "comment_version_key": "4525894163:2026-05-23T16:08:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83988#issuecomment-4525894163",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83988,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-23T16:08:16Z",
+      "comment_updated_at": "2026-05-23T16:08:16Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(tts): defer text settlement for final-mode TTS to eliminate churn (#83511)",
+        "body": "## Summary\n\nWhen `messages.tts.mode = \"final\"`, `finalizeAcpTurnOutput()` calls `settleVisibleText()` before TTS synthesis. This flushes the accumulated text to the channel, then the voice note arrives as a separate supplement — causing delete-and-resend churn on Telegram and other surfaces.\n\nThis PR defers `settleVisibleText()` until after the TTS outcome is known, and includes the visible text in the TTS payload so Telegram can deliver it as a voice-note caption.\n\n## Root cause\n\n```\nCurrent main flow:\n  1. settleVisibleText()     → text message sent to Telegram\n  2. maybeApplyTtsToPayload  → voice note synthesized\n  3. deliver(voice + supplement) → voice note sent separately\n  Result: user sees text, then voice note, then text deleted = churn\n\nFixed flow:\n  1. Skip settleVisibleText()\n  2. maybeApplyTtsToPayload  → voice note synthesized\n  3. deliver(voice + text as caption) → one combined message\n  4. (If TTS fails → settleVisibleText() fallback)\n  Result: user sees one voice note with caption = no churn\n```\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `dispatch-acp.ts` | Defer `settleVisibleText()` when `ttsMode === \"final\"` + include text in TTS payload + fallback on failure |\n| `dispatch-acp.test.ts` | 4 new tests: deferred settlement for Telegram, eager settlement for non-caption channels, fallback on failure, immediate settlement for non-final |\n\n## Tests\n\n```\n$ node scripts/run-vitest.mjs src/auto-reply/reply/dispatch-acp.test.ts\n ✓ auto-reply (54 tests) 30ms\n Test Files  1 passed (1)\n      Tests  54 passed (54)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: `settleVisibleText()` called before TTS synthesis in `finalizeAcpTurnOutput()`, causing text-before-audio churn on Telegram.\n- **Real environment tested**: Local patched OpenClaw checkout at `6de206309d`, macOS arm64, Node.js `v24.10.0`.\n- **Failing proof before fix**: Applied PR test file (`dispatch-acp.test.ts` with 54 tests) to unpatched `upstream/main` (`a002c416c7`) source. 1 test fails:\n\n```\n ❯ auto-reply dispatch-acp.test.ts (54 tests | 1 failed) 47ms\n\n FAIL  auto-reply > tryDispatchAcpReply > does not call settleVisibleText before TTS synthesis when mode is final\n AssertionError: expected true to be false // Object.is equality\n\n - Expected\n + Received\n\n - false\n + true\n\n ❯ dispatch-acp.test.ts:1928:35\n\n Test Files  1 failed (1)\n      Tests  1 failed | 53 passed (54)\n```\n\nThe failing test proves that without this patch, `settleVisibleText()` is called **before** TTS synthesis (`settleCalledBeforeTts === true`), confirming the churn bug.\n\n- **Exact steps or command run after this patch**:\n\n```\ngit checkout origin/fix/tts-final-text-before-audio-83511\nnode scripts/run-vitest.mjs src/auto-reply/reply/dispatch-acp.test.ts\n```\n\n- **Evidence after fix**:\n\n```\n ✓ auto-reply dispatch-acp.test.ts (54 tests) 30ms\n Test Files  1 passed (1)\n      Tests  54 passed (54)\n```\n\n- **Observed result after fix**: All 54 tests pass including the 4 new tests covering: deferred settlement for Telegram (caption-capable channel), eager settlement for non-caption channels (Discord), text fallback when TTS synthesis fails, and immediate settlement when TTS mode is not \"final\".\n- **What was not tested**: Live Telegram TTS session (requires TTS provider credentials and a live conversation). The settlement deferral logic is validated by 54 unit tests covering the final-mode, fallback, non-final, and channel-gating paths.\n\nCloses #83511\n",
+        "branch": "fix/tts-final-text-before-audio-83511",
+        "head_sha": "2233601785a7b9f44b9ee5573eeb8f8f360d569c",
+        "author": "jerry-xin",
+        "labels": [
+          "size: M",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/dispatch-acp-delivery.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-acp.test.ts",
+            "additions": 213,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-acp.ts",
+            "additions": 31,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83988",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83988.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 95,
+          "counts": {
+            "SUCCESS": 67,
+            "SKIPPED": 21,
+            "FAILURE": 6,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-agents:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-agents:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83988:4525651005:2026-05-23T14:24:31Z:re_review",
+      "comment_id": "4525651005",
+      "comment_version_key": "4525651005:2026-05-23T14:24:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83988#issuecomment-4525651005",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83988,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-23T14:24:31Z",
+      "comment_updated_at": "2026-05-23T14:24:31Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(tts): defer text settlement for final-mode TTS to eliminate churn (#83511)",
+        "body": "## Summary\n\nWhen `messages.tts.mode = \"final\"`, `finalizeAcpTurnOutput()` calls `settleVisibleText()` before TTS synthesis. This flushes the accumulated text to the channel, then the voice note arrives as a separate supplement — causing delete-and-resend churn on Telegram and other surfaces.\n\nThis PR defers `settleVisibleText()` until after the TTS outcome is known, and includes the visible text in the TTS payload so Telegram can deliver it as a voice-note caption.\n\n## Root cause\n\n```\nCurrent main flow:\n  1. settleVisibleText()     → text message sent to Telegram\n  2. maybeApplyTtsToPayload  → voice note synthesized\n  3. deliver(voice + supplement) → voice note sent separately\n  Result: user sees text, then voice note, then text deleted = churn\n\nFixed flow:\n  1. Skip settleVisibleText()\n  2. maybeApplyTtsToPayload  → voice note synthesized\n  3. deliver(voice + text as caption) → one combined message\n  4. (If TTS fails → settleVisibleText() fallback)\n  Result: user sees one voice note with caption = no churn\n```\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `dispatch-acp.ts` | Defer `settleVisibleText()` when `ttsMode === \"final\"` + include text in TTS payload + fallback on failure |\n| `dispatch-acp.test.ts` | 4 new tests: deferred settlement for Telegram, eager settlement for non-caption channels, fallback on failure, immediate settlement for non-final |\n\n## Tests\n\n```\n$ node scripts/run-vitest.mjs src/auto-reply/reply/dispatch-acp.test.ts\n ✓ auto-reply (54 tests) 30ms\n Test Files  1 passed (1)\n      Tests  54 passed (54)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: `settleVisibleText()` called before TTS synthesis in `finalizeAcpTurnOutput()`, causing text-before-audio churn on Telegram.\n- **Real environment tested**: Local patched OpenClaw checkout at `6de206309d`, macOS arm64, Node.js `v24.10.0`.\n- **Failing proof before fix**: Applied PR test file (`dispatch-acp.test.ts` with 54 tests) to unpatched `upstream/main` (`a002c416c7`) source. 1 test fails:\n\n```\n ❯ auto-reply dispatch-acp.test.ts (54 tests | 1 failed) 47ms\n\n FAIL  auto-reply > tryDispatchAcpReply > does not call settleVisibleText before TTS synthesis when mode is final\n AssertionError: expected true to be false // Object.is equality\n\n - Expected\n + Received\n\n - false\n + true\n\n ❯ dispatch-acp.test.ts:1928:35\n\n Test Files  1 failed (1)\n      Tests  1 failed | 53 passed (54)\n```\n\nThe failing test proves that without this patch, `settleVisibleText()` is called **before** TTS synthesis (`settleCalledBeforeTts === true`), confirming the churn bug.\n\n- **Exact steps or command run after this patch**:\n\n```\ngit checkout origin/fix/tts-final-text-before-audio-83511\nnode scripts/run-vitest.mjs src/auto-reply/reply/dispatch-acp.test.ts\n```\n\n- **Evidence after fix**:\n\n```\n ✓ auto-reply dispatch-acp.test.ts (54 tests) 30ms\n Test Files  1 passed (1)\n      Tests  54 passed (54)\n```\n\n- **Observed result after fix**: All 54 tests pass including the 4 new tests covering: deferred settlement for Telegram (caption-capable channel), eager settlement for non-caption channels (Discord), text fallback when TTS synthesis fails, and immediate settlement when TTS mode is not \"final\".\n- **What was not tested**: Live Telegram TTS session (requires TTS provider credentials and a live conversation). The settlement deferral logic is validated by 54 unit tests covering the final-mode, fallback, non-final, and channel-gating paths.\n\nCloses #83511\n",
+        "branch": "fix/tts-final-text-before-audio-83511",
+        "head_sha": "2233601785a7b9f44b9ee5573eeb8f8f360d569c",
+        "author": "jerry-xin",
+        "labels": [
+          "size: M",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/dispatch-acp-delivery.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-acp.test.ts",
+            "additions": 213,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-acp.ts",
+            "additions": 31,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83988",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83988.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 95,
+          "counts": {
+            "SUCCESS": 67,
+            "SKIPPED": 21,
+            "FAILURE": 6,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-agents:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-agents:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83988:4525304046:2026-05-23T12:13:10Z:re_review",
+      "comment_id": "4525304046",
+      "comment_version_key": "4525304046:2026-05-23T12:13:10Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83988#issuecomment-4525304046",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83988,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-23T12:13:10Z",
+      "comment_updated_at": "2026-05-23T12:13:10Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(tts): defer text settlement for final-mode TTS to eliminate churn (#83511)",
+        "body": "## Summary\n\nWhen `messages.tts.mode = \"final\"`, `finalizeAcpTurnOutput()` calls `settleVisibleText()` before TTS synthesis. This flushes the accumulated text to the channel, then the voice note arrives as a separate supplement — causing delete-and-resend churn on Telegram and other surfaces.\n\nThis PR defers `settleVisibleText()` until after the TTS outcome is known, and includes the visible text in the TTS payload so Telegram can deliver it as a voice-note caption.\n\n## Root cause\n\n```\nCurrent main flow:\n  1. settleVisibleText()     → text message sent to Telegram\n  2. maybeApplyTtsToPayload  → voice note synthesized\n  3. deliver(voice + supplement) → voice note sent separately\n  Result: user sees text, then voice note, then text deleted = churn\n\nFixed flow:\n  1. Skip settleVisibleText()\n  2. maybeApplyTtsToPayload  → voice note synthesized\n  3. deliver(voice + text as caption) → one combined message\n  4. (If TTS fails → settleVisibleText() fallback)\n  Result: user sees one voice note with caption = no churn\n```\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `dispatch-acp.ts` | Defer `settleVisibleText()` when `ttsMode === \"final\"` + include text in TTS payload + fallback on failure |\n| `dispatch-acp.test.ts` | 4 new tests: deferred settlement for Telegram, eager settlement for non-caption channels, fallback on failure, immediate settlement for non-final |\n\n## Tests\n\n```\n$ node scripts/run-vitest.mjs src/auto-reply/reply/dispatch-acp.test.ts\n ✓ auto-reply (54 tests) 30ms\n Test Files  1 passed (1)\n      Tests  54 passed (54)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: `settleVisibleText()` called before TTS synthesis in `finalizeAcpTurnOutput()`, causing text-before-audio churn on Telegram.\n- **Real environment tested**: Local patched OpenClaw checkout at `6de206309d`, macOS arm64, Node.js `v24.10.0`.\n- **Failing proof before fix**: Applied PR test file (`dispatch-acp.test.ts` with 54 tests) to unpatched `upstream/main` (`a002c416c7`) source. 1 test fails:\n\n```\n ❯ auto-reply dispatch-acp.test.ts (54 tests | 1 failed) 47ms\n\n FAIL  auto-reply > tryDispatchAcpReply > does not call settleVisibleText before TTS synthesis when mode is final\n AssertionError: expected true to be false // Object.is equality\n\n - Expected\n + Received\n\n - false\n + true\n\n ❯ dispatch-acp.test.ts:1928:35\n\n Test Files  1 failed (1)\n      Tests  1 failed | 53 passed (54)\n```\n\nThe failing test proves that without this patch, `settleVisibleText()` is called **before** TTS synthesis (`settleCalledBeforeTts === true`), confirming the churn bug.\n\n- **Exact steps or command run after this patch**:\n\n```\ngit checkout origin/fix/tts-final-text-before-audio-83511\nnode scripts/run-vitest.mjs src/auto-reply/reply/dispatch-acp.test.ts\n```\n\n- **Evidence after fix**:\n\n```\n ✓ auto-reply dispatch-acp.test.ts (54 tests) 30ms\n Test Files  1 passed (1)\n      Tests  54 passed (54)\n```\n\n- **Observed result after fix**: All 54 tests pass including the 4 new tests covering: deferred settlement for Telegram (caption-capable channel), eager settlement for non-caption channels (Discord), text fallback when TTS synthesis fails, and immediate settlement when TTS mode is not \"final\".\n- **What was not tested**: Live Telegram TTS session (requires TTS provider credentials and a live conversation). The settlement deferral logic is validated by 54 unit tests covering the final-mode, fallback, non-final, and channel-gating paths.\n\nCloses #83511\n",
+        "branch": "fix/tts-final-text-before-audio-83511",
+        "head_sha": "2233601785a7b9f44b9ee5573eeb8f8f360d569c",
+        "author": "jerry-xin",
+        "labels": [
+          "size: M",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/dispatch-acp-delivery.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-acp.test.ts",
+            "additions": 213,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-acp.ts",
+            "additions": 31,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83988",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83988.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 95,
+          "counts": {
+            "SUCCESS": 67,
+            "SKIPPED": 21,
+            "FAILURE": 6,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-agents:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-agents:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83988:4525060600:2026-05-23T10:30:02Z:re_review",
+      "comment_id": "4525060600",
+      "comment_version_key": "4525060600:2026-05-23T10:30:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83988#issuecomment-4525060600",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83988,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-23T10:30:02Z",
+      "comment_updated_at": "2026-05-23T10:30:02Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(tts): defer text settlement for final-mode TTS to eliminate churn (#83511)",
+        "body": "## Summary\n\nWhen `messages.tts.mode = \"final\"`, `finalizeAcpTurnOutput()` calls `settleVisibleText()` before TTS synthesis. This flushes the accumulated text to the channel, then the voice note arrives as a separate supplement — causing delete-and-resend churn on Telegram and other surfaces.\n\nThis PR defers `settleVisibleText()` until after the TTS outcome is known, and includes the visible text in the TTS payload so Telegram can deliver it as a voice-note caption.\n\n## Root cause\n\n```\nCurrent main flow:\n  1. settleVisibleText()     → text message sent to Telegram\n  2. maybeApplyTtsToPayload  → voice note synthesized\n  3. deliver(voice + supplement) → voice note sent separately\n  Result: user sees text, then voice note, then text deleted = churn\n\nFixed flow:\n  1. Skip settleVisibleText()\n  2. maybeApplyTtsToPayload  → voice note synthesized\n  3. deliver(voice + text as caption) → one combined message\n  4. (If TTS fails → settleVisibleText() fallback)\n  Result: user sees one voice note with caption = no churn\n```\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `dispatch-acp.ts` | Defer `settleVisibleText()` when `ttsMode === \"final\"` + include text in TTS payload + fallback on failure |\n| `dispatch-acp.test.ts` | 4 new tests: deferred settlement for Telegram, eager settlement for non-caption channels, fallback on failure, immediate settlement for non-final |\n\n## Tests\n\n```\n$ node scripts/run-vitest.mjs src/auto-reply/reply/dispatch-acp.test.ts\n ✓ auto-reply (54 tests) 30ms\n Test Files  1 passed (1)\n      Tests  54 passed (54)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: `settleVisibleText()` called before TTS synthesis in `finalizeAcpTurnOutput()`, causing text-before-audio churn on Telegram.\n- **Real environment tested**: Local patched OpenClaw checkout at `6de206309d`, macOS arm64, Node.js `v24.10.0`.\n- **Failing proof before fix**: Applied PR test file (`dispatch-acp.test.ts` with 54 tests) to unpatched `upstream/main` (`a002c416c7`) source. 1 test fails:\n\n```\n ❯ auto-reply dispatch-acp.test.ts (54 tests | 1 failed) 47ms\n\n FAIL  auto-reply > tryDispatchAcpReply > does not call settleVisibleText before TTS synthesis when mode is final\n AssertionError: expected true to be false // Object.is equality\n\n - Expected\n + Received\n\n - false\n + true\n\n ❯ dispatch-acp.test.ts:1928:35\n\n Test Files  1 failed (1)\n      Tests  1 failed | 53 passed (54)\n```\n\nThe failing test proves that without this patch, `settleVisibleText()` is called **before** TTS synthesis (`settleCalledBeforeTts === true`), confirming the churn bug.\n\n- **Exact steps or command run after this patch**:\n\n```\ngit checkout origin/fix/tts-final-text-before-audio-83511\nnode scripts/run-vitest.mjs src/auto-reply/reply/dispatch-acp.test.ts\n```\n\n- **Evidence after fix**:\n\n```\n ✓ auto-reply dispatch-acp.test.ts (54 tests) 30ms\n Test Files  1 passed (1)\n      Tests  54 passed (54)\n```\n\n- **Observed result after fix**: All 54 tests pass including the 4 new tests covering: deferred settlement for Telegram (caption-capable channel), eager settlement for non-caption channels (Discord), text fallback when TTS synthesis fails, and immediate settlement when TTS mode is not \"final\".\n- **What was not tested**: Live Telegram TTS session (requires TTS provider credentials and a live conversation). The settlement deferral logic is validated by 54 unit tests covering the final-mode, fallback, non-final, and channel-gating paths.\n\nCloses #83511\n",
+        "branch": "fix/tts-final-text-before-audio-83511",
+        "head_sha": "2233601785a7b9f44b9ee5573eeb8f8f360d569c",
+        "author": "jerry-xin",
+        "labels": [
+          "size: M",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/dispatch-acp-delivery.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-acp.test.ts",
+            "additions": 213,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-acp.ts",
+            "additions": 31,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83988",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83988.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 95,
+          "counts": {
+            "SUCCESS": 67,
+            "SKIPPED": 21,
+            "FAILURE": 6,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-agents:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-agents:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83988:4523892385:2026-05-23T02:25:53Z:re_review",
+      "comment_id": "4523892385",
+      "comment_version_key": "4523892385:2026-05-23T02:25:53Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83988#issuecomment-4523892385",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83988,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-23T02:25:53Z",
+      "comment_updated_at": "2026-05-23T02:25:53Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(tts): defer text settlement for final-mode TTS to eliminate churn (#83511)",
+        "body": "## Summary\n\nWhen `messages.tts.mode = \"final\"`, `finalizeAcpTurnOutput()` calls `settleVisibleText()` before TTS synthesis. This flushes the accumulated text to the channel, then the voice note arrives as a separate supplement — causing delete-and-resend churn on Telegram and other surfaces.\n\nThis PR defers `settleVisibleText()` until after the TTS outcome is known, and includes the visible text in the TTS payload so Telegram can deliver it as a voice-note caption.\n\n## Root cause\n\n```\nCurrent main flow:\n  1. settleVisibleText()     → text message sent to Telegram\n  2. maybeApplyTtsToPayload  → voice note synthesized\n  3. deliver(voice + supplement) → voice note sent separately\n  Result: user sees text, then voice note, then text deleted = churn\n\nFixed flow:\n  1. Skip settleVisibleText()\n  2. maybeApplyTtsToPayload  → voice note synthesized\n  3. deliver(voice + text as caption) → one combined message\n  4. (If TTS fails → settleVisibleText() fallback)\n  Result: user sees one voice note with caption = no churn\n```\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `dispatch-acp.ts` | Defer `settleVisibleText()` when `ttsMode === \"final\"` + include text in TTS payload + fallback on failure |\n| `dispatch-acp.test.ts` | 4 new tests: deferred settlement for Telegram, eager settlement for non-caption channels, fallback on failure, immediate settlement for non-final |\n\n## Tests\n\n```\n$ node scripts/run-vitest.mjs src/auto-reply/reply/dispatch-acp.test.ts\n ✓ auto-reply (54 tests) 30ms\n Test Files  1 passed (1)\n      Tests  54 passed (54)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: `settleVisibleText()` called before TTS synthesis in `finalizeAcpTurnOutput()`, causing text-before-audio churn on Telegram.\n- **Real environment tested**: Local patched OpenClaw checkout at `6de206309d`, macOS arm64, Node.js `v24.10.0`.\n- **Failing proof before fix**: Applied PR test file (`dispatch-acp.test.ts` with 54 tests) to unpatched `upstream/main` (`a002c416c7`) source. 1 test fails:\n\n```\n ❯ auto-reply dispatch-acp.test.ts (54 tests | 1 failed) 47ms\n\n FAIL  auto-reply > tryDispatchAcpReply > does not call settleVisibleText before TTS synthesis when mode is final\n AssertionError: expected true to be false // Object.is equality\n\n - Expected\n + Received\n\n - false\n + true\n\n ❯ dispatch-acp.test.ts:1928:35\n\n Test Files  1 failed (1)\n      Tests  1 failed | 53 passed (54)\n```\n\nThe failing test proves that without this patch, `settleVisibleText()` is called **before** TTS synthesis (`settleCalledBeforeTts === true`), confirming the churn bug.\n\n- **Exact steps or command run after this patch**:\n\n```\ngit checkout origin/fix/tts-final-text-before-audio-83511\nnode scripts/run-vitest.mjs src/auto-reply/reply/dispatch-acp.test.ts\n```\n\n- **Evidence after fix**:\n\n```\n ✓ auto-reply dispatch-acp.test.ts (54 tests) 30ms\n Test Files  1 passed (1)\n      Tests  54 passed (54)\n```\n\n- **Observed result after fix**: All 54 tests pass including the 4 new tests covering: deferred settlement for Telegram (caption-capable channel), eager settlement for non-caption channels (Discord), text fallback when TTS synthesis fails, and immediate settlement when TTS mode is not \"final\".\n- **What was not tested**: Live Telegram TTS session (requires TTS provider credentials and a live conversation). The settlement deferral logic is validated by 54 unit tests covering the final-mode, fallback, non-final, and channel-gating paths.\n\nCloses #83511\n",
+        "branch": "fix/tts-final-text-before-audio-83511",
+        "head_sha": "2233601785a7b9f44b9ee5573eeb8f8f360d569c",
+        "author": "jerry-xin",
+        "labels": [
+          "size: M",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/dispatch-acp-delivery.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-acp.test.ts",
+            "additions": 213,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-acp.ts",
+            "additions": 31,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83988",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83988.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 95,
+          "counts": {
+            "SUCCESS": 67,
+            "SKIPPED": 21,
+            "FAILURE": 6,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-agents:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-agents:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:83988:4495586887:2026-05-20T07:13:24Z:re_review",
+      "comment_id": "4495586887",
+      "comment_version_key": "4495586887:2026-05-20T07:13:24Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83988#issuecomment-4495586887",
+      "repo": "openclaw/openclaw",
+      "issue_number": 83988,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-20T07:13:24Z",
+      "comment_updated_at": "2026-05-20T07:13:24Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(tts): defer text settlement for final-mode TTS to eliminate churn (#83511)",
+        "body": "## Summary\n\nWhen `messages.tts.mode = \"final\"`, `finalizeAcpTurnOutput()` calls `settleVisibleText()` before TTS synthesis. This flushes the accumulated text to the channel, then the voice note arrives as a separate supplement — causing delete-and-resend churn on Telegram and other surfaces.\n\nThis PR defers `settleVisibleText()` until after the TTS outcome is known, and includes the visible text in the TTS payload so Telegram can deliver it as a voice-note caption.\n\n## Root cause\n\n```\nCurrent main flow:\n  1. settleVisibleText()     → text message sent to Telegram\n  2. maybeApplyTtsToPayload  → voice note synthesized\n  3. deliver(voice + supplement) → voice note sent separately\n  Result: user sees text, then voice note, then text deleted = churn\n\nFixed flow:\n  1. Skip settleVisibleText()\n  2. maybeApplyTtsToPayload  → voice note synthesized\n  3. deliver(voice + text as caption) → one combined message\n  4. (If TTS fails → settleVisibleText() fallback)\n  Result: user sees one voice note with caption = no churn\n```\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `dispatch-acp.ts` | Defer `settleVisibleText()` when `ttsMode === \"final\"` + include text in TTS payload + fallback on failure |\n| `dispatch-acp.test.ts` | 4 new tests: deferred settlement for Telegram, eager settlement for non-caption channels, fallback on failure, immediate settlement for non-final |\n\n## Tests\n\n```\n$ node scripts/run-vitest.mjs src/auto-reply/reply/dispatch-acp.test.ts\n ✓ auto-reply (54 tests) 30ms\n Test Files  1 passed (1)\n      Tests  54 passed (54)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: `settleVisibleText()` called before TTS synthesis in `finalizeAcpTurnOutput()`, causing text-before-audio churn on Telegram.\n- **Real environment tested**: Local patched OpenClaw checkout at `6de206309d`, macOS arm64, Node.js `v24.10.0`.\n- **Failing proof before fix**: Applied PR test file (`dispatch-acp.test.ts` with 54 tests) to unpatched `upstream/main` (`a002c416c7`) source. 1 test fails:\n\n```\n ❯ auto-reply dispatch-acp.test.ts (54 tests | 1 failed) 47ms\n\n FAIL  auto-reply > tryDispatchAcpReply > does not call settleVisibleText before TTS synthesis when mode is final\n AssertionError: expected true to be false // Object.is equality\n\n - Expected\n + Received\n\n - false\n + true\n\n ❯ dispatch-acp.test.ts:1928:35\n\n Test Files  1 failed (1)\n      Tests  1 failed | 53 passed (54)\n```\n\nThe failing test proves that without this patch, `settleVisibleText()` is called **before** TTS synthesis (`settleCalledBeforeTts === true`), confirming the churn bug.\n\n- **Exact steps or command run after this patch**:\n\n```\ngit checkout origin/fix/tts-final-text-before-audio-83511\nnode scripts/run-vitest.mjs src/auto-reply/reply/dispatch-acp.test.ts\n```\n\n- **Evidence after fix**:\n\n```\n ✓ auto-reply dispatch-acp.test.ts (54 tests) 30ms\n Test Files  1 passed (1)\n      Tests  54 passed (54)\n```\n\n- **Observed result after fix**: All 54 tests pass including the 4 new tests covering: deferred settlement for Telegram (caption-capable channel), eager settlement for non-caption channels (Discord), text fallback when TTS synthesis fails, and immediate settlement when TTS mode is not \"final\".\n- **What was not tested**: Live Telegram TTS session (requires TTS provider credentials and a live conversation). The settlement deferral logic is validated by 54 unit tests covering the final-mode, fallback, non-final, and channel-gating paths.\n\nCloses #83511\n",
+        "branch": "fix/tts-final-text-before-audio-83511",
+        "head_sha": "2233601785a7b9f44b9ee5573eeb8f8f360d569c",
+        "author": "jerry-xin",
+        "labels": [
+          "size: M",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/dispatch-acp-delivery.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-acp.test.ts",
+            "additions": 213,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-acp.ts",
+            "additions": 31,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83988",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83988.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 95,
+          "counts": {
+            "SUCCESS": 67,
+            "SKIPPED": 21,
+            "FAILURE": 6,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-agents:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-agents:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1062,
+    "total_ms": 2326,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 728
+        "ms": 310
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1787
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 4
       },
       {
         "name": "execute_commands",
-        "ms": 322
+        "ms": 196
       },
       {
         "name": "append_ledger",
