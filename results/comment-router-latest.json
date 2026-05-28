@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-28T16:12:26.359Z",
+  "generated_at": "2026-05-28T16:12:35.937Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-28T13:12:23.599Z",
+  "since": "2026-05-28T13:12:35.209Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     87698
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4550959280
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -61,89 +63,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): emit subagent_ended hook for api.runtime.subagent.run() (#59164)",
-        "body": "## Summary\n\n- Plugin SDK subagent runs dispatched via `api.runtime.subagent.run()` never reached `emitSubagentEndedHookOnce`, so plugins listening on `api.on(\"subagent_ended\", ...)` were silent for every plugin-spawned run. `sessions_spawn` and ACP subagent flows already call `registerSubagentRun` themselves after spawning; the plugin SDK seam now mirrors that pattern after the gateway dispatch in `createGatewaySubagentRuntime().run`.\n- Registration is best-effort (a registry failure logs and continues so the public SDK call still returns `runId`), is dynamically imported to keep `server-plugins.ts` off the static back-edge of `subagent-announce.runtime.ts`, and uses the existing gateway request scope to derive a requester key from the configured main-session alias (the same default `resolveSubagentSpawnOwnership` uses when no caller agent session is provided).\n- Public `api.runtime.subagent.run()` signature is unchanged. No new SDK exports, no protocol-version bump, no config additions.\n\n## Linked context\n\nCloses #59164\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: `subagent_ended` hooks did not fire for runs dispatched through `api.runtime.subagent.run()`. Root cause confirmed at source: `src/gateway/server-plugins.ts` plugin SDK `run` adapter dispatched to gateway `agent` (`src/gateway/server-methods/agent.ts` `dispatchAgentRunFromGateway` → `agentCommandFromIngress`) but never created a `SubagentRunRecord`, so `emitSubagentEndedHookOnce` (`src/agents/subagent-registry-completion.ts`) was never called when the run finished.\n- Real environment tested: vitest unit tests inside this worktree, against the patched runtime adapter; no real plugin harness against a running gateway. The clawsweeper:source-repro evidence on #59164 traces the same call graph the test exercises.\n- Exact steps or command run after this patch:\n  - `node scripts/run-vitest.mjs src/gateway/server-plugins.subagent-ended-hook.test.ts`\n  - `node scripts/run-vitest.mjs src/gateway/server-plugins.test.ts src/gateway/server-plugins.lifecycle.test.ts`\n  - `node scripts/run-vitest.mjs src/agents/subagent-registry-completion.test.ts src/agents/tools/sessions-spawn-tool.test.ts src/agents/subagent-spawn.workspace.test.ts src/agents/subagent-spawn.thread-binding.test.ts src/agents/subagent-spawn.depth-limits.test.ts src/agents/sessions-spawn-hooks.test.ts src/plugins/wired-hooks-subagent.test.ts`\n  - `pnpm tsgo` and `pnpm check:import-cycles`\n  - `pnpm build` (verifies no `INEFFECTIVE_DYNAMIC_IMPORT` from the new lazy import)\n- Evidence after fix:\n  - new test file `src/gateway/server-plugins.subagent-ended-hook.test.ts` (4 tests) — pass\n  - existing `server-plugins.test.ts` (45 tests), `server-plugins.lifecycle.test.ts` (1 test) — pass\n  - sibling-surface tests above (13 files, 165 tests) — pass\n  - `Import cycle check: 0 runtime value cycle(s).`\n  - `pnpm build` completes without dynamic-import warnings\n- Observed result after fix: `api.runtime.subagent.run()` returns the same `{ runId }` as before, AND the registry now holds a `SubagentRunRecord` for the run. When the agent completes, the lifecycle controller calls `emitSubagentEndedHookForRun` → `emitSubagentEndedHookOnce` and the `subagent_ended` hook fires with `{ runId, targetSessionKey: <child>, targetKind: \"subagent\", reason, outcome }`, exactly matching the payload other subagent paths emit (see `src/plugins/wired-hooks-subagent.test.ts`).\n- What was not tested: did not stand up a real plugin harness against a running gateway end-to-end. The reporter's source-repro on #59164 plus the registry's existing completion path (covered by `subagent-registry-completion.test.ts` and `subagent-registry-lifecycle.test.ts`) cover the rest of the journey.\n- Proof limitations or environment constraints: vitest-only in this worktree; no Crabbox/Testbox run attached.\n- Before evidence: clawsweeper:source-repro on #59164 already shows the pre-patch call graph (no `registerSubagentRun` on the plugin SDK path).\n\n## Tests and validation\n\nWhich commands did you run?\n\n```\nnode scripts/run-vitest.mjs src/gateway/server-plugins.subagent-ended-hook.test.ts\nnode scripts/run-vitest.mjs src/gateway/server-plugins.test.ts src/gateway/server-plugins.lifecycle.test.ts\nnode scripts/run-vitest.mjs src/agents/subagent-registry-completion.test.ts src/agents/tools/sessions-spawn-tool.test.ts src/agents/subagent-spawn.workspace.test.ts src/agents/subagent-spawn.thread-binding.test.ts src/agents/subagent-spawn.depth-limits.test.ts src/agents/sessions-spawn-hooks.test.ts src/plugins/wired-hooks-subagent.test.ts\npnpm tsgo\npnpm check:test-types\npnpm check:import-cycles\npnpm build\npnpm format:check src/gateway/server-plugins.ts src/gateway/server-plugins.subagent-ended-hook.test.ts\nnode scripts/run-oxlint.mjs src/gateway/server-plugins.ts src/gateway/server-plugins.subagent-ended-hook.test.ts\n```\n\nWhat regression coverage was added or updated?\n\nNew `src/gateway/server-plugins.subagent-ended-hook.test.ts` covers:\n- `runtime.run()` calls `registerSubagentRun` with the gateway-returned `runId`, the caller's `sessionKey` as `childSessionKey`, the message as `task`, `expectsCompletionMessage: false`, `spawnMode: \"run\"`, and the main-session alias from cfg as `requesterSessionKey`.\n- Plugin scope `pluginId` flows through as a `plugin:<id>` registry label so operators can attribute the run.\n- When no gateway context is available (no scope, no fallback), the dispatch throws as before and we do not register a half-baked record.\n- A registry exception does not break the public SDK contract — `runtime.run` still resolves with `{ runId }`.\n\nWhat failed before this fix, if known?\n\nBefore the patch: plugin `api.on(\"subagent_ended\", handler)` handlers never fired for runs started through `api.runtime.subagent.run()`. The new test fails on `expect(registerSubagentRunMock).toHaveBeenCalledTimes(1)` against the pre-patch adapter because the registry was never reached.\n\nIf no test was added, why not?\n\nN/A — test added.\n\n## Risk checklist\n\nDid user-visible behavior change? `Yes` — `subagent_ended` hooks now fire for plugin-SDK subagent runs. That is the intended fix, not a regression.\n\nDid config, environment, or migration behavior change? `No`.\n\nDid security, auth, secrets, network, or tool execution behavior change? `No`. The dispatch still goes through the same gateway `agent` handler with the same `pluginRuntimeOwnerId` plumbing.\n\nWhat is the highest-risk area?\n\nDouble registration on a path that already calls `registerSubagentRun`. Sibling-surface analysis:\n\n- `sessions_spawn` tool (`src/agents/tools/sessions-spawn-tool.ts:434`) calls `callSubagentGateway({ method: \"agent\", ... })`. That `callSubagentGateway` is a session-scoped helper that does **not** route through the plugin SDK adapter, so my new `registerPluginSubagentRunQuietly` is unreachable from this path. Sessions_spawn continues to be the only registration site.\n- `subagent-spawn.ts:1171` (direct spawn) likewise dispatches via `callSubagentGateway`, not via `createGatewaySubagentRuntime`.\n- ACP subagent (`sessions-spawn-tool.ts:419` `resolveSubagentSpawnOwnership` + `registerSubagentRun`) and Codex subagent paths both register on their own side and do not flow through `api.runtime.subagent.run()`.\n- The only caller of `createGatewaySubagentRuntime().run` is the public plugin SDK `api.runtime.subagent.run`. So this fix tracks exactly the set of runs that were missing tracking before, with no overlap.\n\nHow is that risk mitigated?\n\n`registerSubagentRun` itself is keyed on `runId` (`src/agents/subagent-registry-run-manager.ts:481-545`) and a duplicate registration with the same `runId` would only overwrite the entry, not double-emit the hook (`emitSubagentEndedHookOnce` guards on `entry.endedHookEmittedAt`). The sibling-surface review above shows the duplicate-registration case is not reachable through current callers.\n\n## Current review state\n\nWhat is the next action? Maintainer review.\n\nWhat is still waiting on author, maintainer, CI, or external proof? Nothing from the author side. Crabbox/Testbox / real plugin-harness proof can be requested if the source-repro evidence above is not sufficient.\n\nWhich bot or reviewer comments were addressed? N/A — fresh PR.",
-        "branch": "fix/59164-subagent-ended-hook-runtime-api",
-        "head_sha": "f3d2753353a7e9cc1cd23c71aa1f16114ff3bec0",
-        "author": "sweetcornna",
-        "labels": [
-          "gateway",
-          "size: M",
-          "triage: mock-only-proof",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/gateway/server-plugins.subagent-ended-hook.test.ts",
-            "additions": 180,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/server-plugins.ts",
-            "additions": 85,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-87698",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87698.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 103,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 29,
-            "SUCCESS": 69,
-            "IN_PROGRESS": 1,
-            "NEUTRAL": 2
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "actionlint:IN_PROGRESS"
-          ],
-          "pending": [
-            "actionlint:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3029,
+    "total_ms": 1072,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 430
+        "ms": 715
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2319
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 259
+        "ms": 343
       },
       {
         "name": "append_ledger",
