@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-28T07:31:23.530Z",
+  "generated_at": "2026-05-28T07:31:40.723Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-28T04:31:21.279Z",
+  "since": "2026-05-28T04:31:40.008Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,7 +14,7 @@
   "comment_ids": [
     4561726800
   ],
-  "status_comment_id": 4561727187,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -42,9 +42,9 @@
       "author": "VACInc",
       "author_id": 3279061,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-28T07:30:49Z",
-      "comment_updated_at": "2026-05-28T07:30:49Z",
-      "status_comment_id": 4561727187,
+      "comment_created_at": "2026-05-28T07:30:23Z",
+      "comment_updated_at": "2026-05-28T07:30:23Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "hatch",
       "intent": "hatch",
@@ -61,163 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-28T07:31:26.163Z",
-          "response_comment_id": "4561727187",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "Fix Telegram forum topic parallel flow",
-        "body": "## Summary\n- Fix Telegram forum-topic identity when Bot API messages include `is_topic_message: true` but omit `chat.is_forum`, keeping topic messages in topic-scoped session lanes.\n- Replace Telegram text-fragment and media-group global flush chains with per-topic/per-buffer queues so independent topics can flush concurrently.\n- Scope media-group buffering by chat + thread + `media_group_id` so albums in different topics cannot share a buffer lane.\n- Add a per-group fair outbound queue before the existing grammY throttler so one topic/message lane cannot monopolize Telegram's shared group send pipe while preserving Telegram group rate limits.\n- Supersedes #83789 and #83802. #83790 remains separate follow-up/abort behavior work and is not part of this PR.\n\n## Root Cause\nTelegram forum topics felt serialized because there were multiple independent bottlenecks in the topic path.\n\nFirst, topic identity was recovered inconsistently. The early sequential key path could treat `is_topic_message: true` as topic evidence, but later inbound routing paths trusted only `chat.is_forum` or a successful `getChat` lookup. When Telegram omitted `chat.is_forum` and lookup was unavailable, a real forum-topic message could collapse to the base group session.\n\nSecond, Telegram text-fragment and media-group buffering each used process-wide promise chains. That preserved order inside a buffer type but serialized unrelated topics. Media groups also keyed only by Telegram's `media_group_id`, so identical album ids from different topics could share one buffer lane.\n\nThird, after internal topic work could run in parallel, Telegram-visible output still shared grammY's group throttler. The installed `@grammyjs/transformer-throttler` groups group sends by `chat_id`; Telegram forum topics share the same `chat_id`, so one topic's progress/edit burst could sit ahead of another topic's outbound update. The new queue fair-shares requests by `message_thread_id` when present, and by `message_id` for preview edits where Telegram omits the thread id, before handing requests to the existing throttler.\n\n## Real behavior proof\nBehavior addressed: Telegram forum topics no longer collapse to the base group route, no longer block each other's buffered text/media flushes, and no longer let one topic/message lane monopolize the shared Telegram group outbound pipe.\n\nReal environment tested: local live OpenClaw gateway after applying this patch, rebuilding, and restarting the managed gateway. Live identifiers below are redacted where they identify a real Telegram group, Telegram user, bot token, token provider, or local config path.\n\nExact steps or command run after this patch:\n- `pnpm install --force`\n- `pnpm build`\n- `openclaw gateway restart`\n- `openclaw gateway status --deep`\n- `openclaw gateway stability --json --limit 300 --type queue.lane.dequeue`\n- `openclaw gateway stability --json --limit 300 --type diagnostic.heartbeat`\n- `openclaw gateway stability --json --limit 300 --type message.delivery.started`\n- `openclaw gateway stability --json --limit 300 --type message.delivery.completed`\n- `openclaw gateway stability --json --limit 300 --type message.processed`\n- `journalctl --user -u openclaw-gateway --since '2026-05-18 20:33:27 EDT' --until '2026-05-18 21:22:28 EDT' --no-pager -o cat` filtered for Telegram send, failure, `429`, and `retry_after` counters.\n\nEvidence after fix:\n- Gateway restart boundary: `2026-05-18 20:33:27 EDT`.\n- Gateway pid after restart: `3951260`.\n- `openclaw gateway status --deep`: runtime running and connectivity probe OK.\n- Rebuilt `dist` contains `GroupFairQueue`, `resolveForumLaneKey`, and `createTelegramAccountThrottler`.\n- Live topic routes observed for `telegram:group:<redacted>:topic:8428` and `telegram:group:<redacted>:topic:5907`.\n- Queue snapshot after live traffic: `message.queued=4`, `queue.lane.dequeue=8`, max `waitMs=0`.\n- Topic lane sources: `topic:8428` dequeued twice, `topic:5907` dequeued twice, plus their main-lane dispatches.\n- Heartbeats after live traffic: max `active=2`, `waiting=0`, `queued=0`.\n- Delivery snapshot: `message.delivery.started=3`, `message.delivery.completed=3`, all `outcome=completed`.\n- Processed snapshot: `message.processed=3`, all `outcome=completed`.\n- Latest Telegram transport counters from restart through `2026-05-18 21:22:28 EDT`: `sendMessage ok=143`, `outbound send ok=38`, Telegram send failures `0`, Telegram `429` / `retry_after` `0`.\n\nObserved result after fix: two real Telegram forum topics entered topic-qualified lanes with zero queue wait, concurrent work was observed by heartbeat, Telegram deliveries completed, and no Telegram flood-control or send-failure signal appeared.\n\nBefore proof:\n- Applying only the new handler e2e tests to unpatched `origin/main` and running the filtered command failed: `Test Files 2 failed (2); Tests 2 failed | 10 skipped (12)`.\n- Both failures reported that the second topic did not start while the first topic was held: `expected \"vi.fn()\" to be called 2 times, but got 1 times`.\n- Source inspection showed the same root-cause shape: topic identity fallback did not consistently use `is_topic_message`, buffer processing used global promise chains, and grammY's upstream group throttler keyed group sends by `chat_id` rather than `message_thread_id`.\n\n## Live Telegram config (sanitized)\n- Active Telegram config source: user OpenClaw config, values summarized with all Telegram group IDs, user IDs, bot tokens, token-provider names, and local paths redacted.\n- `channels.telegram.enabled`: `true`.\n- Bot token source: SecretRef backed by an exec provider; no inline bot token is disclosed here.\n- Account shape: single default Telegram account; no `channels.telegram.accounts` entries configured.\n- API root: default Telegram Bot API root; no custom `apiRoot` configured.\n- `channels.telegram.dmPolicy`: `pairing`.\n- `channels.telegram.allowFrom`: one numeric Telegram user ID, no wildcard.\n- `channels.telegram.groupPolicy`: `allowlist`.\n- `channels.telegram.groupAllowFrom`: one numeric Telegram user ID, no wildcard.\n- `channels.telegram.groups`: three explicit Telegram groups, all IDs redacted; one has `requireMention: false`, two have `requireMention: true`, and one group has a group-local allowlist containing two numeric IDs with no wildcard.\n- Configured topic overrides: none. The live topics in this proof are discovered from Telegram update metadata (`message_thread_id` / `is_topic_message`) rather than hard-coded in config.\n- `channels.telegram.streaming`: `{ mode: \"progress\", progress: { toolProgress: true, commandText: \"status\" } }`.\n- Legacy `channels.telegram.streamMode`: not configured.\n- Native commands: enabled via `commands.native: true`.\n- Polling stall watchdog: default `120000ms` because `channels.telegram.pollingStallThresholdMs` is not configured.\n- Telegram runner concurrency contract: `extensions/telegram/src/monitor.ts` sets grammY runner sink concurrency from `resolveAgentMaxConcurrent(cfg)`, which reads `agents.defaults.maxConcurrent`.\n- Live concurrency config relevant to this PR: `agents.defaults.maxConcurrent=8`, `agents.defaults.subagents.maxConcurrent=16`, no per-agent `maxConcurrent` overrides, and `acp.maxConcurrentSessions=8`.\n- Serialization boundary after this patch: grammY still sequences updates by Telegram sequential key, but the key includes forum topic thread IDs; text fragments and media groups queue by per-topic/per-buffer keys; outbound group sends are fair-shared by Telegram forum lane before the existing Telegram-safe throttler.\n\n## Verification\n- `git diff --check origin/main...HEAD`\n- `node scripts/run-vitest.mjs extensions/telegram/src`\n  - `Test Files 117 passed (117)`\n  - `Tests 1794 passed (1794)`\n- `OPENCLAW_E2E_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts extensions/telegram/src/bot.media.stickers-and-fragments.e2e.test.ts extensions/telegram/src/bot.media.downloads-media-file-path-no-file-download.e2e.test.ts`\n  - `Test Files 2 passed (2)`\n  - `Tests 12 passed (12)`\n- `node scripts/run-tsgo.mjs -p tsconfig.extensions.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/extensions.tsbuildinfo`\n- `node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.extensions.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/extensions-test.tsbuildinfo`\n- `codex-review --mode branch`\n  - Completed one full loop clean earlier on the combined branch: `codex-review clean: no accepted/actionable findings reported`.\n\n## What was not tested\n- Crabbox/TDLib video proof was not run.\n- Raw Bot API update payload capture was not collected.\n- Callback/native-command/DM-topic live flows were not separately exercised in Telegram after the final restart; focused tests cover those routing semantics.\n- Full repository test suite beyond the Telegram unit surface, focused Telegram e2e files, extension type checks, and codex-review.\n\n",
-        "branch": "fix-telegram-forum-topic-parallel-flow",
-        "head_sha": "b0f78fa275733f31e7df9e2b2f1959bbd9b10b08",
-        "author": "vacinc",
-        "labels": [
-          "channel: telegram",
-          "size: L",
-          "clawsweeper:automerge",
-          "proof: override",
-          "mantis: telegram-visible-proof",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 🚀 automerge armed"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/account-throttler.test.ts",
-            "additions": 106,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/account-throttler.ts",
-            "additions": 148,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-handlers.runtime.ts",
-            "additions": 35,
-            "deletions": 30,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message-context.topic-agentid.test.ts",
-            "additions": 29,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message-context.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-native-commands.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot.create-telegram-bot.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot.media.downloads-media-file-path-no-file-download.e2e.test.ts",
-            "additions": 91,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot.media.stickers-and-fragments.e2e.test.ts",
-            "additions": 87,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot/helpers.test.ts",
-            "additions": 30,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot/helpers.ts",
-            "additions": 20,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/sequential-key.ts",
-            "additions": 9,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": "automerge-openclaw-openclaw-83829",
-        "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83829.md",
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83829",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83829.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 89,
-          "counts": {
-            "SUCCESS": 69,
-            "SKIPPED": 19,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "hatch requires an open pull request"
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5627,
+    "total_ms": 1980,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 787
+        "ms": 703
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1450
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 3364
+        "ms": 1265
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
