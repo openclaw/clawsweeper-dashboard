@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-28T21:32:55.436Z",
-  "repo": "openclaw/clawpdf",
+  "generated_at": "2026-05-28T21:33:50.676Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-28T18:32:55.032Z",
+  "since": "2026-05-28T18:33:48.300Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    7
+    86891
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 0,
-  "commands_seen": 0,
+  "scanned_comments": 3,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,118 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86891:4567764524:2026-05-28T21:33:45Z:clawsweeper_needs_human",
+      "comment_id": "4567764524",
+      "comment_version_key": "4567764524:2026-05-28T21:33:45Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86891#issuecomment-4567764524",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86891,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-28T20:05:17Z",
+      "comment_updated_at": "2026-05-28T21:33:45Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] The remaining action is maintainer acceptance of a compatibility-sensitive delivery-hook contract change, not an automated code repair.; Cleared: The diff changes TypeScript dispatch composition and colocated tests only; no dependency, CI, credential, package, or external code-execution surface is added. (sha=96132e457090bf487809e1f112358097064dbb59)",
+      "review_summary": "The PR composes the canonical `message_sending` `beforeDeliver` hook with channel-supplied `beforeDeliver` callbacks in both auto-reply dispatcher entry points and adds regression tests for no-op, transform, and veto behavior.\n\nPR surface: Source +38, Tests +100. Total +138 across 2 files.\n\nReproducibility: yes. Source inspection shows current main's `??` wiring bypasses `message_sending` whenever a channel supplies `beforeDeliver`, and the PR body supplies before/after runtime output for the no-op channel callback path.",
+      "review_followup": "- [P2] The remaining action is maintainer acceptance of a compatibility-sensitive delivery-hook contract change, not an automated code repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "96132e457090bf487809e1f112358097064dbb59",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(auto-reply): compose channel beforeDeliver with message_sending instead of overriding it",
+        "body": "# Compose `message_sending` hook with channel-supplied `beforeDeliver` instead of `??`-overriding\n\n## Summary\n\nThe two dispatch wiring sites at `src/auto-reply/dispatch.ts:438` and `:516` use a `??` short-circuit:\n\n```ts\nconst configuredBeforeDeliver = params.dispatcherOptions.beforeDeliver ?? buildMessageSendingBeforeDeliver(finalized);\n```\n\nThis means any channel that supplies its own `beforeDeliver` — even an identity no-op — silently disables `message_sending`. The Telegram channel currently does exactly this at `extensions/telegram/src/bot-message-dispatch.ts:1649`, passing `async (payload) => payload`, which prevents `message_sending` from firing on interactive replies through the buffered dispatch path.\n\n## The maintainer question this PR poses\n\nI haven't been able to find a comment, test, or prior PR documenting a rationale for the `??`-override semantics. The doc comments around the channel `beforeDeliver` callers concern delivery routing and durability, not hook gating. My read is that the override semantics are incidental — the wiring pattern happened to be `??` rather than composition, and no caller is intentionally relying on `beforeDeliver` to replace canonical `message_sending` wiring.\n\nIf that read is correct, this PR restores consistency by composing the two `beforeDeliver`s instead of letting one silently override the other.\n\nIf that read is wrong — if there's a constraint I'm missing, or a caller that intentionally suppresses `message_sending` via this mechanism — please point me at it and I'll adapt the approach.\n\n## The fix\n\nIntroduces a `composeBeforeDeliver` helper:\n\n```ts\nfunction composeBeforeDeliver(\n  canonical: ReplyDispatchBeforeDeliver | undefined,\n  channel: ReplyDispatchBeforeDeliver | undefined,\n): ReplyDispatchBeforeDeliver | undefined {\n  if (!canonical) return channel;\n  if (!channel) return canonical;\n  return async (payload, info) => {\n    const gated = await canonical(payload, info);\n    if (!gated) return null;\n    return await channel(gated, info);\n  };\n}\n```\n\nApplied at both wiring sites in place of `??`. Semantics:\n\n- **Canonical-first ordering.** `buildMessageSendingBeforeDeliver` runs first so the `message_sending` hook sees the model's outbound payload before any channel-specific transform. Channel transforms then operate on the gated payload. Rationale: gates assert properties about the model's output; channel transforms (formatting, decoration) should see the gated payload, not transform the payload before gating. This matches the ordering on the standard outbound path, where `deliverOutboundPayloads` runs `message_sending` before downstream presentation/normalization.\n- **Either veto is terminal.** If the canonical hook returns `null` (gate veto), the channel's `beforeDeliver` is not invoked. If the channel's `beforeDeliver` returns `null`, delivery is cancelled. This preserves existing veto semantics on both sides.\n- **Either side absent → pass-through.** If no canonical hook (shouldn't happen on this path, but defensively), use the channel's. If no channel `beforeDeliver`, use canonical alone — current behavior for callers that don't supply one.\n\n## Tests\n\nFive new tests in `src/auto-reply/dispatch.test.ts`:\n\n1. **Baseline (existing behavior preserved):** when no channel `beforeDeliver` is supplied, `message_sending` fires on the buffered path.\n2. **Gap regression lock:** with a channel-supplied no-op `beforeDeliver` (matching Telegram's pattern), `message_sending` fires exactly once. This is the inverted form of the bug-characterizing test that originally demonstrated the issue.\n3. **Canonical-first composition:** with a non-no-op channel `beforeDeliver` that mutates the payload, both run; the channel sees the canonically-gated payload; final delivered payload reflects both transforms in the correct order.\n4. **Canonical veto terminates:** canonical hook returns `null` → no delivery, channel `beforeDeliver` not invoked.\n5. **Channel veto terminates:** canonical hook passes payload through, channel `beforeDeliver` returns `null` → no delivery.\n\nFull auto-reply suite continues to pass with no regressions. Typecheck clean.\n\n## Empirical validation\n\nThe patch has been applied to a local OpenClaw build (forked from v2026.5.18, rebased onto current main for this PR) and verified live: prior to the fix, interactive replies on the Telegram channel produced no `message_sending` events in observability logs while scheduled/cron sends did. After the fix, the interactive reply path fired `message_sending` (verified live). This was the original symptom that motivated the investigation.\n\n## Not covered (acknowledged for follow-up)\n\nThe bundled `thread-ownership` extension is a `message_sending` consumer that the unit-level test suite cannot exercise (the tests mock `runMessageSending` at the layer where the extension's hook would register). A regression test for `thread-ownership` behavior with `message_sending` firing on the interactive path belongs at the extension/integration test level. I haven't added one in this PR; happy to follow up with one in this PR or a separate one, per your preference.\n\n## Why this matters\n\nThe `message_sending` hook is the chokepoint that downstream consumers — gates, audit logging, observation extensions — register on to inspect or modify outbound replies before delivery. The current `??` pattern means any channel that supplies its own `beforeDeliver` for unrelated reasons (formatting, durability, identity passthrough) silently disables all such consumers on that channel's traffic. For deployments that rely on `message_sending` for correctness or safety properties, this is a coverage gap that's invisible until something happens that the hook would have caught.\n\nThe fix preserves all existing channel `beforeDeliver` behavior; it just ensures `message_sending` always composes in alongside it.\n\n\n\n---\n\n## Real behavior proof\n\nThis exercises the patched dispatch path end to end — the real exported `dispatchInboundMessageWithBufferedDispatcher`, the real `composeBeforeDeliver` / `buildMessageSendingBeforeDeliver`, and a real global hook runner with a real `message_sending` hook registered through `initializeGlobalHookRunner`. Only the I/O edges are substituted (the network send and the model text), plus the identity no-op `beforeDeliver` the Telegram channel itself passes.\n\n**Behavior or issue addressed:** A channel-supplied identity no-op `beforeDeliver` — `async (payload) => payload`, the exact value `extensions/telegram/src/bot-message-dispatch.ts` passes — silently discarded the canonical `message_sending` gate under the old `??` wiring, so the gate never ran on interactive replies through the buffered dispatch path. This patch composes the two canonical-first.\n\n**Real environment tested:** A clean checkout of this PR head, built with its own dependencies, run on Node v25.6.0 in an isolated home — `OPENCLAW_HOME` pointed at an empty directory and bundled plugins disabled — so no external configuration or plugins loaded.\n\n**Exact steps or command run after this patch:** Registered a real `message_sending` hook in a real plugin registry via `initializeGlobalHookRunner`, then invoked the real `dispatchInboundMessageWithBufferedDispatcher` with a channel `beforeDeliver` of `async (payload) => payload` and a recording `deliver`, driven by `node --import tsx`. Repeated against current `openclaw/main` (without this patch) for the before/after contrast.\n\n**Evidence after fix:**\n```\nNode v25.6.0  |  openclaw/main (no fix) 6966c202b9  |  PR #86891 head 96132e4570\n\n======================================================================\nBEFORE  (openclaw/main @ 6966c202b9 — no fix, the '??' wiring)\n======================================================================\n      RESULT → message_sending fired 0 time(s)\n      RESULT → delivered payload = {\"text\":\"original model reply\"}\n      VERDICT → gate NEVER fired; channel no-op discarded it ❌ (the bug)\n\n======================================================================\nAFTER  (PR #86891 @ 96132e4570 — composeBeforeDeliver)\n======================================================================\n      ↳ message_sending hook FIRED (#1); inbound content = \"original model reply\"\n      RESULT → message_sending fired 1 time(s)\n      RESULT → delivered payload = {\"text\":\"[gated] original model reply\"}\n      VERDICT → gate FIRED and gated text reached delivery ✅\n```\n\n**Observed result after fix:** On current `openclaw/main`, the gate fires 0 times and the raw payload reaches `deliver`. With this patch, the gate fires exactly once, transforms the payload, and the gated result (`[gated] …`) reaches `deliver` — canonical-first, ahead of the channel no-op.\n\n**What was not tested:** The full live network send over a real Telegram connection was deliberately not exercised, to avoid putting private identifiers (host, chat IDs) into a public PR. The dispatch composition this patch changes is covered above; I'm happy to provide the full interactive path on request.\n",
+        "branch": "fix/compose-message-sending-before-deliver",
+        "head_sha": "96132e457090bf487809e1f112358097064dbb59",
+        "author": "dwty11",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "mantis: telegram-visible-proof",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/dispatch.test.ts",
+            "additions": 100,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/dispatch.ts",
+            "additions": 42,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86891",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86891.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "SUCCESS": 71,
+            "CANCELLED": 1,
+            "SKIPPED": 29,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 735,
+    "total_ms": 2610,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 394
+        "ms": 365
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1996
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 330
+        "ms": 223
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
