@@ -2,73 +2,74 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-87498"
 mode: "autonomous"
-run_id: "26562429523"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26562429523"
-head_sha: "666e707a828896056556870083d5c23184a474f8"
+run_id: "26566650998"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26566650998"
+head_sha: "ca8a8d4f30a243609adf112ca2b34ee63bceb83b"
 workflow_conclusion: "success"
-result_status: "planned"
-published_at: "2026-05-28T08:14:52.156Z"
-canonical: "#87498"
-canonical_issue: null
-canonical_pr: "#87498"
-actions_total: 1
+result_status: "blocked"
+published_at: "2026-05-28T09:38:02.081Z"
+canonical: "https://github.com/openclaw/openclaw/pull/87576"
+canonical_issue: "https://github.com/openclaw/openclaw/issues/87497"
+canonical_pr: "https://github.com/openclaw/openclaw/pull/87576"
+actions_total: 3
 fix_executed: 0
 fix_failed: 0
-fix_blocked: 1
+fix_blocked: 0
 apply_executed: 0
-apply_blocked: 1
+apply_blocked: 0
 apply_skipped: 0
-needs_human_count: 0
+needs_human_count: 1
 ---
 
 # automerge-openclaw-openclaw-87498
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/26562429523](https://github.com/openclaw/clawsweeper/actions/runs/26562429523)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/26566650998](https://github.com/openclaw/clawsweeper/actions/runs/26566650998)
 
 Workflow conclusion: success
 
-Worker result: planned
+Worker result: blocked
 
-Canonical: #87498
+Canonical: https://github.com/openclaw/openclaw/pull/87576
 
 ## Summary
 
-Make PR #87498 merge-ready for ClawSweeper automerge. Rebase onto latest main, address PR comments and review findings, fix CI/check failures, preserve release-note context, and validate before returning.
+Security-sensitive linked issue #87497 and the active replacement PR #87576 involve a claimed webhook/auth replay boundary bypass. Under central_security_only, this worker should not repair, merge, close, or open another fix PR for that security-boundary path. #87498 is already closed and only remains historical source-credit evidence.
 
 ## Impact
 
 | Metric | Count |
 | --- | ---: |
-| Worker actions | 1 |
+| Worker actions | 3 |
 | Fix executed | 0 |
 | Fix failed | 0 |
-| Fix blocked | 1 |
+| Fix blocked | 0 |
 | Applied executions | 0 |
-| Apply blocked | 1 |
+| Apply blocked | 0 |
 | Apply skipped | 0 |
-| Needs human | 0 |
+| Needs human | 1 |
 
 ## Fix Execution Actions
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | blocked | https://github.com/openclaw/openclaw/pull/87498 |  | GitHub rejected the repair branch push because it updates workflow files and the ClawSweeper app token does not have workflows permission |
-| open_fix_pr | opened | https://github.com/openclaw/openclaw/pull/87576 | clawsweeper/automerge-openclaw-openclaw-87498 |  |
+| automerge_repair_outcome_comment | updated | #87576 |  |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #87576 | merge_canonical | blocked | fix_pr | job does not allow merge |
+| _None_ |  |  |  |  |
 
 ## Worker Action Matrix
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #87498 | build_fix_artifact | planned | canonical | Maintainer opted this PR into ClawSweeper automerge/autofix repair; run the direct Codex edit loop after live hydration instead of a separate read-only planning pass. |
+| #87497 | route_security | planned | security_sensitive | The issue is a security-sensitive boundary-bypass report and must be quarantined to central OpenClaw security triage. |
+| #87498 | keep_closed | skipped | superseded | Already closed and superseded by the hydrated replacement PR #87576. |
+| #87576 | route_security | planned | security_sensitive | The active replacement PR changes the security-sensitive webhook replay boundary tied to #87497; route it to central security handling instead of continuing normal automerge repair. |
 
 ## Needs Human
 
-- none
+- Central OpenClaw security triage must decide whether #87576 is cleared to continue through the normal ClawSweeper automerge repair lane or should be handled entirely through the security workflow.
