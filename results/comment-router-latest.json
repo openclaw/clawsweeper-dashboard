@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-28T20:40:18.086Z",
-  "repo": "openclaw/imsg",
+  "generated_at": "2026-05-28T20:40:53.778Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-28T17:40:17.720Z",
+  "since": "2026-05-28T17:40:52.192Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    127
+    86891
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 2,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,191 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86891:4567764524:2026-05-28T20:40:49Z:clawsweeper_needs_human",
+      "comment_id": "4567764524",
+      "comment_version_key": "4567764524:2026-05-28T20:40:49Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86891#issuecomment-4567764524",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86891,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-28T20:05:17Z",
+      "comment_updated_at": "2026-05-28T20:40:49Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] The remaining work is contributor/maintainer validation, not an automated code repair: add inspectable proof, wait for checks, and confirm the hook-ordering compatibility change.; Cleared: The diff changes TypeScript dispatch composition and tests only, with no dependency, CI, secret, package, or external code-execution surface added. (sha=96132e457090bf487809e1f112358097064dbb59)",
+      "review_summary": "The PR composes the auto-reply `message_sending` `beforeDeliver` hook with channel-supplied `beforeDeliver` callbacks and adds focused regression tests for the buffered dispatcher path.\n\nPR surface: Source +38, Tests +100. Total +138 across 2 files.\n\nReproducibility: yes. by source inspection: current main uses `beforeDeliver ?? buildMessageSendingBeforeDeliver(...)`, and Telegram passes an identity `beforeDeliver`, so the canonical `message_sending` hook is not installed on that interactive buffered path. I did not run a live Telegram repro in this read-only review.",
+      "review_followup": "- [P1] The remaining work is contributor/maintainer validation, not an automated code repair: add inspectable proof, wait for checks, and confirm the hook-ordering compatibility change.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "96132e457090bf487809e1f112358097064dbb59",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(auto-reply): compose channel beforeDeliver with message_sending instead of overriding it",
+        "body": "# Compose `message_sending` hook with channel-supplied `beforeDeliver` instead of `??`-overriding\n\n## Summary\n\nThe two dispatch wiring sites at `src/auto-reply/dispatch.ts:438` and `:516` use a `??` short-circuit:\n\n```ts\nconst configuredBeforeDeliver = params.dispatcherOptions.beforeDeliver ?? buildMessageSendingBeforeDeliver(finalized);\n```\n\nThis means any channel that supplies its own `beforeDeliver` — even an identity no-op — silently disables `message_sending`. The Telegram channel currently does exactly this at `extensions/telegram/src/bot-message-dispatch.ts:1649`, passing `async (payload) => payload`, which prevents `message_sending` from firing on interactive replies through the buffered dispatch path.\n\n## The maintainer question this PR poses\n\nI haven't been able to find a comment, test, or prior PR documenting a rationale for the `??`-override semantics. The doc comments around the channel `beforeDeliver` callers concern delivery routing and durability, not hook gating. My read is that the override semantics are incidental — the wiring pattern happened to be `??` rather than composition, and no caller is intentionally relying on `beforeDeliver` to replace canonical `message_sending` wiring.\n\nIf that read is correct, this PR restores consistency by composing the two `beforeDeliver`s instead of letting one silently override the other.\n\nIf that read is wrong — if there's a constraint I'm missing, or a caller that intentionally suppresses `message_sending` via this mechanism — please point me at it and I'll adapt the approach.\n\n## The fix\n\nIntroduces a `composeBeforeDeliver` helper:\n\n```ts\nfunction composeBeforeDeliver(\n  canonical: ReplyDispatchBeforeDeliver | undefined,\n  channel: ReplyDispatchBeforeDeliver | undefined,\n): ReplyDispatchBeforeDeliver | undefined {\n  if (!canonical) return channel;\n  if (!channel) return canonical;\n  return async (payload, info) => {\n    const gated = await canonical(payload, info);\n    if (!gated) return null;\n    return await channel(gated, info);\n  };\n}\n```\n\nApplied at both wiring sites in place of `??`. Semantics:\n\n- **Canonical-first ordering.** `buildMessageSendingBeforeDeliver` runs first so the `message_sending` hook sees the model's outbound payload before any channel-specific transform. Channel transforms then operate on the gated payload. Rationale: gates assert properties about the model's output; channel transforms (formatting, decoration) should see the gated payload, not transform the payload before gating. This matches the ordering on the standard outbound path, where `deliverOutboundPayloads` runs `message_sending` before downstream presentation/normalization.\n- **Either veto is terminal.** If the canonical hook returns `null` (gate veto), the channel's `beforeDeliver` is not invoked. If the channel's `beforeDeliver` returns `null`, delivery is cancelled. This preserves existing veto semantics on both sides.\n- **Either side absent → pass-through.** If no canonical hook (shouldn't happen on this path, but defensively), use the channel's. If no channel `beforeDeliver`, use canonical alone — current behavior for callers that don't supply one.\n\n## Tests\n\nFive new tests in `src/auto-reply/dispatch.test.ts`:\n\n1. **Baseline (existing behavior preserved):** when no channel `beforeDeliver` is supplied, `message_sending` fires on the buffered path.\n2. **Gap regression lock:** with a channel-supplied no-op `beforeDeliver` (matching Telegram's pattern), `message_sending` fires exactly once. This is the inverted form of the bug-characterizing test that originally demonstrated the issue.\n3. **Canonical-first composition:** with a non-no-op channel `beforeDeliver` that mutates the payload, both run; the channel sees the canonically-gated payload; final delivered payload reflects both transforms in the correct order.\n4. **Canonical veto terminates:** canonical hook returns `null` → no delivery, channel `beforeDeliver` not invoked.\n5. **Channel veto terminates:** canonical hook passes payload through, channel `beforeDeliver` returns `null` → no delivery.\n\nFull auto-reply suite continues to pass with no regressions. Typecheck clean.\n\n## Empirical validation\n\nThe patch has been applied to a local OpenClaw build (forked from v2026.5.18, rebased onto current main for this PR) and verified live: prior to the fix, interactive replies on the Telegram channel produced no `message_sending` events in observability logs while scheduled/cron sends did. After the fix, the interactive reply path fired `message_sending` (verified live). This was the original symptom that motivated the investigation.\n\n## Not covered (acknowledged for follow-up)\n\nThe bundled `thread-ownership` extension is a `message_sending` consumer that the unit-level test suite cannot exercise (the tests mock `runMessageSending` at the layer where the extension's hook would register). A regression test for `thread-ownership` behavior with `message_sending` firing on the interactive path belongs at the extension/integration test level. I haven't added one in this PR; happy to follow up with one in this PR or a separate one, per your preference.\n\n## Why this matters\n\nThe `message_sending` hook is the chokepoint that downstream consumers — gates, audit logging, observation extensions — register on to inspect or modify outbound replies before delivery. The current `??` pattern means any channel that supplies its own `beforeDeliver` for unrelated reasons (formatting, durability, identity passthrough) silently disables all such consumers on that channel's traffic. For deployments that rely on `message_sending` for correctness or safety properties, this is a coverage gap that's invisible until something happens that the hook would have caught.\n\nThe fix preserves all existing channel `beforeDeliver` behavior; it just ensures `message_sending` always composes in alongside it.\n",
+        "branch": "fix/compose-message-sending-before-deliver",
+        "head_sha": "96132e457090bf487809e1f112358097064dbb59",
+        "author": "dwty11",
+        "labels": [
+          "size: S",
+          "triage: needs-real-behavior-proof",
+          "mantis: telegram-visible-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/dispatch.test.ts",
+            "additions": 100,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/dispatch.ts",
+            "additions": 42,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86891",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86891.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "counts": {
+            "FAILURE": 1,
+            "SUCCESS": 38,
+            "SKIPPED": 22,
+            "QUEUED": 34,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "checks-node-core-fast:QUEUED",
+            "checks-node-core-src-security:QUEUED",
+            "checks-node-core-ui:QUEUED",
+            "checks-node-core-support:QUEUED",
+            "checks-node-core-runtime-media-ui:QUEUED",
+            "checks-node-core-runtime-shared:QUEUED",
+            "checks-node-core-runtime-cron-core:QUEUED",
+            "checks-node-core-runtime-cron-isolated-agent:QUEUED",
+            "checks-node-core-runtime-cron-service:QUEUED",
+            "checks-node-agentic-cli:QUEUED",
+            "checks-node-agentic-command-support:QUEUED",
+            "checks-node-agentic-commands-agent-channel:QUEUED",
+            "checks-node-agentic-commands-doctor:QUEUED",
+            "checks-node-agentic-commands-doctor-shared:QUEUED",
+            "checks-node-agentic-commands-models:QUEUED",
+            "checks-node-agentic-commands-onboard-config:QUEUED",
+            "checks-node-agentic-commands-status-tools:QUEUED",
+            "checks-node-agentic-agents:QUEUED",
+            "checks-node-agentic-gateway-core:QUEUED",
+            "checks-node-agentic-gateway-methods:QUEUED",
+            "checks-node-agentic-plugin-sdk:QUEUED",
+            "checks-node-auto-reply-core-top-level:QUEUED",
+            "checks-node-auto-reply-reply-agent-runner:QUEUED",
+            "checks-node-auto-reply-reply-commands:QUEUED",
+            "checks-node-auto-reply-reply-dispatch:QUEUED",
+            "checks-node-auto-reply-reply-session:QUEUED",
+            "checks-node-auto-reply-reply-state-routing:QUEUED",
+            "check-dependencies:QUEUED",
+            "check-additional-boundaries-a:QUEUED",
+            "check-additional-boundaries-bcd:QUEUED",
+            "check-additional-extension-channels:QUEUED",
+            "check-additional-extension-bundled:QUEUED",
+            "check-additional-extension-package-boundary:QUEUED",
+            "check-additional-runtime-topology-architecture:QUEUED"
+          ],
+          "pending": [
+            "checks-node-core-fast:QUEUED",
+            "checks-node-core-src-security:QUEUED",
+            "checks-node-core-ui:QUEUED",
+            "checks-node-core-support:QUEUED",
+            "checks-node-core-runtime-media-ui:QUEUED",
+            "checks-node-core-runtime-shared:QUEUED",
+            "checks-node-core-runtime-cron-core:QUEUED",
+            "checks-node-core-runtime-cron-isolated-agent:QUEUED",
+            "checks-node-core-runtime-cron-service:QUEUED",
+            "checks-node-agentic-cli:QUEUED",
+            "checks-node-agentic-command-support:QUEUED",
+            "checks-node-agentic-commands-agent-channel:QUEUED",
+            "checks-node-agentic-commands-doctor:QUEUED",
+            "checks-node-agentic-commands-doctor-shared:QUEUED",
+            "checks-node-agentic-commands-models:QUEUED",
+            "checks-node-agentic-commands-onboard-config:QUEUED",
+            "checks-node-agentic-commands-status-tools:QUEUED",
+            "checks-node-agentic-agents:QUEUED",
+            "checks-node-agentic-gateway-core:QUEUED",
+            "checks-node-agentic-gateway-methods:QUEUED",
+            "checks-node-agentic-plugin-sdk:QUEUED",
+            "checks-node-auto-reply-core-top-level:QUEUED",
+            "checks-node-auto-reply-reply-agent-runner:QUEUED",
+            "checks-node-auto-reply-reply-commands:QUEUED",
+            "checks-node-auto-reply-reply-dispatch:QUEUED",
+            "checks-node-auto-reply-reply-session:QUEUED",
+            "checks-node-auto-reply-reply-state-routing:QUEUED",
+            "check-dependencies:QUEUED",
+            "check-additional-boundaries-a:QUEUED",
+            "check-additional-boundaries-bcd:QUEUED",
+            "check-additional-extension-channels:QUEUED",
+            "check-additional-extension-bundled:QUEUED",
+            "check-additional-extension-package-boundary:QUEUED",
+            "check-additional-runtime-topology-architecture:QUEUED"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ]
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 563,
+    "total_ms": 1816,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 354
+        "ms": 294
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1277
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 197
+        "ms": 218
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
