@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-28T21:41:47.266Z",
+  "generated_at": "2026-05-28T21:42:02.645Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-28T18:41:46.808Z",
+  "since": "2026-05-28T18:42:00.508Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    87782
+    87785
   ],
   "comment_ids": [
-    4568576347
+    4568581159
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4568581465,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:87782:4568576347:2026-05-28T21:40:46Z:re_review",
-      "comment_id": "4568576347",
-      "comment_version_key": "4568576347:2026-05-28T21:40:46Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/87782#issuecomment-4568576347",
+      "idempotency_key": "comment-router:openclaw/openclaw:87785:4568581159:2026-05-28T21:41:28Z:re_review",
+      "comment_id": "4568581159",
+      "comment_version_key": "4568581159:2026-05-28T21:41:28Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/87785#issuecomment-4568581159",
       "repo": "openclaw/openclaw",
-      "issue_number": 87782,
-      "author": "kevinslin",
-      "author_id": 409321,
+      "issue_number": 87785,
+      "author": "solomonneas",
+      "author_id": 41877493,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-28T21:40:46Z",
-      "comment_updated_at": "2026-05-28T21:40:46Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-05-28T21:41:28Z",
+      "comment_updated_at": "2026-05-28T21:41:28Z",
+      "status_comment_id": 4568581465,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,22 +61,101 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-05-28T21:42:03.630Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 87785
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-28T21:42:05.259Z",
+          "response_comment_id": "4568581465",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): don't fail CLI turn when the native harness owns compaction",
+        "body": "> **AI-assisted:** built with Codex (GPT-5.5) and Claude (Opus 4.8). Human-run real behavior proof from a self-hosted gateway is included below.\n\n## Summary\n\nBudget/auto-triggered compaction on a Codex-backed session calls the Codex app-server, which **owns automatic compaction** and returns a successful no-op (`{ ok: true, compacted: false, reason: \"codex app-server owns automatic compaction\" }`, the behavior added in #86772). The host lifecycle `runCliTurnCompactionLifecycle` in `src/agents/command/cli-compaction.ts` treated any non-compacted native outcome without `fallbackToContextEngine` as a hard failure and threw `CLI native harness compaction failed …`. That fails the agent run (`UNAVAILABLE`) and the session lane never releases — on a large thread the bot shows a \"typing\" indicator indefinitely and never replies.\n\nThis honors a contract the codebase **already** establishes elsewhere: the auto-reply preflight path skips compaction for Codex runtimes outright (`src/auto-reply/reply/agent-runner-memory.ts`: \"Its harness owns automatic compaction; OpenClaw preflight compaction is only for non-Codex embedded runtimes\"). `runCliTurnCompactionLifecycle` was the one host path that did not honor it and threw instead.\n\n## Fix\n\nSurface an `ownedByNativeHarness` flag on the native outcome when the harness reports a successful no-op (`result.ok === true`), and add a caller branch **before** the throw that skips both the error and the context-engine fallback, letting the turn proceed so the harness compacts itself. Minimal and additive; no refactor. Genuine failures (`ok:false`, thrown, or `undefined` result) and the unsupported / recoverable-binding cases are unchanged.\n\nNote on shape: I extended the existing `NativeHarnessCliCompactionOutcome` (which already uses parallel optional fields) rather than refactoring it into a discriminated union, to keep the fix small. Happy to take the union refactor in a follow-up if maintainers prefer.\n\n## Sibling surfaces (not one-sided)\n\nThe other native-harness compaction entry points already tolerate the `ok:true` no-op, so this is the only path that needed fixing:\n- `src/agents/embedded-agent-runner/compact.queued.ts` — `shouldFallbackAfterHarnessCompaction` only fires on `ok:false`; the `ok:true` no-op is returned directly.\n- `src/auto-reply/reply/agent-runner-memory.ts` — Codex runtimes skip preflight compaction entirely; otherwise only `isDeferredPreflightCompactionReason` throws, which the owned-skip reason is not.\n\n## Real behavior proof\n\n- **Behavior addressed:** A successful native-harness compaction no-op (`ok:true, compacted:false`, \"codex app-server owns automatic compaction\") must let the turn proceed instead of throwing and jamming the session lane.\n- **Real environment tested:** A self-hosted OpenClaw `2026.5.28` gateway on Linux (Node 22.22.2) where this failure occurred in production, with the equivalent fix applied to the running build and the gateway restarted.\n- **Exact steps or command run after this patch:** Drove one real agent turn through the live gateway against the same over-budget Codex session that had been failing (no channel delivery):\n  `openclaw agent --session-id <redacted> --message \"Reply with exactly: COMPACTION_FIX_OK\" --json`\n- **Evidence after fix:** Console output / redacted runtime logs copied from the live gateway (same session), captured via `openclaw agent --session-id <redacted> --message \"Reply with exactly: COMPACTION_FIX_OK\" --json`, before vs. after the fix.\n\n  Before (pre-fix) — the throw and resulting lane jam:\n  ```\n  [diagnostic] lane wait exceeded: lane=session:agent:main:discord:channel:<redacted> waitedMs=176928 queueAhead=0 activeAhead=1 activeNow=0\n  [ws] ⇄ res ✗ agent errorCode=UNAVAILABLE errorMessage=Error: CLI native harness compaction failed for openai-codex/gpt-5.5: codex app-server owns automatic compaction\n  ```\n\n  After (post-fix) — same compaction outcome, now skipped instead of thrown; turn completes:\n  ```\n  [agent/embedded] skipping codex app-server compaction for non-manual trigger\n  [agents/cli-compaction] CLI native harness compaction did not reduce context for openai-codex/gpt-5.5: codex app-server owns automatic compaction\n  COMPACTION_FIX_OK\n  ```\n  Agent result JSON: `stopReason: \"stop\"`, `executionTrace.winnerProvider: \"openai-codex\"`, `winnerModel: \"gpt-5.5\"`, `attempts[0].result: \"success\"`, `fallbackUsed: false`.\n\n- **Observed result after fix:** Copied live output — the previously-jammed over-budget Codex session completed a turn and the agent returned `COMPACTION_FIX_OK` (gateway console output above). Zero `CLI native harness compaction failed` occurrences in gateway logs since the fix was deployed.\n- **What was not tested:** Not re-driven through the Discord channel UI specifically — the turn was driven via the gateway `agent` command without `--deliver`; behavior is proven at the live gateway turn boundary.\n\n## Supplemental validation\n\n- New regression test in `cli-compaction.test.ts`: `node scripts/run-vitest.mjs src/agents/command/cli-compaction.test.ts` → 24 passed. Reverting only the source change makes the new test fail with `CLI native harness compaction failed for codex/gpt-5.5: codex app-server owns automatic compaction` (the exact production error).\n- `oxfmt --check` clean · `oxlint` clean · `tsgo:test` (core + extensions) exit 0.\n- `codex review --base origin/main` run locally: no actionable correctness issues.\n- Diff: +14 src / +77 test, 0 deletions.\n\nComplements #87158 (Codex plugin side); coordinates with #87738 (same file, missing-thread `ok:false` case). Related: #85160, #86772, #66263.\n",
+        "branch": "fix/codex-compaction-owned-skip",
+        "head_sha": "4c07fc74c461423a975cfe617b33259cb3fcedae",
+        "author": "solomonneas",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/command/cli-compaction.test.ts",
+            "additions": 77,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/command/cli-compaction.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-87785",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87785.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "counts": {
+            "SUCCESS": 69,
+            "SKIPPED": 28,
+            "FAILURE": 4,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-commands-agent-channel:FAILURE",
+            "checks-node-agentic-agents:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-commands-agent-channel:FAILURE",
+            "checks-node-agentic-agents:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      }
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 1551,
+    "total_ms": 5371,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 445
+        "ms": 581
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 1542
       },
       {
         "name": "classify_commands",
@@ -84,7 +163,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1093
+        "ms": 3222
       },
       {
         "name": "append_ledger",
