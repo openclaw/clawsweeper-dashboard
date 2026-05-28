@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-28T00:45:31.686Z",
+  "generated_at": "2026-05-28T00:45:40.930Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-27T21:45:31.475Z",
+  "since": "2026-05-27T21:45:39.717Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    87462
+    87464
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 2,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,125 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:87464:4559849654:2026-05-28T00:45:33Z:clawsweeper_needs_human",
+      "comment_id": "4559849654",
+      "comment_version_key": "4559849654:2026-05-28T00:45:33Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/87464#issuecomment-4559849654",
+      "repo": "openclaw/openclaw",
+      "issue_number": 87464,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-28T00:39:38Z",
+      "comment_updated_at": "2026-05-28T00:45:33Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=9014056c0b46bdf7599e318472facfb9a5cf4bf8)",
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "9014056c0b46bdf7599e318472facfb9a5cf4bf8",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(pi-embedded-runner): wire Anthropic thinking recovery and recognize current error wording",
+        "body": "## Summary\n\n`wrapAnthropicStreamWithRecovery` is designed to handle persisted-thinking-block rejections by stripping thinking blocks and retrying once. Its trigger regex (`THINKING_BLOCK_ERROR_PATTERN` in `pi-embedded-runner/thinking.ts`) currently matches only Anthropic's older error wording — `\"thinking or redacted_thinking blocks … cannot be modified\"`. Anthropic's current wording for the same class of failure is:\n\n> `messages.N.content.M: Invalid \\`signature\\` in \\`thinking\\` block`\n\nThis PR extends the regex to match both wordings, so that — **once the wrapper is also wired in at the streamFn composition site** — recovery fires for the current production failure mode.\n\n## Two changes in one PR\n\nWhile preparing this change I noticed `wrapAnthropicStreamWithRecovery` was defined but had no production call sites — only the implementation, its own test, and a `.d.ts` declaration referenced it. The streamFn composition site at `src/agents/pi-embedded-runner/run/attempt.ts` wraps the provider stream with several layers (malformed-tool-call repair, payload logging, sensitive-stop-reason recovery) but did not add the thinking-block recovery wrap. So an Anthropic invalid-signature rejection had no recovery at all — raw `LLM request rejected: …` bubbled to channel payloads and only the session-reset safety net (which discards the entire conversation) eventually broke the loop.\n\nThis PR fixes both:\n\n1. **Extend `THINKING_BLOCK_ERROR_PATTERN`** in `thinking.ts` to match Anthropic's current wording in addition to the old one.\n2. **Wire `wrapAnthropicStreamWithRecovery` into `attempt.ts`** alongside the existing Anthropic-conditional wraps (gated on `params.provider === \"anthropic\"`, mirroring the `anthropicPayloadLogger` block immediately above it).\n\n## Why this matters\n\nProduction observation on a Telegram bot today: three consecutive inbound messages from a user produced three identical `LLM request rejected: messages.3.content.19: Invalid \\`signature\\` in \\`thinking\\` block` replies before the session-reset safety net kicked in and discarded the entire conversation. Same wording observed 2026-05-26 on `messages.13.content.19`.\n\nThe retry-without-thinking path already exists and is the right behavior. This PR is just a regex extension so the existing path actually runs.\n\n## What this PR doesn't fix\n\nThere's a separate question of why persisted thinking-block signatures fail replay at all — they're stored intact (verified directly: 53 thinking blocks in the broken session, all with non-empty `thinkingSignature` of 364–32128 chars, single model throughout). The hypothesis is server-side signing-key rotation or canonicalization changes, but it could also be a downstream transform mutating the surface that signatures bind to. That's worth investigating separately. This PR focuses on graceful recovery now that the failure has been observed twice in two days.\n\nThere's also a UX bug — the raw `LLM request rejected: …` string should probably never reach a channel payload regardless of which provider error fired. That's also out of scope here.\n\n## Changes\n\n- `src/agents/pi-embedded-runner/thinking.ts` — extend `THINKING_BLOCK_ERROR_PATTERN` to also match the new Anthropic wording. Tolerant whitespace and optional backticks for minor future drift.\n- `src/agents/pi-embedded-runner/run/attempt.ts` — import `wrapAnthropicStreamWithRecovery` and add it as a streamFn wrap immediately after `anthropicPayloadLogger.wrapStreamFn`, gated on `params.provider === \"anthropic\"`.\n- `src/agents/pi-embedded-runner/thinking.test.ts` — add a `wrapAnthropicStreamWithRecovery` test using the new error wording.\n\n## Test plan\n\n- [x] `pnpm exec vitest run src/agents/pi-embedded-runner/thinking.test.ts` — all 28 tests pass, including the new `recovers from Anthropic's invalid-thinking-signature error wording` case.\n- [ ] Existing transcript-policy and Anthropic-replay tests in the wider suite still pass.\n- [ ] Manual reproduction: on a session that has been hitting `Invalid \\`signature\\` in \\`thinking\\` block`, the next agent turn now succeeds on the auto-retry rather than surfacing the raw error to the channel.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+        "branch": "fix/thinking-invalid-signature-recovery",
+        "head_sha": "9014056c0b46bdf7599e318472facfb9a5cf4bf8",
+        "author": "doralevich",
+        "labels": [
+          "agents",
+          "size: S",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
+            "additions": 16,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/thinking.test.ts",
+            "additions": 39,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/thinking.ts",
+            "additions": 9,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-87464",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87464.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "",
+        "checks": {
+          "total": 15,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 9,
+            "SUCCESS": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "reason": "target is not open"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 328,
+    "total_ms": 1420,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 198
+        "ms": 283
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 912
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 117
+        "ms": 196
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
