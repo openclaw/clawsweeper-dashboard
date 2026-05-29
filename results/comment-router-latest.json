@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-29T23:27:04.122Z",
+  "generated_at": "2026-05-29T23:27:18.527Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-29T20:27:01.711Z",
+  "since": "2026-05-29T20:27:17.918Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    87516
+    81829
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4580632139
+  ],
+  "status_comment_id": 4580632295,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,121 +31,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:87516:4560904773:2026-05-29T23:26:58Z:clawsweeper_needs_human",
-      "comment_id": "4560904773",
-      "comment_version_key": "4560904773:2026-05-29T23:26:58Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/87516#issuecomment-4560904773",
-      "repo": "openclaw/openclaw",
-      "issue_number": 87516,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-28T04:47:13Z",
-      "comment_updated_at": "2026-05-29T23:26:58Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] No repair job is needed; maintainers should choose the canonical landing path between this PR and the overlapping open fix PR, then rely on normal checks.; Cleared: The diff only changes embedded-runner cleanup bindings and colocated Vitest coverage; it does not add dependencies, scripts, workflow permissions, credential handling, or package-resolution changes. (sha=621f403d1a703fc46b786fda4cae24a2d314c3d0)",
-      "review_summary": "The PR changes the embedded runner so bundled MCP/LSP runtime materialization assigns to outer cleanup handles, and adds focused cleanup-helper regression tests.\n\nPR surface: Source 0, Tests +40. Total +40 across 2 files.\n\nReproducibility: yes. source-reproducible: current main shadows the outer cleanup handles before the early-exit helper can dispose them. The PR body also supplies before/after Gateway and stdio MCP logs from a forced early-exit path.",
-      "review_followup": "- [P2] No repair job is needed; maintainers should choose the canonical landing path between this PR and the overlapping open fix PR, then rely on normal checks.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "621f403d1a703fc46b786fda4cae24a2d314c3d0",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: prevent bundleMcpRuntime/bundleLspRuntime variable shadowing in embedded attempt",
-        "body": "## Summary\n\nFixes #87482 — MCP filesystem sidecar duplicate spawn / process leak caused by variable shadowing.\n\n## Root Cause\n\nIn `runEmbeddedAttempt()` (`src/agents/embedded-agent-runner/run/attempt.ts`):\n\n- **Lines 813–814**: `let bundleMcpRuntime` / `let bundleLspRuntime` declared at the function scope so the early-exit cleanup helper can dispose them.\n- **Lines 1334 / 1348**: the materialized runtimes were assigned with `const` inside a nested block, **shadowing** the outer `let` bindings. The outer `let`s therefore stayed `undefined`.\n\nThe early-exit cleanup helper `cleanupEmbeddedPrepResourcesAfterEarlyExit` (defined at line 838, function scope) closes over the **outer** `let` bindings. When an attempt throws **after** bundle MCP/LSP materialization but **before** entering the main prompt `try` (e.g. a bundle-LSP init failure, tool-policy error, or before-run hook error), this is the only cleanup path that runs — and it sees `undefined`, so `dispose()` is never called:\n\n1. the MCP lease acquired by `materializeBundleMcpToolsForRun` is never released (`activeLeases` stays `> 0`);\n2. the session-runtime idle sweep skips that runtime forever (`activeLeases > 0` guard);\n3. the stdio MCP child process (e.g. `@modelcontextprotocol/server-filesystem`) is never torn down, so sidecars accumulate under the long-lived Gateway exactly as reported in #87482.\n\n> Note: the *normal* completion path is unaffected — the inner cleanup call `cleanupEmbeddedAttemptResources` (line 4776) lives in the same nested block and resolves to the inner binding, so it already disposed correctly. The leak is specific to the **early-exit** path through the outer-scoped helper.\n\n## Fix\n\nRemoved `const` from the inner declarations (lines 1334 and 1348) so they assign to the outer `let` bindings instead of creating shadowing block-scoped bindings. The early-exit helper now sees the materialized runtimes and disposes them (releasing the lease so the idle sweep can reap the sidecar).\n\n**Files changed:**\n- `src/agents/embedded-agent-runner/run/attempt.ts` — 2 lines changed\n- `src/agents/embedded-agent-runner/run/attempt.subscription-cleanup.test.ts` — 2 regression tests added\n\n## Tests\n\n- Added test verifying `bundleMcpRuntime` and `bundleLspRuntime` are disposed during cleanup.\n- Added test verifying graceful handling when both are `undefined`.\n- All existing + new cleanup tests pass (`attempt.subscription-cleanup.test.ts`).\n\n## Real behavior proof\n\n**Behavior addressed:** On the early-exit cleanup path, the materialized bundle MCP runtime's lease was never released, so the session-runtime idle sweep could never reap the stdio MCP sidecar, leaking one `mcp-server-filesystem` child process per affected session under a long-lived Gateway (#87482).\n\n**Real environment tested:** Isolated `OPENCLAW_HOME` running a real local Gateway (`openclaw gateway run`, loopback :18789) with a real stdio MCP server (`npx @modelcontextprotocol/server-filesystem`) configured under `mcp.servers`, `mcp.sessionIdleTtlMs: 5000`, and a real provider/model (`xiaomi/mimo-v2.5-pro` via the token-plan-cn endpoint). Same build/config/harness for both runs; the **only** difference between runs is this PR's 2-line change. To deterministically hit the early-exit window, an env-guarded fault was injected at the same point in both builds (a `throw` right after bundle MCP/LSP materialization, representing the bug's real failure class). Lease acquire/release/sweep/dispose were traced with an env-guarded log (`[LEASE-DBG]`, identical in both builds).\n\n**Exact steps or command run after this patch:**\n```\n# config: mcp.servers.fs (stdio @modelcontextprotocol/server-filesystem),\n#         mcp.sessionIdleTtlMs=5000, models.providers.xiaomi -> mimo-v2.5-pro\nOPENCLAW_HOME=/tmp/oc-leak OC_LEASE_DBG=1 OC_FORCE_EARLY_EXIT=1 \\\n  node scripts/run-node.mjs gateway run --force      # fixed branch (621f403)\n# drive 3 distinct sessions through the long-lived Gateway:\nfor k in fix-1 fix-2 fix-3; do\n  OPENCLAW_HOME=/tmp/oc-leak node scripts/run-node.mjs agent --session-key $k --message hi --json\ndone\n# observe lease lifecycle + idle sweep + live sidecar process tree\nps -eo pid,ppid,command | grep mcp-server-filesystem\n```\nReal model itself separately confirmed live (auth + inference) on this setup:\n```\n$ node scripts/run-node.mjs infer model run --local --prompt \"...\"\nprovider: xiaomi   model: mimo-v2.5-pro\n<genuine model completion returned>\n```\n\n**Evidence after fix:**\n\n_Before (main `92fc7c5`, shadowing bug) — lease leaks, sweep skips, sidecars persist:_\n```\n[LEASE-DBG] acquire session=e8a58b76… leases=1\n[LEASE-DBG] sweep SKIP (leased) session=e8a58b76… leases=1 idleMs=4519\n[LEASE-DBG] acquire session=2bc36f9a… leases=1\n[LEASE-DBG] sweep SKIP (leased) session=e8a58b76… leases=1 idleMs=7273   # past TTL, still skipped\n[LEASE-DBG] sweep SKIP (leased) session=2bc36f9a… leases=1 idleMs=2739\n[LEASE-DBG] acquire session=cc167ffc… leases=1\n# 3 live sidecars; only force-disposed at Gateway shutdown, still holding leases=1:\n[LEASE-DBG] dispose session=e8a58b76… leases=1\n[LEASE-DBG] dispose session=2bc36f9a… leases=1\n[LEASE-DBG] dispose session=cc167ffc… leases=1\n```\n```\n$ ps -eo ppid,command | grep server-filesystem   # under Gateway pid, before fix\n<gw> npm exec @modelcontextprotocol/server-filesystem /tmp/oc-leak/workspace   # x3, accumulating\n```\n\n_After (this PR `621f403`) — lease released, sweep reaps, sidecars drain to zero:_\n```\n[LEASE-DBG] acquire session=8654c44a… leases=1\n[LEASE-DBG] release session=8654c44a… leases=0\n[LEASE-DBG] sweep REAP session=8654c44a… idleMs=5893\n[LEASE-DBG] dispose session=8654c44a… leases=0\n[LEASE-DBG] acquire session=3957c82e… leases=1\n[LEASE-DBG] release session=3957c82e… leases=0\n[LEASE-DBG] acquire session=6c112d51… leases=1\n[LEASE-DBG] release session=6c112d51… leases=0\n[LEASE-DBG] sweep REAP session=3957c82e… idleMs=50834\n[LEASE-DBG] sweep REAP session=6c112d51… idleMs=48147\n[LEASE-DBG] dispose session=3957c82e… leases=0\n[LEASE-DBG] dispose session=6c112d51… leases=0\n```\n\n**Observed result after fix:** Every session's lease returns to `0` at cleanup; the idle sweep reaps each runtime; the live `mcp-server-filesystem` sidecar count drained to **0** while the Gateway kept running (vs. permanent accumulation before the fix). Leak resolved.\n\n**What was not tested:** Did not stage a real Telegram/Web-UI inbound to trigger a *natural* early-exit (the window was forced via an identical env-guarded fault in both builds). Did not run the agent's MCP filesystem *tool call* end-to-end through `mimo-v2.5-pro` — that model rejects the MCP tool JSON schema (a MiMo provider-schema limitation unrelated to this fix); raw model inference was confirmed live separately. Sidecar accounting was per-session under a single Gateway, not a multi-day soak.\n",
-        "branch": "fix/issue-87482-mcp-sidecar-leak",
-        "head_sha": "621f403d1a703fc46b786fda4cae24a2d314c3d0",
-        "author": "hoobnn",
-        "labels": [
-          "agents",
-          "size: XS",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦞 diamond lobster",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.subscription-cleanup.test.ts",
-            "additions": 40,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-87516",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87516.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 103,
-          "counts": {
-            "FAILURE": 2,
-            "SUCCESS": 72,
-            "SKIPPED": 28,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "check-additional-boundaries-bcd:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "check-additional-boundaries-bcd:FAILURE"
-          ]
-        }
-      },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2743,
+    "total_ms": 931,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 391
+        "ms": 597
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2004
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 320
+        "ms": 322
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
