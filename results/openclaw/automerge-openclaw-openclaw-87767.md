@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-87767"
 mode: "autonomous"
-run_id: "26611929212"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26611929212"
-head_sha: "d37dcfb8395b95b1bfa0176108cb94116a0d1b78"
+run_id: "26614509380"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26614509380"
+head_sha: "558017d383b7eae02be713280ae75e24d0cb8bd2"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-29T01:42:36.353Z"
+published_at: "2026-05-29T03:06:03.912Z"
 canonical: "https://github.com/openclaw/openclaw/pull/87810"
 canonical_issue: null
 canonical_pr: "https://github.com/openclaw/openclaw/pull/87810"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/26611929212](https://github.com/openclaw/clawsweeper/actions/runs/26611929212)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/26614509380](https://github.com/openclaw/clawsweeper/actions/runs/26614509380)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/87810
 
 ## Summary
 
-The surviving canonical path is the open writable replacement PR #87810. Source PR #87767 is already closed as superseded, #86939 is already closed, and security-sensitive linked PR #87017 is routed out of repair scope. #87810 is not merge-ready for this worker because merge is blocked by job policy and the hydrated checks still show one failing relevant gate, so the next deterministic action is a focused repair pass on #87810.
+Canonical repair path is the open same-repo replacement PR #87810. The original fork PR #87767 is already closed as superseded, #86939 is already closed historical context, and security-sensitive linked PR #87017 is quarantined without blocking the non-security gateway repair. #87810 has a passing ClawSweeper review and real-behavior proof, but merge remains blocked by job policy and a cancelled required preflight check, so the deterministic executor should repair/revalidate the writable #87810 branch rather than merge.
 
 ## Impact
 
@@ -66,11 +66,11 @@ The surviving canonical path is the open writable replacement PR #87810. Source 
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #86939 | keep_closed | skipped | fixed_by_candidate | Historical closed issue; no mutation needed. |
-| #87017 | route_security | planned | security_sensitive | Security-sensitive linked ref is quarantined to central OpenClaw security handling. |
-| #87767 | keep_closed | skipped | superseded | Useful source PR was already superseded by the credited writable replacement. |
-| #87810 | fix_needed | planned | canonical | Canonical replacement PR exists but needs a focused repair/validation pass before any later merge-capable applicator can act. |
-| cluster:automerge-openclaw-openclaw-87767 | build_fix_artifact | planned |  | A narrow executable repair plan is needed for the open canonical PR. |
+| #86939 | keep_closed | skipped | fixed_by_candidate | Historical closed issue; no mutation allowed or needed. |
+| #87017 | route_security | planned | security_sensitive | Security-sensitive linked ref is out of ClawSweeper Repair scope except for quarantine routing. |
+| #87767 | keep_closed | skipped | superseded | Already superseded by the open writable replacement PR #87810. |
+| #87810 | fix_needed | planned | canonical | Repair the writable replacement branch, rerun the exact changed-surface validation, and clear the cancelled preflight before merge consideration. |
+| cluster:automerge-openclaw-openclaw-87767 | build_fix_artifact | planned |  | Executable repair path exists on the same-repo #87810 branch. |
 
 ## Needs Human
 

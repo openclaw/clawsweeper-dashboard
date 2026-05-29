@@ -1,6 +1,6 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-05-29T01:42:47.667Z
+Generated: 2026-05-29T03:06:09.761Z
 
 ## Summary
 
@@ -30,5 +30,5 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#87810](https://github.com/openclaw/openclaw/pull/87810) | fix(gateway): clear completed session active runs | automerge-openclaw-openclaw-87767 | MERGEABLE | UNSTABLE | SUCCESS:70 SKIPPED:24 IN_PROGRESS:1 FAILURE:3 NEUTRAL:1; blockers:4 | needs_merge_state:UNSTABLE, needs_checks:CodeQL Critical Quality / Critical Quality (network-runtime-boundary):IN_PROGRESS; CI / check-prod-types:FAILURE; CI / check-test-types:FAILURE, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
+| [#87810](https://github.com/openclaw/openclaw/pull/87810) | fix(gateway): clear completed session active runs | automerge-openclaw-openclaw-87767 | MERGEABLE | UNSTABLE | SUCCESS:72 SKIPPED:23 FAILURE:2 NEUTRAL:1; blockers:2 | needs_merge_state:UNSTABLE, needs_checks:CI / check-lint:FAILURE; CI / check-test-types:FAILURE, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
 | [#87550](https://github.com/openclaw/openclaw/pull/87550) | fix(diagnostics): clear stale session activity | automerge-openclaw-openclaw-87374 | MERGEABLE | BLOCKED | CANCELLED:2 SKIPPED:31 SUCCESS:76 FAILURE:1 NEUTRAL:1; blockers:2 | needs_merge_state:BLOCKED, needs_checks:Real behavior proof:CANCELLED; CI / checks-node-agentic-agents:FAILURE, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
