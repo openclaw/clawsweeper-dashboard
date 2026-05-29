@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-29T19:11:46.303Z",
+  "generated_at": "2026-05-29T19:12:30.609Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-29T16:11:43.135Z",
+  "since": "2026-05-29T16:12:30.049Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4578937886
   ],
-  "status_comment_id": 4578938489,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "NONE",
       "comment_created_at": "2026-05-29T19:11:08Z",
       "comment_updated_at": "2026-05-29T19:11:08Z",
-      "status_comment_id": 4578938489,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,126 +61,30 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-29T19:11:47.389Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 88106
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-29T19:11:49.433Z",
-          "response_comment_id": "4578938489",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): adopt rotated session id and file after embedded compaction rotation",
-        "body": "## Summary\n\nWhen the embedded agent runner hits its context limit mid-run, auto-compaction with `truncateAfterCompaction` **rotates the transcript to a brand-new session id + file** (`compaction-successor-transcript.ts` mints a fresh `randomUUID()`; `run/attempt.ts` updates `sessionIdUsed`/`sessionFileUsed`; `run.ts` surfaces both on `result.meta.agentMeta`).\n\nBut `updateSessionStoreAfterAgentRun` persisted the **pre-rotation** `sessionId` and **never wrote `sessionFile`**. So after a rotation `sessions.json` kept pointing at the stale pre-rotation transcript. Because `resolveSessionTranscriptFile` prefers the stored `sessionEntry.sessionFile`, the next turn reopened the stale file and blocked on its write lock — the deadlock / crash-loop reported in #88040.\n\n### Fix\n\n`updateSessionStoreAfterAgentRun` now detects a rotation and adopts the new identity (id **and** file):\n\n- Rotation is recognized only when `agentMeta.sessionFile` is present and `agentMeta.sessionId` differs from the run's `sessionId`.\n- `sessionStartedAt` resets when the id actually changes (a rotated transcript is a new session).\n\n**Why the guard matters (CLI safety):** only the *embedded* runner sets `agentMeta.sessionFile`. For CLI providers, `agentMeta.sessionId` is the **external CLI tool's** session id (see `cli-runner.ts`) and `sessionFile` is unset — so the guard never rewrites a CLI session's openclaw identity. A naive `agentMeta.sessionId ?? sessionId` adoption would corrupt every CLI run's session id and still leave `sessionFile` stale; this fix avoids both.\n\n## Linked context\n\nCloses #88040\n\n## Real behavior proof (required for external PRs)\n\nBehavior addressed: after embedded auto-compaction rotated the transcript to a new session id/file, sessions.json kept the pre-rotation id and stale sessionFile, so the next turn blocked on the stale transcript's write lock (deadlock). After this patch the on-disk store adopts the rotated id + file; CLI session identity is left untouched.\n\nReal environment tested: local macOS checkout, branch `fix/88040-session-rotation` based on current `upstream/main`. The proof drives the real production function `updateSessionStoreAfterAgentRun` against a real on-disk session store (temp dir, no store mock) with a `result.meta.agentMeta` carrying the rotated `sessionId`+`sessionFile` the embedded runner emits after rotation, then reloads sessions.json from disk to assert the persisted contents. A second case feeds a CLI-shaped `agentMeta` (external `sessionId`, no `sessionFile`) to prove the openclaw id is preserved.\n\nExact steps or command run after this patch: I isolated the fix by reverting only the production file to unpatched `upstream/main` while keeping the new tests, ran the production code path with `node`, then restored the fix and re-ran. Commands:\n\n```\ngit checkout upstream/main -- src/agents/command/session-store.ts\nnode scripts/run-vitest.mjs src/agents/command/session-store.test.ts -t \"rotat\"\ngit checkout HEAD -- src/agents/command/session-store.ts\nnode scripts/run-vitest.mjs src/agents/command/session-store.test.ts\n```\n\nEvidence after fix: copied live console output from `node scripts/run-vitest.mjs`. Against the unpatched production file the run reproduces the deadlock condition (the on-disk store keeps the stale identity); with the fix restored it resolves —\n\n```\nUNPATCHED production file (bug reproduces):\n  FAIL  updateSessionStoreAfterAgentRun > adopts the rotated session id and file after embedded auto-compaction rotation\n  AssertionError: expected 'pre-rotation-session' to be 'post-rotation-session'\n  Expected: \"post-rotation-session\"\n  Received: \"pre-rotation-session\"   <- sessions.json kept the stale pre-rotation identity and sessionFile\n\nPATCHED production file (this branch):\n  Test Files  2 passed (2)\n  Tests  70 passed (70)\n```\n\nObserved result after fix: with the fix restored, the `node scripts/run-vitest.mjs` run shows the reloaded on-disk sessions.json adopts the rotated `sessionId` and `sessionFile` (no stale pointer, so the next turn does not block on the stale transcript's write lock). The CLI case keeps `sessionId` equal to the openclaw id with `sessionFile` unchanged and records the external tool id under `cliSessionIds`.\n\nWhat was not tested: an end-to-end live agent run driven all the way to an in-flight context-limit compaction rotation (that requires a long real model run, infeasible offline). The proof instead exercises the identical post-rotation production path (`updateSessionStoreAfterAgentRun` writing/reloading a real sessions.json) with the exact `agentMeta` shape the embedded runner emits after rotation.\n\n## Tests and validation\n\n- `node scripts/run-vitest.mjs src/agents/command/session-store.test.ts` -> 70 passed (2 new: embedded-rotation adoption of id+file with `sessionStartedAt` reset; CLI run preserves openclaw id and leaves `sessionFile` untouched).\n- Before/after isolation above: the rotation test fails on the unpatched production file and passes with the fix.\n- `oxfmt --check` clean, `oxlint` clean, `git diff --check` clean, `tsgo:core` exit 0, `tsgo:core:test` exit 0.\n\n## Note on #88055\n\nI opened this after noticing #88055 targets the same issue with a one-line `sessionId: result?.meta?.agentMeta?.sessionId ?? sessionId` at the call site. That approach has two problems this PR avoids: (1) for CLI providers `agentMeta.sessionId` is the external tool's id, so it would overwrite the openclaw session id on every CLI run; (2) it never updates `sessionFile`, so `resolveSessionTranscriptFile` still resolves the stale transcript and the deadlock persists. Happy to defer to maintainers on which to take.\n",
-        "branch": "fix/88040-session-rotation",
-        "head_sha": "40e58f90622a4df79197f2aaea9e63332b34a6c6",
-        "author": "coder999999999",
-        "labels": [
-          "agents",
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/command/session-store.test.ts",
-            "additions": 173,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/command/session-store.ts",
-            "additions": 30,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88106",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88106.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 103,
-          "counts": {
-            "SUCCESS": 65,
-            "IN_PROGRESS": 9,
-            "SKIPPED": 26,
-            "FAILURE": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "macos-swift:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-node-agentic-agents:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "macos-swift:IN_PROGRESS",
-            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-node-agentic-agents:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ]
-        }
-      }
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 7017,
+    "total_ms": 1984,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 535
+        "ms": 548
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2619
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 3838
+        "ms": 1424
       },
       {
         "name": "append_ledger",
