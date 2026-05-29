@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-29T06:38:00.346Z",
+  "generated_at": "2026-05-29T06:38:12.091Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-29T03:37:59.881Z",
+  "since": "2026-05-29T03:38:10.388Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    87916
+    85404
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 4,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,153 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:85404:4519653278:2026-05-29T06:38:07Z:clawsweeper_auto_repair",
+      "comment_id": "4519653278",
+      "comment_version_key": "4519653278:2026-05-29T06:38:07Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85404#issuecomment-4519653278",
+      "repo": "openclaw/openclaw",
+      "issue_number": 85404,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T14:37:36Z",
+      "comment_updated_at": "2026-05-29T06:38:07Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=005ffbb56b42cba7eb32776202c9f5774e955d6b)",
+      "review_summary": "This PR adds a per-session-key reservation helper, routes agent-command session resolution through it, adds concurrent same-key regression tests, and adds a changelog entry.\n\nPR surface: Source +72, Tests +77, Docs +1. Total +150 across 4 files.\n\nReproducibility: yes. Source inspection shows current resolveSession can mint two random ids before either request persists the session-key mapping, and the added regression test captures that pre-fix split.",
+      "review_followup": "- Maintainers need to review the session-state reservation semantics and routine rebase/check status; no ClawSweeper repair is needed beyond the small changelog cleanup.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "005ffbb56b42cba7eb32776202c9f5774e955d6b",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): serialize new-session resolution per session key",
+        "body": "### Summary\n\n- **Problem**: Two requests carrying the **same `x-openclaw-session-key`** at the OpenAI-compatible endpoints (`/v1/chat/completions`, `/v1/responses`) can run in **separate sessions** when the second arrives while the first is still in flight (e.g. a follow-up message sent before the first turn finishes). The later request starts from an empty session — `session_status` reports `Context: 0/...` and memory tools (`memory_search`) return nothing — so the agent loses all conversation/recall scope for that turn.\n- **Root Cause**: Session identity is resolved by `resolveSession` (`src/agents/command/session.ts`) **before** the per-session execution lane is entered. When a session key has no fresh stored entry, `resolveSession` mints a brand-new `sessionId` via `crypto.randomUUID()`. Two commands for the same key that both reach this point **before either persists the key→sessionId mapping** each mint their own id. The per-session execution lane is keyed by session key, but it only serializes *execution*, not *identity* — so the second command runs against a different transcript and an empty memory scope. The WebChat `chat.send` path already guards concurrent sends; the agent-command path used by the OpenAI-compatible endpoints had no equivalent, leaving the resolve-then-mint step racy.\n- **Fix**: Add `resolveSessionWithReservation` (`src/agents/command/session-resolution-reservation.ts`) and call it from the agent-command pipeline (`src/agents/agent-command.ts`) in place of `resolveSession`. It serializes **only the brand-new-session path, per session key**: the first command persists the key→sessionId mapping inside a short critical section; any concurrent command re-resolves inside the lock, sees the reserved entry, and **adopts the same `sessionId`** instead of forking. This enforces the invariant \"same session key ⇒ one session id\" at the layer that owns session identity (so all ingress surfaces benefit, not just one endpoint). It avoids side effects because: established sessions and explicit-`sessionId` runs **skip the lock entirely** (no added latency on the steady-state hot path); the critical section is independent of the execution lane and completes before execution, so it **cannot deadlock** with it; and the reserved entry is the same minimal mapping the command already persists moments later, so it introduces **no new orphaning behavior**.\n- **What changed**:\n  - `src/agents/command/session-resolution-reservation.ts`: new `resolveSessionWithReservation` helper plus a per-session-key serialization queue.\n  - `src/agents/agent-command.ts`: resolve the session through `resolveSessionWithReservation` instead of `resolveSession`.\n  - `src/agents/command/session-resolution-reservation.test.ts`: regression coverage (see below).\n- **What did NOT change (scope boundary)**:\n  - `resolveSession` semantics, the per-session execution lane, and the session-store schema are untouched.\n  - The explicit-`sessionId` path and ordinary single requests are untouched (they bypass the reservation lock).\n  - No config keys, no gateway protocol change, no change to streaming or delivery behavior.\n  - Established (already-persisted, fresh) sessions are unaffected; they never enter the lock.\n\n### Reproduction\n\n1. Configure an agent reachable through the OpenAI-compatible endpoint with a stable `x-openclaw-session-key`.\n2. Send a long, multi-tool request for that session key.\n3. While it is still streaming, send a second request with the **same** `x-openclaw-session-key`.\n- Before: the second turn runs in an isolated session (`session_status` shows `Context: 0/...`); it has no recall of the in-flight conversation.\n- After: both turns share one session; the second adopts the first request's `sessionId` and retains conversation/recall scope.\n\n### Real behavior proof\n\n- **Behavior addressed**: concurrent requests carrying the same session key forking isolated, memory-less sessions because session identity is resolved before the per-session lane is entered.\n- **Real environment tested**: Linux, Node 22.22, a running OpenClaw Gateway (`openclaw gateway run`) from this branch serving `POST /v1/chat/completions`, routed to a local OpenAI-compatible model endpoint, writing to an isolated on-disk session store.\n- **Exact steps or command run after this patch**: launched the Gateway, then fired two concurrent `curl` requests to `/v1/chat/completions` carrying an identical `x-openclaw-session-key: final-1779465436`, then inspected the on-disk session store and the per-session transcript files.\n- **Evidence after fix**: both concurrent `curl` requests returned successfully with distinct run ids `chatcmpl_189760ea-7315-4873-a704-bd3bc6b51fa7` and `chatcmpl_9408b3a5-f114-45ba-aa49-f8d5e8ff3940`; the on-disk session store recorded a single entry `agent:main:final-1779465436 -> sessionId bc472c1b-9cbb-4a8e-b337-51a53d3e2aef`; the sessions directory held exactly one session transcript `bc472c1b-9cbb-4a8e-b337-51a53d3e2aef.jsonl`. The live store also showed the reservation-shaped entry `{ sessionId, updatedAt, sessionStartedAt }` written by `resolveSessionWithReservation`. Captured live console output:\n\n```text\ntwo concurrent requests, identical x-openclaw-session-key=final-1779465436 (23:57:16 start -> 23:57:32 done)\n$ curl .../v1/chat/completions -H 'x-openclaw-session-key: final-1779465436' -d '{\"model\":\"openclaw\",\"messages\":[{\"role\":\"user\",\"content\":\"first turn\"}]}' &\n$ curl .../v1/chat/completions -H 'x-openclaw-session-key: final-1779465436' -d '{\"model\":\"openclaw\",\"messages\":[{\"role\":\"user\",\"content\":\"second turn concurrent\"}]}' &\nA: {\"id\":\"chatcmpl_189760ea-7315-4873-a704-bd3bc6b51fa7\", ... \"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\nB: {\"id\":\"chatcmpl_9408b3a5-f114-45ba-aa49-f8d5e8ff3940\", ... \"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\nresolved session for that key (single store entry, single id):\nagent:main:final-1779465436 -> sessionId bc472c1b-9cbb-4a8e-b337-51a53d3e2aef\n\nsession transcripts for that id (exactly one, so no fork):\nbc472c1b-9cbb-4a8e-b337-51a53d3e2aef.jsonl\n```\n- **Observed result after fix**: two distinct concurrent runs against one session key converged on one `sessionId` and one transcript — the second request joined the in-flight session instead of forking an isolated, memory-less one.\n- **What was not tested**: a multi-hour production deployment and a third-party hosted model provider were not exercised; the run used a local OpenAI-compatible model endpoint and an isolated session store.\n\n### Risk / Mitigation\n\n- **Risk**: per-key serialization could add latency or deadlock, or an early-reserved entry could orphan if the run aborts.\n- **Mitigation**: only the brand-new-session path takes the lock — established sessions and explicit-`sessionId` runs are untouched, so the steady-state hot path is unchanged. The critical section is a single resolve plus one store write and is independent of the execution lane, so it cannot deadlock with it. The reserved entry is the same minimal `sessionId` mapping the command already persists immediately afterward, so no new orphaning is introduced. Unit tests assert concurrent same-key resolutions converge on one `sessionId` (they diverge on the pre-fix path) and that the explicit-`sessionId` path is unchanged.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Gateway\n- [x] Agents / agent-command\n- [x] Sessions\n- [x] Tests\n\n### Linked Issue/PR\n\nFixes #84575\n",
+        "branch": "fix/openai-compat-session-key-serialization-84575",
+        "head_sha": "005ffbb56b42cba7eb32776202c9f5774e955d6b",
+        "author": "openperf",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 session-state",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-command.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/command/session-resolution-reservation.test.ts",
+            "additions": 77,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/command/session-resolution-reservation.ts",
+            "additions": 72,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85404",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85404.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 97,
+          "counts": {
+            "IN_PROGRESS": 1,
+            "SUCCESS": 66,
+            "FAILURE": 9,
+            "SKIPPED": 20,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "security-fast:FAILURE",
+            "build-artifacts:FAILURE",
+            "check-guards:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
+          "pending": [
+            "Security High (core-auth-secrets):IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "security-fast:FAILURE",
+            "build-artifacts:FAILURE",
+            "check-guards:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ]
+        }
+      },
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 831,
+    "total_ms": 1925,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 452
+        "ms": 256
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1430
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 366
+        "ms": 210
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
