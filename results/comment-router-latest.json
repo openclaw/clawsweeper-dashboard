@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-29T12:44:05.779Z",
+  "generated_at": "2026-05-29T12:44:08.249Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-29T09:44:01.383Z",
+  "since": "2026-05-29T09:44:05.714Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    88008
+    86584
   ],
   "comment_ids": [
-    4575131884
+    4575141575
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4575142294,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,20 +33,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:88008:4575131884:2026-05-29T12:42:48Z:re_review",
-      "comment_id": "4575131884",
-      "comment_version_key": "4575131884:2026-05-29T12:42:48Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/88008#issuecomment-4575131884",
+      "idempotency_key": "comment-router:openclaw/openclaw:86584:4575141575:2026-05-29T12:43:38Z:re_review",
+      "comment_id": "4575141575",
+      "comment_version_key": "4575141575:2026-05-29T12:43:38Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86584#issuecomment-4575141575",
       "repo": "openclaw/openclaw",
-      "issue_number": 88008,
-      "author": "Feelw00",
-      "author_id": 45638585,
+      "issue_number": 86584,
+      "author": "ubehera",
+      "author_id": 3691059,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-29T12:42:48Z",
-      "comment_updated_at": "2026-05-29T12:42:48Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-05-29T12:43:38Z",
+      "comment_updated_at": "2026-05-29T12:43:38Z",
+      "status_comment_id": 4575142294,
       "trigger": "mention",
-      "command": "review",
+      "command": "re-review",
       "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
@@ -61,45 +61,78 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-05-29T12:44:09.067Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 86584
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-29T12:44:10.904Z",
+          "response_comment_id": "4575142294",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(tasks): persist task store before in-memory mutation to prevent sqlite divergence",
-        "body": "## Summary\n\n- **Problem**: `src/tasks/task-registry.ts` `updateTask` and `deleteTaskRecordById` commit the in-memory `tasks` / `taskDeliveryStates` maps (and the owner / parentFlow / relatedSession / runId indexes) before calling the sqlite persist helpers, and neither persist call is wrapped in a try/catch.\n- **Why it matters**: The default store always binds the transactional variants (`upsertTaskWithDeliveryState` / `deleteTaskWithDeliveryState`), so persist always goes through `withWriteTransaction(BEGIN IMMEDIATE)`, which ROLLBACKs and re-throws on SQLITE_BUSY (multi-writer busy_timeout exceeded), SQLITE_FULL (disk full), or SQLITE_IOERR. The unhandled throw leaves the in-memory state mutated while sqlite keeps the prior row, so the two stores diverge: reload/restart resurrects deleted tasks (lost-delete), and the sqlite-direct reader `listFreshTasksForOwnerKey` (used by `media-generation-task-status-shared`) returns rows that contradict the in-memory path.\n- **What changed**: Persist to the store first; only mutate the in-memory maps and indexes after persist succeeds. When persist throws, the in-memory state is left untouched and stays consistent with sqlite. The snapshot-fallback branches in the persist helpers now project the pending change so they remain correct under the new ordering.\n- **What did NOT change**: Store contracts (`task-registry.store.types.ts`), the sqlite adapter, the transactional semantics, and the normal (persist-succeeds) ordering of observer events are unchanged. No public API or behavior change on the success path.\n\n## Change Type\n\n- [x] Bug fix\n- [ ] Refactor required for the fix\n- [ ] New feature\n- [ ] Docs / CI only\n\n## Scope\n\nTouched areas:\n\n- [x] `src/tasks/` (task registry persistence ordering)\n- [ ] cron\n- [ ] plugins\n- [ ] gateway / security\n\nFiles touched:\n\n- `src/tasks/task-registry.ts` (1 production file: `updateTask`, `deleteTaskRecordById`, and the three persist helpers' snapshot-fallback branches)\n- `src/tasks/task-registry.store.test.ts` (1 regression test)\n\n## Linked Issue\n\nCloses #88007\n\n## Root Cause\n\nThe registry keeps two stores in sync: an in-memory `tasks` Map (plus `taskDeliveryStates` and four secondary indexes) and a persistent sqlite store that is the source of truth across reload/restart. Both mutators wrote the in-memory side first and persisted afterward, with the persist call left unguarded:\n\n- `deleteTaskRecordById`: removes the row from the in-memory `tasks` / `taskDeliveryStates` maps and indexes, then calls `persistTaskDelete` + `persistTaskDeliveryStateDelete`.\n- `updateTask`: runs `tasks.set(taskId, next)` and updates the indexes, then calls `persistTaskUpsert(next)` (the following try block only wrapped `syncFlowFromTask`).\n\nThe missing guardrail is an in-memory <-> sqlite cross-store boundary. The default store binds `upsertTaskWithDeliveryState` / `deleteTaskWithDeliveryState`, so every persist goes through `withWriteTransaction(BEGIN IMMEDIATE)`, which ROLLBACKs and re-throws on SQLITE_BUSY / SQLITE_FULL / SQLITE_IOERR. Because nothing catches or pre-orders that throw, the in-memory mutation has already committed while sqlite still holds the prior row. Result:\n\n- lost-delete: the deleted task survives in sqlite and resurrects on `reloadTaskRegistryFromStore` / `restoreTaskRegistryOnce`.\n- stale read: the updated task diverges so the sqlite-direct reader `listFreshTasksForOwnerKey` returns the stale value while the in-memory path returns the new one. The same `ownerKey` yields contradictory answers in the same process.\n\nThis is the same fix-shape merged in #83238 (persist before committing the in-memory mirror).\n\n## Regression Test Plan\n\nAdded `src/tasks/task-registry.store.test.ts` > \"does not diverge sqlite-direct reads when an upsert persist throws\". It uses the existing `configureTaskRegistryRuntime` seam to inject an in-process store whose `upsertTaskWithDeliveryState` throws `SQLITE_FULL` (mirroring `withWriteTransaction` ROLLBACK + re-throw, which leaves the sqlite row unchanged). It seeds a `running` row, attempts a `running -> succeeded` transition via `markTaskTerminalById`, asserts the persist throws, then asserts both read paths still report `running`:\n\n- `getTaskById(\"task-diverge\")?.status === \"running\"` (in-memory path; the discriminating assertion)\n- `listFreshTasksForOwnerKey(ownerKey)` row status === \"running\" (sqlite-direct reader path used by `media-generation-task-status-shared`)\n\nThis is the exact production hot-path: the default store always routes through the transactional variant, so there is no synthetic-only branch. The `updateTask` reordering also closes the `deleteTaskRecordById` resurrection because both mutators share the persist-before-commit ordering.\n\nRun: `pnpm test src/tasks/task-registry.store.test.ts` (single-file RED -> GREEN) and `pnpm test src/tasks/` (broader regression on mutators).\n\n## Security Impact\n\n- No new permissions, scopes, or capabilities.\n- No new secrets, credentials, or environment variables.\n- No new network calls or external dependencies.\n- No change to data exposure scope: the patch only reorders an in-memory mutation relative to an existing sqlite write within the same process. It strengthens task-registry persistence consistency (the persistent sqlite source of truth is never contradicted by stale in-memory state on a write failure).\n- File is not under `@openclaw/secops` ownership in `.github/CODEOWNERS`.\n\n## Repro + Verification\n\n- **Environment**: macOS (darwin arm64), Node 23.x, base sha `9de6abd8d7` (upstream/main), `node_modules` present.\n- **Steps**: Inject a store whose transactional write throws (matching `withWriteTransaction` ROLLBACK + re-throw), then perform a state transition / delete and read the task back through both the in-memory path (`getTaskById`) and the sqlite-direct reader (`listFreshTasksForOwnerKey`).\n- **Expected (correct)**: When the persist write fails, both stores remain at the prior value; no resurrection and no stale divergence.\n- **Actual (before fix)**: The in-memory map advanced to the new value while sqlite kept the prior row. `getTaskById` returned `succeeded` while sqlite-direct returned `running` (divergence); deleted rows resurrected on reload.\n\n## Evidence\n\nFailing before the fix (buggy ordering: `tasks.set` before `persistTaskUpsert`):\n\n```text\n FAIL  src/tasks/task-registry.store.test.ts > task-registry store runtime > does not diverge sqlite-direct reads when an upsert persist throws\n AssertionError: expected 'succeeded' to be 'running' // Object.is equality\n Expected: \"running\"\n Received: \"succeeded\"\n   at src/tasks/task-registry.store.test.ts:301  expect(getTaskById(\"task-diverge\")?.status).toBe(\"running\");\n\n Test Files  1 failed (1)\n      Tests  1 failed | 12 skipped (13)\n```\n\nPassing after the fix (persist-before-in-memory):\n\n```text\n RUN  v4.1.7\n\n Test Files  1 passed (1)\n      Tests  13 passed (13)\n   Duration  406ms\n```\n\n## Human Verification\n\nTesting level: fully tested (single-file RED -> GREEN confirmed by reverting only the `updateTask` reordering, then restoring; full store suite 13/13 green; type-check clean for the changed file).\n\n- Confirmed the new test fails on the unpatched ordering and passes with the patch (not a tautology).\n- Confirmed `updateTask` does not mutate `taskDeliveryStates`, so moving `persistTaskUpsert` earlier does not change the delivery-state value it reads (`taskDeliveryStates.get(task.taskId)` at the top of `persistTaskUpsert`).\n- Confirmed the secondary indexes (owner / parentFlow / relatedSession / runId) and the observer `deleted` / upsert event are still updated/emitted after a successful persist, so the success-path ordering of observable effects is unchanged.\n- Confirmed `media-generation-task-status-shared.ts` consumes `listFreshTasksForOwnerKey` (the FIND-002 production reader).\n\n## Review Conversations\n\n- [ ] All bot review comments addressed (to be checked after the bot pass).\n\n## Compatibility / Migration\n\n- No schema migration. No data migration. No config change.\n- Backward compatible: store contracts and the sqlite adapter are untouched; on-disk format is unchanged.\n- Behavior change is limited to the failure path (persist throws), where the registry now leaves both stores consistent instead of diverging. The success path is byte-for-byte equivalent in outcome.\n\n## Risks and Mitigations\n\n- **Risk**: Reordering `persistTaskUpsert` before the in-memory commit could change the value persisted if the persist helper read in-memory state. **Mitigation**: `persistTaskUpsert` is called with the fully-computed `next` record and reads only `taskDeliveryStates` (not mutated by `updateTask`); the snapshot-fallback branches now project the pending change explicitly, so the persisted snapshot is correct under the new ordering. Verified by the passing store suite.\n- **Risk**: Observer / sync side effects moving relative to persist. **Mitigation**: They remain after a successful persist, matching prior observable ordering; the existing \"emits incremental observer events\" and \"uses atomic task-plus-delivery store methods\" tests pass unchanged.\n- **Risk**: Partial-success across the two delete persists (`persistTaskDelete` succeeds, `persistTaskDeliveryStateDelete` throws). **Mitigation**: In-memory is still untouched at that point, so the in-memory <-> sqlite boundary holds; intra-sqlite atomicity across the two writes is the store transaction's responsibility, out of scope for this in-memory-boundary fix.\n\n## AI-assisted\n\nThis PR was drafted with AI assistance (Claude Code, claude-opus-4-8). The reasoning, repro, and verification above were produced and reviewed under that workflow; the author has verified the diff, the failing-then-passing evidence, and the absence of success-path behavior change.\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Without this patch, task-registry.ts mutators commit the in-memory Map before calling the unguarded sqlite persist. deleteTaskRecordById deletes from the in-memory `tasks`/`taskDeliveryStates` Maps (2162-2163) before persistTaskDelete (2165); updateTask sets `tasks.set(taskId, next)` (997) before persistTaskUpsert (1011), and the following try (1012) only wraps syncFlowFromTask. When the sqlite write throws (withWriteTransaction ROLLBACK + re-throw on SQLITE_BUSY / SQLITE_FULL / SQLITE_IOERR, store.sqlite.ts:503-506) the in-memory mutation is never rolled back. The deleted row survives in sqlite and resurrects on reloadTaskRegistryFromStore / restoreTaskRegistryOnce (lost-delete); the updated record diverges so the sqlite-direct reader listFreshTasksForOwnerKey returns the stale value while the in-memory path returns the new one. With this patch, an in-memory<->sqlite cross-store boundary (persist-before-commit or rollback-on-persist-fail) keeps both stores in agreement so neither resurrection nor stale divergence occurs.\n- **Real environment tested**: macOS (darwin arm64), Node 23.x, OpenClaw checked out at the base sha with node_modules present. Isolated temp HOME / OPENCLAW_HOME (temp dir); production ~/.openclaw untouched. No external dependencies (no OAuth/LLM/channel/network calls). The task-registry store is replaced via the public configureTaskRegistryRuntime seam with an in-process store whose write methods throw before mutating their backing data, mirroring withWriteTransaction's ROLLBACK (no row change) + re-throw.\n- **Exact steps or command run after this patch**:\n\n```text\n$ git checkout <base sha>                              (Build A) / <head sha> (Build B)\n$ node_modules/.bin/tsx <probe.ts>                     (worktree root, isolated temp HOME)\n  probe trial DELETE: seed sqlite row -> reload -> deleteTaskRecordById (persistTaskDelete throws)\n    -> measure in-memory absent + sqlite present (diverged) -> reload -> measure resurrected\n  probe trial UPDATE: seed -> reload -> updateTaskNotifyPolicyById (persistTaskUpsert throws)\n    -> compare in-memory getTaskById vs sqlite-direct listFreshTasksForOwnerKey\n```\n\n- **Evidence after fix**:\n\nLive tsx measurement of cross-store divergence across two mutators:\n\n```text\n[Build A] without this patch (base sha):\n  trialResults: [{\"branch\": \"delete-lost-delete\", \"persistThrew\": true, \"inMemoryBeforeDelete\": true, \"inMemoryAfterDelete\": false, \"sqliteAfterDelete\": true, \"diverged\": true, \"resurrected\": true}, {\"branch\": \"update-stale-read\", \"persistThrew\": true, \"expectedNext\": \"state_changes\", \"stale\": \"done_only\", \"inMemoryNotify\": \"state_changes\", \"memListNotify\": \"state_changes\", \"sqliteDirectNotify\": \"done_only\", \"diverged\": true}]\n  divergenceCount: 2  (delete + update both diverge)\n  resurrectedCount: 1  (deleted task revived on reload)\n\n[Build B] with this patch (head sha):\n  trialResults: [{\"branch\": \"delete-lost-delete\", \"persistThrew\": true, \"inMemoryBeforeDelete\": true, \"inMemoryAfterDelete\": true, \"sqliteAfterDelete\": true, \"diverged\": false, \"resurrected\": true}, {\"branch\": \"update-stale-read\", \"persistThrew\": true, \"expectedNext\": \"state_changes\", \"stale\": \"done_only\", \"inMemoryNotify\": \"done_only\", \"memListNotify\": \"done_only\", \"sqliteDirectNotify\": \"done_only\", \"diverged\": false}]\n  divergenceCount: 0  (cross-store boundary holds both stores equal)\n  resurrectedCount: 1\n```\n\n- **Observed result after fix**: Without patch: divergenceCount=2/2, resurrectedCount=1 — the deleted task resurrects on reload and the updated task's sqlite-direct read is stale. With patch: divergenceCount=0, resurrectedCount=1 — both stores stay consistent through the persist throw.\n- **What was not tested**: Real multi-process SQLITE_BUSY contention against an on-disk db file (the throw is injected at the store seam, which is the exact point withWriteTransaction re-throws after ROLLBACK). delivery-state-only mutators and the snapshot-fallback persist branches (default store always provides the transactional variant, so those are out of the production path per the FIND counter-evidence).\n",
-        "branch": "fix/task-registry-persist-before-memory",
-        "head_sha": "13ce58e785f1dc725f0431797ae2af2573fe186a",
-        "author": "feelw00",
+        "title": "fix(agents): gate owned-write publish on pre-append fingerprint (#86572)",
+        "body": "## Summary\n\nAdds a pre-append trust gate at the publish-time write boundary so the embedded session takeover fence cannot misclassify pi's own writes as external mutation. Complementary to [#87159](https://github.com/openclaw/openclaw/pull/87159), which serializes cross-attempt access to the same session file but does NOT cover same-lane writes between `releaseForPrompt` and the next hook lock acquisition. Verified to still hold post-#87159 + #87409 rebase.\n\nCloses #86572. Defense-in-depth alongside #87159.\n\n## Rebase note (force-pushed 2026-05-29, head `d780c41bf1`)\n\nRebased onto current `upstream/main`, picking up:\n- [#87159](https://github.com/openclaw/openclaw/pull/87159) — canonical session-file ownership indexing\n- [#87409](https://github.com/openclaw/openclaw/pull/87409) — removed `installSessionExternalHookWriteLock` and `installSessionEventWriteLock`, moved hook locking into the controller\n\nConflicts resolved with the architectural-invariant lens:\n- Dropped the install-* wrapper machinery from the patch (obsolete after #87409)\n- Kept the publish gate (`publishOwnedPostMessageWrite(beforeWrite)`, `beforeMessagePersist` opt) — still load-bearing\n- Dropped 12 install-* dependent tests; will add focused unit tests for the publish gate in a follow-up\n\nNet diff post-rebase: +142 / -8 across 5 files.\n\n## Why this is still needed\n\n@htuyer121 [reported in a comment](https://github.com/openclaw/openclaw/pull/86584#issuecomment-4562247920) (and in [#86845](https://github.com/openclaw/openclaw/issues/86845)) that the `EmbeddedAttemptSessionTakeoverError` class is **still firing in production post-#87159**: 30 events on disk across 11 jobs and 4 agents, all `--session isolated` (single-lane), rate accelerating, spread widening to voice-TTS paths.\n\n`--session isolated` is the key signal: #87159 prevents two attempts from entering the same session file's prompt window. It does NOT prevent a single attempt's own pi append (via `_handleAgentEvent → sessionManager.appendMessage → _persist → appendFileSync`) between `releaseForPrompt` and the next hook lock acquisition from being misclassified as external mutation. That's what this PR's pre-append trust gate addresses.\n\nThe two fixes are orthogonal:\n- **#87159**: serializes attempts at the file-ownership boundary (cross-lane invariant)\n- **#86584**: distinguishes the lane's own writes from external mutation at publish time (same-lane invariant)\n\nBoth invariants are needed to close the takeover-error class observed in production.\n\n## Real behavior proof\n\n- **Behavior addressed:** Eliminates `EmbeddedAttemptSessionTakeoverError` on the lane's own pi-driven writes when an external hook fires after rapid pi writes. The takeover fence still trips on genuine external mutations AND on mixed external-then-pi interleaves.\n\n- **Real environment tested:** Local OpenClaw source checkout (macOS 26.5, Node 26) at the rebased branch HEAD `d780c41bf1`, branched off `468b971fba` (current `upstream/main`, post-#87159 + #87409). The proof harness loads the rebased controller from source and drives four scenarios end-to-end against real temp session files via `fs.appendFile` and `controller.withSessionWriteLock`.\n\n- **Exact steps or command run after this patch:**\n\n  ```sh\n  pnpm install\n  node scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts\n  npx tsx /Users/umank/code/openclaw-tickets/proof/run-refresh-before-hook-lock-proof.mjs\n  ```\n\n- **Evidence after fix (post-rebase proof harness):**\n\n  ```\n  ============================================================\n  PR #86584 — publish-on-onMessagePersisted proof (Issue #86572)\n  ============================================================\n  source under test: src/agents/embedded-agent-runner/run/attempt.session-lock.ts\n                     publishOwnedPostMessageWrite(beforeWrite)\n                     gated on isTrustedSessionFileState(key, beforeWrite)\n\n  -------- Scenario A — pre-fix: pi-style write WITHOUT publish (trips takeover) --------\n    pi-write    pi appendFileSync (F0 → F1) — no publish call\n    hook        controller.withSessionWriteLock(beforeToolCallBody) — fence check happens here\n    hook        RESULT: TAKEOVER (EmbeddedAttemptSessionTakeoverError)\n    state       hasSessionTakeover() = true\n\n  -------- Scenario B — post-fix: pi-style write WITH publish (hook fires cleanly) --------\n    pi-write    pi appendFileSync (F0 → F1) with pre-write captured\n    publish     publishOwnedPostMessageWrite(F0) — F0 is trusted, record F1 as owned\n    hook        controller.withSessionWriteLock(beforeToolCallBody) — fence check happens here\n    hook        RESULT: hook fired successfully (hookOutcome.fired=true)\n    state       hasSessionTakeover() = false\n\n  -------- Scenario C — negative: external write bypasses publish (still trips) --------\n    pi-write    EXTERNAL appendFileSync (F0 → F1) — no publish\n    hook        RESULT: TAKEOVER (EmbeddedAttemptSessionTakeoverError)\n\n  -------- Scenario D — mixed interleave: external THEN pi write + publish (still trips) --------\n    external    EXTERNAL appendFileSync first (F0 → F1)\n    pi-write    pi appendFileSync second (F1 → F2) — pre-write captured = F1\n    publish     publishOwnedPostMessageWrite(F1) — F1 NOT trusted, skip (fail closed)\n    hook        RESULT: TAKEOVER (EmbeddedAttemptSessionTakeoverError)\n\n  RESULT: PASS — all four scenarios behaved as expected.\n  ```\n\n  Scenario D is the bot-required negative regression (mixed external-then-pi interleave). It still trips on the rebased code — proving the trust gate's invariant survives the cross-cutting changes from #87159 and #87409.\n\n- **Test suite:** existing 80 cases under `embedded-agent-runner/run/attempt.session-lock.test.ts` pass cleanly post-rebase. The 12 publish-related tests our PR added pre-rebase depended on `installSessionExternalHookWriteLock` (removed by #87409); they'll be re-added as focused unit tests against `controller.withSessionWriteLock(...)` in a follow-up commit. Marking this PR as the publish gate's core fix; the test re-add is a separate concern.\n\n- **Observed result after fix:** The publish gate behaves identically on the new architecture. Same-lane pi writes get correctly recorded as owned when the pre-append fingerprint is trusted; external writes (including those interleaved before pi's append) still trip the fence.\n\n- **What was not tested:** A live reproduction against htuyer121's 30-event repro data. They [offered the .jsonl files](https://github.com/openclaw/openclaw/pull/86584#issuecomment-4562247920); validating against that would be the strongest possible signal but I don't have the corpus locally yet.\n\n## Compatibility / Risk\n\n- `publishOwnedPostMessageWrite(beforeWrite)` is an additive method on `EmbeddedAttemptSessionLockController`. Existing call sites unaffected.\n- `beforeMessagePersist` is an additive optional opt on `session-tool-result-guard`. Backward compatible.\n- The trust gate is fail-closed: any baseline mismatch refuses to record. Cannot launder external mutations.\n\n## Related\n\n- Issue #86572 — root cause analysis and acceptance criteria\n- #85913 — original tracking issue (closed by #87159)\n- #86845 — htuyer121's production corroboration\n- #87159 — joshavant's session-file ownership (complementary, landed)\n- #87409 — moved hook locking into controller (this PR rebased on top)\n\n---\n\n*This PR is AI-assisted. Code authored with Claude.*\n",
+        "branch": "fix/session-takeover-refresh-before-hook-lock",
+        "head_sha": "d780c41bf1ab985ffac5b80c85d115636229b77c",
+        "author": "ubehera",
         "labels": [
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: ⏳ waiting on author"
+          "agents",
+          "size: S",
+          "triage: mock-only-proof",
+          "P1",
+          "rating: 🌊 off-meta tidepool",
+          "merge-risk: 🚨 session-state"
         ],
         "files": [
           {
-            "path": "src/tasks/task-registry.store.test.ts",
-            "additions": 159,
+            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.ts",
+            "additions": 108,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 16,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-tool-result-guard-wrapper.ts",
+            "additions": 6,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/tasks/task-registry.ts",
-            "additions": 37,
-            "deletions": 18,
+            "path": "src/agents/session-tool-result-guard.ts",
+            "additions": 11,
+            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88008",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88008.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86584",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86584.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
@@ -108,83 +141,86 @@
           "total": 102,
           "counts": {
             "FAILURE": 1,
-            "SUCCESS": 48,
-            "IN_PROGRESS": 24,
+            "SUCCESS": 46,
             "SKIPPED": 28,
+            "IN_PROGRESS": 26,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Scan changed paths (precise):FAILURE",
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Real behavior proof:FAILURE",
+            "Security High (network-ssrf-boundary):IN_PROGRESS",
             "Critical Quality (network-runtime-boundary):IN_PROGRESS",
             "build-artifacts:IN_PROGRESS",
             "checks-fast-contracts-channels-a:IN_PROGRESS",
             "checks-fast-contracts-channels-b:IN_PROGRESS",
             "checks-node-core-fast:IN_PROGRESS",
+            "checks-node-core-src-security:IN_PROGRESS",
             "checks-node-core-runtime-infra-state:IN_PROGRESS",
             "checks-node-core-runtime-infra-process:IN_PROGRESS",
             "checks-node-core-runtime-media-ui:IN_PROGRESS",
             "checks-node-core-runtime-shared:IN_PROGRESS",
             "checks-node-agentic-control-plane-startup-runtime:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
+            "checks-node-agentic-cli:IN_PROGRESS",
             "checks-node-agentic-agents:IN_PROGRESS",
             "checks-node-agentic-gateway-core:IN_PROGRESS",
             "checks-node-auto-reply-reply-commands:IN_PROGRESS",
             "check-guards:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
             "check-lint:IN_PROGRESS",
             "check-dependencies:IN_PROGRESS",
             "check-test-types:IN_PROGRESS",
             "check-additional-boundaries-a:IN_PROGRESS",
             "check-additional-extension-channels:IN_PROGRESS",
             "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS"
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
           "pending": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (network-ssrf-boundary):IN_PROGRESS",
             "Critical Quality (network-runtime-boundary):IN_PROGRESS",
             "build-artifacts:IN_PROGRESS",
             "checks-fast-contracts-channels-a:IN_PROGRESS",
             "checks-fast-contracts-channels-b:IN_PROGRESS",
             "checks-node-core-fast:IN_PROGRESS",
+            "checks-node-core-src-security:IN_PROGRESS",
             "checks-node-core-runtime-infra-state:IN_PROGRESS",
             "checks-node-core-runtime-infra-process:IN_PROGRESS",
             "checks-node-core-runtime-media-ui:IN_PROGRESS",
             "checks-node-core-runtime-shared:IN_PROGRESS",
             "checks-node-agentic-control-plane-startup-runtime:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
+            "checks-node-agentic-cli:IN_PROGRESS",
             "checks-node-agentic-agents:IN_PROGRESS",
             "checks-node-agentic-gateway-core:IN_PROGRESS",
             "checks-node-auto-reply-reply-commands:IN_PROGRESS",
             "check-guards:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
             "check-lint:IN_PROGRESS",
             "check-dependencies:IN_PROGRESS",
             "check-test-types:IN_PROGRESS",
             "check-additional-boundaries-a:IN_PROGRESS",
             "check-additional-extension-channels:IN_PROGRESS",
             "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS"
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
           "terminalBlockers": [
-            "Scan changed paths (precise):FAILURE"
+            "Real behavior proof:FAILURE"
           ]
         }
-      },
-      "reason": "matching ClawSweeper response comment already exists"
+      }
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 4740,
+    "total_ms": 5837,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2108
+        "ms": 615
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2275
+        "ms": 1903
       },
       {
         "name": "classify_commands",
@@ -192,11 +228,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 344
+        "ms": 3288
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
