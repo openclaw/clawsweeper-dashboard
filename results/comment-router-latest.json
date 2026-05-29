@@ -1,15 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-29T22:24:52.641Z",
+  "generated_at": "2026-05-29T22:24:55.161Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-29T19:24:50.182Z",
+  "since": "2026-05-29T19:24:51.778Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    88150
+    85982
+  ],
+  "comment_ids": [
+    4580314788
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -30,17 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88150:4580301302:2026-05-29T22:24:46Z:clawsweeper_needs_human",
-      "comment_id": "4580301302",
-      "comment_version_key": "4580301302:2026-05-29T22:24:46Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/88150#issuecomment-4580301302",
+      "idempotency_key": "comment-router:openclaw/openclaw:85982:4580314788:2026-05-29T22:23:38Z:re_review",
+      "comment_id": "4580314788",
+      "comment_version_key": "4580314788:2026-05-29T22:23:38Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85982#issuecomment-4580314788",
       "repo": "openclaw/openclaw",
-      "issue_number": 88150,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-29T22:20:30Z",
-      "comment_updated_at": "2026-05-29T22:24:46Z",
+      "issue_number": 85982,
+      "author": "kiranmagic7",
+      "author_id": 262980978,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-29T22:23:38Z",
+      "comment_updated_at": "2026-05-29T22:23:38Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -60,79 +63,107 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(config): cap runtime session-store cache retention",
-        "body": "# Fix: cap runtime session-store cache retention for oversized stores\n\n## Summary\n\nThis patch adds a runtime byte cap to the live session-store object and snapshot caches so oversized `sessions.json` loads do not stay resident as parsed object graphs in the gateway heap.\n\nThe on-disk session store remains the source of truth. Large stores can still be reloaded on demand, but they are no longer retained in memory just because they were loaded once.\n\nScope note: this PR only covers the session-store work in this branch. It does not include the separate bootstrap-cache patch or the separate `webgate` patch from the other branch.\n\n## Issue Evidence\n\n- The gateway previously crashed with a V8 heap OOM on the same machine.\n- Before the patch, the live session-store tree and quarantine tree were multi-gigabyte, and the runtime was repeatedly loading the full session store during startup/recovery paths.\n- The old behavior kept parsed session-store object graphs and immutable snapshots in memory after load, which is the retention pattern this patch caps.\n\n## Real Behavior Proof\n\nBehavior or issue addressed: oversized session-store hydration could retain parsed object graphs and snapshots in the live gateway cache, which increased heap pressure during startup, recovery, and repeated session access.\n\nReal environment tested: Local OpenClaw workspace on the same machine, using the source tree at `/root/.openclaw/openclaw-fork-rebase` and the same runtime files that back the gateway.\n\nExact steps or command run after this patch:\n```bash\nnode --import tsx --input-type=module <<'EOF'\nimport fs from 'node:fs';\nimport os from 'node:os';\nimport path from 'node:path';\nimport {\n  getSerializedSessionStoreCacheStatsForTest,\n  getSessionStoreSnapshotCacheStatsForTest,\n  readSessionStoreCache,\n  writeSessionStoreCache,\n} from './src/config/sessions/store-cache.ts';\nimport { clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } from './src/config/sessions/store.ts';\n\nprocess.env.OPENCLAW_SESSION_CACHE_MAX_BYTES = '64';\nclearSessionStoreCacheForTest();\n\nconst tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-session-cache-'));\nconst storePath = path.join(tmpDir, 'sessions.json');\nconst testStore = {\n  'session:1': {\n    sessionId: 'id-1',\n    updatedAt: Date.now(),\n    displayName: 'Oversized session store',\n    skillsSnapshot: {\n      prompt: 'oversized prompt '.repeat(40),\n      skills: [{ name: 'alpha' }],\n    },\n  },\n};\n\nawait saveSessionStore(storePath, testStore);\nclearSessionStoreCacheForTest();\nconsole.log('after save serialized entries=', getSerializedSessionStoreCacheStatsForTest().entries);\nconsole.log('after save snapshot entries=', getSessionStoreSnapshotCacheStatsForTest().entries);\n\nlet storeReads = 0;\nconst originalReadFileSync = fs.readFileSync.bind(fs);\nfs.readFileSync = (...args) => {\n  if (args[0] === storePath) {\n    storeReads += 1;\n  }\n  return originalReadFileSync(...args);\n};\n\nconst loaded1 = loadSessionStore(storePath);\nconst loaded2 = loadSessionStore(storePath);\n\nconsole.log('storeReads=', storeReads);\nconsole.log('sameReference=', loaded1 === loaded2);\nconsole.log('equalPayload=', JSON.stringify(loaded1) === JSON.stringify(loaded2));\nconsole.log('serialized entries after loads=', getSerializedSessionStoreCacheStatsForTest().entries);\nconsole.log('snapshot entries after loads=', getSessionStoreSnapshotCacheStatsForTest().entries);\n\nclearSessionStoreCacheForTest();\nconst smallStore = {\n  'session:small': {\n    sessionId: 'id-small',\n    updatedAt: Date.now(),\n    displayName: 'Small Session',\n  },\n};\nconst smallSerialized = JSON.stringify(smallStore);\nwriteSessionStoreCache({\n  storePath,\n  store: smallStore,\n  mtimeMs: 1,\n  sizeBytes: Buffer.byteLength(smallSerialized, 'utf8'),\n  serialized: smallSerialized,\n  cloneSerialized: smallSerialized,\n});\nconsole.log('small serialized entries=', getSerializedSessionStoreCacheStatsForTest().entries);\nconst oversizeRead = readSessionStoreCache({ storePath, mtimeMs: 1, sizeBytes: 128 });\nconsole.log('oversize direct read null=', oversizeRead === null);\nconsole.log('after oversized direct read serialized entries=', getSerializedSessionStoreCacheStatsForTest().entries);\nconsole.log('after oversized direct read snapshot entries=', getSessionStoreSnapshotCacheStatsForTest().entries);\nEOF\n```\n\nEvidence after fix:\n```text\nafter save serialized entries= 0\nafter save snapshot entries= 0\nstoreReads= 2\nsameReference= false\nequalPayload= true\nserialized entries after loads= 0\nsnapshot entries after loads= 0\nsmall serialized entries= 1\noversize direct read null= true\nafter oversized direct read serialized entries= 0\nafter oversized direct read snapshot entries= 0\n```\n\nObserved result after fix: oversized runtime session-store caches stay empty, repeated loads still return correct data, and direct oversized cache reads invalidate instead of retaining the object graph in memory. In the live gateway, the process stayed healthy and recovered back down after spikes during normal use; the conservative internal \"critical\" warnings still fired at times, but the post-GC floor remained bounded in the observed window and did not show the earlier runaway crash pattern.\n\nUser observation: under heavy normal use, the gateway also seemed noticeably faster after this patch, with smoother response under load. That is currently anecdotal only and not backed by measurement yet, so it should be treated as a qualitative observation rather than proof.\n\nWhat was not tested: an overnight soak or a full quarantine/restart-recovery cleanup pass after this specific patch. Supplemental runtime data can be added later if the long-run floor starts drifting.\n\n## Before-Fix Evidence (Supplementary)\n\n<details>\n<summary>Pre-patch crash and pressure symptoms</summary>\n\n- The gateway previously crashed with a V8 heap OOM rather than a native fault.\n- The live process had repeated memory-pressure warnings before this patch.\n- The on-disk session corpus was large enough to justify avoiding persistent in-memory retention of oversized stores.\n\n</details>\n\n\nCloses #88147",
-        "branch": "rebase/session-store-only",
-        "head_sha": "f6247c8e6e18c82d385a4623b7fec889ce1b4449",
-        "author": "yozakura-ava",
+        "title": "fix(models): dedupe implicit CLI runtime aliases",
+        "body": "Summary\n- Prune implicit CLI runtime alias provider rows from `/models` provider data when the canonical provider already owns the same model.\n- Preserve explicit legacy CLI runtime refs, including configured exact refs and wildcard/provider-visible cases, so existing user configs do not disappear.\n- Preserve explicit full-catalog CLI runtime provider browsing: `/models claude-cli all` still lists `claude-cli/*` rows even when canonical `anthropic/*` rows exist.\n- Add regression coverage for duplicate alias pruning, explicit legacy preservation, canonical models routed through CLI runtime policy, and the explicit CLI provider `all` browse path.\n\nVerification\n- Rebuilt the PR branch cleanly on top of upstream `main` and force-pushed only the fork branch with `--force-with-lease`; the PR diff is back to the intended three files: `src/agents/model-runtime-aliases.ts`, `src/auto-reply/reply/commands-models.ts`, and `src/auto-reply/reply/commands-models.test.ts`.\n- `pnpm install --frozen-lockfile`\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.auto-reply-reply.config.ts src/auto-reply/reply/commands-models.test.ts` passed on the clean branch: 1 file, 33 tests.\n- `pnpm exec oxlint src/auto-reply/reply/commands-models.ts src/auto-reply/reply/commands-models.test.ts src/agents/model-runtime-aliases.ts` passed on the clean branch.\n- `git diff --check` passed before the clean commit.\n- `git diff --check HEAD^..HEAD` passed after the clean commit.\n\nLive behavior proof\n- Exact build/SHA tested: `0f814c1792bd048e39af89415a6b158835d1b766`.\n- Real environment used: local terminal source checkout on macOS Darwin 25.3.0 arm64, Node `v25.6.1`, pnpm `11.2.2`.\n- Live path exercised: terminal invocation of the actual `/models` command handler with synthetic terminal sender metadata and isolated workspace `/tmp/openclaw-proof-85982`. No unit-test mocks were used for the proof commands.\n- Command flow 1 exercised: `/models`.\n- Observed result after patch: default provider browse no longer lists implicit CLI alias providers beside canonical providers:\n\n```text\nCOMMAND /models\nProviders:\n- anthropic (4)\n- arcee (3)\n- google (6)\n- openai (16)\n- openrouter (3)\n- xai (9)\n\nUse: /models <provider>\nSwitch: /model <provider/model>\nEND COMMAND /models\n```\n\n- Command flow 2 exercised: `/models claude-cli all`.\n- Observed result after patch: explicit CLI runtime provider full-catalog browse still works and lists `claude-cli/*` rows:\n\n```text\nCOMMAND /models claude-cli all\nModels (claude-cli · 🔑 token (anthropic:manual)) — showing 1-4 of 4 (page 1/1)\n- claude-cli/claude-opus-4-6\n- claude-cli/claude-opus-4-7\n- claude-cli/claude-opus-4-8\n- claude-cli/claude-sonnet-4-6\n\nSwitch: /model <provider/model>\nEND COMMAND /models claude-cli all\n```\n\nBefore/after symptom evidence\n- Before this update, ClawSweeper identified that pruning ran even for `view: \"all\"`, so explicit CLI provider browse could lose its CLI rows.\n- After this update, pruning is skipped for `options.view === \"all\"`; the terminal proof above shows `/models` dedupes implicit providers while `/models claude-cli all` still works.\n\nRemaining proof gaps\n- I did not run the full repository test suite.\n- I did not capture a live Telegram Desktop recording; the proof is terminal output from the affected `/models` command path.\n\nFixes #83342\n",
+        "branch": "fix-models-dedupe-runtime-aliases",
+        "head_sha": "0f814c1792bd048e39af89415a6b158835d1b766",
+        "author": "kiranmagic7",
         "labels": [
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
+          "agents",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "mantis: telegram-visible-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
+          "merge-risk: 🚨 auth-provider",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/config/sessions.cache.test.ts",
-            "additions": 70,
+            "path": "src/agents/model-runtime-aliases.ts",
+            "additions": 89,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/config/sessions/store-cache.ts",
-            "additions": 48,
-            "deletions": 0,
+            "path": "src/auto-reply/reply/commands-models.test.ts",
+            "additions": 71,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/commands-models.ts",
+            "additions": 115,
+            "deletions": 4,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88150",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88150.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85982",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85982.md",
         "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
         "review_decision": "",
         "checks": {
-          "total": 106,
+          "total": 105,
           "counts": {
-            "SUCCESS": 75,
-            "CANCELLED": 1,
-            "SKIPPED": 28,
             "FAILURE": 1,
+            "SUCCESS": 66,
+            "SKIPPED": 27,
+            "IN_PROGRESS": 10,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-core-runtime-infra-process:FAILURE"
+            "Real behavior proof:FAILURE",
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-node-agentic-agents-core:IN_PROGRESS",
+            "checks-node-agentic-agents-embedded:IN_PROGRESS",
+            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
           ],
-          "pending": [],
+          "pending": [
+            "Critical Quality (network-runtime-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-node-agentic-agents-core:IN_PROGRESS",
+            "checks-node-agentic-agents-embedded:IN_PROGRESS",
+            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
+          ],
           "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-core-runtime-infra-process:FAILURE"
+            "Real behavior proof:FAILURE"
           ]
         }
       },
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2810,
+    "total_ms": 3632,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 428
+        "ms": 2068
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2017
+        "ms": 1299
       },
       {
         "name": "classify_commands",
@@ -140,11 +171,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 338
+        "ms": 250
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
