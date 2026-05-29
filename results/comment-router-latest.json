@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-29T22:40:39.097Z",
+  "generated_at": "2026-05-29T22:42:57.263Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-29T19:40:38.873Z",
+  "since": "2026-05-29T19:42:55.113Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    88154
+    88150
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +29,210 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88150:4580301302:2026-05-29T22:42:52Z:clawsweeper_needs_human",
+      "comment_id": "4580301302",
+      "comment_version_key": "4580301302:2026-05-29T22:42:52Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88150#issuecomment-4580301302",
+      "repo": "openclaw/openclaw",
+      "issue_number": 88150,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-29T22:20:30Z",
+      "comment_updated_at": "2026-05-29T22:42:52Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] Maintainer review should accept or tune the new 16 MiB runtime cache cap; there is no narrow automated code repair indicated by this review.; Cleared: The diff only changes in-process session-store cache retention and focused tests; no concrete security or supply-chain concern was found. (sha=fecb26bdb5af95065beabc28631a9f1b821d1a29)",
+      "review_summary": "The PR adds a 16 MiB default, env-configurable runtime session-store cache cap and tests that oversized stores are not retained in serialized/object/snapshot caches.\n\nPR surface: Source +54, Tests +71. Total +125 across 2 files.\n\nReproducibility: yes. for the cache-retention path: current main writes parsed stores and snapshots into runtime caches without a size-aware cap, and the PR supplies a terminal fixture showing the changed behavior. I did not reproduce the full gateway V8 OOM in this read-only review.",
+      "review_followup": "- [P2] Maintainer review should accept or tune the new 16 MiB runtime cache cap; there is no narrow automated code repair indicated by this review.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "fecb26bdb5af95065beabc28631a9f1b821d1a29",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(config): cap runtime session-store cache retention",
+        "body": "# Fix: cap runtime session-store cache retention for oversized stores\n\n## Summary\n\nThis patch adds a runtime byte cap to the live session-store object and snapshot caches so oversized `sessions.json` loads do not stay resident as parsed object graphs in the gateway heap.\n\nThe on-disk session store remains the source of truth. Large stores can still be reloaded on demand, but they are no longer retained in memory just because they were loaded once.\n\nScope note: this PR only covers the session-store work in this branch. It does not include the separate bootstrap-cache patch or the separate `webgate` patch from the other branch.\n\n## Issue Evidence\n\n- The gateway previously crashed with a V8 heap OOM on the same machine.\n- Before the patch, the live session-store tree and quarantine tree were multi-gigabyte, and the runtime was repeatedly loading the full session store during startup/recovery paths.\n- The old behavior kept parsed session-store object graphs and immutable snapshots in memory after load, which is the retention pattern this patch caps.\n\n## Real Behavior Proof\n\nBehavior or issue addressed: oversized session-store hydration could retain parsed object graphs and snapshots in the live gateway cache, which increased heap pressure during startup, recovery, and repeated session access.\n\nReal environment tested: Local OpenClaw workspace on the same machine, using the source tree at `/root/.openclaw/openclaw-fork-rebase` and the same runtime files that back the gateway.\n\nExact steps or command run after this patch:\n```bash\nnode --import tsx --input-type=module <<'EOF'\nimport fs from 'node:fs';\nimport os from 'node:os';\nimport path from 'node:path';\nimport {\n  getSerializedSessionStoreCacheStatsForTest,\n  getSessionStoreSnapshotCacheStatsForTest,\n  readSessionStoreCache,\n  writeSessionStoreCache,\n} from './src/config/sessions/store-cache.ts';\nimport { clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } from './src/config/sessions/store.ts';\n\nprocess.env.OPENCLAW_SESSION_CACHE_MAX_BYTES = '64';\nclearSessionStoreCacheForTest();\n\nconst tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-session-cache-'));\nconst storePath = path.join(tmpDir, 'sessions.json');\nconst testStore = {\n  'session:1': {\n    sessionId: 'id-1',\n    updatedAt: Date.now(),\n    displayName: 'Oversized session store',\n    skillsSnapshot: {\n      prompt: 'oversized prompt '.repeat(40),\n      skills: [{ name: 'alpha' }],\n    },\n  },\n};\n\nawait saveSessionStore(storePath, testStore);\nclearSessionStoreCacheForTest();\nconsole.log('after save serialized entries=', getSerializedSessionStoreCacheStatsForTest().entries);\nconsole.log('after save snapshot entries=', getSessionStoreSnapshotCacheStatsForTest().entries);\n\nlet storeReads = 0;\nconst originalReadFileSync = fs.readFileSync.bind(fs);\nfs.readFileSync = (...args) => {\n  if (args[0] === storePath) {\n    storeReads += 1;\n  }\n  return originalReadFileSync(...args);\n};\n\nconst loaded1 = loadSessionStore(storePath);\nconst loaded2 = loadSessionStore(storePath);\n\nconsole.log('storeReads=', storeReads);\nconsole.log('sameReference=', loaded1 === loaded2);\nconsole.log('equalPayload=', JSON.stringify(loaded1) === JSON.stringify(loaded2));\nconsole.log('serialized entries after loads=', getSerializedSessionStoreCacheStatsForTest().entries);\nconsole.log('snapshot entries after loads=', getSessionStoreSnapshotCacheStatsForTest().entries);\n\nclearSessionStoreCacheForTest();\nconst smallStore = {\n  'session:small': {\n    sessionId: 'id-small',\n    updatedAt: Date.now(),\n    displayName: 'Small Session',\n  },\n};\nconst smallSerialized = JSON.stringify(smallStore);\nwriteSessionStoreCache({\n  storePath,\n  store: smallStore,\n  mtimeMs: 1,\n  sizeBytes: Buffer.byteLength(smallSerialized, 'utf8'),\n  serialized: smallSerialized,\n  cloneSerialized: smallSerialized,\n});\nconsole.log('small serialized entries=', getSerializedSessionStoreCacheStatsForTest().entries);\nconst oversizeRead = readSessionStoreCache({ storePath, mtimeMs: 1, sizeBytes: 128 });\nconsole.log('oversize direct read null=', oversizeRead === null);\nconsole.log('after oversized direct read serialized entries=', getSerializedSessionStoreCacheStatsForTest().entries);\nconsole.log('after oversized direct read snapshot entries=', getSessionStoreSnapshotCacheStatsForTest().entries);\nEOF\n```\n\nEvidence after fix:\n```text\nafter save serialized entries= 0\nafter save snapshot entries= 0\nstoreReads= 2\nsameReference= false\nequalPayload= true\nserialized entries after loads= 0\nsnapshot entries after loads= 0\nsmall serialized entries= 1\noversize direct read null= true\nafter oversized direct read serialized entries= 0\nafter oversized direct read snapshot entries= 0\n```\n\nObserved result after fix: oversized runtime session-store caches stay empty, repeated loads still return correct data, and direct oversized cache reads invalidate instead of retaining the object graph in memory. In the live gateway, the process stayed healthy and recovered back down after spikes during normal use; the conservative internal \"critical\" warnings still fired at times, but the post-GC floor remained bounded in the observed window and did not show the earlier runaway crash pattern.\n\nUser observation: under heavy normal use, the gateway also seemed noticeably faster after this patch, with smoother response under load. That is currently anecdotal only and not backed by measurement yet, so it should be treated as a qualitative observation rather than proof.\n\nWhat was not tested: an overnight soak or a full quarantine/restart-recovery cleanup pass after this specific patch. Supplemental runtime data can be added later if the long-run floor starts drifting.\n\n## Before-Fix Evidence (Supplementary)\n\n<details>\n<summary>Pre-patch crash and pressure symptoms</summary>\n\n- The gateway previously crashed with a V8 heap OOM rather than a native fault.\n- The live process had repeated memory-pressure warnings before this patch.\n- The on-disk session corpus was large enough to justify avoiding persistent in-memory retention of oversized stores.\n\n</details>\n\n\nCloses #88147",
+        "branch": "rebase/session-store-only",
+        "head_sha": "fecb26bdb5af95065beabc28631a9f1b821d1a29",
+        "author": "yozakura-ava",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/config/sessions.cache.test.ts",
+            "additions": 71,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/store-cache.ts",
+            "additions": 54,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-88150",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88150.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 107,
+          "counts": {
+            "SUCCESS": 77,
+            "SKIPPED": 27,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-core-runtime-infra-state:FAILURE",
+            "checks-node-core-runtime-infra-process:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-core-runtime-infra-state:FAILURE",
+            "checks-node-core-runtime-infra-process:FAILURE"
+          ]
+        }
+      },
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:88150:4580378777:2026-05-29T22:37:19Z:re_review",
+      "comment_id": "4580378777",
+      "comment_version_key": "4580378777:2026-05-29T22:37:19Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88150#issuecomment-4580378777",
+      "repo": "openclaw/openclaw",
+      "issue_number": 88150,
+      "author": "yozakura-ava",
+      "author_id": 280745628,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-29T22:37:19Z",
+      "comment_updated_at": "2026-05-29T22:37:19Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(config): cap runtime session-store cache retention",
+        "body": "# Fix: cap runtime session-store cache retention for oversized stores\n\n## Summary\n\nThis patch adds a runtime byte cap to the live session-store object and snapshot caches so oversized `sessions.json` loads do not stay resident as parsed object graphs in the gateway heap.\n\nThe on-disk session store remains the source of truth. Large stores can still be reloaded on demand, but they are no longer retained in memory just because they were loaded once.\n\nScope note: this PR only covers the session-store work in this branch. It does not include the separate bootstrap-cache patch or the separate `webgate` patch from the other branch.\n\n## Issue Evidence\n\n- The gateway previously crashed with a V8 heap OOM on the same machine.\n- Before the patch, the live session-store tree and quarantine tree were multi-gigabyte, and the runtime was repeatedly loading the full session store during startup/recovery paths.\n- The old behavior kept parsed session-store object graphs and immutable snapshots in memory after load, which is the retention pattern this patch caps.\n\n## Real Behavior Proof\n\nBehavior or issue addressed: oversized session-store hydration could retain parsed object graphs and snapshots in the live gateway cache, which increased heap pressure during startup, recovery, and repeated session access.\n\nReal environment tested: Local OpenClaw workspace on the same machine, using the source tree at `/root/.openclaw/openclaw-fork-rebase` and the same runtime files that back the gateway.\n\nExact steps or command run after this patch:\n```bash\nnode --import tsx --input-type=module <<'EOF'\nimport fs from 'node:fs';\nimport os from 'node:os';\nimport path from 'node:path';\nimport {\n  getSerializedSessionStoreCacheStatsForTest,\n  getSessionStoreSnapshotCacheStatsForTest,\n  readSessionStoreCache,\n  writeSessionStoreCache,\n} from './src/config/sessions/store-cache.ts';\nimport { clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } from './src/config/sessions/store.ts';\n\nprocess.env.OPENCLAW_SESSION_CACHE_MAX_BYTES = '64';\nclearSessionStoreCacheForTest();\n\nconst tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-session-cache-'));\nconst storePath = path.join(tmpDir, 'sessions.json');\nconst testStore = {\n  'session:1': {\n    sessionId: 'id-1',\n    updatedAt: Date.now(),\n    displayName: 'Oversized session store',\n    skillsSnapshot: {\n      prompt: 'oversized prompt '.repeat(40),\n      skills: [{ name: 'alpha' }],\n    },\n  },\n};\n\nawait saveSessionStore(storePath, testStore);\nclearSessionStoreCacheForTest();\nconsole.log('after save serialized entries=', getSerializedSessionStoreCacheStatsForTest().entries);\nconsole.log('after save snapshot entries=', getSessionStoreSnapshotCacheStatsForTest().entries);\n\nlet storeReads = 0;\nconst originalReadFileSync = fs.readFileSync.bind(fs);\nfs.readFileSync = (...args) => {\n  if (args[0] === storePath) {\n    storeReads += 1;\n  }\n  return originalReadFileSync(...args);\n};\n\nconst loaded1 = loadSessionStore(storePath);\nconst loaded2 = loadSessionStore(storePath);\n\nconsole.log('storeReads=', storeReads);\nconsole.log('sameReference=', loaded1 === loaded2);\nconsole.log('equalPayload=', JSON.stringify(loaded1) === JSON.stringify(loaded2));\nconsole.log('serialized entries after loads=', getSerializedSessionStoreCacheStatsForTest().entries);\nconsole.log('snapshot entries after loads=', getSessionStoreSnapshotCacheStatsForTest().entries);\n\nclearSessionStoreCacheForTest();\nconst smallStore = {\n  'session:small': {\n    sessionId: 'id-small',\n    updatedAt: Date.now(),\n    displayName: 'Small Session',\n  },\n};\nconst smallSerialized = JSON.stringify(smallStore);\nwriteSessionStoreCache({\n  storePath,\n  store: smallStore,\n  mtimeMs: 1,\n  sizeBytes: Buffer.byteLength(smallSerialized, 'utf8'),\n  serialized: smallSerialized,\n  cloneSerialized: smallSerialized,\n});\nconsole.log('small serialized entries=', getSerializedSessionStoreCacheStatsForTest().entries);\nconst oversizeRead = readSessionStoreCache({ storePath, mtimeMs: 1, sizeBytes: 128 });\nconsole.log('oversize direct read null=', oversizeRead === null);\nconsole.log('after oversized direct read serialized entries=', getSerializedSessionStoreCacheStatsForTest().entries);\nconsole.log('after oversized direct read snapshot entries=', getSessionStoreSnapshotCacheStatsForTest().entries);\nEOF\n```\n\nEvidence after fix:\n```text\nafter save serialized entries= 0\nafter save snapshot entries= 0\nstoreReads= 2\nsameReference= false\nequalPayload= true\nserialized entries after loads= 0\nsnapshot entries after loads= 0\nsmall serialized entries= 1\noversize direct read null= true\nafter oversized direct read serialized entries= 0\nafter oversized direct read snapshot entries= 0\n```\n\nObserved result after fix: oversized runtime session-store caches stay empty, repeated loads still return correct data, and direct oversized cache reads invalidate instead of retaining the object graph in memory. In the live gateway, the process stayed healthy and recovered back down after spikes during normal use; the conservative internal \"critical\" warnings still fired at times, but the post-GC floor remained bounded in the observed window and did not show the earlier runaway crash pattern.\n\nUser observation: under heavy normal use, the gateway also seemed noticeably faster after this patch, with smoother response under load. That is currently anecdotal only and not backed by measurement yet, so it should be treated as a qualitative observation rather than proof.\n\nWhat was not tested: an overnight soak or a full quarantine/restart-recovery cleanup pass after this specific patch. Supplemental runtime data can be added later if the long-run floor starts drifting.\n\n## Before-Fix Evidence (Supplementary)\n\n<details>\n<summary>Pre-patch crash and pressure symptoms</summary>\n\n- The gateway previously crashed with a V8 heap OOM rather than a native fault.\n- The live process had repeated memory-pressure warnings before this patch.\n- The on-disk session corpus was large enough to justify avoiding persistent in-memory retention of oversized stores.\n\n</details>\n\n\nCloses #88147",
+        "branch": "rebase/session-store-only",
+        "head_sha": "fecb26bdb5af95065beabc28631a9f1b821d1a29",
+        "author": "yozakura-ava",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/config/sessions.cache.test.ts",
+            "additions": 71,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/store-cache.ts",
+            "additions": 54,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-88150",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88150.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 107,
+          "counts": {
+            "SUCCESS": 77,
+            "SKIPPED": 27,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-core-runtime-infra-state:FAILURE",
+            "checks-node-core-runtime-infra-process:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-core-runtime-infra-state:FAILURE",
+            "checks-node-core-runtime-infra-process:FAILURE"
+          ]
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 380,
+    "total_ms": 2356,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 213
+        "ms": 225
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1909
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 154
+        "ms": 194
       },
       {
         "name": "append_ledger",
