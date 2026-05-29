@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-29T11:07:44.012Z",
+  "generated_at": "2026-05-29T11:08:43.002Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-29T08:07:42.159Z",
+  "since": "2026-05-29T08:08:42.635Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    87446
+    87999
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,118 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:87446:4559446735:2026-05-29T11:07:38Z:clawsweeper_auto_repair",
-      "comment_id": "4559446735",
-      "comment_version_key": "4559446735:2026-05-29T11:07:38Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/87446#issuecomment-4559446735",
-      "repo": "openclaw/openclaw",
-      "issue_number": 87446,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-27T23:13:22Z",
-      "comment_updated_at": "2026-05-29T11:07:38Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=61118e7d3695cb87084a9055b42b4f5e2078de01)",
-      "review_summary": "The PR adds rejection-reset handling for the channel progress draft gate and regression tests for timer and direct `noteWork()` startup failures.\n\nPR surface: Source +6, Tests +38. Total +44 across 2 files.\n\nReproducibility: yes. Source inspection shows current main and `v2026.5.27` set `started = true` before `onStart` resolves and do not reset it on rejection; this review did not run tests because the task is read-only.",
-      "review_followup": "- [P1] The next step is contributor or maintainer rebase plus real behavior proof; automation should not repair this PR while external proof remains insufficient.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "61118e7d3695cb87084a9055b42b4f5e2078de01",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(channels): reset progress draft gate started flag when onStart rejects",
-        "body": "## Summary\n\n`createChannelProgressDraftGate` sets `started = true` synchronously before `params.onStart()` resolves. If `onStart` rejects (e.g. channel API rate limit, network error on the initial \"Working...\" message send), `started` stays permanently `true`. Every subsequent `noteWork()` call returns `true` at the early-return guard, causing downstream code to believe the draft stream is active when it was never started.\n\n## Changes\n\n**`src/channels/streaming.ts`**: Add `.catch()` handler to the `start()` promise chain that resets `started = false` and `startPromise = undefined` before re-throwing. This keeps the re-entry guard behavior (no double `onStart` calls during resolution) while allowing the gate to recover on the next `noteWork()` or `startNow()` call after a failure.\n\n**`src/plugin-sdk/channel-streaming.test.ts`**: Two new behavioral cases verifying the rejection-reset-retry path across both trigger modes (timer-triggered and direct noteWork).\n\n## Verification\n\n### Real behavior proof\n\nBehavior addressed: Progress draft gate permanently stuck in started=true after onStart rejection, noteWork returns true when no stream is active.\n\nReal environment tested: macOS terminal, Node v26.0.0, darwin arm64, patched branch\n\nExact steps or command run after this patch: Exercised the patched `createChannelProgressDraftGate` state machine in Node to demonstrate the rejection-reset-retry path. The script creates a gate with a failing `onStart`, calls `noteWork()` twice (second call triggers `start()` directly), observes `hasStarted` reset to false after rejection, then retries with a succeeding `onStart` to confirm recovery.\n\n```bash\nnode --input-type=module << 'PROOF'\n// Exercise the PATCHED createChannelProgressDraftGate from src/channels/streaming.ts\nfunction createGate(params) {\n  let started = false;\n  let startPromise;\n  const start = () => {\n    if (started) return startPromise ?? Promise.resolve();\n    started = true;\n    startPromise = Promise.resolve()\n      .then(params.onStart)\n      .catch((error) => { started = false; startPromise = undefined; throw error; });\n    return startPromise;\n  };\n  return {\n    get hasStarted() { return started; },\n    async noteWork() {\n      // second noteWork triggers start directly\n      return start().then(() => true);\n    },\n  };\n}\nlet shouldFail = true;\nlet callCount = 0;\nconst gate = createGate({ onStart: async () => { callCount++; if (shouldFail) throw new Error(\"channel send failed\"); } });\nconsole.log(\"1. hasStarted=\" + gate.hasStarted);\ntry { await gate.noteWork(); } catch (err) { console.log(\"2. caught: \" + err.message + \", hasStarted=\" + gate.hasStarted); }\nshouldFail = false;\nconst r = await gate.noteWork();\nconsole.log(\"3. recovered=\" + r + \", hasStarted=\" + gate.hasStarted + \", onStart calls=\" + callCount);\nPROOF\n```\n\nEvidence after fix:\n\nTerminal output from the Node runtime exercise on the patched branch:\n\n```console\n$ node --input-type=module << 'PROOF'\n...\nPROOF\n=== Runtime proof: progress gate rejection-reset-retry ===\nNode: v26.0.0 | Platform: darwin arm64\n\n1. Initial state:\n   hasStarted=false, workEvents=0\n2. First noteWork (schedules timer, returns false):\n   returned=false, hasStarted=false\n3. Second noteWork (triggers start, onStart rejects):\n  onStart called (attempt 1), shouldFail=true\n   caught: \"channel send failed\"\n   hasStarted=false (RESET to false by .catch handler)\n4. Retry: clear failure, third noteWork:\n  onStart called (attempt 2), shouldFail=false\n   returned=true, hasStarted=true (RECOVERED)\n   onStart called 2 times total\n\n=== Before this fix, step 3 would leave hasStarted=true permanently. ===\n=== The gate would never retry onStart, silently swallowing the failure. ===\n```\n\nStep 3 shows the critical behavior: after `onStart` rejects, `hasStarted` is reset to `false` by the `.catch()` handler at `src/channels/streaming.ts:544-547`. Before this patch, `started` would remain `true` permanently after the rejection, and every subsequent `noteWork()` call would hit the early-return guard at line 538, returning the failed `startPromise` without ever calling `onStart` again.\n\nStep 4 confirms recovery: with `started` properly reset, the next `noteWork()` call invokes `start()` again, `onStart` runs a second time, and the gate transitions to `hasStarted=true`.\n\nObserved result after fix: `hasStarted` reports `false` after `onStart` rejection. The gate recovers on the next `noteWork()` call: `onStart` is invoked again (2 calls total), `hasStarted` transitions to `true`, and `noteWork()` resolves to `true`. The gate no longer gets permanently stuck in `started=true` after a transient channel failure.\n\nWhat was not tested: Live channel API rejection through a running gateway (requires a channel that rate-limits the initial progress message send). The fix is in the gate state machine with no I/O dependencies; the Node runtime exercise runs the same code path that executes in production.\n\nCloses #83115\n\n",
-        "branch": "fix/progress-gate-started-on-reject",
-        "head_sha": "61118e7d3695cb87084a9055b42b4f5e2078de01",
-        "author": "sebtardif",
-        "labels": [
-          "size: XS",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/plugin-sdk/channel-streaming.test.ts",
-            "additions": 38,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/channel-streaming.ts",
-            "additions": 7,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-87446",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87446.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 13,
-          "counts": {
-            "CANCELLED": 1,
-            "SUCCESS": 3,
-            "SKIPPED": 9
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2205,
+    "total_ms": 681,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 490
+        "ms": 357
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1346
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 337
+        "ms": 313
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
