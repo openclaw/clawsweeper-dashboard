@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-29T06:44:45.930Z",
+  "generated_at": "2026-05-29T06:45:13.313Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-29T03:44:45.706Z",
+  "since": "2026-05-29T03:45:11.170Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    87918
+    75089
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 4,
+  "commands_seen": 3,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,642 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:75089:4352796333:2026-05-29T06:45:07Z:clawsweeper_auto_repair",
+      "comment_id": "4352796333",
+      "comment_version_key": "4352796333:2026-05-29T06:45:07Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/75089#issuecomment-4352796333",
+      "repo": "openclaw/openclaw",
+      "issue_number": 75089,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-04-30T13:20:35Z",
+      "comment_updated_at": "2026-05-29T06:45:07Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=593c709d6d5f8f83943676139a3a5d406e4bad90)",
+      "review_summary": "The branch adds a central `ChatRunState.clearRun()` cleanup path, timestamps raw buffered chat text, and rewires Gateway abort, finalization, maintenance, context, and tests to sweep stale chat stream state.\n\nPR surface: Source +16, Tests +87. Total +103 across 17 files.\n\nReproducibility: yes. for source reproduction: current main retains raw streamed chat text separately from the projected buffer, and existing stale cleanup paths do not consistently clear that raw map. I did not reproduce a production RSS graph.",
+      "review_followup": "- [P2] A narrow repair can add the missing restart-close cleanup-hook wiring and rerun focused validation without a product decision.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "593c709d6d5f8f83943676139a3a5d406e4bad90",
+      "finding_id": "review-feedback",
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): clear stale chat stream buffers",
+        "body": "## Summary\n\n- Clear gateway chat raw/projected/delta buffers through one `clearRun` path on normal finish, abort, timeout, and stale maintenance cleanup.\n- Track `bufferUpdatedAt` so raw-only streamed buffers that never emitted deltas can be swept after their run is no longer active.\n- Include current-main broadcast text and agent text throttle state in the same per-run cleanup path.\n\n## Root cause\n\nGateway `rawBuffers` can retain full streamed assistant text. Some cleanup paths removed only projected buffers and delta metadata, and suppressed/raw-only output could avoid `deltaSentAt` entirely, so maintenance could miss it.\n\n## Impact\n\nWhen long or frequent streamed chat runs hit abort, timeout, suppressed-output, or missing terminal-event paths, the retained raw buffers can accumulate in the gateway process and cause gateway memory to grow over time. This PR ensures those per-run buffers are cleaned consistently so stale chat state does not become a gateway memory leak.\n\n## Related Issues\n\nRelated to #51821, which reported stale `chatRunState.buffers` cleanup gaps for stuck runs.\n\nContributes to the broader Gateway RSS/session accumulation tracker #54155, but does not fully close that tracker.\n\n## Review follow-up\n\n- Refreshed the branch onto current `main` so the PR no longer relies on the stale Apr 30 base.\n- Included current-main `deltaLastBroadcastText`, `agentDeltaSentAt`, and `bufferedAgentEvents` in `ChatRunState.clearRun()` and full-state cleanup.\n- Addressed the original ClawSweeper P2 by removing the unrelated age-based `toolStartData` sweep from this PR. The final diff stays focused on Gateway chat buffer cleanup and does not delete active tool-start records before their matching end event.\n- Added the required `CHANGELOG.md` entry for the user-facing Gateway chat buffer memory-growth fix.\n- Marked the secrets reload system event as `trusted: false` to clear the OpenGrep explicit-trust finding on `server.impl.ts`.\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: stale Gateway chat raw stream buffers can remain after abort/timeout/suppressed-output paths and grow gateway memory over time.\n- **Real environment tested**: local OpenClaw Gateway runtime from commit `0efb7685cbac7de522fb6fc604643993dfa9dc4c` on macOS, using the real `startGatewayMaintenanceTimers()` source path.\n- **Exact steps or command run after this patch**: ran `node --import tsx --input-type=module`, created `createChatRunState()`, seeded a stale raw-only run in `rawBuffers`, `bufferUpdatedAt`, and `deltaLastBroadcastText`, started `startGatewayMaintenanceTimers({ ...gatewayMaintenanceDeps, chatRunState })`, then waited for the real maintenance interval with `await new Promise((resolve) => setTimeout(resolve, 61_000))`.\n- **Evidence after fix**: terminal output from the local runtime command:\n\n```json\n{\n  \"label\": \"before maintenance\",\n  \"runId\": \"runtime-proof-75089\",\n  \"rawBuffers\": 1,\n  \"bufferUpdatedAt\": 1,\n  \"buffers\": 0,\n  \"deltaSentAt\": 0,\n  \"deltaLastBroadcastLen\": 0,\n  \"deltaLastBroadcastText\": 1,\n  \"agentDeltaSentAt\": 0,\n  \"bufferedAgentEvents\": 0\n}\n```\n\n```json\n{\n  \"label\": \"after maintenance\",\n  \"runId\": \"runtime-proof-75089\",\n  \"rawBuffers\": 0,\n  \"bufferUpdatedAt\": 0,\n  \"buffers\": 0,\n  \"deltaSentAt\": 0,\n  \"deltaLastBroadcastLen\": 0,\n  \"deltaLastBroadcastText\": 0,\n  \"agentDeltaSentAt\": 0,\n  \"bufferedAgentEvents\": 0\n}\n```\n\n- **Observed result after fix**: after the real maintenance sweep, the stale raw-only run was removed from `rawBuffers`, `bufferUpdatedAt`, and `deltaLastBroadcastText`; projected/delta/agent maps were also empty.\n- **What was not tested**: production RSS graph was not captured; this proof targets the actual Gateway maintenance cleanup path responsible for sweeping stale per-run chat state.\n\n## Validation\n\n- `pnpm test src/gateway/server.reload.test.ts src/gateway/server-maintenance.test.ts src/gateway/chat-abort.test.ts` (3 files, 32 tests passed)\n- `pnpm test src/gateway/server-methods/chat.abort-authorization.test.ts` (1 file, 5 tests passed)\n- `pnpm test:gateway` (299 files, 3781 tests passed)\n- `pnpm tsgo:core`\n- `pnpm tsgo:core:test`\n- `pnpm lint --threads=8` (previous local PR validation)\n- `pnpm exec vitest run --config test/vitest/vitest.agents-core.config.ts src/agents/pi-embedded-subscribe.handlers.tools.test.ts`\n- `pnpm exec vitest run --config test/vitest/vitest.agents-core.config.ts src/agents/model-fallback.test.ts -t \"does not classify successful results when the optional classifier returns null\"` (from earlier investigation)\n\nNote: full `agents-core` had one flaky timeout in `src/agents/model-fallback.test.ts`; the timed-out test passed when rerun directly.\n",
+        "branch": "codex/fix-gateway-buffer-cleanup",
+        "head_sha": "593c709d6d5f8f83943676139a3a5d406e4bad90",
+        "author": "litang9",
+        "labels": [
+          "app: web-ui",
+          "gateway",
+          "stale",
+          "size: M",
+          "triage: refactor-only",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/chat-abort.test.ts",
+            "additions": 35,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/chat-abort.ts",
+            "additions": 2,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-chat-state.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-chat.ts",
+            "additions": 4,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-maintenance.test.ts",
+            "additions": 44,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-maintenance.ts",
+            "additions": 22,
+            "deletions": 22,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/agent.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/chat.abort.test-helpers.ts",
+            "additions": 17,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/chat.directive-tags.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/chat.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/shared-types.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-request-context.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-request-context.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-early.test.ts",
+            "additions": 6,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.chat.gateway-server-chat-b.test.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.impl.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/talk-realtime-relay.test.ts",
+            "additions": 36,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-75089",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-75089.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 103,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 28,
+            "SUCCESS": 62,
+            "FAILURE": 10,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "build-artifacts:FAILURE",
+            "checks-node-agentic-control-plane-startup-runtime:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-guards:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "build-artifacts:FAILURE",
+            "checks-node-agentic-control-plane-startup-runtime:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-guards:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ]
+        }
+      },
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:75089:4356841140:2026-04-30T23:25:27Z:freeform_assist",
+      "comment_id": "4356841140",
+      "comment_version_key": "4356841140:2026-04-30T23:25:27Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/75089#issuecomment-4356841140",
+      "repo": "openclaw/openclaw",
+      "issue_number": 75089,
+      "author": "litang9",
+      "author_id": 141409885,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-04-30T23:25:27Z",
+      "comment_updated_at": "2026-04-30T23:25:27Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "please re-review. follow-ups from the last review are addressed: - added the required `changelog.md` entry for the gateway chat buffer memory-growth fix. - marked the secrets reload system event as `trusted: false` to clear the opengrep explicit-trust finding. local checks passed: `pnpm lint --threads=8`, `pnpm tsgo:core`, `pnpm tsgo:core:test`, and targeted gateway tests for reload, maintenance, and chat abort.",
+      "intent": "freeform_assist",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": "please re-review. Follow-ups from the last review are addressed: - Added the required `CHANGELOG.md` entry for the Gateway chat buffer memory-growth fix. - Marked the secrets reload system event as `trusted: false` to clear the OpenGrep explicit-trust finding. Local checks passed: `pnpm lint --threads=8`, `pnpm tsgo:core`, `pnpm tsgo:core:test`, and targeted Gateway tests for reload, maintenance, and chat abort.",
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "ignored",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): clear stale chat stream buffers",
+        "body": "## Summary\n\n- Clear gateway chat raw/projected/delta buffers through one `clearRun` path on normal finish, abort, timeout, and stale maintenance cleanup.\n- Track `bufferUpdatedAt` so raw-only streamed buffers that never emitted deltas can be swept after their run is no longer active.\n- Include current-main broadcast text and agent text throttle state in the same per-run cleanup path.\n\n## Root cause\n\nGateway `rawBuffers` can retain full streamed assistant text. Some cleanup paths removed only projected buffers and delta metadata, and suppressed/raw-only output could avoid `deltaSentAt` entirely, so maintenance could miss it.\n\n## Impact\n\nWhen long or frequent streamed chat runs hit abort, timeout, suppressed-output, or missing terminal-event paths, the retained raw buffers can accumulate in the gateway process and cause gateway memory to grow over time. This PR ensures those per-run buffers are cleaned consistently so stale chat state does not become a gateway memory leak.\n\n## Related Issues\n\nRelated to #51821, which reported stale `chatRunState.buffers` cleanup gaps for stuck runs.\n\nContributes to the broader Gateway RSS/session accumulation tracker #54155, but does not fully close that tracker.\n\n## Review follow-up\n\n- Refreshed the branch onto current `main` so the PR no longer relies on the stale Apr 30 base.\n- Included current-main `deltaLastBroadcastText`, `agentDeltaSentAt`, and `bufferedAgentEvents` in `ChatRunState.clearRun()` and full-state cleanup.\n- Addressed the original ClawSweeper P2 by removing the unrelated age-based `toolStartData` sweep from this PR. The final diff stays focused on Gateway chat buffer cleanup and does not delete active tool-start records before their matching end event.\n- Added the required `CHANGELOG.md` entry for the user-facing Gateway chat buffer memory-growth fix.\n- Marked the secrets reload system event as `trusted: false` to clear the OpenGrep explicit-trust finding on `server.impl.ts`.\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: stale Gateway chat raw stream buffers can remain after abort/timeout/suppressed-output paths and grow gateway memory over time.\n- **Real environment tested**: local OpenClaw Gateway runtime from commit `0efb7685cbac7de522fb6fc604643993dfa9dc4c` on macOS, using the real `startGatewayMaintenanceTimers()` source path.\n- **Exact steps or command run after this patch**: ran `node --import tsx --input-type=module`, created `createChatRunState()`, seeded a stale raw-only run in `rawBuffers`, `bufferUpdatedAt`, and `deltaLastBroadcastText`, started `startGatewayMaintenanceTimers({ ...gatewayMaintenanceDeps, chatRunState })`, then waited for the real maintenance interval with `await new Promise((resolve) => setTimeout(resolve, 61_000))`.\n- **Evidence after fix**: terminal output from the local runtime command:\n\n```json\n{\n  \"label\": \"before maintenance\",\n  \"runId\": \"runtime-proof-75089\",\n  \"rawBuffers\": 1,\n  \"bufferUpdatedAt\": 1,\n  \"buffers\": 0,\n  \"deltaSentAt\": 0,\n  \"deltaLastBroadcastLen\": 0,\n  \"deltaLastBroadcastText\": 1,\n  \"agentDeltaSentAt\": 0,\n  \"bufferedAgentEvents\": 0\n}\n```\n\n```json\n{\n  \"label\": \"after maintenance\",\n  \"runId\": \"runtime-proof-75089\",\n  \"rawBuffers\": 0,\n  \"bufferUpdatedAt\": 0,\n  \"buffers\": 0,\n  \"deltaSentAt\": 0,\n  \"deltaLastBroadcastLen\": 0,\n  \"deltaLastBroadcastText\": 0,\n  \"agentDeltaSentAt\": 0,\n  \"bufferedAgentEvents\": 0\n}\n```\n\n- **Observed result after fix**: after the real maintenance sweep, the stale raw-only run was removed from `rawBuffers`, `bufferUpdatedAt`, and `deltaLastBroadcastText`; projected/delta/agent maps were also empty.\n- **What was not tested**: production RSS graph was not captured; this proof targets the actual Gateway maintenance cleanup path responsible for sweeping stale per-run chat state.\n\n## Validation\n\n- `pnpm test src/gateway/server.reload.test.ts src/gateway/server-maintenance.test.ts src/gateway/chat-abort.test.ts` (3 files, 32 tests passed)\n- `pnpm test src/gateway/server-methods/chat.abort-authorization.test.ts` (1 file, 5 tests passed)\n- `pnpm test:gateway` (299 files, 3781 tests passed)\n- `pnpm tsgo:core`\n- `pnpm tsgo:core:test`\n- `pnpm lint --threads=8` (previous local PR validation)\n- `pnpm exec vitest run --config test/vitest/vitest.agents-core.config.ts src/agents/pi-embedded-subscribe.handlers.tools.test.ts`\n- `pnpm exec vitest run --config test/vitest/vitest.agents-core.config.ts src/agents/model-fallback.test.ts -t \"does not classify successful results when the optional classifier returns null\"` (from earlier investigation)\n\nNote: full `agents-core` had one flaky timeout in `src/agents/model-fallback.test.ts`; the timed-out test passed when rerun directly.\n",
+        "branch": "codex/fix-gateway-buffer-cleanup",
+        "head_sha": "593c709d6d5f8f83943676139a3a5d406e4bad90",
+        "author": "litang9",
+        "labels": [
+          "app: web-ui",
+          "gateway",
+          "stale",
+          "size: M",
+          "triage: refactor-only",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/chat-abort.test.ts",
+            "additions": 35,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/chat-abort.ts",
+            "additions": 2,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-chat-state.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-chat.ts",
+            "additions": 4,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-maintenance.test.ts",
+            "additions": 44,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-maintenance.ts",
+            "additions": 22,
+            "deletions": 22,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/agent.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/chat.abort.test-helpers.ts",
+            "additions": 17,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/chat.directive-tags.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/chat.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/shared-types.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-request-context.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-request-context.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-early.test.ts",
+            "additions": 6,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.chat.gateway-server-chat-b.test.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.impl.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/talk-realtime-relay.test.ts",
+            "additions": 36,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-75089",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-75089.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 103,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 28,
+            "SUCCESS": 62,
+            "FAILURE": 10,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "build-artifacts:FAILURE",
+            "checks-node-agentic-control-plane-startup-runtime:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-guards:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "build-artifacts:FAILURE",
+            "checks-node-agentic-control-plane-startup-runtime:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-guards:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ]
+        }
+      },
+      "reason": "author association CONTRIBUTOR and repository permission read are not allowed"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:75089:4352924325:2026-04-30T13:37:55Z:freeform_assist",
+      "comment_id": "4352924325",
+      "comment_version_key": "4352924325:2026-04-30T13:37:55Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/75089#issuecomment-4352924325",
+      "repo": "openclaw/openclaw",
+      "issue_number": 75089,
+      "author": "litang9",
+      "author_id": 141409885,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-04-30T13:37:55Z",
+      "comment_updated_at": "2026-04-30T13:37:55Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "please re-review. i addressed the p2 by removing the `toolstartdata` ttl/max-entry sweep from this pr. the final diff now only changes gateway chat buffer cleanup and no longer deletes active tool-start records before their matching end event.",
+      "intent": "freeform_assist",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": "please re-review. I addressed the P2 by removing the `toolStartData` TTL/max-entry sweep from this PR. The final diff now only changes Gateway chat buffer cleanup and no longer deletes active tool-start records before their matching end event.",
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "ignored",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): clear stale chat stream buffers",
+        "body": "## Summary\n\n- Clear gateway chat raw/projected/delta buffers through one `clearRun` path on normal finish, abort, timeout, and stale maintenance cleanup.\n- Track `bufferUpdatedAt` so raw-only streamed buffers that never emitted deltas can be swept after their run is no longer active.\n- Include current-main broadcast text and agent text throttle state in the same per-run cleanup path.\n\n## Root cause\n\nGateway `rawBuffers` can retain full streamed assistant text. Some cleanup paths removed only projected buffers and delta metadata, and suppressed/raw-only output could avoid `deltaSentAt` entirely, so maintenance could miss it.\n\n## Impact\n\nWhen long or frequent streamed chat runs hit abort, timeout, suppressed-output, or missing terminal-event paths, the retained raw buffers can accumulate in the gateway process and cause gateway memory to grow over time. This PR ensures those per-run buffers are cleaned consistently so stale chat state does not become a gateway memory leak.\n\n## Related Issues\n\nRelated to #51821, which reported stale `chatRunState.buffers` cleanup gaps for stuck runs.\n\nContributes to the broader Gateway RSS/session accumulation tracker #54155, but does not fully close that tracker.\n\n## Review follow-up\n\n- Refreshed the branch onto current `main` so the PR no longer relies on the stale Apr 30 base.\n- Included current-main `deltaLastBroadcastText`, `agentDeltaSentAt`, and `bufferedAgentEvents` in `ChatRunState.clearRun()` and full-state cleanup.\n- Addressed the original ClawSweeper P2 by removing the unrelated age-based `toolStartData` sweep from this PR. The final diff stays focused on Gateway chat buffer cleanup and does not delete active tool-start records before their matching end event.\n- Added the required `CHANGELOG.md` entry for the user-facing Gateway chat buffer memory-growth fix.\n- Marked the secrets reload system event as `trusted: false` to clear the OpenGrep explicit-trust finding on `server.impl.ts`.\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: stale Gateway chat raw stream buffers can remain after abort/timeout/suppressed-output paths and grow gateway memory over time.\n- **Real environment tested**: local OpenClaw Gateway runtime from commit `0efb7685cbac7de522fb6fc604643993dfa9dc4c` on macOS, using the real `startGatewayMaintenanceTimers()` source path.\n- **Exact steps or command run after this patch**: ran `node --import tsx --input-type=module`, created `createChatRunState()`, seeded a stale raw-only run in `rawBuffers`, `bufferUpdatedAt`, and `deltaLastBroadcastText`, started `startGatewayMaintenanceTimers({ ...gatewayMaintenanceDeps, chatRunState })`, then waited for the real maintenance interval with `await new Promise((resolve) => setTimeout(resolve, 61_000))`.\n- **Evidence after fix**: terminal output from the local runtime command:\n\n```json\n{\n  \"label\": \"before maintenance\",\n  \"runId\": \"runtime-proof-75089\",\n  \"rawBuffers\": 1,\n  \"bufferUpdatedAt\": 1,\n  \"buffers\": 0,\n  \"deltaSentAt\": 0,\n  \"deltaLastBroadcastLen\": 0,\n  \"deltaLastBroadcastText\": 1,\n  \"agentDeltaSentAt\": 0,\n  \"bufferedAgentEvents\": 0\n}\n```\n\n```json\n{\n  \"label\": \"after maintenance\",\n  \"runId\": \"runtime-proof-75089\",\n  \"rawBuffers\": 0,\n  \"bufferUpdatedAt\": 0,\n  \"buffers\": 0,\n  \"deltaSentAt\": 0,\n  \"deltaLastBroadcastLen\": 0,\n  \"deltaLastBroadcastText\": 0,\n  \"agentDeltaSentAt\": 0,\n  \"bufferedAgentEvents\": 0\n}\n```\n\n- **Observed result after fix**: after the real maintenance sweep, the stale raw-only run was removed from `rawBuffers`, `bufferUpdatedAt`, and `deltaLastBroadcastText`; projected/delta/agent maps were also empty.\n- **What was not tested**: production RSS graph was not captured; this proof targets the actual Gateway maintenance cleanup path responsible for sweeping stale per-run chat state.\n\n## Validation\n\n- `pnpm test src/gateway/server.reload.test.ts src/gateway/server-maintenance.test.ts src/gateway/chat-abort.test.ts` (3 files, 32 tests passed)\n- `pnpm test src/gateway/server-methods/chat.abort-authorization.test.ts` (1 file, 5 tests passed)\n- `pnpm test:gateway` (299 files, 3781 tests passed)\n- `pnpm tsgo:core`\n- `pnpm tsgo:core:test`\n- `pnpm lint --threads=8` (previous local PR validation)\n- `pnpm exec vitest run --config test/vitest/vitest.agents-core.config.ts src/agents/pi-embedded-subscribe.handlers.tools.test.ts`\n- `pnpm exec vitest run --config test/vitest/vitest.agents-core.config.ts src/agents/model-fallback.test.ts -t \"does not classify successful results when the optional classifier returns null\"` (from earlier investigation)\n\nNote: full `agents-core` had one flaky timeout in `src/agents/model-fallback.test.ts`; the timed-out test passed when rerun directly.\n",
+        "branch": "codex/fix-gateway-buffer-cleanup",
+        "head_sha": "593c709d6d5f8f83943676139a3a5d406e4bad90",
+        "author": "litang9",
+        "labels": [
+          "app: web-ui",
+          "gateway",
+          "stale",
+          "size: M",
+          "triage: refactor-only",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/chat-abort.test.ts",
+            "additions": 35,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/chat-abort.ts",
+            "additions": 2,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-chat-state.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-chat.ts",
+            "additions": 4,
+            "deletions": 20,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-maintenance.test.ts",
+            "additions": 44,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-maintenance.ts",
+            "additions": 22,
+            "deletions": 22,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/agent.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/chat.abort.test-helpers.ts",
+            "additions": 17,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/chat.directive-tags.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/chat.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/shared-types.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-request-context.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-request-context.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-early.test.ts",
+            "additions": 6,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.chat.gateway-server-chat-b.test.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.impl.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/talk-realtime-relay.test.ts",
+            "additions": 36,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-75089",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-75089.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 103,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 28,
+            "SUCCESS": 62,
+            "FAILURE": 10,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "build-artifacts:FAILURE",
+            "checks-node-agentic-control-plane-startup-runtime:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-guards:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "build-artifacts:FAILURE",
+            "checks-node-agentic-control-plane-startup-runtime:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-guards:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ]
+        }
+      },
+      "reason": "author association CONTRIBUTOR and repository permission read are not allowed"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 347,
+    "total_ms": 2426,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 211
+        "ms": 366
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 1759
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 123
+        "ms": 270
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
