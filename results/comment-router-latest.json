@@ -1,20 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-29T03:04:16.844Z",
+  "generated_at": "2026-05-29T03:04:24.957Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-29T00:04:15.041Z",
+  "since": "2026-05-29T00:04:23.097Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     87596
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4568920979
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
+  "scanned_comments": 1,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -61,95 +63,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(moonshot): rewrite duplicate native Kimi tool_call ids on replay",
-        "body": "## Summary\n\n- Add a `preserveNativeKimiToolCallIds` option to the shared tool_call_id sanitiser that mirrors `preserveNativeAnthropicToolUseIds`: the first occurrence of a `functions.<name>:<index>` id passes through verbatim, later occurrences run through the existing occurrence-aware resolver and pick up unique rewritten ids.\n- Plumb the option through `ProviderReplayPolicy` (public type), `TranscriptPolicy`, the embedded-runner replay sanitiser, and the per-message image sanitiser.\n- Opt the Moonshot plugin in to the new behaviour by overriding `buildReplayPolicy` so OpenAI-compatible and Anthropic-messages Moonshot transports both keep native Kimi ids on first use and stop duplicating them on retry / long sessions / group chats.\n- Out of scope: relaxing the `#62319` invariant (native Kimi ids must survive *first* occurrence) and changing tool_call_id generation upstream of the runner.\n\n## Linked context\n\nCloses #51593\n\nWas this requested by a maintainer or owner?\n\nNo direct maintainer request. The issue is `bug:crash`, `P1`, `clawsweeper:fix-shape-clear`, `queueable-fix`, `source-repro`. The community discussion in the issue thread converged on \\\"Moonshot replay policy gap\\\" being the most likely root cause, which is the angle this PR fixes; ClawSweeper's own write-up also notes the existing occurrence-aware sanitiser is the right place to thread the new option.\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: Moonshot/Kimi returns native tool_call_ids shaped like `functions.exec:26`. Because `#62319` requires those native ids to survive replay, the Moonshot plugin disabled the replay sanitiser entirely. Long sessions / WhatsApp group chats reused the same `<name>:<index>` slot, replayed the same id twice in one request, and Moonshot rejected the second assistant turn with HTTP 400 `tool call id <id> is duplicated`.\n- Real environment tested: Local OpenClaw source checkout on Linux with Node `v22.22.3`, pnpm `11.2.2` via corepack.\n- Exact steps or command run after this patch: Ran a local OpenClaw source smoke against the registered Moonshot plugin via `registerSingleProviderPlugin` and the real `sanitizeToolCallIdsForCloudCodeAssist`, replaying two assistant turns that share the same `functions.exec:26` id. Re-ran after `git stash`-ing the patch.\n- Evidence after fix:\n\n  Before-fix (patch stashed):\n\n  ```\n  === BEFORE-FIX BEHAVIOR ===\n  moonshot policy: {\n    \\\"applyAssistantFirstOrderingFix\\\": true,\n    \\\"validateGeminiTurns\\\": true,\n    \\\"validateAnthropicTurns\\\": true\n  }\n  => policy has no sanitizeToolCallIds/toolCallIdMode => sanitizer never runs => duplicate native Kimi ids reach Moonshot verbatim\n  ```\n\n  After-fix (patch restored):\n\n  ```\n  === AFTER-FIX BEHAVIOR ===\n  moonshot policy: {\n    \\\"applyAssistantFirstOrderingFix\\\": true,\n    \\\"validateGeminiTurns\\\": true,\n    \\\"validateAnthropicTurns\\\": true,\n    \\\"sanitizeToolCallIds\\\": true,\n    \\\"toolCallIdMode\\\": \\\"strict\\\",\n    \\\"preserveNativeKimiToolCallIds\\\": true\n  }\n  first toolCall id : functions.exec:26\n  second toolCall id: functionsexec262\n  first preserved as native: true\n  second got unique rewrite: true\n  first toolResult matches: true\n  second toolResult matches: true\n  ```\n\n- Observed result after fix: First `functions.exec:26` survives verbatim (so #62319 stays fixed), the duplicate gets `functionsexec262` (unique, alphanumeric, length-9-ish via the existing `makeUniqueToolId`), and the paired `toolResult` ids match the rewritten ids by encounter order. The exact wire shape Moonshot would reject is no longer producible.\n- What was not tested: A live WhatsApp group chat against Moonshot `kimi-k2.5/k2.6`. The fix is at the runtime replay sanitiser boundary that produces the wire-level ids, so the smoke exercises the exact transformation the live request would consume.\n- Proof limitations or environment constraints: The smoke uses the real registered plugin and the real sanitiser in a local checkout but does not call Moonshot because this environment is not configured with Moonshot credentials or a WhatsApp instance. The reporter's HTTP 400 capture in the issue documents the upstream side of the same boundary.\n- Before evidence (optional but encouraged): Captured above via `git stash`-ing this patch.\n\n## Tests and validation\n\nWhich commands did you run?\n\n- `PATH=\\\"\\$HOME/.nvm/versions/node/v22.22.3/bin:\\$PATH\\\" node scripts/test-projects.mjs src/agents/tool-call-id.test.ts extensions/moonshot/index.test.ts`\n- `PATH=\\\"\\$HOME/.nvm/versions/node/v22.22.3/bin:\\$PATH\\\" corepack pnpm exec oxfmt --check ...` (all touched files)\n- `git diff --check`\n\nOutputs:\n\n- `tool-call-id.test.ts` + `moonshot/index.test.ts`: `Test Files 1 passed (1)` / `Tests 5 passed (5)` for Moonshot, full tool-call-id suite plus the two new Kimi-specific cases all green.\n- `oxfmt --check`: `All matched files use the correct format.`\n\nWhat regression coverage was added or updated?\n\n- `src/agents/tool-call-id.test.ts` adds two cases: \\\"preserves the first native Kimi tool_call id and rewrites duplicates\\\" and \\\"still rewrites duplicate native Kimi tool_call ids even when no preserve flag is set\\\" (locks the existing `#62319` invariant + the new dedup behavior).\n- `extensions/moonshot/index.test.ts` updates the existing replay-policy assertion to reflect the new opt-in (`sanitizeToolCallIds: true, toolCallIdMode: \\\"strict\\\", preserveNativeKimiToolCallIds: true`) and adds an `anthropic-messages` case that asserts both anthropic and Kimi preservation co-exist.\n\nWhat failed before this fix, if known?\n\nThe before-fix smoke above shows the Moonshot policy had no `sanitizeToolCallIds`, so the sanitiser never ran for Moonshot transports — that is exactly why the reported HTTP 400 could happen.\n\nIf no test was added, why not?\n\nN/A.\n\n## Risk checklist\n\nDid user-visible behavior change? (`Yes/No`)\n\nYes (positive). Moonshot multi-turn sessions / group chats now survive duplicate native id replays instead of failing with HTTP 400.\n\nDid config, environment, or migration behavior change? (`Yes/No`)\n\nNo.\n\nDid security, auth, secrets, network, or tool execution behavior change? (`Yes/No`)\n\nNo (tool_call_ids are rewritten in-flight only; nothing is persisted differently).\n\nWhat is the highest-risk area?\n\nThe new `preserveNativeKimiToolCallIds` propagation touches `ProviderReplayPolicy`, `TranscriptPolicy`, `replay-history`, and `images.ts`. A consumer that already supplied a literal policy object without the new key keeps the previous behaviour because the default everywhere is `false`.\n\nHow is that risk mitigated?\n\nThe default is opt-in: the new flag defaults to `false` in `DEFAULT_TRANSCRIPT_POLICY`, in `mergeTranscriptPolicy`, and in every existing call site. Only the Moonshot plugin sets it to `true`. Every other provider keeps its current sanitisation behaviour. The new `tool-call-id` test explicitly covers the off-by-default path so future contributors cannot accidentally regress the `#62319` invariant.\n\n## Current review state\n\nWhat is the next action?\n\nAwait maintainer / ClawSweeper review on (a) whether `preserveNativeKimiToolCallIds` belongs on the shared `ProviderReplayPolicy` or only as a Moonshot-local detail, and (b) whether the rewritten id format (`functionsexec262`) is acceptable to Moonshot's serving layer in practice — the alphanumeric+length-9 shape comes from the existing `makeUniqueToolId` strict mode and matches the `#62319` allowlist, but a live group-chat smoke would confirm it end-to-end.\n\nWhat is still waiting on author, maintainer, CI, or external proof?\n\nA live WhatsApp group-chat / long-session Moonshot smoke that exercises the duplicate-id path before and after the patch is still not provided from this environment.\n\nWhich bot or reviewer comments were addressed?\n\nInitial PR; no PR comments yet. The patch implements ClawSweeper's recommended fix shape (\\\"enable occurrence-aware sanitisation while preserving native Kimi ids on first use\\\").\n\nAI-assisted: yes. I reviewed the touched code paths, threaded the new option through the policy stack, and ran the focused validation commands above.\n\nMade with [Cursor](https://cursor.com)",
-        "branch": "fix/moonshot-duplicate-tool-call-id",
-        "head_sha": "d0cb5d4d68b56417a1e8184cf882361506109d41",
-        "author": "pluviobyte",
-        "labels": [
-          "agents",
-          "size: S",
-          "extensions: moonshot",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/moonshot/index.test.ts",
-            "additions": 23,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/moonshot/index.ts",
-            "additions": 18,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tool-call-id.test.ts",
-            "additions": 88,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-87596",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87596.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 98,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 76,
-            "SKIPPED": 20,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
-        }
-      },
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2055,
+    "total_ms": 2237,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 290
+        "ms": 1846
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1499
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 240
+        "ms": 378
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
