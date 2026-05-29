@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-83042"
 mode: "autonomous"
-run_id: "26631757169"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26631757169"
+run_id: "26633586918"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26633586918"
 head_sha: "beb50640445a7699b711ffaf8b27ca39a82c5b3c"
 workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-05-29T11:04:04.981Z"
+published_at: "2026-05-29T11:47:41.180Z"
 canonical: "https://github.com/openclaw/openclaw/pull/84814"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/48680"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/84814"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/26631757169](https://github.com/openclaw/clawsweeper/actions/runs/26631757169)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/26633586918](https://github.com/openclaw/clawsweeper/actions/runs/26633586918)
 
 Workflow conclusion: failure
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/84814
 
 ## Summary
 
-Canonical repair path is open PR #84814, the writable ClawSweeper replacement for closed source PR #83042. The PR is not merge-ready because it is dirty against main and has relevant failing checks, so this result emits a repair artifact only; no close or merge actions are planned.
+PR #84814 is the live canonical repair path for the closed source PR #83042 and issue #48680. It is same-repo writable but not merge-ready: preflight shows mergeable_state=dirty plus two failing CI shards, so the next deterministic step is to repair/rebase #84814, preserve @yu-xin-c credit from #83042, and rerun focused validation plus pnpm check:changed. No close or merge action is emitted because the job blocks both.
 
 ## Impact
 
@@ -66,10 +66,10 @@ Canonical repair path is open PR #84814, the writable ClawSweeper replacement fo
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #48680 | keep_canonical | planned | canonical | Keep the root issue open until the canonical repair PR lands and validation is green. |
-| #83042 | keep_closed | skipped | superseded | Closed source PR is historical evidence only; repair continues in #84814. |
-| #84814 | fix_needed | planned | canonical | Repair the writable replacement PR branch in place, then rerun focused validation and review. Merge is explicitly blocked for this worker. |
-| cluster:automerge-openclaw-openclaw-83042 | build_fix_artifact | planned |  | Canonical PR exists but is not merge-ready; emit an executable repair artifact instead of merge or close actions. |
+| #48680 | keep_related | planned | fixed_by_candidate | Keep the issue open and associated with #84814 until the repair PR lands; closure is blocked by job policy and unmerged fix state. |
+| #83042 | keep_closed | skipped | superseded | Closed historical source PR; it remains credit and provenance evidence for the writable replacement #84814. |
+| #84814 | fix_needed | planned | canonical | Repair the writable canonical replacement PR before any future merge gate. |
+| cluster:automerge-openclaw-openclaw-83042 | build_fix_artifact | planned |  | Emit an executable repair artifact for the ClawSweeper edit pass. |
 
 ## Needs Human
 
