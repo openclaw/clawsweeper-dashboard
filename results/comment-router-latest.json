@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-29T19:43:03.412Z",
+  "generated_at": "2026-05-29T19:43:02.006Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-29T16:43:01.777Z",
+  "since": "2026-05-29T16:42:59.829Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    87469
+    88112
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
-  "commands_seen": 1,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,21 +31,112 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:87469:4559939317:2026-05-29T19:42:56Z:clawsweeper_auto_repair",
-      "comment_id": "4559939317",
-      "comment_version_key": "4559939317:2026-05-29T19:42:56Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/87469#issuecomment-4559939317",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88112:4578968966:2026-05-29T19:42:56Z:clawsweeper_auto_repair",
+      "comment_id": "4578968966",
+      "comment_version_key": "4578968966:2026-05-29T19:42:56Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88112#issuecomment-4578968966",
       "repo": "openclaw/openclaw",
-      "issue_number": 87469,
+      "issue_number": 88112,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-28T00:58:02Z",
+      "comment_created_at": "2026-05-29T19:13:54Z",
       "comment_updated_at": "2026-05-29T19:42:56Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
       "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=6f029c56a0025c478153df938575b4724f3eb37b)",
+      "review_summary": "The PR adds an `ensureAsciiBase64` guard for inline agent image attachments and regression tests for raw latin1 data, valid base64, filtering, and undefined input.\n\nPR surface: Source +24, Tests +55. Total +79 across 2 files.\n\nReproducibility: yes. source inspection gives a high-confidence path: current main forwards inline image data unchanged while provider mappers treat it as base64, and the linked report includes provider rejection logs. I did not run the live Discord/provider flow in this read-only review.",
+      "review_followup": "- [P1] Contributor action is still needed for real behavior proof, and automation should not replace that proof even though the lint fix itself is mechanical.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "6f029c56a0025c478153df938575b4724f3eb37b",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): ensure inline image attachments use ASCII base64 (Fixes #86984)",
+        "body": "## Summary\n\nInline and replayed-history image attachments handed in by channel plugins can carry a raw latin1/binary byte string in their `data` field. This value was forwarded untouched into the provider `source.base64`. The Anthropic Messages API rejects any request whose `image.source.base64` contains non-ASCII characters:\nmessages.337.content.1.image.source.base64: string argument should contain only ASCII characters\n\nBecause history images are re-hydrated on every turn, a single poisoned history image block silently breaks every subsequent turn in a long-lived session, and the agent goes silent with isError=true. The same raw passthrough also reaches the OpenAI/Responses image mappers.\n\n## Root cause\n\n`resolveAgentTurnAttachments` (current-turn path) already encodes file buffers via `buffer.toString(\"base64\")`. But `resolveInlineAgentImageAttachments` forwarded `data` untouched:\n\n```ts\n.map((image) => ({ mediaType: image.mimeType, data: image.data }))\n```\n\nWhen `data` holds unencoded latin1 bytes, the downstream provider mapper builds the image source with non-ASCII content and the API rejects the whole turn.\n\n## Fix\n\n`resolveInlineAgentImageAttachments` now routes `data` through an idempotent `ensureAsciiBase64` guard built on the existing `canonicalizeBase64` helper (the same one used by `tool-images.ts`):\n\n- Valid base64 is always ASCII, so `canonicalizeBase64` returns it unchanged and correct payloads pass through untouched.\n- Only non-base64 payloads are re-encoded from their latin1 bytes via `Buffer.from(data, \"latin1\").toString(\"base64\")`.\n\nThe guard is purely defensive and idempotent, so normal images are unaffected.\n\n## Real behavior proof\n\nBehavior or issue addressed: Inline/replayed-history image attachments with raw latin1 data produced a non-ASCII provider source.base64, which the Anthropic API rejected, breaking every subsequent turn (issue 86984).\n\nReal environment tested: Local Ubuntu 24.04 (WSL2), Node v24.14.0, exercising the actual resolveInlineAgentImageAttachments entry point on disk.\n\nExact steps or command run after this patch: ran the command shown in the evidence below against the real source file.\n\nEvidence after fix: I ran `node scripts/run-vitest.mjs src/auto-reply/reply/agent-turn-attachments.test.ts` directly on this machine. The captured terminal output below is from that real `node` invocation. To confirm the regression is genuinely detected, the same `node` command was run with the one-line change temporarily reverted to the original passthrough (BEFORE), then restored (AFTER):\n-- BEFORE (data: image.data passthrough), node run on this host\nauto-reply  agent-turn-attachments.test.ts (4 tests | 1 failed)\nx   re-encodes raw latin1/binary data into ASCII base64\nAssertionError: expected false to be true\nat expect(ASCII_ONLY.test(attachment.data)).toBe(true)\nTest Files  1 failed (1)\nTests       1 failed | 3 passed (4)\n-- AFTER (data: ensureAsciiBase64(image.data)), node run on this host\nauto-reply  agent-turn-attachments.test.ts (4 tests)\nTest Files  1 passed (1)\nTests       4 passed (4)\nDuration    315ms\n\nObserved result after fix: the `node` run reports all 4 cases green. The latin1 payload is re-encoded to valid ASCII base64 and decodes back to the original image bytes; already-valid base64 is returned unchanged (idempotent); non-image and empty attachments are still filtered out.\n\nWhat was not tested: the same raw-data passthrough also exists on the Anthropic and OpenAI/Responses provider mappers. This change fixes the single inline-attachment chokepoint that all inline/replayed images flow through; a redundant guard at the provider-mapper layer is left out to keep the change minimal and can be added separately if maintainers prefer defense in depth. Live end-to-end reproduction against a real provider API was not performed.\n",
+        "branch": "fix-86984-inline-image-base64",
+        "head_sha": "6f029c56a0025c478153df938575b4724f3eb37b",
+        "author": "alkor2000",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/agent-turn-attachments.test.ts",
+            "additions": 55,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-turn-attachments.ts",
+            "additions": 27,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-88112",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88112.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 98,
+          "counts": {
+            "SUCCESS": 73,
+            "SKIPPED": 21,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-core-runtime-media-ui:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-core-runtime-media-ui:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:88112:4579158498:2026-05-29T19:35:14Z:re_review",
+      "comment_id": "4579158498",
+      "comment_version_key": "4579158498:2026-05-29T19:35:14Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88112#issuecomment-4579158498",
+      "repo": "openclaw/openclaw",
+      "issue_number": 88112,
+      "author": "alkor2000",
+      "author_id": 131229172,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-29T19:35:14Z",
+      "comment_updated_at": "2026-05-29T19:35:14Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -61,673 +152,20 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "feat: add core session goals",
-        "body": "## Summary\n\n- Replaces #85723 with core-owned session goals instead of a plugin/lease extension surface.\n- Persists goals on `SessionEntry`, exposes `get_goal`/`create_goal`/`update_goal` model tools, and adds native/text `/goal` controls.\n- Adds resumable blocked/budget-limited goal behavior, projected session-row goal state, and a compact TUI footer goal indicator.\n- Adds a dedicated Goal docs page plus TUI/slash-command cross-links and focused regression coverage.\n\n## Verification\n\nBehavior addressed: Core-owned thread/session goals with model tools, `/goal` controls, TUI footer status, and dedicated docs, replacing plugin-owned PR #85723.\n\nReal environment tested: Local OpenClaw checkout.\n\nExact steps or command run after this patch:\n- `pnpm exec oxfmt --check ...` on touched TS/docs files\n- `node scripts/run-oxlint.mjs ...` on touched TS files\n- `pnpm docs:list`\n- `pnpm docs:check-mdx`\n- `pnpm format:docs:check`\n- `pnpm docs:check-links -- docs/tools/goal.md docs/tools/slash-commands.md docs/web/tui.md docs/cli/tui.md docs/tools/index.md`\n- `git diff --check`\n- `pnpm exec tsx -e ...` direct goal lifecycle, formatter, stale-baseline, budget-resume, and TUI session-refresh smokes\n- `/Users/steipete/Projects/agent-skills/skills/autoreview/scripts/autoreview --mode local`\n\nEvidence after fix: Formatting, oxlint, docs index, docs MDX, docs formatting, docs links, whitespace, direct TS smokes, and final local autoreview passed. Final autoreview reported no accepted/actionable findings.\n\nObserved result after fix: Goals persist in core session state; model tools can read/create/complete/block goals; `/goal` can start, show, pause, resume, complete, block, and clear goals; blocked goals can be resumed; budget-limited goals resume with a fresh budget window; stale token baselines are not overcounted; TUI session rows carry goal state and the footer shows compact goal status.\n\nWhat was not tested: Vitest wrapper did not complete in this checkout; it hung without test output and was stopped. Earlier broad `tsgo` was blocked on existing unrelated `src/config/io.ts` unique-symbol errors.\n",
-        "branch": "core-thread-goals",
-        "head_sha": "3601c3d2bef1bee9039fda6dfa1c7f23eaded983",
-        "author": "steipete",
-        "labels": [
-          "docs",
-          "channel: telegram",
-          "app: web-ui",
-          "gateway",
-          "commands",
-          "agents",
-          "maintainer",
-          "size: XL",
-          "extensions: codex",
-          "proof: sufficient",
-          "mantis: telegram-visible-proof",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
-            "additions": 20,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/cli/tui.md",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/docs.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/tools/goal.md",
-            "additions": 217,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "docs/tools/index.md",
-            "additions": 12,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/tools/slash-commands.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/web/tui.md",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/transcript-mirror.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message-dispatch.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/index.test.ts",
-            "additions": 47,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/schema/logs-chat.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/schema/sessions.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-command.live-model-switch.test.ts",
-            "additions": 25,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-command.ts",
-            "additions": 28,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-scope.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/command/attempt-execution.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/compact.hooks.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/compact.queued.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/compact.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/compact.types.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/compaction-hooks.ts",
-            "additions": 11,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/context-engine-maintenance.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt-tool-construction-plan.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/tool-result-truncation.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/transcript-rewrite.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openclaw-tools.ts",
-            "additions": 23,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/session-tool-result-guard-wrapper.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/session-tool-result-guard.transcript-events.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/session-tool-result-guard.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tool-catalog.test.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tool-catalog.ts",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tool-display-config.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tool-mutation.test.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tool-mutation.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/embedded-gateway-stub.test.ts",
-            "additions": 58,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/embedded-gateway-stub.ts",
-            "additions": 29,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/goal-tools.test.ts",
-            "additions": 108,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/tools/goal-tools.ts",
-            "additions": 139,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auto-reply/commands-registry.shared.ts",
-            "additions": 23,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/commands-goal.ts",
-            "additions": 161,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auto-reply/reply/commands-handlers.runtime.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session-usage.ts",
-            "additions": 7,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session.test.ts",
-            "additions": 53,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor.runs-legacy-state-migrations-yes-mode-without.e2e.test.ts",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/goals.test.ts",
-            "additions": 418,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/config/sessions/goals.ts",
-            "additions": 317,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/config/sessions/transcript.ts",
-            "additions": 6,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/types.ts",
-            "additions": 30,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/chat-abort.test.ts",
-            "additions": 34,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/chat-abort.ts",
-            "additions": 61,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/local-request-context.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/managed-image-attachments.test.ts",
-            "additions": 88,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/managed-image-attachments.ts",
-            "additions": 74,
-            "deletions": 19,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-chat-state.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-chat.agent-events.test.ts",
-            "additions": 225,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-chat.ts",
-            "additions": 150,
-            "deletions": 40,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-close.ts",
-            "additions": 4,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/agent.test.ts",
-            "additions": 697,
-            "deletions": 13,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/agent.ts",
-            "additions": 148,
-            "deletions": 37,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/chat-transcript-inject.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/chat.abort-persistence.test.ts",
-            "additions": 570,
-            "deletions": 11,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/chat.abort.test-helpers.ts",
-            "additions": 7,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/chat.directive-tags.test.ts",
-            "additions": 240,
-            "deletions": 21,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/chat.error-broadcast.test.ts",
-            "additions": 50,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/chat.inject.parentid.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/chat.ts",
-            "additions": 430,
-            "deletions": 40,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/sessions.abort-agent-scope.test.ts",
-            "additions": 387,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/sessions.send-followup-status.test.ts",
-            "additions": 51,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/sessions.ts",
-            "additions": 443,
-            "deletions": 75,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/shared-types.ts",
-            "additions": 5,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-session-events.ts",
-            "additions": 47,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.sessions.compaction.test.ts",
-            "additions": 98,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.sessions.create.test.ts",
-            "additions": 230,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.sessions.delete-lifecycle.test.ts",
-            "additions": 67,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.sessions.list-changed.test.ts",
-            "additions": 263,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.sessions.reset-hooks.test.ts",
-            "additions": 224,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-lifecycle-state.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-message-events.test.ts",
-            "additions": 293,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-reset-service.ts",
-            "additions": 53,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-utils.test.ts",
-            "additions": 29,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-utils.ts",
-            "additions": 41,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-utils.types.ts",
-            "additions": 6,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/sessions-patch.test.ts",
-            "additions": 33,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/sessions-patch.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/agent-events.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/session-entry-slot-keys.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/sessions/transcript-events.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/sessions/transcript-events.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/sessions/user-turn-transcript.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tui/embedded-backend.test.ts",
-            "additions": 350,
-            "deletions": 11,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tui/embedded-backend.ts",
-            "additions": 153,
-            "deletions": 19,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tui/gateway-chat.test.ts",
-            "additions": 39,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tui/gateway-chat.ts",
-            "additions": 7,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tui/tui-backend.ts",
-            "additions": 16,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tui/tui-command-handlers.test.ts",
-            "additions": 111,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tui/tui-command-handlers.ts",
-            "additions": 38,
-            "deletions": 11,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-87469",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87469.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 14,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 10,
-            "SUCCESS": 2
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1909,
+    "total_ms": 3822,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 466
+        "ms": 471
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1155
+        "ms": 1688
       },
       {
         "name": "classify_commands",
@@ -735,7 +173,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 262
+        "ms": 1634
       },
       {
         "name": "append_ledger",
