@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-29T02:03:03.527Z",
+  "generated_at": "2026-05-29T02:03:05.732Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-28T23:03:01.116Z",
+  "since": "2026-05-28T23:03:03.489Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    87527
+    87530
   ],
   "comment_ids": [
-    4569839524
+    4569839724
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,17 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:87527:4569839524:2026-05-29T02:01:57Z:re_review",
-      "comment_id": "4569839524",
-      "comment_version_key": "4569839524:2026-05-29T02:01:57Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/87527#issuecomment-4569839524",
+      "idempotency_key": "comment-router:openclaw/openclaw:87530:4569839724:2026-05-29T02:02:00Z:re_review",
+      "comment_id": "4569839724",
+      "comment_version_key": "4569839724:2026-05-29T02:02:00Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/87530#issuecomment-4569839724",
       "repo": "openclaw/openclaw",
-      "issue_number": 87527,
+      "issue_number": 87530,
       "author": "geekhuashan",
       "author_id": 47098938,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-29T02:01:57Z",
-      "comment_updated_at": "2026-05-29T02:01:57Z",
+      "comment_created_at": "2026-05-29T02:02:00Z",
+      "comment_updated_at": "2026-05-29T02:02:00Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -66,50 +66,64 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(bash-tools): default stdin to pipe-closed in service-managed mode",
-        "body": "## Problem\n\nWhen OpenClaw runs as a launchd service (`OPENCLAW_SERVICE_MODE=launchd`), spawned child processes inherit fd 0 (stdin) from the service manager process. On Node 26, launchd closes fd 0 before exec. The child process inherits a closed file descriptor; when Node.js tries to set up the inherited stream, it throws `EBADF` (bad file descriptor) during child startup.\n\n## Fix\n\nIn `createChildAdapter`, extract `isServiceManagedRuntime()` into a local `serviceManaged` boolean (avoiding two calls), then apply it to the `stdinMode` default:\n\n```ts\nconst serviceManaged = isServiceManagedRuntime();\nconst stdinMode =\n  params.stdinMode ?? (params.input !== undefined || serviceManaged ? \"pipe-closed\" : \"inherit\");\nconst useDetached = process.platform !== \"win32\" && !serviceManaged;\n```\n\nWhen `serviceManaged` is `true`, stdin defaults to `\"pipe-closed\"` (a closed pipe) instead of `\"inherit\"`. This avoids giving children a closed fd 0 and eliminates the EBADF.\n\nOutside service mode the existing POSIX detached behavior is preserved: `stdinMode` defaults to `\"inherit\"` for interactive shells and sub-shells.\n\n## Behavior proof\n\n### Before-patch symptom (OpenClaw on macOS launchd, Node 26)\n\n```\n[supervisor] spawn error account=cherry\nError: EBADF: bad file descriptor, read\n    at ChildProcess.<anonymous> (node:child_process:...)\n    at ChildProcess.emit (node:events:...)\n```\n\nThe error appears immediately on `createChildAdapter` when launchd has closed fd 0 and `stdinMode` defaults to `\"inherit\"`.\n\n### After-patch behavior\n\nWith `serviceManaged = true`, stdin is set to `\"pipe-closed\"`. The child process never tries to inherit the closed fd. No EBADF on startup; children spawn cleanly.\n\n```\n# gateway.log — launchd service boot (2026-05-28)\n[gateway] starting account=cherry\n[discord] provider started account=cherry\n[discord] gateway connected account=cherry\n```\n\nThe cherry agent connected without any EBADF errors after the patch was applied to the local runtime via `reapply-openclaw-discord-patches.sh`.\n\n## Notes on `checks-node-agentic-control-plane-runtime` CI failure\n\nThe failing tests (`server.shared-token-hot-reload.test.ts`, `server.shared-token-session-rotation.test.ts`) are in a different package and not touched by this PR. The failure is a Vitest `EnvironmentTeardownError` in the `gateway-server` test suite — a known intermittent issue unrelated to `child.ts`. See [PR comment](https://github.com/openclaw/openclaw/pull/87527#issuecomment-4569705966).\n\n🤖 Updated with [Claude Code](https://claude.com/claude-code)",
-        "branch": "pr-bash-tools-stdin-ebadf",
-        "head_sha": "db702cfb98da86ddfc4c2c066b4a050555aa5e29",
+        "title": "fix(discord): account-scoped voice groups + delayed autoJoin safety net",
+        "body": "## Summary\n- Scopes `@discordjs/voice` connections by account ID (`group: \"openclaw:<accountId>\"`) to prevent multi-bot connection collisions\n- Delays initial autoJoin by 6s so voice gateway state settles after READY/RESUMED before joining\n- Adds 8s and 75s delayed autoJoin safety nets for cases where voice state is still transient\n- Adds `.unref()` on all autoJoin timers so they don't prevent process exit\n\n## Motivation\nWhen multiple bot accounts share a Discord guild, `@discordjs/voice` stores connections by `(group, guildId)` with default group `\"default\"`. Without account scoping, bots overwrite each other's voice connections (cherry, butler, scholar all share the same guild).\n\nREADY/RESUMED gateway events fire before voice server/state info has fully arrived, so autoJoin called immediately fails with \"unknown voice state\". A 6s delay + retry at 8s/75s closes this window.\n\nCherry is the 3rd account in a 3-account setup (20s startup stagger). Without multi-retry, she often misses the READY event window entirely and never joins voice.\n\n## Behavior proof\n\n### Before-patch symptom\n\nMulti-account setup (cherry, butler, scholar) on the same guild:\n\n```\n# gateway.log — before patch\n[discord voice] autoJoin failed account=butler: Cannot read properties of undefined (reading 'guildId')\n# cherry silently never joined — READY event window missed entirely\n```\n\nButler was overwriting cherry's voice state (shared `\"default\"` group). Cherry's 3rd-account stagger meant she often missed the original autoJoin trigger window.\n\n### After-patch behavior\n\n```\n# gateway.log — 2026-05-28, after patch applied via reapply-openclaw-discord-patches.sh\n[discord voice] startAutoJoin scheduled 6000ms account=cherry\n[discord voice] startAutoJoin scheduled 6000ms account=butler\n[discord voice] startAutoJoin fired after 6048ms account=cherry\n[discord voice] startAutoJoin settled account=cherry\n[discord voice] 8s autoJoin fired after 8031ms account=cherry\n[discord voice] 75s autoJoin safety net fired after 75052ms account=butler\n```\n\nEach account has an independent voice group (`openclaw:cherry`, `openclaw:butler`). The 75s safety net caught butler's late join after her voice state arrived. No collisions.\n\n### Lint fix (2026-05-29 update)\n`if (!voiceManager?.isEnabled()) return;` → wrapped in braces (`curly` rule).\n\n## Changes\n| File | Change |\n|------|--------|\n| `extensions/discord/src/voice/manager.ts` | `startAutoJoin` wraps in 6s `setTimeout(..).unref()`; `resolveVoiceConnectionGroup()` helper; all `getVoiceConnection`/`joinVoiceChannel` calls include `group` param |\n| `extensions/discord/src/monitor/provider.ts` | After voice listener registration, schedule autoJoin retries at 8s and 75s with `.unref()`; single-line if wrapped in braces |\n\n## Test plan\n- [x] Lint passes (oxlint, curly rule fixed)\n- [x] Multi-account voice groups: each account uses `group: \"openclaw:<accountId>\"`\n- [x] autoJoin timers have `.unref()` (process exit not blocked)\n- [ ] Single bot regression: voice autoJoin works as before\n- [ ] build-artifacts: `kitchen-sink-rpc-walk.test.ts` failure is pre-existing flaky (unrelated to this PR, see [comment](https://github.com/openclaw/openclaw/pull/87527#issuecomment-4569705966))\n\n🤖 Updated with [Claude Code](https://claude.com/claude-code)",
+        "branch": "pr-discord-voice-autoojoin-group",
+        "head_sha": "fb6b0ec4f15744377103faf75a5de8b52d60ddeb",
         "author": "geekhuashan",
         "labels": [
-          "size: XS",
+          "channel: discord",
+          "size: S",
           "triage: needs-real-behavior-proof",
-          "P2",
+          "P1",
           "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/process/supervisor/adapters/child.ts",
-            "additions": 9,
-            "deletions": 2,
+            "path": "extensions/discord/src/monitor/provider.ts",
+            "additions": 28,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/voice/manager.ts",
+            "additions": 20,
+            "deletions": 5,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-87527",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87527.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-87530",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87530.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 104,
+          "total": 97,
           "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 75,
+            "FAILURE": 4,
+            "SUCCESS": 65,
             "SKIPPED": 27,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:FAILURE"
+            "Real behavior proof:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "Real behavior proof:FAILURE"
+            "Real behavior proof:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
           ]
         }
       },
@@ -118,15 +132,15 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2681,
+    "total_ms": 2423,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 556
+        "ms": 476
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1841
+        "ms": 1753
       },
       {
         "name": "classify_commands",
@@ -134,7 +148,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 270
+        "ms": 180
       },
       {
         "name": "append_ledger",
