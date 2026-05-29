@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-83042"
 mode: "autonomous"
-run_id: "26626797126"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26626797126"
+run_id: "26630613176"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26630613176"
 head_sha: "beb50640445a7699b711ffaf8b27ca39a82c5b3c"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-29T09:11:27.159Z"
+published_at: "2026-05-29T10:21:59.610Z"
 canonical: "https://github.com/openclaw/openclaw/pull/84814"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/48680"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/84814"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/26626797126](https://github.com/openclaw/clawsweeper/actions/runs/26626797126)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/26630613176](https://github.com/openclaw/clawsweeper/actions/runs/26630613176)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/84814
 
 ## Summary
 
-Planned repair for writable replacement PR #84814. Original contributor PR #83042 is already closed and remains historical credit/context; linked issue #48680 stays open until the canonical repair lands because close/post-merge close is blocked for this job.
+Canonical repair path is the open same-repo replacement PR #84814, with #48680 as the source issue and #83042 already closed as superseded. Merge and close are disallowed by the job, and #84814 is not merge-ready because the hydrated state reports mergeable_state=dirty plus failing checks, so this result emits a repair_contributor_branch fix artifact for the executor to rebase/repair #84814 while preserving #83042/@yu-xin-c credit.
 
 ## Impact
 
@@ -54,8 +54,8 @@ Planned repair for writable replacement PR #84814. Original contributor PR #8304
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | failed |  |  | Codex /review timed out after 52801ms |
-| execute_fix | blocked |  |  | Codex /review timed out after 52801ms |
+| repair_contributor_branch | failed |  |  | Codex fix worker timed out after 1200000ms |
+| execute_fix | blocked |  |  | Codex fix worker timed out after 1200000ms |
 | automerge_repair_outcome_comment | updated | #84814 |  |  |
 
 ## Apply Actions
@@ -68,10 +68,10 @@ Planned repair for writable replacement PR #84814. Original contributor PR #8304
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #83042 | keep_closed | skipped | superseded | Already closed source PR; treat as historical credit and source context only. |
-| #84814 | fix_needed | planned | canonical | Canonical replacement PR is useful and writable, but dirty merge state plus failing relevant checks require a repair pass before the automerge loop can continue. |
-| #48680 | keep_related | planned | fixed_by_candidate | Issue is covered by the canonical repair candidate, but no close action is allowed before the fix lands. |
-| cluster:automerge-openclaw-openclaw-83042 | build_fix_artifact | planned |  | Build an executable repair artifact for the writable canonical PR rather than merging or closing in this worker. |
+| #84814 | fix_needed | planned | canonical | Repair #84814 directly; do not merge because the job blocks merge and the PR still has dirty merge state plus failing relevant checks. |
+| cluster:automerge-openclaw-openclaw-83042 | build_fix_artifact | planned |  | A repair artifact is required because #84814 is the viable canonical PR but is not currently merge-ready. |
+| #48680 | keep_canonical | planned | canonical | Keep the source issue open while #84814 owns validation and repair. |
+| #83042 | keep_closed | skipped | superseded | Historical source PR only; no mutation is planned for an already-closed target. |
 
 ## Needs Human
 
