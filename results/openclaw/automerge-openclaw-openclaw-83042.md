@@ -2,19 +2,19 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-83042"
 mode: "autonomous"
-run_id: "26633586918"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26633586918"
+run_id: "26635903021"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26635903021"
 head_sha: "beb50640445a7699b711ffaf8b27ca39a82c5b3c"
-workflow_conclusion: "failure"
+workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-05-29T11:47:41.180Z"
+published_at: "2026-05-29T12:24:36.540Z"
 canonical: "https://github.com/openclaw/openclaw/pull/84814"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/48680"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/84814"
 actions_total: 4
 fix_executed: 0
-fix_failed: 0
-fix_blocked: 0
+fix_failed: 1
+fix_blocked: 1
 apply_executed: 0
 apply_blocked: 0
 apply_skipped: 0
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/26633586918](https://github.com/openclaw/clawsweeper/actions/runs/26633586918)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/26635903021](https://github.com/openclaw/clawsweeper/actions/runs/26635903021)
 
-Workflow conclusion: failure
+Workflow conclusion: success
 
 Worker result: planned
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/84814
 
 ## Summary
 
-PR #84814 is the live canonical repair path for the closed source PR #83042 and issue #48680. It is same-repo writable but not merge-ready: preflight shows mergeable_state=dirty plus two failing CI shards, so the next deterministic step is to repair/rebase #84814, preserve @yu-xin-c credit from #83042, and rerun focused validation plus pnpm check:changed. No close or merge action is emitted because the job blocks both.
+Canonical fix path is the open same-repo replacement PR #84814, which preserves credit from the closed source PR #83042 and targets the open issue #48680. #84814 is repairable but not merge-ready because hydrated CI still shows two relevant failures and mergeability is unknown, so this result emits a branch-repair fix artifact and no close or merge actions.
 
 ## Impact
 
@@ -43,8 +43,8 @@ PR #84814 is the live canonical repair path for the closed source PR #83042 and 
 | --- | ---: |
 | Worker actions | 4 |
 | Fix executed | 0 |
-| Fix failed | 0 |
-| Fix blocked | 0 |
+| Fix failed | 1 |
+| Fix blocked | 1 |
 | Applied executions | 0 |
 | Apply blocked | 0 |
 | Apply skipped | 0 |
@@ -54,7 +54,9 @@ PR #84814 is the live canonical repair path for the closed source PR #83042 and 
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| repair_contributor_branch | failed |  |  | Codex fix worker timed out after 1200000ms |
+| execute_fix | blocked |  |  | Codex fix worker timed out after 1200000ms |
+| automerge_repair_outcome_comment | updated | #84814 |  |  |
 
 ## Apply Actions
 
@@ -66,10 +68,10 @@ PR #84814 is the live canonical repair path for the closed source PR #83042 and 
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #48680 | keep_related | planned | fixed_by_candidate | Keep the issue open and associated with #84814 until the repair PR lands; closure is blocked by job policy and unmerged fix state. |
-| #83042 | keep_closed | skipped | superseded | Closed historical source PR; it remains credit and provenance evidence for the writable replacement #84814. |
-| #84814 | fix_needed | planned | canonical | Repair the writable canonical replacement PR before any future merge gate. |
-| cluster:automerge-openclaw-openclaw-83042 | build_fix_artifact | planned |  | Emit an executable repair artifact for the ClawSweeper edit pass. |
+| #48680 | keep_canonical | planned | canonical | Canonical issue should remain open while the repairable PR #84814 is made merge-ready. |
+| #83042 | keep_closed | skipped | superseded | Closed source PR is historical evidence and credit source only; no mutation is valid. |
+| #84814 | fix_needed | planned | canonical | Repair the writable replacement PR branch, inspect failing relevant checks, rebase if needed, rerun review and changed checks, then let the deterministic automerge lane decide merge later. |
+| cluster:automerge-openclaw-openclaw-83042 | build_fix_artifact | planned |  | A narrow repair artifact is actionable and preserves contributor credit without merge or close mutations. |
 
 ## Needs Human
 
