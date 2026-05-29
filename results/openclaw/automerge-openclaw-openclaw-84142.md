@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-84142"
 mode: "autonomous"
-run_id: "26626789582"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26626789582"
+run_id: "26630622792"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26630622792"
 head_sha: "beb50640445a7699b711ffaf8b27ca39a82c5b3c"
 workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-05-29T09:14:48.359Z"
+published_at: "2026-05-29T10:42:19.193Z"
 canonical: "https://github.com/openclaw/openclaw/pull/84362"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/84038"
 canonical_pr: "https://github.com/openclaw/openclaw/pull/84362"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/26626789582](https://github.com/openclaw/clawsweeper/actions/runs/26626789582)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/26630622792](https://github.com/openclaw/clawsweeper/actions/runs/26630622792)
 
 Workflow conclusion: failure
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw/pull/84362
 
 ## Summary
 
-No GitHub mutation is planned from this worker. The hydrated artifact shows #84362 is the live, writable replacement PR for the closed source PR #84142, but it is still dirty and blocked by an actionable ClawSweeper review finding, so the correct next step is a focused repair artifact for #84362. #84038 remains the canonical issue until the repair PR lands; #84142 and #83315 are already closed context.
+Cluster has a clear repair path: #84362 is the open same-repo ClawSweeper replacement for closed source PR #84142 and should be repaired before any merge decision. No GitHub mutations are proposed because close and merge are blocked for this job.
 
 ## Impact
 
@@ -66,11 +66,11 @@ No GitHub mutation is planned from this worker. The hydrated artifact shows #843
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #84038 | keep_canonical | planned | canonical | Keep the issue open as the canonical bug report while the repairable PR #84362 is made merge-ready. |
-| #84142 | keep_closed | skipped | superseded | Already-closed source PR; do not emit a close action. |
-| #84362 | fix_needed | planned | canonical | Repair the existing writable replacement PR branch; do not merge because merge is blocked by job policy and missing merge preflight. |
-| #83315 | keep_closed | skipped | independent | Closed historical context only; no action needed. |
-| cluster:automerge-openclaw-openclaw-84142 | build_fix_artifact | planned |  | Executable repair planning is allowed; close and merge are blocked by job frontmatter. |
+| #83315 | keep_closed | skipped | related | Already closed; no closure action is valid. |
+| #84038 | keep_related | planned | fixed_by_candidate | Covered by the active candidate path, but not closable in this job. |
+| #84142 | keep_closed | skipped | superseded | Closed source PR already superseded by #84362; no mutation is valid. |
+| #84362 | fix_needed | planned | canonical | Repair the writable canonical replacement PR; merge is blocked by job policy and missing clean review preflight. |
+| cluster:automerge-openclaw-openclaw-84142 | build_fix_artifact | planned |  | A narrow repair artifact is required for the executor. |
 
 ## Needs Human
 
