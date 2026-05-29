@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-29T04:56:47.642Z",
+  "generated_at": "2026-05-29T04:56:47.622Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-29T01:56:45.917Z",
+  "since": "2026-05-29T01:56:47.306Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    81417
+    81892
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 4,
-  "commands_seen": 1,
+  "scanned_comments": 2,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,212 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:81417:4441444814:2026-05-29T04:56:43Z:clawsweeper_auto_repair",
-      "comment_id": "4441444814",
-      "comment_version_key": "4441444814:2026-05-29T04:56:43Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/81417#issuecomment-4441444814",
-      "repo": "openclaw/openclaw",
-      "issue_number": 81417,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-13T13:22:44Z",
-      "comment_updated_at": "2026-05-29T04:56:43Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=a7b4934fa30ff949c2cc31aee65c57d794ba007d)",
-      "review_summary": "The PR makes memory-core derive the default memory-flush soft threshold from the resolved model context window, passes that window through the memory flush resolver, and adds flush-plan tests.\n\nPR surface: Source +67, Tests +106. Total +173 across 4 files.\n\nReproducibility: no. high-confidence real reproduction is present. The default/docs/provider-resolution blockers are source-reproducible, but the PR only provides unit/typecheck claims for the long-session large-window symptom.",
-      "review_followup": "- [P1] Maintainers need to decide the adaptive default/API policy, and the contributor must provide real behavior proof plus a current-main rebase before an automated repair is safe.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "a7b4934fa30ff949c2cc31aee65c57d794ba007d",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(memory-core): scale default softThresholdTokens with model context window",
-        "body": "## Summary\n\nReplaces the hard-coded `DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000` default in `extensions/memory-core/src/flush-plan.ts` with a window-aware helper `defaultMemoryFlushSoftThresholdTokens(window)` that returns `min(floor(window * 0.7), 900_000)`, falling back to the legacy `4000` when the window is unknown or small.\n\n## Why\n\nOn 1M-token models the legacy 4000 default left the pre-compaction flush trigger at ~99.6% of the context window, so long-lived sessions skipped the pre-compaction flush entirely and arrived at auto-compaction with nothing persisted -- the *\"bot turns slow after a few days\"* symptom (a fully resident, near-full prompt). Operators were already manually setting `agents.defaults.compaction.memoryFlush.softThresholdTokens` to `900_000` to work around it; this PR makes that the implicit default for big-window models while leaving small-window operators untouched.\n\nReference math (using `threshold = contextWindow - reserveTokensFloor - softThresholdTokens` from `src/auto-reply/reply/memory-flush.ts`, with the default 20k reserve floor):\n\n| Context window | Old softThreshold | Old flush trigger | New softThreshold | New flush trigger |\n|---|---|---|---|---|\n| 8k | 4000 | ~50% | 4000 (legacy floor preserved) | ~50% |\n| 200k | 4000 | ~98.8% | 140000 | ~20% |\n| 1M | 4000 | ~99.6% | 700000 | ~28% |\n| 2M | 4000 | ~99.8% | 900000 (cap) | ~54% |\n\n## Plumbing\n\n- `MemoryFlushPlanResolver` (`src/plugins/memory-state.ts:77`) gains an optional `modelContextWindowTokens` parameter -- additive, backward-compatible. Third-party resolver implementations that ignore the param keep working.\n- `agent-runner-memory.ts` already resolves the context-window tokens via `resolveMemoryFlushContextWindowTokens()` in both flush call sites; this PR plumbs that value through to `resolveMemoryFlushPlan({...})` and the follow-up `activeMemoryFlushPlan` re-resolve.\n- The `defaultMemoryFlushSoftThresholdTokens()` helper is exported so third-party plugins can match the upstream policy if they replace the resolver.\n- Explicit operator-set `agents.defaults.compaction.memoryFlush.softThresholdTokens` values still win unchanged.\n\n## Test plan\n\n- [x] `pnpm test extensions/memory-core/src/flush-plan.test.ts` -- 10/10 pass (new tests cover the helper at boundary conditions plus the resolver wiring)\n- [x] `pnpm test src/auto-reply/reply/reply-state.test.ts` -- 37/37 pass (existing memory-flush context-window tests still green)\n- [x] `pnpm tsgo` -- clean (resolver signature change typechecks across all callers)\n\n## Notes\n\n- Cap chosen at 900_000 because that is the upper bound house operators were already using as a manual override. Easy to raise later if frontier models ship even larger windows.\n- The legacy `DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000` constant is retained as the fallback for callers that cannot resolve a window (control-plane tooling, doc generation, etc.) so the previously documented constant value is preserved.",
-        "branch": "kotaro-22kyasue/memory-flush-context-window-aware-default",
-        "head_sha": "a7b4934fa30ff949c2cc31aee65c57d794ba007d",
-        "author": "22kyasue",
-        "labels": [
-          "extensions: memory-core",
-          "size: S",
-          "triage: external-plugin-candidate",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/memory-core/src/flush-plan.test.ts",
-            "additions": 106,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/memory-core/src/flush-plan.ts",
-            "additions": 50,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-memory.ts",
-            "additions": 18,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/memory-state.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/api.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-core.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-update-tracker.test.ts",
-            "additions": 11,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-update-tracker.ts",
-            "additions": 26,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot.create-telegram-bot.test.ts",
-            "additions": 46,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot.types.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/monitor-polling.runtime.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/monitor.test.ts",
-            "additions": 47,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/monitor.ts",
-            "additions": 98,
-            "deletions": 19,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/polling-session.test.ts",
-            "additions": 63,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/polling-session.ts",
-            "additions": 33,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/update-offset-store.test.ts",
-            "additions": 50,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/update-offset-store.ts",
-            "additions": 60,
-            "deletions": 17,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-81417",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-81417.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 117,
-          "counts": {
-            "FAILURE": 3,
-            "SUCCESS": 87,
-            "SKIPPED": 26,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "check-test-types:FAILURE",
-            "check:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "check-test-types:FAILURE",
-            "check:FAILURE"
-          ]
-        }
-      },
-      "reason": "target is not open"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1958,
+    "total_ms": 557,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 259
+        "ms": 304
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1454
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 223
+        "ms": 240
       },
       {
         "name": "append_ledger",
