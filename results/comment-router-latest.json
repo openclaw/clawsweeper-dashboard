@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-29T05:04:32.739Z",
+  "generated_at": "2026-05-29T05:04:35.033Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-29T02:04:30.550Z",
+  "since": "2026-05-29T02:04:34.461Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     87799
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4570815987
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -36,16 +38,16 @@
       "comment_version_key": "4568880366:2026-05-29T05:04:26Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/87799#issuecomment-4568880366",
       "repo": "openclaw/openclaw",
-      "issue_number": 87799,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-28T22:34:08Z",
-      "comment_updated_at": "2026-05-29T05:04:26Z",
+      "issue_number": 87628,
+      "author": "Gausons",
+      "author_id": 52775115,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-29T05:03:30Z",
+      "comment_updated_at": "2026-05-29T05:03:30Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "trigger": "mention",
+      "command": "review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -61,81 +63,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(install): harden stdin consumers to prevent pipe corruption in curl | bash",
-        "body": "## Problem\n\nWhen invoked via `curl -fsSL https://openclaw.ai/install.sh | bash`, bash reads the script from stdin. Non-interactive subprocesses (npm, openclaw daemon, openclaw plugins) inherit stdin and can consume bytes from the script stream, causing truncated function names and hangs.\n\nPR #82918 attempted to fix this with a top-level pipe guard, but was [closed by steipete](https://github.com/openclaw/openclaw/pull/82918#issuecomment-4568506465) because the detection heuristic (`BASH_SOURCE[0]` + `/dev/stdin` pipe check) was too broad and fired in `bash -c` and other non-piped modes.\n\n## Fix\n\nFollow steipete's guidance: harden the actual stdin consumers instead of adding a global guard.\n\n- **Non-interactive subprocesses** (`npm install`, `openclaw daemon restart`, `openclaw plugins update`, `openclaw dashboard`): redirect stdin from `/dev/null` so they cannot consume script bytes.\n- **Interactive commands** (`openclaw onboard` in bootstrap): redirect stdin from `/dev/tty` so the onboarding process gets terminal input instead of the script stream.\n- **Wrapper functions** (`run_with_spinner`, `run_quiet_step`): add `< /dev/null` to fallback paths where raw commands run without gum's stdin protection.\n\nInteractive prompts (`prompt_choice`, `gum choose`, `openclaw doctor`, final `exec openclaw onboard`) already use `/dev/tty` and are unchanged.\n\nThis approach has no detection heuristics, no re-execution, and no behavior change for direct execution (`bash install.sh`). Each subprocess simply gets the correct stdin for its purpose.\n\nFixes #73814\n\n## Real behavior proof\n\n- Behavior or issue addressed: non-interactive subprocesses in install.sh can steal stdin bytes when the script is piped via `curl | bash`, causing truncated function names and hangs.\n- Real environment tested: macOS, bash 3.2 and 5.2, Node v24.2.0, openclaw main at latest.\n- Exact steps or command run after this patch:\n\n  ```bash\n  # Piped dry-run (simulates curl | bash)\n  cat scripts/install.sh | bash -s -- --dry-run --install-method npm\n\n  # Direct dry-run (simulates bash install.sh)\n  bash scripts/install.sh --dry-run --install-method npm\n\n  # Verify subprocess stdin is isolated\n  bash -c 'read -t 0.1 line; echo \"got: ${#line} chars\"' < /dev/null\n  # Output: got: 0 chars\n  ```\n\n- Evidence after fix (terminal output):\n\n  Stdin isolation behavior verified in the terminal:\n\n  ```console\n  $ echo \"hello from stdin\" | bash -c 'read line; echo \"got: $line\"'\n  got: hello from stdin\n  $ echo \"hello from stdin\" | bash -c 'read line < /dev/null; echo \"got: $line\"'\n  got:\n  ```\n\n  Without `< /dev/null`, the subprocess consumes \"hello from stdin\" from the pipe. With `< /dev/null`, the subprocess gets empty stdin and the pipe stream is preserved for the parent script.\n\n  Patched subprocess counts in install.sh:\n\n  ```console\n  $ grep -c '< /dev/null' scripts/install.sh\n  9\n  $ grep -c '< /dev/tty' scripts/install.sh\n  3\n  ```\n\n  9 non-interactive subprocess calls redirect stdin from `/dev/null` (npm install, daemon restart, plugins update, dashboard, npm config, run_with_spinner fallbacks, run_quiet_step fallback). 3 interactive calls redirect from `/dev/tty` (onboard, which needs terminal input for user prompts).\n\n  Dry-run through pipe completes without truncation:\n\n  ```console\n  $ cat scripts/install.sh | bash -s -- --dry-run --install-method npm\n  Dry run: yes\n  ✓ Dry run complete (no changes made)\n  $ bash scripts/install.sh --dry-run --install-method npm\n  Dry run: yes\n  ✓ Dry run complete (no changes made)\n  ```\n\n- Observed result after fix: subprocesses receive `/dev/null` as stdin and cannot consume bytes from the script stream during `curl | bash` execution. Interactive commands (`openclaw onboard`) receive `/dev/tty` so user prompts still work. Both piped and direct execution modes complete without truncation or hangs.\n- What was not tested: full npm install in piped mode (requires clean environment); WSL2 reproduction of the original truncation from #73814. The fix is mechanical (`< /dev/null` and `< /dev/tty` redirections) and does not depend on platform-specific behavior.\n\n",
-        "branch": "fix/install-stdin-tty-safety",
-        "head_sha": "fa10a673999591e114efbf3b1adced7e77474f6e",
-        "author": "sebtardif",
-        "labels": [
-          "scripts",
-          "size: S",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 automation",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof",
-          "dependency-guard-backfill"
-        ],
-        "files": [
-          {
-            "path": ".github/workflows/labeler.yml",
-            "additions": 49,
-            "deletions": 26,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/install.sh",
-            "additions": 12,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-87799",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87799.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BLOCKED",
-        "review_decision": "",
-        "checks": {
-          "total": 89,
-          "counts": {
-            "SUCCESS": 80,
-            "SKIPPED": 8,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2488,
+    "total_ms": 1774,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 399
+        "ms": 559
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1778
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 4
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 289
+        "ms": 1203
       },
       {
         "name": "append_ledger",
