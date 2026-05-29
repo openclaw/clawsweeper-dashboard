@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-29T17:45:34.402Z",
+  "generated_at": "2026-05-29T17:47:02.482Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-29T14:45:31.518Z",
+  "since": "2026-05-29T14:47:02.187Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    82079
+    88087
   ],
-  "comment_ids": [
-    4578115493
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,109 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:82079:4578115493:2026-05-29T17:44:46Z:re_review",
-      "comment_id": "4578115493",
-      "comment_version_key": "4578115493:2026-05-29T17:44:46Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82079#issuecomment-4578115493",
-      "repo": "openclaw/openclaw",
-      "issue_number": 82079,
-      "author": "pfrederiksen",
-      "author_id": 908172,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-29T17:44:46Z",
-      "comment_updated_at": "2026-05-29T17:44:46Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "ignored",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(telegram): preserve bot-self reply target context under allowlist visibility (#82002)",
-        "body": "## Summary\n\n- Fixes #82002. In Telegram groups under `contextVisibility: \"allowlist\"`, the supplemental-context filter computed `senderAllowed` only from `effectiveGroupAllow`, so a user reply to a bot-sent cron/system message would drop the quoted bot text whenever the bot account was not in the allowlist.\n- Treats the bot/self sender as allowed for quote/forwarded supplemental context before the allowlist gate. Bot replies already count as implicit mentions for Telegram (`extensions/telegram/src/bot-message-context.body.ts:332`), so this aligns the supplemental-context filter with the existing activation contract. Forwarded-origin redaction inside non-bot reply targets is unchanged.\n\n## Verification\n\n```bash\nnode scripts/run-vitest.mjs extensions/telegram/src/bot.test.ts\nnode scripts/run-oxlint.mjs extensions/telegram/src/bot-message-context.session.ts extensions/telegram/src/bot.test.ts\npnpm format extensions/telegram/src/bot-message-context.session.ts extensions/telegram/src/bot.test.ts\n```\n\n72/72 on `bot.test.ts` (new \"preserves bot-self reply target context under allowlist visibility\" case included). Existing \"redacts forwarded origin inside reply targets when context visibility is allowlist\" still green — non-bot reply targets continue to be filtered when sender is not in `effectiveGroupAllow`.\n\n## Real behavior proof\n\nBehavior addressed: User reply to a bot-sent message in a Telegram group with `contextVisibility: \"allowlist\"` and an allowlist that admits the user but not the bot now keeps the quoted bot body in the supplemental context (`ReplyToBody`, reply-chain entry), instead of being filtered out before the agent turn is built. Verified by running the production `evaluateSupplementalContextVisibility` helper at `src/security/context-visibility.ts:16` against synthetic-but-realistic inputs that exercise the new `isBotSelfSender` short-circuit at `extensions/telegram/src/bot-message-context.session.ts:248-266`.\n\nReal environment tested: macOS arm64, Node 22.21.1, repo at the fix commit (`35de519`). Ran a standalone Node reproducer with `--experimental-strip-types` so the prod TypeScript module is loaded and executed directly — no vitest, no mocks, no test framework on the path; the runtime call goes through the same `evaluateSupplementalContextVisibility` export that the Telegram bot calls in production. (Real `api.telegram.org` bot session is out of scope here; this proves the security/context-visibility contract that the Telegram handler depends on.)\n\nExact steps or command run after this patch:\n```bash\ncat > /tmp/proof_82079.mjs <<'JS'\nimport { evaluateSupplementalContextVisibility } from \"./src/security/context-visibility.ts\";\n\nconst senderAllowedBeforeFix = ({ isInAllowlist }) => isInAllowlist;\nconst senderAllowedAfterFix = ({ botSenderId, senderId, isInAllowlist }) => {\n  const isBotSelfSender = botSenderId != null && senderId === botSenderId;\n  return isBotSelfSender ? true : isInAllowlist;\n};\n\nconst scenarios = [\n  { label: \"Group + allowlist + user replies to bot (THE BUG)\", botSenderId: \"999\", senderId: \"999\", isInAllowlist: false, mode: \"allowlist\", kind: \"quote\" },\n  { label: \"Control: reply to non-allowlisted human (must stay blocked)\", botSenderId: \"999\", senderId: \"42\", isInAllowlist: false, mode: \"allowlist\", kind: \"quote\" },\n];\n\nfor (const s of scenarios) {\n  const before = evaluateSupplementalContextVisibility({ mode: s.mode, kind: s.kind, senderAllowed: senderAllowedBeforeFix(s) });\n  const after  = evaluateSupplementalContextVisibility({ mode: s.mode, kind: s.kind, senderAllowed: senderAllowedAfterFix(s)  });\n  console.log(\"scenario:\", s.label);\n  console.log(\"  BEFORE include:\", before.include, \"reason:\", before.reason);\n  console.log(\"  AFTER  include:\", after.include,  \"reason:\", after.reason);\n}\nJS\n\nnode --experimental-strip-types /tmp/proof_82079.mjs\n```\n\nEvidence after fix:\n```\nscenario: Group + allowlist + user replies to bot (THE BUG)\n  BEFORE include: false reason: blocked\n  AFTER  include: true  reason: sender_allowed\nscenario: Control: reply to non-allowlisted human (must stay blocked)\n  BEFORE include: false reason: blocked\n  AFTER  include: false reason: blocked\n```\n\nObserved result after fix: For the bug scenario (`botSenderId === senderId === \"999\"`, `effectiveGroupAllow` does not include `\"999\"`, mode = `allowlist`, kind = `quote`), the prod `evaluateSupplementalContextVisibility` decision flipped from `{ include: false, reason: \"blocked\" }` (before-fix `senderAllowed` computation) to `{ include: true, reason: \"sender_allowed\" }` (after-fix `senderAllowed` computation with the new `isBotSelfSender` short-circuit). The control scenario — non-bot sender not in allowlist — stays `blocked` in both runs, proving the change is scoped to bot-self replies and does not loosen the allowlist for arbitrary users.\n\nWhat was not tested: Live `api.telegram.org` bot session against a real bot token + Telegram group is not exercised here; the contributor environment is macOS arm64 without admin and without a provisioned bot token. The reproducer above runs the same `evaluateSupplementalContextVisibility` export that the Telegram handler calls in production, so the security/context-visibility contract is verified end-to-end at the prod-module level; the remaining gap is the grammY adapter wiring, which is covered by the new test in `extensions/telegram/src/bot.test.ts`. Happy to run a real-bot/Testbox session if a harness with credentials is provided.\n",
-        "branch": "fix/telegram-allowlist-bot-self-reply-context",
-        "head_sha": "35de519e4aef3a055d4e2c4de1dc4129b487f5d5",
-        "author": "0xghost42",
-        "labels": [
-          "channel: telegram",
-          "size: S",
-          "proof: supplied",
-          "mantis: telegram-visible-proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/telegram/src/bot-message-context.session.ts",
-            "additions": 14,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot.test.ts",
-            "additions": 45,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-82079",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82079.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BLOCKED",
-        "review_decision": "",
-        "checks": {
-          "total": 105,
-          "counts": {
-            "SUCCESS": 84,
-            "SKIPPED": 20,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "reason": "author association CONTRIBUTOR and repository permission read are not allowed"
-    }
-  ],
+  "commands": [],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3118,
+    "total_ms": 501,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 664
+        "ms": 283
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2206
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 235
+        "ms": 206
       },
       {
         "name": "append_ledger",
