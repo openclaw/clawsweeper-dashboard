@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-29T05:29:08.904Z",
+  "generated_at": "2026-05-29T05:28:56.041Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-29T02:29:06.508Z",
+  "since": "2026-05-29T02:28:53.881Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    86898
+    86917
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 5,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86898:4544223918:2026-05-29T05:18:57Z:clawsweeper_auto_repair",
-      "comment_id": "4544223918",
-      "comment_version_key": "4544223918:2026-05-29T05:18:57Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86898#issuecomment-4544223918",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86917:4544588084:2026-05-29T05:15:30Z:clawsweeper_needs_human",
+      "comment_id": "4544588084",
+      "comment_version_key": "4544588084:2026-05-29T05:15:30Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86917#issuecomment-4544588084",
       "repo": "openclaw/openclaw",
-      "issue_number": 86898,
+      "issue_number": 86917,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-26T13:01:46Z",
-      "comment_updated_at": "2026-05-29T05:18:57Z",
+      "comment_created_at": "2026-05-26T13:41:05Z",
+      "comment_updated_at": "2026-05-29T05:15:30Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -52,93 +52,187 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=48309ca3016331599cd41a582eaaf6f82138bbab)",
-      "review_summary": "This PR removes the deferred turn-maintenance worker's session-lane idle wait and updates context-engine maintenance tests to expect maintenance to run on its dedicated lane during active sessions.\n\nPR surface: Source -11, Tests +24. Total +13 across 2 files.\n\nReproducibility: yes. from source inspection: current main waits for resolveSessionLane(sessionKey) to drain, and same-session inference is queued on that same lane. I did not run a live Telegram reproduction in this read-only review.",
-      "review_followup": "- [P1] Needs maintainer/contributor revision rather than an automated repair because the branch is stale, the scheduling semantics need an ordering decision, and contributor real-environment proof is missing.",
+      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=0d44568f778fdca0ed70fca592e75e14230f1bbb)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +14, Tests +54, Other 0. Total +68 across 4 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "48309ca3016331599cd41a582eaaf6f82138bbab",
+      "expected_head_sha": "0d44568f778fdca0ed70fca592e75e14230f1bbb",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(context-engine): resolve turn-maintenance livelock on Telegram DM sessions (#77340)",
-        "body": "## Problem\n\nCloses #77340.\n\nUnder steady Telegram DM traffic, the deferred turn-maintenance worker livelocks. It waits for `resolveSessionLane(sessionKey)` to reach zero queue depth before committing — but that lane is also used by inference, so it never empties while the user is actively chatting.\n\n**Observable consequence:** monotonically growing trailing-assistant accumulation. Each turn's `bootstrap-context` assembler reads pre-maintenance transcript state, growing `inputMessages` far beyond `outputMessages`. Production evidence from a macOS / Telegram DM deployment running `lossless-claw`:\n\n```\n[lcm] assemble: done inputMessages=778 outputMessages=154 duration=2457ms\n[trace:embedded-run] prep stages: bootstrap-context:14190ms@15162ms\nliveness warning: eventLoopDelayP99Ms=21743 eventLoopUtilization=1 cpuCoreRatio=1.015\n```\n\n14 seconds of `bootstrap-context` assembly per turn → ~2 minute end-to-end response latency. The event loop utilisation hits 1.0 (100%) during each turn.\n\n## Fix (Option B from issue)\n\nReplace the session-lane drain wait with `enqueueCommandInLane` on the dedicated maintenance lane (`resolveDeferredTurnMaintenanceLane`). The maintenance lane is keyed separately from the session/inference lane:\n\n- Maintenance runs serialise **against each other** (no concurrent maintenance for the same session)\n- Maintenance **never contends with inference** — the session lane is no longer blocked\n- Transcript-correctness writes complete before the next read, without the livelock\n\n```ts\n// Before: waits for inference lane — livelocks under steady traffic\nconst sessionLane = resolveSessionLane(params.sessionKey);\nfor (;;) {\n  while (getQueueSize(sessionLane) > 0) {\n    await sleepWithAbort(TURN_MAINTENANCE_WAIT_POLL_MS, ...);\n  }\n  if (getQueueSize(sessionLane) === 0) break;\n}\n\n// After: runs on its own lane — no contention with inference\nawait enqueueCommandInLane(\n  resolveDeferredTurnMaintenanceLane(params.sessionKey),\n  async () => { /* maintenance work */ },\n);\n```\n\n## Testing\n\n- TypeScript: zero errors (`tsc --noEmit`)\n- Pre-existing test setup failure (`@openclaw/fs-safe/config` resolution) exists on upstream `main` before this change — not caused by this PR\n- Manually verified: after applying locally, `inputMessages` converges to `outputMessages` and `bootstrap-context` duration drops from 14s to ~80ms on the affected Telegram DM session\n\n## Repro environment (confirming match with #77340)\n\n- macOS Darwin 25.5.0 arm64\n- OpenClaw 2026.5.22, Node 24.15.0\n- `@martian-engineering/lossless-claw` active\n- Channel: Telegram DM (`agent:main:telegram:direct:<id>`)\n- Pattern: `inputMessages` grew to 778 vs `outputMessages` 154; liveness warnings every turn",
-        "branch": "fix/77340-turn-maintenance-livelock",
-        "head_sha": "48309ca3016331599cd41a582eaaf6f82138bbab",
-        "author": "baghvn",
+        "title": "fix(session-store): rewrite generated transcript paths on rollover",
+        "body": "## Summary\n\n- Rewrites generated `sessionFile` paths when a session-store merge changes `sessionId`.\n- Prevents stale generated transcript paths like `old-session.jsonl` or `old-session-topic-456.jsonl` from being carried onto a new session id.\n- Preserves custom/non-generated `sessionFile` paths when OpenClaw cannot safely derive a replacement.\n\nRefs #65564.\n\nComplements #73809 by hardening generic session-store merges. The heartbeat-specific archival bug is handled by #73809; this PR keeps other session-store writers from persisting a generated transcript path that still embeds the previous session id after a merge rolls the session id forward.\n\n## Verification\n\n- `node scripts/run-vitest.mjs src/config/sessions/sessions.test.ts`\n- `node scripts/run-vitest.mjs src/agents/command/session-store.test.ts`\n- `git diff --check`\n\n## Real behavior proof\n\nBehavior addressed: Generic session-store rollover can preserve a stale generated `sessionFile` while changing `sessionId`, causing a new logical session id to keep appending to an old transcript file. This is a session-store invariant hardening change, not the heartbeat-specific reset archival fix from #73809.\n\nReal environment tested: Local OpenClaw source checkout on Linux with Node v22.20.0, writing a real temporary `agents/main/sessions/sessions.json` file through the agent session-store persistence path.\n\nExact steps or command run after this patch:\n\n```bash\nnode --import tsx /tmp/openclaw-session-rollover-proof.mjs\n```\n\nEvidence after fix: Terminal output copied from running the command above:\n\n```text\nOpenClaw session rollover proof\nsource path: /tmp/openclaw-upstream\nstore path: /tmp/openclaw-rollover-proof-dsfpZV/agents/main/sessions/sessions.json\nreal path exercised: persistSessionEntry -> updateSessionStore -> mergeSessionEntry\nbefore.sessionId: 11111111-1111-4111-8111-111111111111\nbefore.sessionFile.basename: 11111111-1111-4111-8111-111111111111-topic-456.jsonl\nrollover patch carried stale sessionFile basename: 11111111-1111-4111-8111-111111111111-topic-456.jsonl\nafter.sessionId: 22222222-2222-4222-8222-222222222222\nafter.sessionFile.basename: 22222222-2222-4222-8222-222222222222-topic-456.jsonl\nexpected generated sessionFile basename: 22222222-2222-4222-8222-222222222222-topic-456.jsonl\npersisted object matches store: true\nstale sessionFile carried after fix: false\nrewritten to current sessionId: true\nresult: PASS\n```\n\nObserved result after fix: The on-disk `sessions.json` entry kept the new `sessionId` and rewrote the generated transcript basename from `11111111-1111-4111-8111-111111111111-topic-456.jsonl` to `22222222-2222-4222-8222-222222222222-topic-456.jsonl`; the stale generated `sessionFile` was not carried forward. This proves the generic merge boundary now preserves the invariant that generated transcript paths follow the current persisted session id.\n\nWhat was not tested: Full repository test suite, live heartbeat runtime, and packaged npm install/upgrade path.\n",
+        "branch": "codex/fix-session-file-rollover",
+        "head_sha": "0d44568f778fdca0ed70fca592e75e14230f1bbb",
+        "author": "sunjae-k",
         "labels": [
           "agents",
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "mantis: telegram-visible-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🌊 off-meta tidepool",
+          "merge-risk: 🚨 session-state"
         ],
         "files": [
           {
-            "path": "src/agents/pi-embedded-runner/context-engine-maintenance.test.ts",
-            "additions": 114,
-            "deletions": 90,
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
+            "additions": 6,
+            "deletions": 6,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/pi-embedded-runner/context-engine-maintenance.ts",
-            "additions": 17,
-            "deletions": 28,
+            "path": "src/agents/tool-display-config.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/sessions.test.ts",
+            "additions": 54,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/types.ts",
+            "additions": 14,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86898",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86898.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86917",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86917.md",
         "mode": "autonomous",
         "mergeable": "UNKNOWN",
         "merge_state_status": "UNKNOWN",
         "review_decision": "",
         "checks": {
-          "total": 105,
+          "total": 108,
           "counts": {
-            "SKIPPED": 24,
-            "FAILURE": 4,
-            "SUCCESS": 76,
+            "SKIPPED": 30,
+            "SUCCESS": 77,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "check-guards:FAILURE",
-            "check-lint:FAILURE",
-            "checks-windows-node-test:FAILURE"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "check-guards:FAILURE",
-            "check-lint:FAILURE",
-            "checks-windows-node-test:FAILURE"
-          ]
+          "terminalBlockers": []
         }
       },
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86917:4544720883:2026-05-26T13:55:49Z:re_review",
+      "comment_id": "4544720883",
+      "comment_version_key": "4544720883:2026-05-26T13:55:49Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86917#issuecomment-4544720883",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86917,
+      "author": "Sunjae-k",
+      "author_id": 52808029,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-26T13:55:49Z",
+      "comment_updated_at": "2026-05-26T13:55:49Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(session-store): rewrite generated transcript paths on rollover",
+        "body": "## Summary\n\n- Rewrites generated `sessionFile` paths when a session-store merge changes `sessionId`.\n- Prevents stale generated transcript paths like `old-session.jsonl` or `old-session-topic-456.jsonl` from being carried onto a new session id.\n- Preserves custom/non-generated `sessionFile` paths when OpenClaw cannot safely derive a replacement.\n\nRefs #65564.\n\nComplements #73809 by hardening generic session-store merges. The heartbeat-specific archival bug is handled by #73809; this PR keeps other session-store writers from persisting a generated transcript path that still embeds the previous session id after a merge rolls the session id forward.\n\n## Verification\n\n- `node scripts/run-vitest.mjs src/config/sessions/sessions.test.ts`\n- `node scripts/run-vitest.mjs src/agents/command/session-store.test.ts`\n- `git diff --check`\n\n## Real behavior proof\n\nBehavior addressed: Generic session-store rollover can preserve a stale generated `sessionFile` while changing `sessionId`, causing a new logical session id to keep appending to an old transcript file. This is a session-store invariant hardening change, not the heartbeat-specific reset archival fix from #73809.\n\nReal environment tested: Local OpenClaw source checkout on Linux with Node v22.20.0, writing a real temporary `agents/main/sessions/sessions.json` file through the agent session-store persistence path.\n\nExact steps or command run after this patch:\n\n```bash\nnode --import tsx /tmp/openclaw-session-rollover-proof.mjs\n```\n\nEvidence after fix: Terminal output copied from running the command above:\n\n```text\nOpenClaw session rollover proof\nsource path: /tmp/openclaw-upstream\nstore path: /tmp/openclaw-rollover-proof-dsfpZV/agents/main/sessions/sessions.json\nreal path exercised: persistSessionEntry -> updateSessionStore -> mergeSessionEntry\nbefore.sessionId: 11111111-1111-4111-8111-111111111111\nbefore.sessionFile.basename: 11111111-1111-4111-8111-111111111111-topic-456.jsonl\nrollover patch carried stale sessionFile basename: 11111111-1111-4111-8111-111111111111-topic-456.jsonl\nafter.sessionId: 22222222-2222-4222-8222-222222222222\nafter.sessionFile.basename: 22222222-2222-4222-8222-222222222222-topic-456.jsonl\nexpected generated sessionFile basename: 22222222-2222-4222-8222-222222222222-topic-456.jsonl\npersisted object matches store: true\nstale sessionFile carried after fix: false\nrewritten to current sessionId: true\nresult: PASS\n```\n\nObserved result after fix: The on-disk `sessions.json` entry kept the new `sessionId` and rewrote the generated transcript basename from `11111111-1111-4111-8111-111111111111-topic-456.jsonl` to `22222222-2222-4222-8222-222222222222-topic-456.jsonl`; the stale generated `sessionFile` was not carried forward. This proves the generic merge boundary now preserves the invariant that generated transcript paths follow the current persisted session id.\n\nWhat was not tested: Full repository test suite, live heartbeat runtime, and packaged npm install/upgrade path.\n",
+        "branch": "codex/fix-session-file-rollover",
+        "head_sha": "0d44568f778fdca0ed70fca592e75e14230f1bbb",
+        "author": "sunjae-k",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🌊 off-meta tidepool",
+          "merge-risk: 🚨 session-state"
+        ],
+        "files": [
+          {
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
+            "additions": 6,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tool-display-config.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/sessions.test.ts",
+            "additions": 54,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86917",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86917.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 108,
+          "counts": {
+            "SKIPPED": 30,
+            "SUCCESS": 77,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2753,
+    "total_ms": 2536,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 438
+        "ms": 471
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1942
+        "ms": 1672
       },
       {
         "name": "classify_commands",
@@ -146,7 +240,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 346
+        "ms": 365
       },
       {
         "name": "append_ledger",
