@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-29T21:56:45.412Z",
+  "generated_at": "2026-05-29T21:59:23.391Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-29T18:56:42.782Z",
+  "since": "2026-05-29T18:59:23.184Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    88139
+    88143
   ],
-  "comment_ids": [
-    4580184580
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,80 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:88139:4580184580:2026-05-29T21:55:33Z:re_review",
-      "comment_id": "4580184580",
-      "comment_version_key": "4580184580:2026-05-29T21:55:33Z",
-      "comment_url": "https://github.com/openclaw/openclaw/issues/88139#issuecomment-4580184580",
-      "repo": "openclaw/openclaw",
-      "issue_number": 88139,
-      "author": "JakubOleksy",
-      "author_id": 6147691,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-29T21:55:33Z",
-      "comment_updated_at": "2026-05-29T21:55:33Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "issue",
-        "state": "open",
-        "locked": false,
-        "title": "[Bug] BlueBubbles channel dispatch broken in v2026.5.27 — TypeError: Cannot read properties of undefined (reading 'run') (same regression as #87602)",
-        "body": "## Description\n\nAfter upgrading OpenClaw from v2026.5.26 to v2026.5.27 (stable, the current `latest` dist-tag), the BlueBubbles channel fails to dispatch incoming iMessage messages to the agent session. The typing indicator fires (different code path) but the reply itself never lands — to the end user it looks like the agent is \"typing forever\".\n\nThis is the same regression as #87602 (Feishu), but on the `@openclaw/bluebubbles` plugin, which has not been republished with the fix. `@openclaw/bluebubbles@latest` is still `2026.5.7`, which calls the old `core.channel.turn.run()` API removed in 2026.5.27.\n\n## Steps to Reproduce\n\n1. Run `openclaw update` from v2026.5.26 → v2026.5.27 (or fresh install at 2026.5.27)\n2. Have `@openclaw/bluebubbles@2026.5.7` installed (current `latest`)\n3. Send an iMessage DM to the bot via BlueBubbles\n4. Observe the error in `/tmp/openclaw/openclaw-YYYY-MM-DD.log`\n\n## Expected Behavior\n\nBlueBubbles inbound messages dispatch to the agent session and receive a reply.\n\n## Actual Behavior\n\nThe BlueBubbles webhook receives the message, the typing indicator starts, then debounce flush throws:\n\n```\n{\"subsystem\":\"channels/bluebubbles\"} [default] [bluebubbles] debounce flush failed: TypeError: Cannot read properties of undefined (reading 'run')\n```\n\nNo reply is sent. The outbound payload ends up in `~/.openclaw/delivery-queue/failed/` with `lastError: \"Outbound not configured for channel: imessage\"` on retry.\n\n## Root Cause\n\nSame as #87602: API rename from `core.channel.turn.run()` to `core.channel.inbound.run()` in 2026.5.27. The BlueBubbles plugin still has the old call site:\n\n`@openclaw/bluebubbles@2026.5.7/dist/monitor-processing-Dy-LY2QQ.js:1935`\n\n```js\nawait core.channel.turn.run({\n  channel: \"bluebubbles\",\n  accountId: account.accountId,\n  raw: ctxPayload,\n  adapter: { /* ... */ }\n});\n```\n\nThe runtime channel object (built in `runtime-channel-Cmfay0aK.js` in the 2026.5.27 gateway dist) now exposes this under `channel.inbound.run` (with siblings `buildContext`, `runPreparedReply`, `dispatchReply`). `channel.turn` no longer exists — hence `undefined.run`.\n\nPatching that single call site (`core.channel.turn.run` → `core.channel.inbound.run`) and restarting the gateway restores iMessage dispatch end-to-end.\n\n## Impact\n\nBlueBubbles / iMessage channel completely broken for inbound DMs on every install that runs `openclaw update` to 2026.5.27 (which is now the `latest` stable, not just a beta). The pairing with #87602 means the channel-API rename shipped without a coordinated republish of all out-of-tree channel plugins.\n\n## Workaround\n\nEither:\n\n1. **Roll the gateway back** to 2026.5.26:\n   ```sh\n   npm install -g openclaw@2026.5.26\n   OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 openclaw gateway install --force\n   OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 openclaw gateway restart\n   ```\n   (Note: in my case launchd silently killed the 2026.5.26 daemon even though it ran fine in the foreground; stderr is routed to `/dev/null` by the installed plist, making this hard to debug.)\n\n2. **Patch the plugin in place** until a fixed `@openclaw/bluebubbles` ships:\n   ```sh\n   sed -i '' 's/core\\.channel\\.turn\\.run/core.channel.inbound.run/' \\\n     ~/.openclaw/npm/node_modules/@openclaw/bluebubbles/dist/monitor-processing-Dy-LY2QQ.js\n   openclaw gateway restart\n   ```\n   This patch will be overwritten by any plugin reinstall.\n\n## Ask\n\nPlease publish a `@openclaw/bluebubbles` release (e.g. 2026.5.8) with the `channel.inbound.run` rename applied, and bump npm `latest` so `openclaw update` pulls a compatible pair.\n\n## Environment\n\n- OpenClaw `2026.5.27` (`27ae826`), upgraded from `2026.5.26` (`10ad3aa`)\n- `@openclaw/bluebubbles@2026.5.7` (current npm `latest`)\n- BlueBubbles server: macOS 26.5.0, Private API enabled\n- Channel mode: webhook, DM policy: allowlist\n- macOS 15, Node.js v25.8.2, installed via `npm -g`\n",
-        "author": "JakubOleksy",
-        "labels": [],
-        "cluster_id": null,
-        "job_path": null,
-        "open_prs": [],
-        "issue_implementation_cluster_id": "issue-openclaw-openclaw-88139",
-        "issue_implementation_job_path": "jobs/openclaw/inbox/issue-openclaw-openclaw-88139.md",
-        "mode": "autonomous"
-      },
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
+  "commands": [],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2900,
+    "total_ms": 325,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2098
+        "ms": 193
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 374
+        "ms": 2
       },
       {
         "name": "classify_commands",
-        "ms": 144
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 271
+        "ms": 118
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
