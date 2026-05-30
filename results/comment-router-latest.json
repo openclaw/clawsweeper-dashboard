@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-30T09:40:11.122Z",
+  "generated_at": "2026-05-30T09:40:45.754Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-30T06:40:08.724Z",
+  "since": "2026-05-30T06:40:45.292Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4582439981
   ],
-  "status_comment_id": 4582440102,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-05-30T09:39:38Z",
       "comment_updated_at": "2026-05-30T09:39:38Z",
-      "status_comment_id": 4582440102,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,104 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-30T09:40:11.815Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 84422
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-30T09:40:12.859Z",
-          "response_comment_id": "4582440102",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): register SIGHUP handler for daemon signal hygiene",
-        "body": "## Summary\n\nRegister a supervisor-gated SIGHUP handler in the gateway run-loop as standard daemon hygiene.\n\nWhen the gateway detects it is running under a respawn supervisor (launchd, systemd, or schtasks), SIGHUP is caught, logged, and ignored. Foreground (unsupervised) gateways retain Node.js default behavior (exit 129).\n\nThis prevents accidental gateway termination when a terminal hangup signal leaks through to a supervised daemon that has no controlling terminal.\n\n> **Note:** This is defensive hardening. The SSH disconnect outage reported in #84249 involves a SIGTERM path from the TUI/systemd lifecycle chain, which is a separate concern. This PR ensures the gateway does not crash on any stray SIGHUP regardless of how it was launched.\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `run-loop.ts` | Add supervisor-gated SIGHUP handler: detect supervisor via `eagerLifecycleRuntime.detectRespawnSupervisor()`, register handler only when supervised |\n| `run-loop.test.ts` | Two SIGHUP tests + supervisor mock updates for existing tests |\n\n## Behavior\n\n| Mode | SIGHUP behavior | Why |\n|------|----------------|-----|\n| Supervised (launchd/systemd/schtasks) | Logged + ignored | Daemon has no controlling terminal; SIGHUP is accidental |\n| Foreground (no supervisor) | Node.js default (exit 129) | No behavior change from current main |\n\n## Tests\n\n```\n$ node scripts/run-vitest.mjs src/cli/gateway-cli/run-loop.test.ts\n ✓ cli src/cli/gateway-cli/run-loop.test.ts (37 tests) 181ms\n Test Files  1 passed (1)\n      Tests  37 passed (37)\n```\n\nSIGHUP-specific tests:\n```\n ✓ runGatewayLoop > ignores SIGHUP when running under a supervisor (3ms)\n ✓ runGatewayLoop > does not install SIGHUP handler in foreground (no supervisor) (2ms)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Gateway process terminates with exit 129 on SIGHUP because no signal handler is registered. Any supervised daemon that receives a stray SIGHUP (e.g. from a parent terminal closing) would crash.\n\n- **Real environment tested**: Docker `node:22-bookworm` (Node.js `v22.22.3`, Debian bookworm), OpenClaw checkout at PR head `ec8faa55`.\n\n- **Failing proof before fix**: On current main branch (`0185d0d2`), no SIGHUP handler exists:\n\n```\n$ grep -n 'SIGHUP' src/cli/gateway-cli/run-loop.ts\n(no matches)\n\n$ grep -n 'process.on.*SIG' src/cli/gateway-cli/run-loop.ts\n782:  process.on(\"SIGTERM\", onSigterm);\n783:  process.on(\"SIGINT\", onSigint);\n784:  process.on(\"SIGUSR1\", onSigusr1);\n```\n\nLive signal test on main — process killed by SIGHUP:\n```\n$ node test-no-handler.mjs &\nPID: 260\nSIGHUP listeners: 0\nWaiting for signals...\n\n$ kill -HUP 260\nbash: line 15:   260 Hangup                  node test-no-handler.mjs\nProcess 260 terminated after SIGHUP with exit code: 129\n```\n\n- **Exact steps or command run after this patch**:\n\n```bash\ngit checkout pr-84422\nnode scripts/run-vitest.mjs src/cli/gateway-cli/run-loop.test.ts\n```\n\nPlus live signal tests simulating both supervisor-gated paths from the PR code.\n\n- **Evidence after fix**:\n\nSupervised mode (SIGHUP handler registered, simulates `detectRespawnSupervisor()` returning `\"launchd\"`):\n```\n$ node test-supervised.mjs &\nPID: 464\nSIGHUP listeners: 1\nSupervisor: launchd\nWaiting for signals...\n\n--- Sending first SIGHUP ---\nsignal SIGHUP received; ignoring (launchd supervised daemon survives terminal hangup)\nProcess 464 still alive after first SIGHUP ✓\n\n--- Sending second SIGHUP ---\nsignal SIGHUP received; ignoring (launchd supervised daemon survives terminal hangup)\nProcess 464 still alive after second SIGHUP ✓\n\n--- Sending SIGTERM (clean shutdown) ---\nSIGTERM received, shutting down gracefully\nProcess exited with code: 0 ✓\n```\n\nForeground mode (no supervisor detected, no SIGHUP handler — Node.js default preserved):\n```\n$ node test-foreground.mjs &\nPID: 482\nSIGHUP listeners: 0\nSupervisor: null\nWaiting for signals (foreground mode, no SIGHUP handler)...\n\n--- Sending SIGHUP to foreground process ---\nbash: line 25:   482 Hangup                  node test-foreground.mjs\nProcess 482 terminated with exit code: 129 (Node.js default SIGHUP) ✓\n```\n\n- **Observed result after fix**: Under supervision, SIGHUP is logged and ignored — process survives multiple SIGHUP signals and only stops on SIGTERM (exit 0). Without supervision (foreground), no SIGHUP handler is registered and Node.js default behavior is preserved (exit 129). This matches the PR's supervisor-gated design.\n\n- **What was not tested**: Live production gateway with actual launchd/systemd supervision receiving SIGHUP during SSH disconnect. The signal behavior is validated at the process level; the supervisor detection logic (`detectRespawnSupervisor`) is tested separately in its own test suite.\n\n## Compatibility\n\nNo `kill -HUP` workflow exists in the OpenClaw codebase or documentation:\n```\n$ grep -rn 'kill.*HUP\\|kill -1' docs/ scripts/ src/ | grep -v node_modules | grep -v .test.\n(zero hits)\n```\n\nDocumented signal contract (`docs/cli/gateway.md`): SIGUSR1=restart, SIGINT/SIGTERM=stop. SIGHUP was previously undefined (Node.js default). This PR only affects supervised daemons; foreground behavior is unchanged.\n",
-        "branch": "fix/sighup-handler-84249",
-        "head_sha": "ec8faa55d296bbe4fd1331a05224bb2f63c16d26",
-        "author": "jerry-xin",
-        "labels": [
-          "cli",
-          "size: S",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/cli/gateway-cli/run-loop.test.ts",
-            "additions": 56,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/run-loop.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84422",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84422.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 108,
-          "counts": {
-            "SUCCESS": 77,
-            "SKIPPED": 30,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4674,
+    "total_ms": 1755,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 607
+        "ms": 448
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1777
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 2264
+        "ms": 1294
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
