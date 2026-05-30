@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-30T17:07:59.749Z",
+  "generated_at": "2026-05-30T17:08:32.175Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-30T14:07:56.070Z",
+  "since": "2026-05-30T14:08:31.718Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4583510557
   ],
-  "status_comment_id": 4583510655,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-05-30T17:07:25Z",
       "comment_updated_at": "2026-05-30T17:07:25Z",
-      "status_comment_id": 4583510655,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,127 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-30T17:08:00.475Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 85691
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-30T17:08:01.640Z",
-          "response_comment_id": "4583391025",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(doctor): auto-repair stale session snapshot paths on --fix",
-        "body": "## Summary\n\nAdd `shouldRepair` support to `noteSessionSnapshotHealth()` so that `openclaw doctor --fix` can rewrite stale session snapshot paths in `sessions.json` instead of only reporting them as warnings.\n\nFixes #85689\n\n## Problem\n\nAfter a pnpm update changes the runtime root (e.g. `openclaw@2026.5.20_@types+express@5.0.6` → `openclaw@2026.5.20`), sessions that cached `skillsSnapshot.prompt` paths referencing the old root become stale. `openclaw doctor` correctly detects this and reports findings with both `cachedPath` and `expectedPath`, but:\n\n1. `noteSessionSnapshotHealth()` has no `shouldRepair` parameter — it's always report-only\n2. The update flow runs `doctor --fix` post-update, but session snapshot paths are never repaired\n3. Users must manually edit `sessions.json` or reset affected sessions (losing history)\n\n## Fix\n\nThe repair is **layered on top of the existing scanner** — all current scanner logic is preserved:\n\n1. `extractBundledSkillRelativeSegments` — identifies stale bundled runtime skill paths\n2. `resolveExpectedBundledSkillPath` — computes correct expected path with `pathExists` validation\n3. `loadSessionStoreForSnapshotScan` — hydrates `skillsSnapshot.promptRef` blobbed values before scanning\n4. `collectResolvedSkillPaths` — scans both `filePath` and `baseDir` fields\n5. `collectCachedSnapshotPaths` — covers `skillsSnapshot.prompt`, `resolvedSkills`, and `injectedWorkspaceFiles`\n\nThe only additions are:\n- `replacePathsInSession()` — scoped replacement that modifies only snapshot metadata fields\n- `shouldRepair?: boolean` parameter on `noteSessionSnapshotHealth()`\n- Repair block that reuses scanner findings and applies replacements\n- `.bak` backup + `writeTextAtomic` for safe writes\n\n**Key design: scoped replacement** — the repair parses `sessions.json`, finds the specific session by key, and replaces paths only in the affected fields (`skillsSnapshot.prompt`, `resolvedSkills[].filePath/baseDir`, `injectedWorkspaceFiles[].path`). Unrelated content (transcripts, user messages, other fields) is never modified.\n\n## Changes\n\n- `src/commands/doctor-session-snapshots.ts`: +168 lines (replacePathsInSession + repair block)\n- `src/flows/doctor-health-contributions.ts`: +1 line (pass shouldRepair)\n- `repro-doctor-session-snapshot-repair.mjs`: standalone proof script (6 scenarios)\n\n## Path Replacement Strategy\n\nThe repair handles three forms of stale paths in sessions.json:\n\n1. **JSON-escaped** (Windows backslashes, unicode): `JSON.stringify().slice(1,-1)` generates the escaped form\n2. **XML-escaped** (skillsSnapshot.prompt locations): `&amp;` `&lt;` `&gt;` `&quot;` `&apos;` entity encoding\n3. **Raw unescaped** (fallback for non-encoded storage)\n\n**Scoped replacement:** Only modifies the specific session's snapshot metadata fields. Unrelated content (transcripts, user messages, other fields) is preserved unchanged.\n\n## Real behavior proof\n\n**Behavior or issue addressed:** `openclaw doctor --fix` reports stale session snapshot paths but never repairs them. After a pnpm runtime root change (e.g. `openclaw@2026.5.20_@types+express@5.0.6` → `openclaw@2026.5.20`), sessions.json caches paths that no longer exist. The production `openclaw doctor --fix` is report-only — it detects stale paths but does not rewrite them. This PR adds `shouldRepair` support that rewrites stale paths in both inline prompts and promptRef blobs.\n\n**Real environment tested:** Linux x64, Node v24.14.0. Live production instance with 20 sessions. Production `openclaw doctor` run with synthetic stale paths injected (simulating pnpm runtime root change). Standalone proof script mirrors the exact repair logic from the PR, operating on real sessions.json data.\n\n**Exact steps or command run after this patch:**\n```bash\nnode proof-doctor-session-snapshot-repair.mjs\n```\n\n**Evidence after fix:**\n\n**1. Production `openclaw doctor` — detects 20 stale sessions (BEFORE):**\n```\nSession snapshots\n- Found 20 sessions with stale cached session metadata paths.\n  Live bundled skills root is healthy:\n  ~/.local/share/pnpm/global/5/.pnpm/openclaw@2026.5.20/...\n  Cached session metadata still references an inactive runtime root;\n  start a fresh session or reset the affected long-lived sessions\n  after confirming history can be retired.\n  Store: /tmp/doctor-proof-test/agents/main/sessions/sessions.json\n  - agent:main:main skillsSnapshot.prompt: ...\n```\n\n**2. Production `openclaw doctor --fix` — still report-only (confirms current main does NOT repair):**\n```\nSession snapshots\n- Found 20 sessions with stale cached session metadata paths.\n  (same output — no repair performed)\n```\n\n**3. Standalone proof script — all 20 sessions repaired (AFTER):**\n```\nReal Behavior Proof: Doctor Session Snapshot Auto-Repair\nDate: 2026-05-30T17:04:00.000Z\nNode: v24.14.0 | Platform: linux x64\n\nReal sessions.json: 20 sessions\nSessions with bundled runtime skill paths: 20\nInjected stale paths into 20 sessions (simulating pnpm runtime root change)\n\nScenario 1: openclaw doctor (report only)\n  Sessions with stale bundled paths: 20\n  Repair performed: NO\n  PASS: stale paths detected, no repair\n\nScenario 2: openclaw doctor --fix (shouldRepair=true)\n  Sessions repaired: 20\n  Stale paths remaining: 0\n  JSON valid: true\n  PASS: all stale paths replaced\n\nScenario 3: Re-scan after repair\n  Leftover findings: 0\n  PASS: no stale paths remain\n\nScenario 4: Scoped replacement\n  Sample session: agent:main:main\n  Prompt contains stale paths: false\n  PASS: prompt repaired, unrelated fields preserved\n\nSUMMARY\n  Real sessions analyzed: 20\n  Sessions with stale paths injected: 20\n  Sessions repaired: 20\n  Stale paths remaining: 0\n  Leftover findings: 0\n```\n\n**Observed result after fix:** The production `openclaw doctor` correctly detects 20 sessions with stale bundled skill paths. The production `openclaw doctor --fix` remains report-only (confirms the issue). The proof script, which mirrors the exact repair logic from the PR, successfully repairs all 20 sessions: inline prompt paths, promptRef blob paths (with new blob hash), and resolvedSkills filePath/baseDir paths. After repair, re-scan finds 0 stale paths. Scoped replacement preserves unrelated session content.\n\n**What was not tested:**\n- Live `openclaw doctor --fix` with the patched binary (local build fails due to missing native bindings in container environment)\n- Concurrent access to sessions.json during repair (single-threaded doctor execution)\n\n**Proof coverage:**\nThe standalone script operates on the real 20-session sessions.json from the running instance:\n- Same repair logic as `src/commands/doctor-session-snapshots.ts`: raw JSON targeted replacement\n- PromptRef blobs: reads blob, replaces paths, writes new blob, updates hash/bytes\n- Inline prompts: replaces directly in raw JSON\n- Scoped: only snapshot metadata fields modified\n- Idempotent: re-scan after repair finds 0 stale paths\n",
-        "branch": "fix/doctor-session-snapshot-autorepair",
-        "head_sha": "0eba25ee7de60edd457c0603ae07b384d1868cac",
-        "author": "ggzeng",
-        "labels": [
-          "commands",
-          "size: L",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "repro-doctor-session-snapshot-repair.mjs",
-            "additions": 354,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/commands/doctor-session-snapshots.test.ts",
-            "additions": 231,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor-session-snapshots.ts",
-            "additions": 216,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/flows/doctor-health-contributions.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85691",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85691.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 105,
-          "counts": {
-            "SUCCESS": 81,
-            "SKIPPED": 19,
-            "FAILURE": 4,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-core-runtime-infra-state:FAILURE",
-            "checks-node-agentic-commands-doctor:FAILURE",
-            "check-guards:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-core-runtime-infra-state:FAILURE",
-            "checks-node-agentic-commands-doctor:FAILURE",
-            "check-guards:FAILURE",
-            "check-test-types:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 6123,
+    "total_ms": 1756,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1818
+        "ms": 444
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1848
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 2431
+        "ms": 1299
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
