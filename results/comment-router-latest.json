@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-30T08:33:08.812Z",
+  "generated_at": "2026-05-30T08:33:49.258Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-30T05:33:06.542Z",
+  "since": "2026-05-30T05:33:46.599Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4582281652
   ],
-  "status_comment_id": 4582281840,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-05-30T08:32:36Z",
       "comment_updated_at": "2026-05-30T08:32:36Z",
-      "status_comment_id": 4582281840,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,109 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-30T08:33:09.458Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 85248
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-30T08:33:10.394Z",
-          "response_comment_id": "4582281840",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): strip spurious tool call blocks when provider signals stop",
-        "body": "## Summary\n\nStrip spurious tool call content blocks from OpenAI-compatible completions streaming responses when the provider signals `finish_reason: \"stop\"` (not `\"tool_calls\"`).\n\n## Problem\n\nWhen an OpenAI-compatible provider (e.g., llama.cpp serving Qwen3.6 with thinking enabled) emits structured `delta.tool_calls` parsed from the model's reasoning/thinking output but correctly reports `finish_reason: \"stop\"`, the gateway unconditionally builds `toolCall` content blocks and the agent loop executes them.\n\nThis is caused by an asymmetric stop-reason guard in `processOpenAICompletionsStream`: the existing guard downgrades `stopReason` from `\"toolUse\"` to `\"stop\"` when no tool call blocks are present (line 2679-2681), but the inverse guard — stripping tool call blocks when `stopReason` is not `\"toolUse\"` — was missing.\n\n## Fix\n\nAdd the missing inverse guard after the existing one:\n\n```typescript\nif (hasToolCalls && output.stopReason !== \"toolUse\") {\n  output.content = output.content.filter((block) => block.type !== \"toolCall\");\n}\n```\n\nThis ensures that when a provider does not signal tool-use intent via `finish_reason`, any tool call blocks in the response are treated as spurious and discarded.\n\n## Tests\n\nAdded three test cases to `openai-transport-stream.test.ts`:\n1. `delta.tool_calls` + `finish_reason: \"stop\"` → tool call blocks stripped ✅\n2. `delta.tool_calls` + `finish_reason: \"tool_calls\"` → tool calls preserved (regression) ✅\n3. No tool calls + `finish_reason: \"stop\"` → no change (regression) ✅\n\nAll 354 tests pass.\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Tool call XML in LLM reasoning/thinking block is executed by gateway when provider signals `finish_reason: \"stop\"` instead of `\"tool_calls\"`.\n- **Real environment tested**: Native `llama-server` compiled from ggml-org/llama.cpp master (commit `0f3cb3f`), built with `cmake -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=80`, running on 3× NVIDIA A100-PCIE-40GB. Two models tested: Qwen3-0.6B-Q8_0.gguf (single A100) and Qwen3.6-35B-A3B-Q4_K_M.gguf (21GB, 3× A100). Thinking mode enabled.\n- **Failing proof before fix**: On upstream/main, `openai-transport-stream.ts:2678-2681` only has one-way guard (toolUse→stop when no blocks). No inverse guard exists. Source-verified at `openai-transport-stream.ts:2678-2681`.\n- **Exact steps or command run after this patch**:\n  1. Compiled llama-server from source with CUDA support\n  2. Ran 9 test sessions against Qwen3.6-35B-A3B (Q4_K_M) with tool definitions + thinking enabled\n  3. Prompted model to execute sequential tool calls (e.g., \"Execute sleep 1 thirty times sequentially\")\n  4. Captured raw SSE streams for each test run\n  5. Unit tests: `docker build -f Dockerfile.proof -t openclaw-proof . && docker run --rm openclaw-proof src/agents/openai-transport-stream.test.ts`\n- **Evidence after fix**:\n  - **Test 8 of 9**: Model generated complete `<tool_call>` XML inside `reasoning_content` while planning tool usage — confirming the exact trigger condition from issue #85161. Native llama-server correctly isolated this into `reasoning_content` (not parsed into `delta.tool_calls`), but providers that do not separate reasoning will expose it as spurious tool calls with `finish_reason: \"stop\"`.\n  - **Tests 4, 5**: 35B model produced mixed text `content` + structured `tool_calls` in the same response, demonstrating complex streaming scenarios the guard must handle.\n  - **0.6B baseline**: Confirmed `delta.tool_calls` structured output with `finish_reason: \"tool_calls\"` (correct path) and `reasoning_content` → `content` with `finish_reason: \"stop\"` (text-only path) as two distinct code paths.\n  - **Unit tests**: 354 passed (354), including 3 new tests covering the spurious tool call scenario.\n  ```\n  ✓ agents-core ../../src/agents/openai-transport-stream.test.ts (177 tests) 184ms\n  ✓ agents-support ../../src/agents/openai-transport-stream.test.ts (177 tests) 152ms\n  Test Files  2 passed (2)\n       Tests  354 passed (354)\n    Duration  4.20s\n  ```\n- **Observed result after fix**: The inverse guard `hasToolCalls && stopReason !== \"toolUse\"` correctly strips spurious tool call blocks when the provider does not signal tool-use intent. This prevents the gateway from executing tool calls that originated in the model's reasoning/thinking output rather than as intentional tool invocations.\n- **What was not tested**: End-to-end gateway integration test with a live llama.cpp provider streaming into a running gateway instance. The exact bug scenario (provider that does not separate `reasoning_content` and exposes thinking XML as `delta.tool_calls` with `finish_reason: \"stop\"`) was confirmed via model behavior analysis and unit test mocks that reproduce the reported SSE structure.\n\nFixes #85161\n",
-        "branch": "fix/completions-stop-reason-tool-guard",
-        "head_sha": "7a6cfed5ff6e565a985f666b8a72c6b3ec9f341b",
-        "author": "jerry-xin",
-        "labels": [
-          "agents",
-          "size: M",
-          "triage: mock-only-proof",
-          "P1",
-          "rating: 🌊 off-meta tidepool",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery"
-        ],
-        "files": [
-          {
-            "path": "src/agents/openai-transport-stream.test.ts",
-            "additions": 220,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openai-transport-stream.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-85248",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85248.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 108,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 77,
-            "SKIPPED": 29,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4341,
+    "total_ms": 4337,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 523
+        "ms": 2645
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1732
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2059
+        "ms": 1679
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
