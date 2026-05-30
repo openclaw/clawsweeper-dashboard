@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-30T03:06:01.399Z",
+  "generated_at": "2026-05-30T03:07:38.535Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-30T00:05:59.344Z",
+  "since": "2026-05-30T00:07:36.133Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    67946
+    52365
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 16,
-  "commands_seen": 6,
+  "scanned_comments": 9,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,17 +31,178 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:67946:4324220794:2026-05-30T03:05:56Z:clawsweeper_needs_human",
-      "comment_id": "4324220794",
-      "comment_version_key": "4324220794:2026-05-30T03:05:56Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/67946#issuecomment-4324220794",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:52365:4339464999:2026-05-30T03:07:32Z:clawsweeper_auto_repair",
+      "comment_id": "4339464999",
+      "comment_version_key": "4339464999:2026-05-30T03:07:32Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/52365#issuecomment-4339464999",
       "repo": "openclaw/openclaw",
-      "issue_number": 67946,
+      "issue_number": 52365,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-27T04:52:34Z",
-      "comment_updated_at": "2026-05-30T03:05:56Z",
+      "comment_created_at": "2026-04-28T22:13:52Z",
+      "comment_updated_at": "2026-05-30T03:07:32Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=e3f5a2d46c74174ea5384a01478413a4a13c46bb)",
+      "review_summary": "The PR adds a `beforeAttempt` model-fallback hook, threads cron deadline access into isolated cron execution, skips near-deadline fallback candidates, and adds cron/fallback regression coverage.\n\nPR surface: Source +126, Tests +1855, Other 0. Total +1981 across 14 files.\n\nReproducibility: Do we have a high-confidence way to reproduce the issue? Source inspection gives a credible path: current main has no pre-attempt cron budget gate, and the PR body includes production-style logs, but I did not run a live current-main cron repro.",
+      "review_followup": "- [P1] Needs contributor current-head real behavior proof plus maintainer/code follow-up for stop-error preservation; this is not a safe automated repair while proof remains stale.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "e3f5a2d46c74174ea5384a01478413a4a13c46bb",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): stop fallback attempts when cron budget is exhausted",
+        "body": "## Problem\n\nWhen a cron job's primary model times out near the cron deadline, the fallback model is started but immediately killed by the same cron timeout — receiving effectively 0ms to make an LLM request. The fallback never gets a fair chance to respond, and the user sees a misleading `cron: job execution timed out` error attributed to the fallback model.\n\n**Observed in production logs (2026-03-22):**\n\n```\n[08:10:30.733] anthropic/claude-opus-4-6 attempt=1/2 reason=unknown err='Request was aborted.' duration=28667ms\n[08:10:30.735] openai-codex/gpt-5.4    attempt=2/2 reason=timeout err='cron: job execution timed out' duration=0ms\n```\n\nThe cron timeout wraps the entire fallback chain. When the primary model consumes most of the budget, the fallback model is allocated ~0ms and fails immediately.\n\n## Solution\n\n1. **Propagate the cron deadline** (`deadlineAtMs`) from `executeJobCoreWithTimeout` through the cron service state down to `runCronIsolatedAgentTurn`.\n\n2. **Add a `beforeAttempt` hook** to `runWithModelFallback` that is called before each candidate attempt. If it returns `{ type: 'stop' }`, the fallback chain stops and preserves the original error from the previous attempt.\n\n3. **Check remaining budget** in the cron layer's `beforeAttempt` callback. If less than `min(30s, timeout/4)` remains before the cron deadline, the fallback is skipped with a clear message:\n   > `Skipping fallback: only 50ms remain before cron timeout (need at least 30000ms).`\n\nThis ensures:\n- The primary model's real error is preserved (not masked by a fake cron timeout on the fallback)\n- No wasted LLM API calls that would be aborted instantly\n- The `beforeAttempt` hook is generic and reusable for other pre-attempt checks\n\n## Changes\n\n- `src/agents/model-fallback.ts` — Add `beforeAttempt` hook + `stop_before_candidate` decision type\n- `src/cron/service/timer.ts` — Compute and pass `deadlineAtMs` to job execution\n- `src/cron/isolated-agent/run.ts` — Use `beforeAttempt` to check remaining cron budget\n- `src/cron/service/state.ts` + `src/gateway/server-cron.ts` — Thread `deadlineAtMs` through interfaces\n\n## Tests\n\n- `model-fallback.test.ts` — beforeAttempt stop behavior\n- `run.fallback-time-budget.test.ts` — Cron deadline propagation + fallback budget exhaustion\n- `service.issue-regressions.test.ts` — Deadline passed to isolated runs\n\n\n## Real behavior proof\n\n**Behavior or issue addressed:** Cron isolated agent-turn jobs should not start a model fallback when the primary attempt has consumed almost the whole cron deadline and the fallback would be killed immediately by the same timeout.\n\n**Real environment tested:** Local OpenClaw checkout on branch `fix/cron-fallback-timeout` at `008791fa10`, macOS host, Node 22. The proof command uses the same fallback budget formula added in this branch and the cron job shape from the affected isolated agent-turn surface.\n\n**Exact steps or command run after this patch:** Ran `node .artifacts/pr-52365-real-behavior-proof.mjs` locally after the patch, then ran `pnpm test src/cron/isolated-agent/run.fallback-time-budget.test.ts -- --reporter=verbose` as supplemental coverage for the same gate.\n\n**Evidence after fix:** Terminal output from the local reproduction command:\n\n```\n$ node .artifacts/pr-52365-real-behavior-proof.mjs\ncron fallback budget repro\njob: sessionTarget=isolated wakeMode=next-heartbeat payload=agentTurn timeoutSeconds=60\nprimary attempt: consumed 59900ms of a 60000ms cron deadline\nfallback check: remainingMs=100; fallbackMinRemainingMs=15000\nbefore(upstream/main): runWithModelFallback had no beforeAttempt budget gate -> fallbackAttempted=true\nafter(this branch): fallbackAttempted=false\nafter stop: Skipping fallback: only 100ms remain before cron timeout (need at least 15000ms).\n```\n\nSupplemental targeted test output:\n\n```\n$ pnpm test src/cron/isolated-agent/run.fallback-time-budget.test.ts -- --reporter=verbose\n✓ allows fallback attempts when the per-attempt budget fits inside the remaining cron deadline\n✓ uses agents.defaults.timeoutSeconds for fallback budget when job timeoutSeconds is unset\n✓ stops new fallback attempts when the per-attempt budget no longer fits\nTest Files  1 passed (1)\nTests  3 passed (3)\n```\n\n**Observed result after fix:** With only 100ms left before the cron deadline and a 15,000ms minimum fallback budget, the after-fix gate returns `fallbackAttempted=false` and reports `Skipping fallback: only 100ms remain before cron timeout (need at least 15000ms).` The before behavior had no `beforeAttempt` budget gate, so the fallback candidate was started even though it could only receive about 0ms.\n\n**What was not tested:** Live Anthropic/OpenAI API calls were not run for this proof; the local reproduction covers the cron fallback budget decision and the targeted test covers the runtime hook path with mocked provider execution.\n",
+        "branch": "fix/cron-fallback-timeout",
+        "head_sha": "e3f5a2d46c74174ea5384a01478413a4a13c46bb",
+        "author": "imwyvern",
+        "labels": [
+          "gateway",
+          "scripts",
+          "agents",
+          "size: XL",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/test-projects.test-support.mjs",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback-observation.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback.test.ts",
+            "additions": 98,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback.ts",
+            "additions": 56,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run-executor.ts",
+            "additions": 32,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run.fallback-time-budget.test.ts",
+            "additions": 279,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service.issue-regressions.test-helpers.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service.issue-regressions.test.ts",
+            "additions": 1345,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/state.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.test.ts",
+            "additions": 121,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.ts",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-cron.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/test-projects.test.ts",
+            "additions": 13,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-52365",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-52365.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 103,
+          "counts": {
+            "SUCCESS": 80,
+            "SKIPPED": 22,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:52365:4345794045:2026-04-29T16:55:17Z:clawsweeper_needs_human",
+      "comment_id": "4345794045",
+      "comment_version_key": "4345794045:2026-04-29T16:55:17Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/52365#issuecomment-4345794045",
+      "repo": "openclaw/openclaw",
+      "issue_number": 52365,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-04-29T16:55:17Z",
+      "comment_updated_at": "2026-04-29T16:55:17Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -52,65 +213,134 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] No repair lane is needed because the PR already contains the focused fix and I found no actionable patch defect.; Cleared: The diff only changes TypeScript session/agent logic and a regression test; it does not alter dependencies, workflows, secrets, publishing, or code-execution supply-chain surfaces. (sha=99eb96710c3889c9b6d127457a7654f7f4f274a9)",
-      "review_summary": "The PR clears persisted subagent lineage for ordinary top-level sessions, preserves it for subagent and ACP session keys, and adds focused regression coverage for stale `spawnedBy` reuse.\n\nPR surface: Source +16, Tests +28. Total +44 across 3 files.\n\nReproducibility: yes. by source inspection and the PR terminal proof: current main persists and reuses stale lineage fields, and depth resolution consumes those fields when enforcing `sessions_spawn` limits. I did not execute a local repro because this was a read-only review.",
-      "review_followup": "- [P2] No repair lane is needed because the PR already contains the focused fix and I found no actionable patch defect.",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=48a621558196d879d9ef8d084a606b5fc4d5ba02)",
+      "review_summary": "The PR adds a pre-attempt stop hook to model fallback, threads cron deadline information into isolated cron execution, and adds tests for skipping fallback attempts when little cron budget remains.",
+      "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "99eb96710c3889c9b6d127457a7654f7f4f274a9",
+      "expected_head_sha": "48a621558196d879d9ef8d084a606b5fc4d5ba02",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "Clear stale subagent lineage on top-level sessions",
-        "body": "Fixes #67943.\n\n## Summary\n\nPrevents normal top-level sessions from inheriting stale subagent lineage metadata that can incorrectly trip `sessions_spawn` depth limits.\n\n## What changed\n\n- clear persisted subagent lineage fields on ordinary top-level session turns\n- preserve lineage only for actual `subagent:*` and `acp:*` sessions\n- stop reusing stale `sessionEntry.spawnedBy` for normal top-level agent runs\n- add regression coverage proving top-level sessions no longer pass stale lineage through\n- preserve newer model-thinking compatibility tests while rebasing onto current `upstream/main`\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** A normal top-level session key (`agent:main:main`) could carry stale stored subagent lineage (`spawnedBy`, `spawnDepth`, `spawnedWorkspaceDir`, `subagentRole`, `subagentControlScope`). With `maxSpawnDepth: 1`, that stale stored depth makes `sessions_spawn` reject a normal top-level caller as already nested.\n- **Real environment tested:** Local OpenClaw checkout for PR #67946 on Linux/Node 22, rebased onto current `origin/main`, head `a1cc7e7681ccdb488f9fa2bb1d78823995291d25`.\n- **Exact steps or command run after this patch:** Ran a redacted local runtime proof from the patched checkout. It seeds the session store with stale lineage for `agent:main:main`, calls production `getSubagentDepthFromSessionStore` and `spawnSubagentDirect`, applies the same ordinary-session lineage gate used by the patch (`isSubagentSessionKey(sessionKey) || isAcpSessionKey(sessionKey)`), then calls `spawnSubagentDirect` again. The gateway `agent` call is replaced with a local proof client returning `accepted` so the proof isolates session-lineage/depth behavior without contacting an external gateway.\n- **Evidence after fix:** Copied terminal output from the after-fix command:\n\n  ```text\n  proof head: a1cc7e7681ccdb488f9fa2bb1d78823995291d25\n  session key: agent:main:main\n  is subagent/acp: false false\n  before cleanup entry: {\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"updatedAt\":1778983631000,\"sessionStartedAt\":1778983631000,\"lastInteractionAt\":1778983631000,\"spawnedBy\":\"agent:main:subagent:stale-parent\",\"spawnDepth\":1,\"spawnedWorkspaceDir\":\"/stale/subagent/workspace\",\"subagentRole\":\"leaf\",\"subagentControlScope\":\"operator.admin\"}\n  before cleanup depth: 1\n  before cleanup sessions_spawn status: forbidden\n  before cleanup sessions_spawn error: sessions_spawn is not allowed at this depth (current depth: 1, max: 1)\n  after cleanup entry: {}\n  after cleanup depth: 0\n  after cleanup sessions_spawn status: accepted\n  after cleanup sessions_spawn runId: proof-run-1\n  after cleanup sessions_spawn childSessionKey: agent:main:subagent:3ea9be1a-ca77-49e9-b9f5-cd08d6d1ffc4\n  PASS: true\n  ```\n\n- **Observed result after fix:** The top-level session key is not subagent/ACP-shaped, the stale lineage fields are cleared, depth resolution drops from `1` to `0`, and the same `sessions_spawn` path changes from `forbidden` to `accepted`.\n- **What was not tested:** This proof does not launch a real child model run against a live external gateway; the gateway `agent` request is stubbed after the production spawn-depth/session-store path so the proof stays redacted and deterministic.\n\n## Validation\n\n- `git diff --check`\n- `pnpm run lint:plugins:no-extension-test-core-imports`\n- `CI=true pnpm exec vitest run --config test/vitest/vitest.agents.config.ts src/agents/agent-command.live-model-switch.test.ts`\n  - `Test Files 1 passed (1)`\n  - `Tests 20 passed (20)`\n- `pnpm check:test-types`\n\nNote: targeted `pnpm exec oxlint` on touched files still reports the pre-existing exported test helper name `__testing` in `src/agents/agent-command.ts`, so I did not count that as a passing validation gate.\n",
-        "branch": "fix/stale-subagent-lineage-depth",
-        "head_sha": "99eb96710c3889c9b6d127457a7654f7f4f274a9",
-        "author": "pfrederiksen",
+        "title": "fix(cron): stop fallback attempts when cron budget is exhausted",
+        "body": "## Problem\n\nWhen a cron job's primary model times out near the cron deadline, the fallback model is started but immediately killed by the same cron timeout — receiving effectively 0ms to make an LLM request. The fallback never gets a fair chance to respond, and the user sees a misleading `cron: job execution timed out` error attributed to the fallback model.\n\n**Observed in production logs (2026-03-22):**\n\n```\n[08:10:30.733] anthropic/claude-opus-4-6 attempt=1/2 reason=unknown err='Request was aborted.' duration=28667ms\n[08:10:30.735] openai-codex/gpt-5.4    attempt=2/2 reason=timeout err='cron: job execution timed out' duration=0ms\n```\n\nThe cron timeout wraps the entire fallback chain. When the primary model consumes most of the budget, the fallback model is allocated ~0ms and fails immediately.\n\n## Solution\n\n1. **Propagate the cron deadline** (`deadlineAtMs`) from `executeJobCoreWithTimeout` through the cron service state down to `runCronIsolatedAgentTurn`.\n\n2. **Add a `beforeAttempt` hook** to `runWithModelFallback` that is called before each candidate attempt. If it returns `{ type: 'stop' }`, the fallback chain stops and preserves the original error from the previous attempt.\n\n3. **Check remaining budget** in the cron layer's `beforeAttempt` callback. If less than `min(30s, timeout/4)` remains before the cron deadline, the fallback is skipped with a clear message:\n   > `Skipping fallback: only 50ms remain before cron timeout (need at least 30000ms).`\n\nThis ensures:\n- The primary model's real error is preserved (not masked by a fake cron timeout on the fallback)\n- No wasted LLM API calls that would be aborted instantly\n- The `beforeAttempt` hook is generic and reusable for other pre-attempt checks\n\n## Changes\n\n- `src/agents/model-fallback.ts` — Add `beforeAttempt` hook + `stop_before_candidate` decision type\n- `src/cron/service/timer.ts` — Compute and pass `deadlineAtMs` to job execution\n- `src/cron/isolated-agent/run.ts` — Use `beforeAttempt` to check remaining cron budget\n- `src/cron/service/state.ts` + `src/gateway/server-cron.ts` — Thread `deadlineAtMs` through interfaces\n\n## Tests\n\n- `model-fallback.test.ts` — beforeAttempt stop behavior\n- `run.fallback-time-budget.test.ts` — Cron deadline propagation + fallback budget exhaustion\n- `service.issue-regressions.test.ts` — Deadline passed to isolated runs\n\n\n## Real behavior proof\n\n**Behavior or issue addressed:** Cron isolated agent-turn jobs should not start a model fallback when the primary attempt has consumed almost the whole cron deadline and the fallback would be killed immediately by the same timeout.\n\n**Real environment tested:** Local OpenClaw checkout on branch `fix/cron-fallback-timeout` at `008791fa10`, macOS host, Node 22. The proof command uses the same fallback budget formula added in this branch and the cron job shape from the affected isolated agent-turn surface.\n\n**Exact steps or command run after this patch:** Ran `node .artifacts/pr-52365-real-behavior-proof.mjs` locally after the patch, then ran `pnpm test src/cron/isolated-agent/run.fallback-time-budget.test.ts -- --reporter=verbose` as supplemental coverage for the same gate.\n\n**Evidence after fix:** Terminal output from the local reproduction command:\n\n```\n$ node .artifacts/pr-52365-real-behavior-proof.mjs\ncron fallback budget repro\njob: sessionTarget=isolated wakeMode=next-heartbeat payload=agentTurn timeoutSeconds=60\nprimary attempt: consumed 59900ms of a 60000ms cron deadline\nfallback check: remainingMs=100; fallbackMinRemainingMs=15000\nbefore(upstream/main): runWithModelFallback had no beforeAttempt budget gate -> fallbackAttempted=true\nafter(this branch): fallbackAttempted=false\nafter stop: Skipping fallback: only 100ms remain before cron timeout (need at least 15000ms).\n```\n\nSupplemental targeted test output:\n\n```\n$ pnpm test src/cron/isolated-agent/run.fallback-time-budget.test.ts -- --reporter=verbose\n✓ allows fallback attempts when the per-attempt budget fits inside the remaining cron deadline\n✓ uses agents.defaults.timeoutSeconds for fallback budget when job timeoutSeconds is unset\n✓ stops new fallback attempts when the per-attempt budget no longer fits\nTest Files  1 passed (1)\nTests  3 passed (3)\n```\n\n**Observed result after fix:** With only 100ms left before the cron deadline and a 15,000ms minimum fallback budget, the after-fix gate returns `fallbackAttempted=false` and reports `Skipping fallback: only 100ms remain before cron timeout (need at least 15000ms).` The before behavior had no `beforeAttempt` budget gate, so the fallback candidate was started even though it could only receive about 0ms.\n\n**What was not tested:** Live Anthropic/OpenAI API calls were not run for this proof; the local reproduction covers the cron fallback budget decision and the targeted test covers the runtime hook path with mocked provider execution.\n",
+        "branch": "fix/cron-fallback-timeout",
+        "head_sha": "e3f5a2d46c74174ea5384a01478413a4a13c46bb",
+        "author": "imwyvern",
         "labels": [
+          "gateway",
+          "scripts",
           "agents",
-          "size: S",
+          "size: XL",
           "proof: supplied",
-          "proof: sufficient",
           "P2",
-          "rating: 🐚 platinum hermit",
-          "status: 👀 ready for maintainer look"
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/agent-command.live-model-switch.test.ts",
-            "additions": 28,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-command.ts",
-            "additions": 6,
+            "path": "scripts/test-projects.test-support.mjs",
+            "additions": 1,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/session.ts",
-            "additions": 18,
-            "deletions": 7,
+            "path": "src/agents/model-fallback-observation.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback.test.ts",
+            "additions": 98,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback.ts",
+            "additions": 56,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run-executor.ts",
+            "additions": 32,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run.fallback-time-budget.test.ts",
+            "additions": 279,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service.issue-regressions.test-helpers.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service.issue-regressions.test.ts",
+            "additions": 1345,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/state.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.test.ts",
+            "additions": 121,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.ts",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-cron.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/test-projects.test.ts",
+            "additions": 13,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-67946",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-67946.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-52365",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-52365.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 107,
+          "total": 103,
           "counts": {
-            "SUCCESS": 78,
-            "SKIPPED": 28,
+            "SUCCESS": 80,
+            "SKIPPED": 22,
             "NEUTRAL": 1
           },
           "blockers": [],
@@ -121,424 +351,19 @@
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
       "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:67946:4581417382:2026-05-30T02:57:49Z:re_review",
-      "comment_id": "4581417382",
-      "comment_version_key": "4581417382:2026-05-30T02:57:49Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/67946#issuecomment-4581417382",
-      "repo": "openclaw/openclaw",
-      "issue_number": 67946,
-      "author": "pfrederiksen",
-      "author_id": 908172,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-30T02:57:49Z",
-      "comment_updated_at": "2026-05-30T02:57:49Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:67946:4468851930:2026-05-17T02:07:56Z:re_review",
-      "comment_id": "4468851930",
-      "comment_version_key": "4468851930:2026-05-17T02:07:56Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/67946#issuecomment-4468851930",
-      "repo": "openclaw/openclaw",
-      "issue_number": 67946,
-      "author": "pfrederiksen",
-      "author_id": 908172,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-17T02:07:56Z",
-      "comment_updated_at": "2026-05-17T02:07:56Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "Clear stale subagent lineage on top-level sessions",
-        "body": "Fixes #67943.\n\n## Summary\n\nPrevents normal top-level sessions from inheriting stale subagent lineage metadata that can incorrectly trip `sessions_spawn` depth limits.\n\n## What changed\n\n- clear persisted subagent lineage fields on ordinary top-level session turns\n- preserve lineage only for actual `subagent:*` and `acp:*` sessions\n- stop reusing stale `sessionEntry.spawnedBy` for normal top-level agent runs\n- add regression coverage proving top-level sessions no longer pass stale lineage through\n- preserve newer model-thinking compatibility tests while rebasing onto current `upstream/main`\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** A normal top-level session key (`agent:main:main`) could carry stale stored subagent lineage (`spawnedBy`, `spawnDepth`, `spawnedWorkspaceDir`, `subagentRole`, `subagentControlScope`). With `maxSpawnDepth: 1`, that stale stored depth makes `sessions_spawn` reject a normal top-level caller as already nested.\n- **Real environment tested:** Local OpenClaw checkout for PR #67946 on Linux/Node 22, rebased onto current `origin/main`, head `a1cc7e7681ccdb488f9fa2bb1d78823995291d25`.\n- **Exact steps or command run after this patch:** Ran a redacted local runtime proof from the patched checkout. It seeds the session store with stale lineage for `agent:main:main`, calls production `getSubagentDepthFromSessionStore` and `spawnSubagentDirect`, applies the same ordinary-session lineage gate used by the patch (`isSubagentSessionKey(sessionKey) || isAcpSessionKey(sessionKey)`), then calls `spawnSubagentDirect` again. The gateway `agent` call is replaced with a local proof client returning `accepted` so the proof isolates session-lineage/depth behavior without contacting an external gateway.\n- **Evidence after fix:** Copied terminal output from the after-fix command:\n\n  ```text\n  proof head: a1cc7e7681ccdb488f9fa2bb1d78823995291d25\n  session key: agent:main:main\n  is subagent/acp: false false\n  before cleanup entry: {\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"updatedAt\":1778983631000,\"sessionStartedAt\":1778983631000,\"lastInteractionAt\":1778983631000,\"spawnedBy\":\"agent:main:subagent:stale-parent\",\"spawnDepth\":1,\"spawnedWorkspaceDir\":\"/stale/subagent/workspace\",\"subagentRole\":\"leaf\",\"subagentControlScope\":\"operator.admin\"}\n  before cleanup depth: 1\n  before cleanup sessions_spawn status: forbidden\n  before cleanup sessions_spawn error: sessions_spawn is not allowed at this depth (current depth: 1, max: 1)\n  after cleanup entry: {}\n  after cleanup depth: 0\n  after cleanup sessions_spawn status: accepted\n  after cleanup sessions_spawn runId: proof-run-1\n  after cleanup sessions_spawn childSessionKey: agent:main:subagent:3ea9be1a-ca77-49e9-b9f5-cd08d6d1ffc4\n  PASS: true\n  ```\n\n- **Observed result after fix:** The top-level session key is not subagent/ACP-shaped, the stale lineage fields are cleared, depth resolution drops from `1` to `0`, and the same `sessions_spawn` path changes from `forbidden` to `accepted`.\n- **What was not tested:** This proof does not launch a real child model run against a live external gateway; the gateway `agent` request is stubbed after the production spawn-depth/session-store path so the proof stays redacted and deterministic.\n\n## Validation\n\n- `git diff --check`\n- `pnpm run lint:plugins:no-extension-test-core-imports`\n- `CI=true pnpm exec vitest run --config test/vitest/vitest.agents.config.ts src/agents/agent-command.live-model-switch.test.ts`\n  - `Test Files 1 passed (1)`\n  - `Tests 20 passed (20)`\n- `pnpm check:test-types`\n\nNote: targeted `pnpm exec oxlint` on touched files still reports the pre-existing exported test helper name `__testing` in `src/agents/agent-command.ts`, so I did not count that as a passing validation gate.\n",
-        "branch": "fix/stale-subagent-lineage-depth",
-        "head_sha": "99eb96710c3889c9b6d127457a7654f7f4f274a9",
-        "author": "pfrederiksen",
-        "labels": [
-          "agents",
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/agents/agent-command.live-model-switch.test.ts",
-            "additions": 28,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-command.ts",
-            "additions": 6,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session.ts",
-            "additions": 18,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-67946",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-67946.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 107,
-          "counts": {
-            "SUCCESS": 78,
-            "SKIPPED": 28,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:67946:4468826146:2026-05-17T01:54:43Z:re_review",
-      "comment_id": "4468826146",
-      "comment_version_key": "4468826146:2026-05-17T01:54:43Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/67946#issuecomment-4468826146",
-      "repo": "openclaw/openclaw",
-      "issue_number": 67946,
-      "author": "pfrederiksen",
-      "author_id": 908172,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-17T01:54:43Z",
-      "comment_updated_at": "2026-05-17T01:54:43Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "Clear stale subagent lineage on top-level sessions",
-        "body": "Fixes #67943.\n\n## Summary\n\nPrevents normal top-level sessions from inheriting stale subagent lineage metadata that can incorrectly trip `sessions_spawn` depth limits.\n\n## What changed\n\n- clear persisted subagent lineage fields on ordinary top-level session turns\n- preserve lineage only for actual `subagent:*` and `acp:*` sessions\n- stop reusing stale `sessionEntry.spawnedBy` for normal top-level agent runs\n- add regression coverage proving top-level sessions no longer pass stale lineage through\n- preserve newer model-thinking compatibility tests while rebasing onto current `upstream/main`\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** A normal top-level session key (`agent:main:main`) could carry stale stored subagent lineage (`spawnedBy`, `spawnDepth`, `spawnedWorkspaceDir`, `subagentRole`, `subagentControlScope`). With `maxSpawnDepth: 1`, that stale stored depth makes `sessions_spawn` reject a normal top-level caller as already nested.\n- **Real environment tested:** Local OpenClaw checkout for PR #67946 on Linux/Node 22, rebased onto current `origin/main`, head `a1cc7e7681ccdb488f9fa2bb1d78823995291d25`.\n- **Exact steps or command run after this patch:** Ran a redacted local runtime proof from the patched checkout. It seeds the session store with stale lineage for `agent:main:main`, calls production `getSubagentDepthFromSessionStore` and `spawnSubagentDirect`, applies the same ordinary-session lineage gate used by the patch (`isSubagentSessionKey(sessionKey) || isAcpSessionKey(sessionKey)`), then calls `spawnSubagentDirect` again. The gateway `agent` call is replaced with a local proof client returning `accepted` so the proof isolates session-lineage/depth behavior without contacting an external gateway.\n- **Evidence after fix:** Copied terminal output from the after-fix command:\n\n  ```text\n  proof head: a1cc7e7681ccdb488f9fa2bb1d78823995291d25\n  session key: agent:main:main\n  is subagent/acp: false false\n  before cleanup entry: {\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"updatedAt\":1778983631000,\"sessionStartedAt\":1778983631000,\"lastInteractionAt\":1778983631000,\"spawnedBy\":\"agent:main:subagent:stale-parent\",\"spawnDepth\":1,\"spawnedWorkspaceDir\":\"/stale/subagent/workspace\",\"subagentRole\":\"leaf\",\"subagentControlScope\":\"operator.admin\"}\n  before cleanup depth: 1\n  before cleanup sessions_spawn status: forbidden\n  before cleanup sessions_spawn error: sessions_spawn is not allowed at this depth (current depth: 1, max: 1)\n  after cleanup entry: {}\n  after cleanup depth: 0\n  after cleanup sessions_spawn status: accepted\n  after cleanup sessions_spawn runId: proof-run-1\n  after cleanup sessions_spawn childSessionKey: agent:main:subagent:3ea9be1a-ca77-49e9-b9f5-cd08d6d1ffc4\n  PASS: true\n  ```\n\n- **Observed result after fix:** The top-level session key is not subagent/ACP-shaped, the stale lineage fields are cleared, depth resolution drops from `1` to `0`, and the same `sessions_spawn` path changes from `forbidden` to `accepted`.\n- **What was not tested:** This proof does not launch a real child model run against a live external gateway; the gateway `agent` request is stubbed after the production spawn-depth/session-store path so the proof stays redacted and deterministic.\n\n## Validation\n\n- `git diff --check`\n- `pnpm run lint:plugins:no-extension-test-core-imports`\n- `CI=true pnpm exec vitest run --config test/vitest/vitest.agents.config.ts src/agents/agent-command.live-model-switch.test.ts`\n  - `Test Files 1 passed (1)`\n  - `Tests 20 passed (20)`\n- `pnpm check:test-types`\n\nNote: targeted `pnpm exec oxlint` on touched files still reports the pre-existing exported test helper name `__testing` in `src/agents/agent-command.ts`, so I did not count that as a passing validation gate.\n",
-        "branch": "fix/stale-subagent-lineage-depth",
-        "head_sha": "99eb96710c3889c9b6d127457a7654f7f4f274a9",
-        "author": "pfrederiksen",
-        "labels": [
-          "agents",
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/agents/agent-command.live-model-switch.test.ts",
-            "additions": 28,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-command.ts",
-            "additions": 6,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session.ts",
-            "additions": 18,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-67946",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-67946.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 107,
-          "counts": {
-            "SUCCESS": 78,
-            "SKIPPED": 28,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:67946:4468818100:2026-05-17T01:50:05Z:re_review",
-      "comment_id": "4468818100",
-      "comment_version_key": "4468818100:2026-05-17T01:50:05Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/67946#issuecomment-4468818100",
-      "repo": "openclaw/openclaw",
-      "issue_number": 67946,
-      "author": "pfrederiksen",
-      "author_id": 908172,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-17T01:50:05Z",
-      "comment_updated_at": "2026-05-17T01:50:05Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "Clear stale subagent lineage on top-level sessions",
-        "body": "Fixes #67943.\n\n## Summary\n\nPrevents normal top-level sessions from inheriting stale subagent lineage metadata that can incorrectly trip `sessions_spawn` depth limits.\n\n## What changed\n\n- clear persisted subagent lineage fields on ordinary top-level session turns\n- preserve lineage only for actual `subagent:*` and `acp:*` sessions\n- stop reusing stale `sessionEntry.spawnedBy` for normal top-level agent runs\n- add regression coverage proving top-level sessions no longer pass stale lineage through\n- preserve newer model-thinking compatibility tests while rebasing onto current `upstream/main`\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** A normal top-level session key (`agent:main:main`) could carry stale stored subagent lineage (`spawnedBy`, `spawnDepth`, `spawnedWorkspaceDir`, `subagentRole`, `subagentControlScope`). With `maxSpawnDepth: 1`, that stale stored depth makes `sessions_spawn` reject a normal top-level caller as already nested.\n- **Real environment tested:** Local OpenClaw checkout for PR #67946 on Linux/Node 22, rebased onto current `origin/main`, head `a1cc7e7681ccdb488f9fa2bb1d78823995291d25`.\n- **Exact steps or command run after this patch:** Ran a redacted local runtime proof from the patched checkout. It seeds the session store with stale lineage for `agent:main:main`, calls production `getSubagentDepthFromSessionStore` and `spawnSubagentDirect`, applies the same ordinary-session lineage gate used by the patch (`isSubagentSessionKey(sessionKey) || isAcpSessionKey(sessionKey)`), then calls `spawnSubagentDirect` again. The gateway `agent` call is replaced with a local proof client returning `accepted` so the proof isolates session-lineage/depth behavior without contacting an external gateway.\n- **Evidence after fix:** Copied terminal output from the after-fix command:\n\n  ```text\n  proof head: a1cc7e7681ccdb488f9fa2bb1d78823995291d25\n  session key: agent:main:main\n  is subagent/acp: false false\n  before cleanup entry: {\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"updatedAt\":1778983631000,\"sessionStartedAt\":1778983631000,\"lastInteractionAt\":1778983631000,\"spawnedBy\":\"agent:main:subagent:stale-parent\",\"spawnDepth\":1,\"spawnedWorkspaceDir\":\"/stale/subagent/workspace\",\"subagentRole\":\"leaf\",\"subagentControlScope\":\"operator.admin\"}\n  before cleanup depth: 1\n  before cleanup sessions_spawn status: forbidden\n  before cleanup sessions_spawn error: sessions_spawn is not allowed at this depth (current depth: 1, max: 1)\n  after cleanup entry: {}\n  after cleanup depth: 0\n  after cleanup sessions_spawn status: accepted\n  after cleanup sessions_spawn runId: proof-run-1\n  after cleanup sessions_spawn childSessionKey: agent:main:subagent:3ea9be1a-ca77-49e9-b9f5-cd08d6d1ffc4\n  PASS: true\n  ```\n\n- **Observed result after fix:** The top-level session key is not subagent/ACP-shaped, the stale lineage fields are cleared, depth resolution drops from `1` to `0`, and the same `sessions_spawn` path changes from `forbidden` to `accepted`.\n- **What was not tested:** This proof does not launch a real child model run against a live external gateway; the gateway `agent` request is stubbed after the production spawn-depth/session-store path so the proof stays redacted and deterministic.\n\n## Validation\n\n- `git diff --check`\n- `pnpm run lint:plugins:no-extension-test-core-imports`\n- `CI=true pnpm exec vitest run --config test/vitest/vitest.agents.config.ts src/agents/agent-command.live-model-switch.test.ts`\n  - `Test Files 1 passed (1)`\n  - `Tests 20 passed (20)`\n- `pnpm check:test-types`\n\nNote: targeted `pnpm exec oxlint` on touched files still reports the pre-existing exported test helper name `__testing` in `src/agents/agent-command.ts`, so I did not count that as a passing validation gate.\n",
-        "branch": "fix/stale-subagent-lineage-depth",
-        "head_sha": "99eb96710c3889c9b6d127457a7654f7f4f274a9",
-        "author": "pfrederiksen",
-        "labels": [
-          "agents",
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/agents/agent-command.live-model-switch.test.ts",
-            "additions": 28,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-command.ts",
-            "additions": 6,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session.ts",
-            "additions": 18,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-67946",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-67946.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 107,
-          "counts": {
-            "SUCCESS": 78,
-            "SKIPPED": 28,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:67946:4446929264:2026-05-14T02:33:57Z:re_review",
-      "comment_id": "4446929264",
-      "comment_version_key": "4446929264:2026-05-14T02:33:57Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/67946#issuecomment-4446929264",
-      "repo": "openclaw/openclaw",
-      "issue_number": 67946,
-      "author": "pfrederiksen",
-      "author_id": 908172,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-14T02:33:57Z",
-      "comment_updated_at": "2026-05-14T02:33:57Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "Clear stale subagent lineage on top-level sessions",
-        "body": "Fixes #67943.\n\n## Summary\n\nPrevents normal top-level sessions from inheriting stale subagent lineage metadata that can incorrectly trip `sessions_spawn` depth limits.\n\n## What changed\n\n- clear persisted subagent lineage fields on ordinary top-level session turns\n- preserve lineage only for actual `subagent:*` and `acp:*` sessions\n- stop reusing stale `sessionEntry.spawnedBy` for normal top-level agent runs\n- add regression coverage proving top-level sessions no longer pass stale lineage through\n- preserve newer model-thinking compatibility tests while rebasing onto current `upstream/main`\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** A normal top-level session key (`agent:main:main`) could carry stale stored subagent lineage (`spawnedBy`, `spawnDepth`, `spawnedWorkspaceDir`, `subagentRole`, `subagentControlScope`). With `maxSpawnDepth: 1`, that stale stored depth makes `sessions_spawn` reject a normal top-level caller as already nested.\n- **Real environment tested:** Local OpenClaw checkout for PR #67946 on Linux/Node 22, rebased onto current `origin/main`, head `a1cc7e7681ccdb488f9fa2bb1d78823995291d25`.\n- **Exact steps or command run after this patch:** Ran a redacted local runtime proof from the patched checkout. It seeds the session store with stale lineage for `agent:main:main`, calls production `getSubagentDepthFromSessionStore` and `spawnSubagentDirect`, applies the same ordinary-session lineage gate used by the patch (`isSubagentSessionKey(sessionKey) || isAcpSessionKey(sessionKey)`), then calls `spawnSubagentDirect` again. The gateway `agent` call is replaced with a local proof client returning `accepted` so the proof isolates session-lineage/depth behavior without contacting an external gateway.\n- **Evidence after fix:** Copied terminal output from the after-fix command:\n\n  ```text\n  proof head: a1cc7e7681ccdb488f9fa2bb1d78823995291d25\n  session key: agent:main:main\n  is subagent/acp: false false\n  before cleanup entry: {\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"updatedAt\":1778983631000,\"sessionStartedAt\":1778983631000,\"lastInteractionAt\":1778983631000,\"spawnedBy\":\"agent:main:subagent:stale-parent\",\"spawnDepth\":1,\"spawnedWorkspaceDir\":\"/stale/subagent/workspace\",\"subagentRole\":\"leaf\",\"subagentControlScope\":\"operator.admin\"}\n  before cleanup depth: 1\n  before cleanup sessions_spawn status: forbidden\n  before cleanup sessions_spawn error: sessions_spawn is not allowed at this depth (current depth: 1, max: 1)\n  after cleanup entry: {}\n  after cleanup depth: 0\n  after cleanup sessions_spawn status: accepted\n  after cleanup sessions_spawn runId: proof-run-1\n  after cleanup sessions_spawn childSessionKey: agent:main:subagent:3ea9be1a-ca77-49e9-b9f5-cd08d6d1ffc4\n  PASS: true\n  ```\n\n- **Observed result after fix:** The top-level session key is not subagent/ACP-shaped, the stale lineage fields are cleared, depth resolution drops from `1` to `0`, and the same `sessions_spawn` path changes from `forbidden` to `accepted`.\n- **What was not tested:** This proof does not launch a real child model run against a live external gateway; the gateway `agent` request is stubbed after the production spawn-depth/session-store path so the proof stays redacted and deterministic.\n\n## Validation\n\n- `git diff --check`\n- `pnpm run lint:plugins:no-extension-test-core-imports`\n- `CI=true pnpm exec vitest run --config test/vitest/vitest.agents.config.ts src/agents/agent-command.live-model-switch.test.ts`\n  - `Test Files 1 passed (1)`\n  - `Tests 20 passed (20)`\n- `pnpm check:test-types`\n\nNote: targeted `pnpm exec oxlint` on touched files still reports the pre-existing exported test helper name `__testing` in `src/agents/agent-command.ts`, so I did not count that as a passing validation gate.\n",
-        "branch": "fix/stale-subagent-lineage-depth",
-        "head_sha": "99eb96710c3889c9b6d127457a7654f7f4f274a9",
-        "author": "pfrederiksen",
-        "labels": [
-          "agents",
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/agents/agent-command.live-model-switch.test.ts",
-            "additions": 28,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-command.ts",
-            "additions": 6,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session.ts",
-            "additions": 18,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-67946",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-67946.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 107,
-          "counts": {
-            "SUCCESS": 78,
-            "SKIPPED": 28,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3196,
+    "total_ms": 2756,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 313
+        "ms": 496
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1725
+        "ms": 1887
       },
       {
         "name": "classify_commands",
@@ -546,11 +371,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1128
+        "ms": 341
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
