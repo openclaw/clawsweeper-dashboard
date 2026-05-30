@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-30T07:45:14.687Z",
+  "generated_at": "2026-05-30T07:45:43.610Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-30T04:45:12.639Z",
+  "since": "2026-05-30T04:45:43.178Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4582139721
   ],
-  "status_comment_id": 4582139841,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-05-30T07:44:45Z",
       "comment_updated_at": "2026-05-30T07:44:45Z",
-      "status_comment_id": 4582139841,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,134 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-30T07:45:15.259Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 87981
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-30T07:45:16.138Z",
-          "response_comment_id": "4582139841",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): retire MCP runtimes on isolated cron timeout and dispose",
-        "body": "## Summary\n\n- Isolated cron runs create a fresh session and MCP runtime per execution. When runs time out, the cleanup path removes the run from the active registry but does not retire the associated MCP runtime. With default concurrency at 8, the scheduler sees empty slots and spawns new runs while orphaned MCP runtimes (with their child processes and transports) accumulate — eventually saturating the event loop and wedging the gateway.\n\n- This PR adds MCP runtime retirement to both the timeout cleanup path and the normal dispose path for isolated cron sessions, and wraps MCP session disposal in a 5-second timeout to prevent hung servers from blocking indefinitely.\n\n- Outcome: orphaned MCP runtimes are retired immediately on cron timeout or completion, preventing resource accumulation that leads to gateway wedge.\n\n- Out of scope: concurrency default value (intentionally raised to 8 in bc12e049), systemd WatchdogSec configuration, MCP idle sweep TTL tuning.\n\n- Success: isolated cron runs with MCP servers configured no longer accumulate orphaned runtimes after timeout or completion; all existing cron tests pass.\n\n- Reviewers should focus on: the three cleanup paths (timeout in server-cron.ts, dispose in run.ts, timeout guard in agent-bundle-mcp-runtime.ts) and whether race conditions exist between active retirement and the idle sweep.\n\n## Linked context\n\nCloses #87821\n\n## Real behavior proof (required for external PRs)\n\n- **Behavior or issue addressed**: Isolated cron runs can wedge gateway due to orphaned MCP runtimes accumulating after timeout cleanup fails to retire them\n\n- **Real environment tested**: Docker container (`openclaw-pr87981:test`, built from PR HEAD commit `4594516c102e`), Linux arm64 (Docker on macOS host), Node.js v24.14.0\n\n- **Exact steps or command run after this patch**:\n  ```bash\n  # 1. Build Docker image from PR HEAD\n  git clone --branch fix/cron-isolated-mcp-leak https://github.com/Jerry-Xin/openclaw.git\n  cd openclaw && docker build -t openclaw-pr87981:test --platform linux/arm64 .\n\n  # 2. Configure MCP server + isolated cron job\n  mkdir -p state/cron\n  # openclaw.json: provider + MCP server (proof-echo, stdio)\n  # cron/jobs.json: isolated job every 60s, timeoutSeconds=20\n\n  # 3. Run gateway in Docker\n  docker run -d --name openclaw-proof-new \\\n    -v ./state:/home/node/.openclaw \\\n    -e OPENCLAW_LOG_LEVEL=debug \\\n    openclaw-pr87981:test \\\n    node openclaw.mjs gateway --allow-unconfigured\n\n  # 4. Unit tests (all 97 pass)\n  node scripts/run-vitest.mjs src/agents/agent-bundle-mcp-runtime.test.ts\n  node scripts/run-vitest.mjs src/cron/isolated-agent/run.fast-mode.test.ts\n  node scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts\n  node scripts/run-vitest.mjs src/cron/isolated-agent/run.meta-error-status.test.ts\n  node scripts/run-vitest.mjs src/cron/isolated-agent/run.session-key-isolation.test.ts\n  ```\n\n## Real behavior proof — Docker container runtime\n\n### Environment\n\n- Docker image: `openclaw-pr87981:test` (built from PR HEAD at commit `4594516c102e`)\n- Container: `openclaw-proof-new`, Linux arm64, Node.js v24.14.0\n- Provider: **REDACTED**/claude-sonnet-4-6 (Anthropic Messages API)\n- Config: isolated cron job every 60s, timeoutSeconds=20, delivery=none\n\n### MCP server configuration\n\nThe gateway was configured with a stdio MCP server (proof-echo) to verify MCP runtime lifecycle:\n\n```json\n{\n  \"mcp\": {\n    \"servers\": {\n      \"proof-echo\": {\n        \"command\": \"node\",\n        \"args\": [\"/home/node/.openclaw/proof-mcp-server.cjs\"],\n        \"scope\": \"agent\"\n      }\n    }\n  }\n}\n```\n\nThe MCP server implements raw JSON-RPC stdio protocol with an `echo` tool. Evidence of MCP tool injection: `systemPromptChars=21827` (includes MCP tool declaration in each isolated cron session's system prompt).\n\n### 7 consecutive isolated cron runs\n\n| Run | Session ID | Outcome | Duration | MCP Tool Called |\n|-----|-----------|---------|----------|-----------------|\n| 1 | 311f3345 | completed | 4579ms | ✅ proof-echo__echo |\n| 2 | 9736cfb0 | completed | 4410ms | ✅ proof-echo__echo |\n| 3 | 4dfd850f | completed | 4097ms | ✅ proof-echo__echo |\n| 4 | 56764e72 | completed | 4295ms | ✅ proof-echo__echo |\n| 5 | 289f9289 | completed | 4182ms | ✅ proof-echo__echo |\n| 6 | df29900d | completed | 4330ms | ✅ proof-echo__echo |\n| 7 | e44b5c1b | completed | 3881ms | ✅ proof-echo__echo |\n\nEach run creates a unique session ID — confirms isolated session creation per cron execution. All runs invoke the MCP echo tool successfully.\n\n### Resource stability after 7 runs\n\n```\nCONTAINER   CPU %   MEM USAGE         MEM %   PIDS\nproof-new   0.31%   274.5MiB/7.8GiB   3.63%   12\n```\n\n### Key observations\n\n- **Unique session per run**: 7 distinct session IDs confirm isolated session creation\n- **MCP tool injection confirmed**: `systemPromptChars=21827` (consistent across all runs) proves MCP runtime initialization per session\n- **MCP tool calls succeed**: All 7 runs successfully called `proof-echo__echo` tool via MCP runtime\n- **RSS stable at ~275-322 MiB**: No memory growth between runs (vs reported 1.4-2.2GB in #87821)\n- **CPU 0.31%**: No sustained CPU load (vs reported ~100% in #87821)\n- **12 PIDs / 3 processes**: No orphaned child processes accumulating (tini + openclaw + ps only)\n- **No hangs, no timeouts**: All runs completed in 3.8-4.6 seconds\n\n### Raw gateway log excerpt (redacted)\n\n```\n[gateway] ready\n[diagnostic] message queued: sessionId=311f3345 source=cron-isolated\n[diagnostic] session state: prev=idle new=processing\n[agent/embedded] [context-diag] pre-prompt: provider=**REDACTED**/claude-sonnet-4-6 systemPromptChars=21827\n[agent/embedded] embedded run tool start: tool=proof-echo__echo\n[agent/embedded] embedded run tool end: tool=proof-echo__echo\n[diagnostic] session state: prev=processing new=idle reason=\"run_completed\"\n[diagnostic] lane task done: lane=cron-nested durationMs=4548 active=0 queued=0\n[diagnostic] message processed: outcome=completed duration=4579ms\n```\n\n### Before/after comparison\n\n| Metric | Before fix (#87821 report) | After fix (this proof) |\n|--------|---------------------------|----------------------|\n| Memory after multiple runs | 1.4-2.2 GB (growing) | 274-322 MiB (stable) |\n| CPU | ~100% sustained | 0.31% |\n| Orphaned MCP processes | Accumulating per run | 0 (12 PIDs total) |\n| Gateway state | Wedged/unresponsive | Healthy, all runs complete |\n\n### What was not tested\n\n- Multi-hour soak test at concurrency=8 (the original #87821 scenario ran for hours)\n- systemd WatchdogSec integration\n- Streamable-HTTP MCP transport timeout (covered by unit tests only; Docker proof uses stdio transport)\n\n### Streamable-HTTP transport timeout test coverage (new)\n\nAdded 2 tests for the streamable-HTTP transport timeout path (`agent-bundle-mcp-runtime.test.ts`):\n1. **\"force-closes transport and client when terminateSession hangs\"** — mock transport where `terminateSession()` never resolves; verifies timeout fires and both `transport.close()` + `client.close()` are force-called\n2. **\"does not force-close when terminateSession resolves before timeout\"** — verifies happy path: close called once from normal path, not force-close\n\nAdded 2 tests for MCP retirement in dispose path (`run.dispose-mcp-retirement.test.ts`):\n1. **\"retires MCP runtime for isolated session after successful run\"**\n2. **\"does not retire MCP runtime for non-isolated sessions in dispose\"**\n\n### Unit test evidence (supplemental)\n\n- **Evidence after fix (full terminal output)**:\n  ```\n  === Test 1: agent-bundle-mcp-runtime (includes new dispose timeout test) ===\n\n  ✓  agents-core  agent-bundle-mcp-runtime.test.ts (20 tests) 6393ms\n       ✓ keeps MCP tools/list responses that exceed the connection timeout\n         but finish within the internal catalog timeout  788ms\n       ✓ times out default-config hung bundle MCP tools/list using the\n         internal catalog timeout  1527ms\n       ✓ completes disposal even when the MCP server process ignores\n         shutdown  4028ms\n  ✓  agents-support  agent-bundle-mcp-runtime.test.ts (20 tests) 6394ms\n       ✓ completes disposal even when the MCP server process ignores\n         shutdown  4028ms\n\n  Test Files  2 passed (2)\n       Tests  40 passed (40)\n    Duration  14.45s\n\n  === Test 2: cron isolated-agent fast-mode (updated assertions) ===\n\n  ✓  cron  run.fast-mode.test.ts (5 tests) 416ms\n\n  Test Files  1 passed (1)\n       Tests  5 passed (5)\n    Duration  2.83s\n\n  === Test 3: timer regression ===\n\n  ✓  cron  timer.regression.test.ts (43 tests) 122ms\n\n  Test Files  1 passed (1)\n       Tests  43 passed (43)\n    Duration  765ms\n\n  === Test 4: meta-error-status ===\n\n  ✓  cron  run.meta-error-status.test.ts (4 tests) 439ms\n\n  Test Files  1 passed (1)\n       Tests  4 passed (4)\n    Duration  3.15s\n\n  === Test 5: session-key-isolation ===\n\n  ✓  cron  run.session-key-isolation.test.ts (5 tests) 490ms\n\n  Test Files  1 passed (1)\n       Tests  5 passed (5)\n    Duration  2.99s\n  ```\n- **Observed result after fix**: All 97 tests across 7 test files pass. Key new test `\"completes disposal even when the MCP server process ignores shutdown\"` confirms disposal completes within ~5s (4028ms measured) even when the MCP server process ignores SIGTERM. The updated fast-mode test assertions verify `retireSessionMcpRuntime` is called with reason `\"isolated-cron-dispose\"` for isolated sessions. The `disposeSession` timeout test specifically validates the new 5-second bounded disposal guard introduced in this PR.\n- **What was not tested**: Live multi-hour soak test with concurrent isolated cron jobs at concurrency 8 (the original reproduction scenario requires 8+ hours of sustained cron execution on a Linux/systemd host). The fix is verified through focused unit and integration tests covering the specific cleanup paths (timeout retirement, dispose retirement, and bounded MCP session disposal).\n- **Proof limitations or environment constraints**: The original issue was reported on a systemd-managed Linux deployment with sustained 8h runtime. A full soak reproduction is impractical for a contributor PR. The three code paths fixed by this PR (timeout cleanup, dispose cleanup, disposal timeout guard) are platform-independent and are exercised by the test suite. The `\"completes disposal even when the MCP server process ignores shutdown\"` test is the closest practical equivalent to the reported scenario — it proves that a hung MCP process no longer blocks disposal indefinitely.\n- **Before evidence**: On current main, `cleanupTimedOutAgentRun` (server-cron.ts:386) calls `abortAndDrainEmbeddedAgentRun` but does not call `retireSessionMcpRuntime`. `disposeCronRunContext` (run.ts:1187) is synchronous and does not retire MCP. `disposeSession` (agent-bundle-mcp-runtime.ts:210) has no timeout on `transport.close()` or `terminateSession()`. These three omissions allow MCP runtimes to accumulate without bound.\n\n## Tests and validation\n\n- `node scripts/run-vitest.mjs src/agents/agent-bundle-mcp-runtime.test.ts` — 40 passed (includes new dispose timeout test)\n- `node scripts/run-vitest.mjs src/cron/isolated-agent/run.fast-mode.test.ts` — 5 passed (updated assertions for dispose retirement)\n- `node scripts/run-vitest.mjs src/cron/service/timer.regression.test.ts` — 43 passed\n- `node scripts/run-vitest.mjs src/cron/isolated-agent/run.meta-error-status.test.ts` — 4 passed\n- `node scripts/run-vitest.mjs src/cron/isolated-agent/run.session-key-isolation.test.ts` — 5 passed\n- New test added: `disposeSession` timeout coverage in `agent-bundle-mcp-runtime.test.ts` — verifies disposal completes within 5s when MCP server ignores shutdown\n- Updated test assertions in `run.fast-mode.test.ts` to verify new `\"isolated-cron-dispose\"` retirement reason\n- Mock infrastructure added in `server-cron.test.ts` for `retireSessionMcpRuntime` and `abortAndDrainEmbeddedAgentRun`\n\nBefore this fix, the existing `run.fast-mode.test.ts` asserted `expect(retireSessionMcpRuntimeMock).not.toHaveBeenCalled()` for isolated sessions. After this fix, isolated sessions correctly call retirement with reason `\"isolated-cron-dispose\"`.\n\n\n## Availability tradeoff (requires maintainer sign-off)\n\nThis PR introduces a **bounded 5-second disposal deadline** for MCP session cleanup. This is an intentional tradeoff:\n\n**Before (current main):** `disposeSession` awaits `terminateSession()` → `transport.close()` → `client.close()` with **no timeout**. If any step hangs (e.g. a stuck DELETE request to a remote MCP server, or a zombie child process), the entire disposal chain blocks indefinitely. In the cron path, this eventually saturates the event loop and wedges the gateway.\n\n**After (this PR):** Disposal is bounded to 5 seconds. If the graceful path exceeds the deadline:\n1. The timeout fires and the wrapper returns\n2. The `.finally()` block force-closes the transport (`transport.close()` aborts the SDK AbortController, cancelling any in-flight HTTP requests) and client\n3. For stdio transports, `close()` triggers the existing kill sequence (stdin end → 2s wait → SIGTERM → 2s wait → SIGKILL)\n\n**What could remain alive after timeout:**\n- For **streamable-http**: Nothing critical — `transport.close()` is now called in the timeout path, which aborts the AbortController and cancels the hung DELETE\n- For **stdio**: The existing kill chain (SIGTERM → SIGKILL) runs inside `close()`, so child processes are actively reaped\n- Edge case: if `transport.close()` itself hangs (unlikely but possible with a deeply broken transport implementation), the process could linger until OS reap or gateway restart\n\n**Precedent in codebase:**\n- `OpenClawStdioClientTransport.close()` already has 2s+2s+500ms bounded waits with SIGTERM/SIGKILL (`mcp-stdio-transport.ts:113-137`)\n- `embeddings-worker.ts:183-204` races worker close against a deadline with `shutdownChild()` in `finally`\n- `delivery.ts:155-178` uses AbortController timeout for delivery operations\n\n**Risk assessment:** The tradeoff is strongly favorable — a wedged gateway (the current failure mode) is a complete outage affecting all users, while a lingering MCP process is a bounded resource leak that self-heals on gateway restart. The 5-second deadline is generous enough for normal cleanup but short enough to prevent accumulation.\n\n**Maintainer decision needed:** Please confirm acceptance of bounded disposal semantics. If the 5-second deadline is too aggressive or too lenient, it can be made configurable via `cron.mcpDisposeTimeoutMs`.\n\n## Risk checklist\n\nDid user-visible behavior change? No\n\nDid config, environment, or migration behavior change? No\n\nDid security, auth, secrets, network, or tool execution behavior change? No\n\nWhat is the highest-risk area? The `disposeSession` timeout wrapper — if the 5s timeout fires, MCP child processes may linger until OS reap or gateway restart.\n\nHow is that risk mitigated? Timer uses `.unref()` so it does not keep the event loop alive, and `clearTimeout` in the `.finally()` block prevents timer leaks on normal-speed disposal. Lingering child processes are an acceptable tradeoff vs a wedged gateway.\n\n## Current review state\n\nLint fix applied (braced-if on line 228). All 97 targeted tests pass. Ready for maintainer review. If the focused test coverage is insufficient for the proof gate, maintainers can apply `proof: override` given the impracticality of an 8-hour soak test reproduction.\n\n\n\n\n",
-        "branch": "fix/cron-isolated-mcp-leak",
-        "head_sha": "4594516c102e57ebeecf1eaec10f6bb71dbfdbd3",
-        "author": "jerry-xin",
-        "labels": [
-          "gateway",
-          "agents",
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/agent-bundle-mcp-runtime.test.ts",
-            "additions": 196,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-bundle-mcp-runtime.ts",
-            "additions": 27,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run.fast-mode.test.ts",
-            "additions": 12,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run.ts",
-            "additions": 10,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-cron.test.ts",
-            "additions": 18,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-cron.ts",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-87981",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87981.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 108,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 77,
-            "SKIPPED": 29,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3911,
+    "total_ms": 1644,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 436
+        "ms": 419
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1596
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 1851
+        "ms": 1212
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
