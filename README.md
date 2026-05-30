@@ -4,35 +4,35 @@ Generated from the durable state branch for [openclaw/clawsweeper](https://githu
 
 ## Sweep Dashboard
 
-Last source update: May 30, 2026, 11:49 UTC
+Last source update: May 30, 2026, 12:14 UTC
 
 ### Fleet
 
 | Metric | Count |
 | --- | ---: |
 | Covered repositories | 3 |
-| Open review records | 3005 |
+| Open review records | 3013 |
 | Archived closed records | 782 |
-| Fresh reviews, 7d | 3005 |
+| Fresh reviews, 7d | 3013 |
 | Proposed closes awaiting apply | 38 |
-| Work candidates awaiting promotion | 371 |
-| Failed or stale reviews | 545 |
+| Work candidates awaiting promotion | 372 |
+| Failed or stale reviews | 543 |
 
 ### Current Runs
 
 | Repository | State | Updated | Run |
 | --- | --- | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Review in progress | May 30, 2026, 11:38 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/26682826529) |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | Review in progress | May 30, 2026, 11:46 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/26682989365) |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Review in progress | May 30, 2026, 12:08 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/26683401578) |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | Review in progress | May 30, 2026, 12:07 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/26683400925) |
 | [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Review in progress | May 30, 2026, 07:38 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/26678275323) |
 
 ### Repositories
 
 | Repository | Open records | Archived | Fresh | Proposed closes | Work candidates | Failed/stale | Last review | Last close |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 2829 | 754 | 2829 | 38 | 354 | 544 | May 30, 2026, 11:49 UTC | May 30, 2026, 10:58 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 2837 | 754 | 2837 | 38 | 355 | 542 | May 30, 2026, 12:14 UTC | May 30, 2026, 10:58 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | 140 | 17 | 140 | 0 | 7 | 1 | May 30, 2026, 01:53 UTC | May 29, 2026, 20:04 UTC |
-| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | 36 | 11 | 36 | 0 | 10 | 0 | May 30, 2026, 10:36 UTC | May 29, 2026, 03:58 UTC |
+| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | 36 | 11 | 36 | 0 | 10 | 0 | May 30, 2026, 12:11 UTC | May 29, 2026, 03:58 UTC |
 
 ### Work Candidates
 
@@ -84,21 +84,21 @@ Last source update: May 30, 2026, 11:49 UTC
 
 | Repository | Item | Title | Outcome | Status | Reviewed |
 | --- | --- | --- | --- | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#88311](https://github.com/openclaw/openclaw/pull/88311) | fix(windows): repair doctor update fallback migration | keep_open / kept_open | complete | May 30, 2026, 11:49 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#88314](https://github.com/openclaw/openclaw/pull/88314) | fix #76284: [Bug]: openclaw agents add blocked — cannot add Jon/Atlas as separate agents | keep_open / kept_open | complete | May 30, 2026, 11:48 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#84896](https://github.com/openclaw/openclaw/pull/84896) | fix(memory): export LanceDB artifacts for wiki bridge | keep_open / kept_open | complete | May 30, 2026, 11:45 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#87072](https://github.com/openclaw/openclaw/pull/87072) | feat(telegram): opt-in interleaved progress lane | keep_open / kept_open | complete | May 30, 2026, 11:45 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#75128](https://github.com/openclaw/openclaw/pull/75128) | fix(boot): wrap BOOT.md in internal-runtime-context, strip from message-tool args (#53732) | keep_open / kept_open | complete | May 30, 2026, 11:44 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#86527](https://github.com/openclaw/openclaw/pull/86527) | Fix voice-call trusted proxy matching for IPv4-mapped webhooks | keep_open / kept_open | complete | May 30, 2026, 11:44 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#88299](https://github.com/openclaw/openclaw/pull/88299) | fix(gateway): recover channels after reload stop timeout | keep_open / kept_open | complete | May 30, 2026, 11:42 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#88252](https://github.com/openclaw/openclaw/pull/88252) | fix(agents): avoid full stream replay on text deltas | keep_open / kept_open | complete | May 30, 2026, 11:37 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#88115](https://github.com/openclaw/openclaw/pull/88115) | docs: add inline code comments | keep_open / kept_open | complete | May 30, 2026, 11:35 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#88312](https://github.com/openclaw/openclaw/issues/88312) | [Bug]: [Regression] 2026.5.27: Codex app-server turn-completion stall returns ("Codex stopped before confir... | keep_open / kept_open | complete | May 30, 2026, 11:34 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#88313](https://github.com/openclaw/openclaw/pull/88313) | docs(codex): clarify report-mode plugin approval ownership | keep_open / kept_open | complete | May 30, 2026, 11:34 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#88309](https://github.com/openclaw/openclaw/issues/88309) | Restart race condition with LaunchAgent KeepAlive causes shutdown instead of restart | keep_open / kept_open | complete | May 30, 2026, 11:32 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#88310](https://github.com/openclaw/openclaw/pull/88310) | fix(test): include workflow lint target in routing expectation | keep_open / kept_open | complete | May 30, 2026, 11:29 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#87141](https://github.com/openclaw/openclaw/pull/87141) | fix(plugin): harden schema and metadata fuzz boundaries | keep_open / kept_open | complete | May 30, 2026, 11:27 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#83988](https://github.com/openclaw/openclaw/pull/83988) | fix(tts): defer text settlement for final-mode TTS to eliminate churn (#83511) | keep_open / kept_open | complete | May 30, 2026, 11:27 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#88322](https://github.com/openclaw/openclaw/issues/88322) | Dreaming narrative sessions become orphaned — visible in sidebar but undeletable via session management | keep_open / kept_open | complete | May 30, 2026, 12:14 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#88323](https://github.com/openclaw/openclaw/pull/88323) | [codex] Dedupe generated media final payloads | keep_open / kept_open | complete | May 30, 2026, 12:13 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#87829](https://github.com/openclaw/openclaw/pull/87829) | fix(plugins): scope plugin tool callbacks | keep_open / kept_open | complete | May 30, 2026, 12:13 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#87141](https://github.com/openclaw/openclaw/pull/87141) | fix(plugin): harden schema and metadata fuzz boundaries | keep_open / kept_open | complete | May 30, 2026, 12:13 UTC |
+| [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | [#230](https://github.com/openclaw/clawsweeper/pull/230) | fix(repair): gate event re-review Complete on verdict marker freshness | keep_open / kept_open | complete | May 30, 2026, 12:11 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#88319](https://github.com/openclaw/openclaw/pull/88319) | fix(agents): skip below-target CLI compaction failures | keep_open / kept_open | complete | May 30, 2026, 12:11 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#88321](https://github.com/openclaw/openclaw/pull/88321) | fix(codex): keep post-tool app-server turns alive | keep_open / kept_open | complete | May 30, 2026, 12:09 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#75128](https://github.com/openclaw/openclaw/pull/75128) | fix(boot): wrap BOOT.md in internal-runtime-context, strip from message-tool args (#53732) | keep_open / kept_open | complete | May 30, 2026, 12:09 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#88316](https://github.com/openclaw/openclaw/pull/88316) | fix: expose session status route channels | keep_open / kept_open | complete | May 30, 2026, 12:08 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#88320](https://github.com/openclaw/openclaw/pull/88320) | fix(agents): recover DeepSeek DSML tool calls | keep_open / kept_open | complete | May 30, 2026, 12:08 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#74163](https://github.com/openclaw/openclaw/pull/74163) | WORKING: All Microsoft Issues and PRs (refresh) | keep_open / kept_open | complete | May 30, 2026, 12:07 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#88311](https://github.com/openclaw/openclaw/pull/88311) | fix(windows): repair doctor update fallback migration | keep_open / kept_open | complete | May 30, 2026, 12:01 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#82434](https://github.com/openclaw/openclaw/pull/82434) | feat: add external plugin approval verification | keep_open / kept_open | complete | May 30, 2026, 12:01 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#88305](https://github.com/openclaw/openclaw/pull/88305) | fix(browser): isolate Chrome MCP pending attach aborts | keep_open / kept_open | complete | May 30, 2026, 11:59 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#72987](https://github.com/openclaw/openclaw/pull/72987) | docs(compaction): document reserveTokensFloor default (20,000 tokens) | keep_open / kept_open | complete | May 30, 2026, 11:57 UTC |
 
 </details>
 
