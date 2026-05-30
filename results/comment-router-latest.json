@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-30T16:33:57.296Z",
+  "generated_at": "2026-05-30T16:35:40.868Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-30T13:33:57.042Z",
+  "since": "2026-05-30T13:35:38.207Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    88383
+    88004
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 2,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,168 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88004:4574556134:2026-05-30T16:35:35Z:clawsweeper_needs_human",
+      "comment_id": "4574556134",
+      "comment_version_key": "4574556134:2026-05-30T16:35:35Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88004#issuecomment-4574556134",
+      "repo": "openclaw/openclaw",
+      "issue_number": 88004,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-29T11:45:12Z",
+      "comment_updated_at": "2026-05-30T16:35:35Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- No automated repair is indicated; maintainer judgment is needed on whether the focused TUI/PTY/Testbox proof is enough for this message-delivery change or whether to require a live Gateway smoke before landing.; Cleared: The diff is limited to TUI runtime logic and tests, with no dependency, workflow, credential, or supply-chain surface changes found. (sha=7ff0fab446187625257d5eeb4ee97d6421afe350)",
+      "review_summary": "This PR updates TUI final-event history refresh to preserve displayable assistant finals during async history reloads and adds focused TUI session, handler, and PTY coverage.\n\nPR surface: Source +128, Tests +605. Total +733 across 6 files.\n\nReproducibility: yes. by source inspection: current main starts a history reload before finalizing displayable non-local output, and loadHistory clears and rebuilds the chat log from possibly stale history. I did not run a live timing repro because the race depends on Gateway persistence lag.",
+      "review_followup": "- No automated repair is indicated; maintainer judgment is needed on whether the focused TUI/PTY/Testbox proof is enough for this message-delivery change or whether to require a live Gateway smoke before landing.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "7ff0fab446187625257d5eeb4ee97d6421afe350",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(tui): skip history reload when final event has displayable output",
+        "body": "## Summary\n\nThe last assistant message intermittently disappears from the TUI right as a run finishes streaming. The cause is a read-after-write race: on every `final` event for an external/gateway run, `handleChatEvent` fires `void loadHistory()` (async, not awaited), which does `chatLog.clearAll()` and rebuilds the log from the server response. If the gateway has not persisted the just-finished message yet, the rebuilt log drops it.\n\nLocal runs are already guarded against this (they skip the reload when there is displayable output). External runs had no equivalent guard.\n\n## Root cause\n\nIn `src/tui/tui-event-handlers.ts`, the `final` state handler for normal messages calls `maybeRefreshHistoryForRun(evt.runId)` before `chatLog.finalizeAssistant(finalText, evt.runId)`. For external runs, `maybeRefreshHistoryForRun` fires `void loadHistory()` which is async. The sequence:\n\n1. `maybeRefreshHistoryForRun` fires `void loadHistory()` (async fetch starts).\n2. Synchronously: `finalizeAssistant(finalText)` renders the message correctly.\n3. `loadHistory` fetch resolves, `clearAll()` wipes everything, and rebuilds from `record.messages`.\n4. The server has not persisted the message yet, so the rebuilt log omits it. The message vanishes.\n\nThe bug only affects external/gateway runs because local runs have an existing guard that skips the reload when there is displayable output.\n\n## Fix\n\n1. **`tui-event-handlers.ts`**: Add a `hasDisplayableFinal` option to `maybeRefreshHistoryForRun`. When set, the function skips the destructive `loadHistory()` call. This mirrors the existing local-run guard (line 355: \"Local runs with displayable output do not need a history reload\").\n\n2. **Caller restructure**: Compute `finalText` via `streamAssembler.finalize()` before calling `maybeRefreshHistoryForRun`, so we know whether there is displayable output. Pass `hasDisplayableFinal: !suppressEmptyExternalPlaceholder` to skip the reload when the final message is already rendered locally.\n\n3. **Tests**: Replace the old \"refreshes history after a non-local chat final\" test (which asserted the now-incorrect behavior) with two targeted tests:\n   - External run with displayable text: `loadHistory` is NOT called.\n   - External run with no message: `loadHistory` IS called (no local content to preserve).\n\n## Real behavior proof\n\nBehavior addressed: TUI final assistant message intermittently vanishes when loadHistory() clearAll() races server persistence on external/gateway runs.\n\nReal environment tested: macOS 15.5, Node v22.19, OpenClaw built from patched source at `/tmp/wt-tui-race`.\n\nExact steps or command run after this patch:\n\nStep 1. Build from the patched branch:\n```text\ncd /tmp/wt-tui-race\nCI=true pnpm install --frozen-lockfile\npnpm build\n```\n\nStep 2. Verify the fix is active in the production bundle:\n```text\ngrep -n 'hasDisplayableFinal' dist/tui-CFOfMOfa.js\n```\n\nEvidence after fix: terminal output from the patched build:\n\nThe fix is active in the production bundle at `dist/tui-CFOfMOfa.js`:\n\n```console\n$ grep -n 'hasDisplayableFinal' dist/tui-CFOfMOfa.js\n2955:if (opts?.hasDisplayableFinal) return;\n3059:maybeRefreshHistoryForRun(evt.runId, { hasDisplayableFinal: !suppressEmptyExternalPlaceholder });\n```\n\nLine 2955 shows the guard that prevents the destructive `loadHistory()` call when the final event already produced displayable output. Line 3059 shows the caller passing the flag based on whether the finalized text is displayable.\n\nThe surrounding code path in the compiled bundle confirms the correct ordering:\n\n```console\n$ grep -n -A1 'suppressEmptyExternalPlaceholder' dist/tui-CFOfMOfa.js\n3058:const suppressEmptyExternalPlaceholder = finalText === \"(no output)\" && !isLocalRunId?.(evt.runId);\n3059:maybeRefreshHistoryForRun(evt.runId, { hasDisplayableFinal: !suppressEmptyExternalPlaceholder });\n3060:if (suppressEmptyExternalPlaceholder) chatLog.dropAssistant(evt.runId);\n3061:else chatLog.finalizeAssistant(finalText, evt.runId);\n```\n\nGateway starts and shuts down cleanly with the patched build:\n\n```console\n$ timeout 10 node openclaw.mjs gateway\n[gateway] loading configuration…\n[gateway] resolving authentication…\n[gateway] starting...\n[gateway] starting HTTP server...\n[health-monitor] started (interval: 300s, startup-grace: 60s, channel-connect-grace: 120s)\n[gateway] signal SIGTERM received\n[gateway] received SIGTERM; shutting down\n```\n\nObserved result after fix: The compiled production code at `dist/tui-CFOfMOfa.js:2955` guards external runs with displayable finals from the destructive `loadHistory()` reload. The `finalText` is computed before `maybeRefreshHistoryForRun` (line 3058), so the guard has the information it needs. When the final event contains text, the reload is skipped and the locally-rendered message is preserved. When there is no displayable output, the reload still fires to sync with server state.\n\nWhat was not tested: a multi-session live gateway with concurrent external runs was not exercised. The race is timing-dependent and requires the server persistence to lag behind the TUI event stream, which cannot be reliably reproduced in a deterministic test.\n\nCloses #87922\n\n",
+        "branch": "fix/tui-history-reload-race",
+        "head_sha": "7ff0fab446187625257d5eeb4ee97d6421afe350",
+        "author": "sebtardif",
+        "labels": [
+          "size: L",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 message-delivery",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/tui/tui-event-handlers.test.ts",
+            "additions": 292,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/tui/tui-event-handlers.ts",
+            "additions": 61,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/tui/tui-pty-harness.e2e.test.ts",
+            "additions": 25,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/tui/tui-session-actions.test.ts",
+            "additions": 293,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/tui/tui-session-actions.ts",
+            "additions": 71,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/tui/tui-stream-assembler.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-88004",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88004.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 110,
+          "counts": {
+            "FAILURE": 9,
+            "SUCCESS": 70,
+            "SKIPPED": 28,
+            "IN_PROGRESS": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Scan changed paths (precise):FAILURE",
+            "build-artifacts:FAILURE",
+            "checks-node-core-runtime-infra-state:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor:IN_PROGRESS",
+            "check-guards:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
+          "pending": [
+            "checks-node-core-runtime-infra-state:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "Scan changed paths (precise):FAILURE",
+            "build-artifacts:FAILURE",
+            "check-guards:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 437,
+    "total_ms": 2843,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 241
+        "ms": 216
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 2430
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 183
+        "ms": 172
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
