@@ -44,8 +44,8 @@
       "comment_updated_at": "2026-05-30T04:56:33Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -127,124 +127,7 @@
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:69060:4499057385:2026-05-20T13:49:03Z:freeform_assist",
-      "comment_id": "4499057385",
-      "comment_version_key": "4499057385:2026-05-20T13:49:03Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/69060#issuecomment-4499057385",
-      "repo": "openclaw/openclaw",
-      "issue_number": 69060,
-      "author": "JustInCache",
-      "author_id": 105823120,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-20T13:49:03Z",
-      "comment_updated_at": "2026-05-20T13:49:03Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "hatch",
-      "intent": "freeform_assist",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": "hatch",
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "ignored",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: add x-openclaw-session header for stable agent-scoped HTTP sessions",
-        "body": "## Summary\n\nPartially addresses #68920 (the QMD re-index overhead component).\n\nEvery `/v1/chat/completions` call that omits the OpenAI `user` field receives a fresh random-UUID session key. This triggers a full QMD re-index on each request, which accounts for a significant portion of the 10-15s TTFB reported by voice/realtime callers (LiveKit, Twilio, etc.).\n\nVoice stacks cannot always inject the `user` field per-request. This PR adds a new `x-openclaw-session` header that produces a **deterministic, agent-scoped session key** without clobbering the existing full-override behaviour of `x-openclaw-session-key`.\n\n## Priority order (unchanged except for the new entry)\n\n| Priority | Source | Scope |\n|---|---|---|\n| 1 | `x-openclaw-session-key` header | Explicit full override (unchanged) |\n| 2 | `user` request field | Agent-scoped (unchanged) |\n| 3 | `x-openclaw-session` header (**new**) | Agent-scoped stable hint |\n| 4 | Random UUID | Per-call fallback (unchanged) |\n\n## Usage\n\nVoice/realtime callers can now pass a stable call identifier:\n\n```\nPOST /v1/chat/completions\nx-openclaw-session: livekit-room-abc123\n```\n\nThe gateway resolves this to `{prefix}-session:livekit-room-abc123` scoped to the agent, so warm-session cache hits apply and QMD sync is skipped on subsequent requests in the same call.\n\n## What this does NOT fix\n\nThe core 15-20K-token framework system prompt assembly still runs on every request. A `lightContext` / `x-openclaw-light-context` mode that bypasses the full context pipeline is a separate, larger architectural change.\n\n## Test plan\n\n- [ ] Without `x-openclaw-session`: behaviour unchanged — new UUID session per call\n- [ ] With `x-openclaw-session: my-id`: same stable session key across calls (verify no QMD re-index on second call)\n- [ ] `user` field still takes priority over `x-openclaw-session`\n- [ ] `x-openclaw-session-key` still takes highest priority, overriding both\n- [ ] Two different agents with the same `x-openclaw-session` value get different session keys (agent scoping confirmed)\n\n## Real behavior proof\n\n**Behavior or issue addressed:** `/v1/chat/completions` calls without the OpenAI `user` field each received a fresh random UUID session key, triggering a full QMD re-index on every request and inflating TTFB to 10-15s for voice/realtime callers.\n\n**Real environment tested:** Local OpenClaw gateway (`openclaw start`), `gateway.http.endpoints.chatCompletions.enabled: true`, macOS 14.7, Node 22.4, auth mode `token`.\n\n**Exact steps or command run after fix:**\n\n```bash\n# Call 1 — pass x-openclaw-session hint\ncurl -sS http://127.0.0.1:18789/v1/chat/completions \\\n  -H \"Authorization: Bearer $OPENCLAW_TOKEN\" \\\n  -H \"Content-Type: application/json\" \\\n  -H \"x-openclaw-session: livekit-room-abc123\" \\\n  -d '{\"model\":\"openclaw\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}' \\\n  -w \"\\nTTFB: %{time_starttransfer}s\\n\"\n\n# Call 2 — same hint, expect warm-session hit\ncurl -sS http://127.0.0.1:18789/v1/chat/completions \\\n  -H \"Authorization: Bearer $OPENCLAW_TOKEN\" \\\n  -H \"Content-Type: application/json\" \\\n  -H \"x-openclaw-session: livekit-room-abc123\" \\\n  -d '{\"model\":\"openclaw\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}' \\\n  -w \"\\nTTFB: %{time_starttransfer}s\\n\"\n```\n\n**Evidence after fix:**\n\nTerminal capture — gateway debug log showing session key resolution and TTFB:\n\n```\n# --- before patch (no header) ---\n[gateway] session key: agent:main:openai:9f4a1b2c-3d5e-4f67-8901-ab2cd3ef4567  (cold)\n[gateway] QMD re-index started\nTTFB: 11.432s\n\n# --- after patch, call 1 (cold) ---\n[gateway] session key: agent:main:openai-session:livekit-room-abc123  (cold)\n[gateway] QMD re-index started\nTTFB: 10.891s\n\n# --- after patch, call 2 (same header, warm) ---\n[gateway] session key: agent:main:openai-session:livekit-room-abc123  (warm hit)\n[gateway] QMD sync skipped — session already indexed\nTTFB: 0.347s\n```\n\n**Observed result after fix:** Calls 1 and 2 with the same `x-openclaw-session: livekit-room-abc123` header resolve to the identical session key `agent:main:openai-session:livekit-room-abc123`. Call 2 skips QMD re-index and returns in ~350ms vs ~11s for the cold call. Without the header the key stays random-UUID and every call is cold.\n\n**What was not tested:** Load behaviour under concurrent voice sessions; LiveKit/Twilio SDK integration beyond curl.",
-        "branch": "fix/openai-http-stable-session-header",
-        "head_sha": "488aa32bcf129b343669829e65f29ec87b36dd29",
-        "author": "justincache",
-        "labels": [
-          "docs",
-          "gateway",
-          "stale",
-          "size: S",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/gateway/openai-http-api.md",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/http-utils.ts",
-            "additions": 27,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/openai-http.test.ts",
-            "additions": 89,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-69060",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-69060.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 99,
-          "counts": {
-            "SUCCESS": 78,
-            "FAILURE": 6,
-            "SKIPPED": 14,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-process:FAILURE",
-            "check-lint:FAILURE",
-            "check-docs:FAILURE",
-            "check:FAILURE",
-            "checks-node-core:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-process:FAILURE",
-            "check-lint:FAILURE",
-            "check-docs:FAILURE",
-            "check:FAILURE",
-            "checks-node-core:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "author association NONE and repository permission read are not allowed"
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": true,
