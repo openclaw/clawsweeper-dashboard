@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-30T04:53:16.783Z",
+  "generated_at": "2026-05-30T05:15:38.712Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-30T01:53:16.494Z",
+  "since": "2026-05-30T02:15:35.128Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    74249
+    88211
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4581420379
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +31,132 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88211:4581420379:2026-05-30T05:15:01Z:clawsweeper_needs_human",
+      "comment_id": "4581420379",
+      "comment_version_key": "4581420379:2026-05-30T05:15:01Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88211#issuecomment-4581420379",
+      "repo": "openclaw/openclaw",
+      "issue_number": 88211,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-30T02:59:11Z",
+      "comment_updated_at": "2026-05-30T05:15:01Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] The remaining blocker is a concrete loader/config compatibility repair with clear files and validation, though the fix needs care to avoid reintroducing the reported raw-snapshot bug.; Needs attention: The patch has a concrete sensitive-data risk because double substitution can deliver an env secret to plugin code when config intentionally escaped the placeholder.; Review finding: [P1] Preserve escaped placeh... (sha=08c3ea19a91cc88fc11bb921daa53af2120786a7)",
+      "review_summary": "The PR resolves `${ENV_VAR}` references in `plugins.entries.*.config` during plugin config validation and adds loader fixture coverage for process-env and explicit loader-env cases.\n\nPR surface: Source +19, Tests +47. Total +66 across 3 files.\n\nReproducibility: yes. for the reported user path: the PR body gives a concrete live before/after provider-plugin run, and source inspection shows `entry?.config` flows through `validatePluginConfig` into `api.pluginConfig`. I did not execute tests or the live gateway path in this read-only review.",
+      "review_followup": "- [P2] The remaining blocker is a concrete loader/config compatibility repair with clear files and validation, though the fix needs care to avoid reintroducing the reported raw-snapshot bug.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "08c3ea19a91cc88fc11bb921daa53af2120786a7",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(plugins): resolve ${ENV_VAR} references in plugin config before handoff",
+        "body": "## Summary\n\n`${ENV_VAR}` references in **plugin** config (`plugins.entries.<id>.config.*`) were handed to plugins **unresolved**, while the same references in **provider** config (`models.providers.*`) resolved correctly. A provider plugin whose API key was configured as `apiKey: \"${MY_KEY}\"` therefore authenticated with the literal placeholder string, so every upstream request was rejected — surfacing to the user as \"provider down\" / a silent model failover with no indication why.\n\nThis resolves `${VAR}` references in `validatePluginConfig` — the single point every plugin entry config passes through on its way to the plugin — so plugins always receive resolved values, matching provider-config behaviour.\n\nCloses #88195.\n\n## Root cause\n\n`resolveConfigEnvVars` (`src/config/env-substitution.ts`) deep-walks the whole config uniformly, and the normal config-read path resolves plugin config too — so substitution itself is correct. The regression is that the config reaching the plugin loader on the gateway path is a representation that bypassed read-time substitution (the `sourceConfig`/`runtimeConfig` split in the config-snapshot machinery), so `plugins.entries.*.config` arrives with `${VAR}` intact. Rather than chase every config-delivery path, this fixes it at the one boundary all plugin entry config funnels through before reaching a plugin.\n\n`validatePluginConfig` now substitutes `${VAR}` on the entry config before validation/handoff:\n- Missing vars are preserved as their literal placeholder (via `onMissing`) instead of throwing, matching read-time substitution semantics.\n- It is a no-op when the config is already resolved (no `${...}` remain).\n\n## Real behavior proof\n\n**Behavior addressed:** a provider plugin configured with `apiKey: \"${PIONEER_API_KEY}\"` received the literal `${PIONEER_API_KEY}` string, so its upstream rejected every request (HTTP 403) and the agent silently failed over to a fallback model.\n\n**Real environment tested:** live OpenClaw `2026.5.28-beta.4` gateway on macOS 15.7.3 (Intel), node 25.9.0, driving a provider plugin (`pioneer-provider-adapter`) that reads `api.pluginConfig.apiKey`. The plugin's `env.vars.PIONEER_API_KEY` holds the real key; the plugin entry config references it as `\"${PIONEER_API_KEY}\"`.\n\n**Steps run, before vs after the fix** (gateway restarted via `launchctl kickstart -k \"gui/$(id -u)/ai.openclaw.gateway\"` between states; same `apiKey: \"${PIONEER_API_KEY}\"` config throughout):\n\n```\nopenclaw agent --model <plugin-provider>/<model> \\\n  --message \"Run the shell command: echo FIX_PROOF_OK — then tell me exactly what it printed.\"\n```\n\n**Before (stock dist):** the turn failed over to the fallback model. Gateway log:\n```\nembedded_run_agent_end  provider=<plugin>  model=<model>  isError=true\nmodel_fallback_decision candidate_failed  fallbackStepFromFailureDetail=\"<html>…403 Forbidden…</html>\"\nmodel_fallback_decision candidate_succeeded  candidateModel=<fallback>\n```\nThe persisted session attributed the reply to the **fallback** model.\n\n**After (fix applied to the running install, same `${PIONEER_API_KEY}` config):** the turn was served by the plugin's provider directly.\n- `0` × `403 Forbidden` / `candidate_failed` / `FailoverError` after the restart.\n- The persisted session attributed the reply to the **plugin's provider/model** (not the fallback).\n- The tool call ran and returned `FIX_PROOF_OK` correctly.\n\nSo, same `${VAR}` config, only the loader fix changed: 403→failover became a clean direct success.\n\n**Honest caveat:** my sandbox hits a native-allocation cap (`memory allocation of N bytes failed` from the Rust-based test/transform toolchain) with ~70% system RAM free, so a clean `pnpm build`/`pnpm test` could not run locally. The live proof above was produced by applying an **equivalent inline `${VAR}` resolver at `validatePluginConfig`** in the installed dist (same function, same behaviour as the committed source, which uses `resolveConfigEnvVars`). CI validates the build and the added unit test.\n\n## Tests\n\nAdded `src/plugins/loader.test.ts` › \"resolves ${ENV_VAR} references in plugin config before handing config to the plugin\": loads a plugin with `apiKey: \"${ENV_CONFIG_PROBE_SECRET}\"` and an env var set, and asserts the plugin's `register(api)` receives the **resolved** value.\n\n`pnpm build && pnpm check && pnpm test` to be validated by CI (see caveat above re: local sandbox).\n\n---\n\n[AI-assisted] Investigated and authored with Claude Code. cc @Peetiegonzalez\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+        "branch": "fix/resolve-env-vars-in-plugin-config",
+        "head_sha": "08c3ea19a91cc88fc11bb921daa53af2120786a7",
+        "author": "marvinthebored",
+        "labels": [
+          "size: S",
+          "proof: sufficient",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 security-boundary",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/plugins/loader.test-fixtures.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/loader.test.ts",
+            "additions": 47,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/loader.ts",
+            "additions": 26,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-88211",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88211.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 112,
+          "counts": {
+            "CANCELLED": 1,
+            "SUCCESS": 82,
+            "SKIPPED": 27,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "build-artifacts:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "build-artifacts:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 463,
+    "total_ms": 3803,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 276
+        "ms": 1838
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1726
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 174
+        "ms": 208
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
