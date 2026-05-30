@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-30T03:07:38.535Z",
+  "generated_at": "2026-05-30T03:08:06.598Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-30T00:07:36.133Z",
+  "since": "2026-05-30T00:08:04.790Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    52365
+    88163
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 9,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,178 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:52365:4339464999:2026-05-30T03:07:32Z:clawsweeper_auto_repair",
-      "comment_id": "4339464999",
-      "comment_version_key": "4339464999:2026-05-30T03:07:32Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/52365#issuecomment-4339464999",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88163:4580645304:2026-05-30T03:08:00Z:clawsweeper_needs_human",
+      "comment_id": "4580645304",
+      "comment_version_key": "4580645304:2026-05-30T03:08:00Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88163#issuecomment-4580645304",
       "repo": "openclaw/openclaw",
-      "issue_number": 52365,
+      "issue_number": 88163,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-28T22:13:52Z",
-      "comment_updated_at": "2026-05-30T03:07:32Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=e3f5a2d46c74174ea5384a01478413a4a13c46bb)",
-      "review_summary": "The PR adds a `beforeAttempt` model-fallback hook, threads cron deadline access into isolated cron execution, skips near-deadline fallback candidates, and adds cron/fallback regression coverage.\n\nPR surface: Source +126, Tests +1855, Other 0. Total +1981 across 14 files.\n\nReproducibility: Do we have a high-confidence way to reproduce the issue? Source inspection gives a credible path: current main has no pre-attempt cron budget gate, and the PR body includes production-style logs, but I did not run a live current-main cron repro.",
-      "review_followup": "- [P1] Needs contributor current-head real behavior proof plus maintainer/code follow-up for stop-error preservation; this is not a safe automated repair while proof remains stale.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "e3f5a2d46c74174ea5384a01478413a4a13c46bb",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): stop fallback attempts when cron budget is exhausted",
-        "body": "## Problem\n\nWhen a cron job's primary model times out near the cron deadline, the fallback model is started but immediately killed by the same cron timeout — receiving effectively 0ms to make an LLM request. The fallback never gets a fair chance to respond, and the user sees a misleading `cron: job execution timed out` error attributed to the fallback model.\n\n**Observed in production logs (2026-03-22):**\n\n```\n[08:10:30.733] anthropic/claude-opus-4-6 attempt=1/2 reason=unknown err='Request was aborted.' duration=28667ms\n[08:10:30.735] openai-codex/gpt-5.4    attempt=2/2 reason=timeout err='cron: job execution timed out' duration=0ms\n```\n\nThe cron timeout wraps the entire fallback chain. When the primary model consumes most of the budget, the fallback model is allocated ~0ms and fails immediately.\n\n## Solution\n\n1. **Propagate the cron deadline** (`deadlineAtMs`) from `executeJobCoreWithTimeout` through the cron service state down to `runCronIsolatedAgentTurn`.\n\n2. **Add a `beforeAttempt` hook** to `runWithModelFallback` that is called before each candidate attempt. If it returns `{ type: 'stop' }`, the fallback chain stops and preserves the original error from the previous attempt.\n\n3. **Check remaining budget** in the cron layer's `beforeAttempt` callback. If less than `min(30s, timeout/4)` remains before the cron deadline, the fallback is skipped with a clear message:\n   > `Skipping fallback: only 50ms remain before cron timeout (need at least 30000ms).`\n\nThis ensures:\n- The primary model's real error is preserved (not masked by a fake cron timeout on the fallback)\n- No wasted LLM API calls that would be aborted instantly\n- The `beforeAttempt` hook is generic and reusable for other pre-attempt checks\n\n## Changes\n\n- `src/agents/model-fallback.ts` — Add `beforeAttempt` hook + `stop_before_candidate` decision type\n- `src/cron/service/timer.ts` — Compute and pass `deadlineAtMs` to job execution\n- `src/cron/isolated-agent/run.ts` — Use `beforeAttempt` to check remaining cron budget\n- `src/cron/service/state.ts` + `src/gateway/server-cron.ts` — Thread `deadlineAtMs` through interfaces\n\n## Tests\n\n- `model-fallback.test.ts` — beforeAttempt stop behavior\n- `run.fallback-time-budget.test.ts` — Cron deadline propagation + fallback budget exhaustion\n- `service.issue-regressions.test.ts` — Deadline passed to isolated runs\n\n\n## Real behavior proof\n\n**Behavior or issue addressed:** Cron isolated agent-turn jobs should not start a model fallback when the primary attempt has consumed almost the whole cron deadline and the fallback would be killed immediately by the same timeout.\n\n**Real environment tested:** Local OpenClaw checkout on branch `fix/cron-fallback-timeout` at `008791fa10`, macOS host, Node 22. The proof command uses the same fallback budget formula added in this branch and the cron job shape from the affected isolated agent-turn surface.\n\n**Exact steps or command run after this patch:** Ran `node .artifacts/pr-52365-real-behavior-proof.mjs` locally after the patch, then ran `pnpm test src/cron/isolated-agent/run.fallback-time-budget.test.ts -- --reporter=verbose` as supplemental coverage for the same gate.\n\n**Evidence after fix:** Terminal output from the local reproduction command:\n\n```\n$ node .artifacts/pr-52365-real-behavior-proof.mjs\ncron fallback budget repro\njob: sessionTarget=isolated wakeMode=next-heartbeat payload=agentTurn timeoutSeconds=60\nprimary attempt: consumed 59900ms of a 60000ms cron deadline\nfallback check: remainingMs=100; fallbackMinRemainingMs=15000\nbefore(upstream/main): runWithModelFallback had no beforeAttempt budget gate -> fallbackAttempted=true\nafter(this branch): fallbackAttempted=false\nafter stop: Skipping fallback: only 100ms remain before cron timeout (need at least 15000ms).\n```\n\nSupplemental targeted test output:\n\n```\n$ pnpm test src/cron/isolated-agent/run.fallback-time-budget.test.ts -- --reporter=verbose\n✓ allows fallback attempts when the per-attempt budget fits inside the remaining cron deadline\n✓ uses agents.defaults.timeoutSeconds for fallback budget when job timeoutSeconds is unset\n✓ stops new fallback attempts when the per-attempt budget no longer fits\nTest Files  1 passed (1)\nTests  3 passed (3)\n```\n\n**Observed result after fix:** With only 100ms left before the cron deadline and a 15,000ms minimum fallback budget, the after-fix gate returns `fallbackAttempted=false` and reports `Skipping fallback: only 100ms remain before cron timeout (need at least 15000ms).` The before behavior had no `beforeAttempt` budget gate, so the fallback candidate was started even though it could only receive about 0ms.\n\n**What was not tested:** Live Anthropic/OpenAI API calls were not run for this proof; the local reproduction covers the cron fallback budget decision and the targeted test covers the runtime hook path with mocked provider execution.\n",
-        "branch": "fix/cron-fallback-timeout",
-        "head_sha": "e3f5a2d46c74174ea5384a01478413a4a13c46bb",
-        "author": "imwyvern",
-        "labels": [
-          "gateway",
-          "scripts",
-          "agents",
-          "size: XL",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "scripts/test-projects.test-support.mjs",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/model-fallback-observation.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/model-fallback.test.ts",
-            "additions": 98,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/model-fallback.ts",
-            "additions": 56,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run-executor.ts",
-            "additions": 32,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run.fallback-time-budget.test.ts",
-            "additions": 279,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run.ts",
-            "additions": 20,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service.issue-regressions.test-helpers.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service.issue-regressions.test.ts",
-            "additions": 1345,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/state.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/timer.test.ts",
-            "additions": 121,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/timer.ts",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-cron.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/test-projects.test.ts",
-            "additions": 13,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-52365",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-52365.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 103,
-          "counts": {
-            "SUCCESS": 80,
-            "SKIPPED": 22,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:52365:4345794045:2026-04-29T16:55:17Z:clawsweeper_needs_human",
-      "comment_id": "4345794045",
-      "comment_version_key": "4345794045:2026-04-29T16:55:17Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/52365#issuecomment-4345794045",
-      "repo": "openclaw/openclaw",
-      "issue_number": 52365,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-29T16:55:17Z",
-      "comment_updated_at": "2026-04-29T16:55:17Z",
+      "comment_created_at": "2026-05-29T23:30:38Z",
+      "comment_updated_at": "2026-05-30T03:08:00Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -213,135 +52,58 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=48a621558196d879d9ef8d084a606b5fc4d5ba02)",
-      "review_summary": "The PR adds a pre-attempt stop hook to model fallback, threads cron deadline information into isolated cron execution, and adds tests for skipping fallback attempts when little cron budget remains.",
-      "review_followup": null,
+      "repair_reason": "- [P2] Protected maintainer draft changes auth-token rotation semantics, so the next action is maintainer validation and final proof rather than an automated repair PR.; Cleared: The diff is auth-sensitive but I found no concrete security bypass or supply-chain concern; the remaining concern is maintainer validation of the credential reuse boundary. (sha=828773c8f9e81311298bbf424b0117bd16ad3564)",
+      "review_summary": "The PR changes device pairing approval so valid same-key untagged device tokens can be reused during metadata-refresh approvals while unsafe token states still rotate, with regression coverage.\n\nPR surface: Source +77, Tests +189. Total +266 across 2 files.\n\nReproducibility: yes. current main source shows approveDevicePairing always mints a replacement token for requested roles when an existing token is present, and the PR adds a focused metadata-refresh test for stable token reuse. I did not run the test because this review is read-only.",
+      "review_followup": "- [P2] Protected maintainer draft changes auth-token rotation semantics, so the next action is maintainer validation and final proof rather than an automated repair PR.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "48a621558196d879d9ef8d084a606b5fc4d5ba02",
+      "expected_head_sha": "828773c8f9e81311298bbf424b0117bd16ad3564",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(cron): stop fallback attempts when cron budget is exhausted",
-        "body": "## Problem\n\nWhen a cron job's primary model times out near the cron deadline, the fallback model is started but immediately killed by the same cron timeout — receiving effectively 0ms to make an LLM request. The fallback never gets a fair chance to respond, and the user sees a misleading `cron: job execution timed out` error attributed to the fallback model.\n\n**Observed in production logs (2026-03-22):**\n\n```\n[08:10:30.733] anthropic/claude-opus-4-6 attempt=1/2 reason=unknown err='Request was aborted.' duration=28667ms\n[08:10:30.735] openai-codex/gpt-5.4    attempt=2/2 reason=timeout err='cron: job execution timed out' duration=0ms\n```\n\nThe cron timeout wraps the entire fallback chain. When the primary model consumes most of the budget, the fallback model is allocated ~0ms and fails immediately.\n\n## Solution\n\n1. **Propagate the cron deadline** (`deadlineAtMs`) from `executeJobCoreWithTimeout` through the cron service state down to `runCronIsolatedAgentTurn`.\n\n2. **Add a `beforeAttempt` hook** to `runWithModelFallback` that is called before each candidate attempt. If it returns `{ type: 'stop' }`, the fallback chain stops and preserves the original error from the previous attempt.\n\n3. **Check remaining budget** in the cron layer's `beforeAttempt` callback. If less than `min(30s, timeout/4)` remains before the cron deadline, the fallback is skipped with a clear message:\n   > `Skipping fallback: only 50ms remain before cron timeout (need at least 30000ms).`\n\nThis ensures:\n- The primary model's real error is preserved (not masked by a fake cron timeout on the fallback)\n- No wasted LLM API calls that would be aborted instantly\n- The `beforeAttempt` hook is generic and reusable for other pre-attempt checks\n\n## Changes\n\n- `src/agents/model-fallback.ts` — Add `beforeAttempt` hook + `stop_before_candidate` decision type\n- `src/cron/service/timer.ts` — Compute and pass `deadlineAtMs` to job execution\n- `src/cron/isolated-agent/run.ts` — Use `beforeAttempt` to check remaining cron budget\n- `src/cron/service/state.ts` + `src/gateway/server-cron.ts` — Thread `deadlineAtMs` through interfaces\n\n## Tests\n\n- `model-fallback.test.ts` — beforeAttempt stop behavior\n- `run.fallback-time-budget.test.ts` — Cron deadline propagation + fallback budget exhaustion\n- `service.issue-regressions.test.ts` — Deadline passed to isolated runs\n\n\n## Real behavior proof\n\n**Behavior or issue addressed:** Cron isolated agent-turn jobs should not start a model fallback when the primary attempt has consumed almost the whole cron deadline and the fallback would be killed immediately by the same timeout.\n\n**Real environment tested:** Local OpenClaw checkout on branch `fix/cron-fallback-timeout` at `008791fa10`, macOS host, Node 22. The proof command uses the same fallback budget formula added in this branch and the cron job shape from the affected isolated agent-turn surface.\n\n**Exact steps or command run after this patch:** Ran `node .artifacts/pr-52365-real-behavior-proof.mjs` locally after the patch, then ran `pnpm test src/cron/isolated-agent/run.fallback-time-budget.test.ts -- --reporter=verbose` as supplemental coverage for the same gate.\n\n**Evidence after fix:** Terminal output from the local reproduction command:\n\n```\n$ node .artifacts/pr-52365-real-behavior-proof.mjs\ncron fallback budget repro\njob: sessionTarget=isolated wakeMode=next-heartbeat payload=agentTurn timeoutSeconds=60\nprimary attempt: consumed 59900ms of a 60000ms cron deadline\nfallback check: remainingMs=100; fallbackMinRemainingMs=15000\nbefore(upstream/main): runWithModelFallback had no beforeAttempt budget gate -> fallbackAttempted=true\nafter(this branch): fallbackAttempted=false\nafter stop: Skipping fallback: only 100ms remain before cron timeout (need at least 15000ms).\n```\n\nSupplemental targeted test output:\n\n```\n$ pnpm test src/cron/isolated-agent/run.fallback-time-budget.test.ts -- --reporter=verbose\n✓ allows fallback attempts when the per-attempt budget fits inside the remaining cron deadline\n✓ uses agents.defaults.timeoutSeconds for fallback budget when job timeoutSeconds is unset\n✓ stops new fallback attempts when the per-attempt budget no longer fits\nTest Files  1 passed (1)\nTests  3 passed (3)\n```\n\n**Observed result after fix:** With only 100ms left before the cron deadline and a 15,000ms minimum fallback budget, the after-fix gate returns `fallbackAttempted=false` and reports `Skipping fallback: only 100ms remain before cron timeout (need at least 15000ms).` The before behavior had no `beforeAttempt` budget gate, so the fallback candidate was started even though it could only receive about 0ms.\n\n**What was not tested:** Live Anthropic/OpenAI API calls were not run for this proof; the local reproduction covers the cron fallback budget decision and the targeted test covers the runtime hook path with mocked provider execution.\n",
-        "branch": "fix/cron-fallback-timeout",
-        "head_sha": "e3f5a2d46c74174ea5384a01478413a4a13c46bb",
-        "author": "imwyvern",
+        "title": "fix(pairing): preserve stable device tokens on metadata refresh",
+        "body": "## Summary\n- preserve existing untagged device tokens for same-key metadata refresh approvals when the token was already valid before the approval\n- keep rotating for scope expansion, public-key repair, stale baseline tokens, revoked/issuer-tagged tokens, incompatible role/scopes, and malformed persisted token entries\n- add pairing token regression coverage for Windows node reconnect churn and unsafe reuse boundaries\n\n## Validation\n- `node scripts/run-vitest.mjs src/infra/device-pairing.test.ts`: 60 passed\n- `.agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main`: clean, no accepted/actionable findings\n- maintainer Crabbox `OPENCLAW_TESTBOX=1 node scripts/crabbox-wrapper.mjs run --shell -- \"pnpm check:changed\"`: passed core/coreTests lanes\n\n## Notes\nDraft because the signed prerelease recut plus full pond pairing / exec-approval validation are still pending.\n",
+        "branch": "fix-windows-node-token-rotation",
+        "head_sha": "828773c8f9e81311298bbf424b0117bd16ad3564",
+        "author": "vincentkoc",
         "labels": [
-          "gateway",
-          "scripts",
-          "agents",
-          "size: XL",
-          "proof: supplied",
+          "maintainer",
+          "size: M",
           "P2",
-          "rating: 🦪 silver shellfish",
+          "rating: 🐚 platinum hermit",
           "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "scripts/test-projects.test-support.mjs",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/model-fallback-observation.ts",
-            "additions": 1,
+            "path": "src/infra/device-pairing.test.ts",
+            "additions": 189,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/model-fallback.test.ts",
-            "additions": 98,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/model-fallback.ts",
-            "additions": 56,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run-executor.ts",
-            "additions": 32,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run.fallback-time-budget.test.ts",
-            "additions": 279,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run.ts",
-            "additions": 20,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service.issue-regressions.test-helpers.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service.issue-regressions.test.ts",
-            "additions": 1345,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/state.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/timer.test.ts",
-            "additions": 121,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/timer.ts",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-cron.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/test-projects.test.ts",
-            "additions": 13,
-            "deletions": 0,
+            "path": "src/infra/device-pairing.ts",
+            "additions": 90,
+            "deletions": 13,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-52365",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-52365.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-88163",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88163.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 103,
+          "total": 48,
           "counts": {
-            "SUCCESS": 80,
-            "SKIPPED": 22,
-            "NEUTRAL": 1
+            "SUCCESS": 6,
+            "SKIPPED": 42
           },
           "blockers": [],
           "pending": [],
@@ -355,27 +117,27 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2756,
+    "total_ms": 2151,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 496
+        "ms": 431
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1887
+        "ms": 1360
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 341
+        "ms": 332
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
