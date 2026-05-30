@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-30T08:56:19.016Z",
+  "generated_at": "2026-05-30T08:57:25.314Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-30T05:56:18.513Z",
+  "since": "2026-05-30T05:57:23.583Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    75128
+    88251
   ],
-  "comment_ids": [
-    4353893103
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,17 +31,134 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:75128:4353893103:2026-05-30T08:55:28Z:clawsweeper_needs_human",
-      "comment_id": "4353893103",
-      "comment_version_key": "4353893103:2026-05-30T08:55:28Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/75128#issuecomment-4353893103",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88251:4581905629:2026-05-30T08:57:20Z:clawsweeper_auto_repair",
+      "comment_id": "4581905629",
+      "comment_version_key": "4581905629:2026-05-30T08:57:20Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88251#issuecomment-4581905629",
       "repo": "openclaw/openclaw",
-      "issue_number": 75128,
+      "issue_number": 88251,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-30T08:55:13Z",
-      "comment_updated_at": "2026-05-30T08:55:13Z",
+      "comment_created_at": "2026-05-30T06:03:07Z",
+      "comment_updated_at": "2026-05-30T08:57:20Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=1440ed950a0dd9ac79fb9bf8abcac80eca708213)",
+      "review_summary": "The PR adds a Discord inbound run watchdog that aborts timed-out queued message processing, commits replay keys, advances the per-session queue, and expands queue regression tests while preserving the shipped timeout constant as deprecated.\n\nPR surface: Source +78, Tests +167. Total +245 across 4 files.\n\nReproducibility: Do we have a high-confidence way to reproduce the issue? Partially: source inspection shows the keyed channel queue has no task timeout, and the PR adds a synthetic regression for a never-settling Discord run, but I did not verify a live current-main Discord/Gateway reproduction.",
+      "review_followup": "- [P1] Human review is needed because the branch has a blocking unsupported Plugin SDK import, missing external real behavior proof, and maintainer-owned replay/session overlap semantics.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "1440ed950a0dd9ac79fb9bf8abcac80eca708213",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(discord): unblock inbound queue after stuck run",
+        "body": "## Summary\n\nThis adds a Discord-specific watchdog around queued inbound message runs so one stuck run cannot indefinitely block later messages for the same Discord session key.\n\nThe watchdog now mirrors the existing configured agent timeout contract via `runtime.agent.resolveAgentTimeoutMs({ cfg })`. There is no new 30-minute production SLA.\n\n## Problem\n\nDiscord inbound handling serializes work per route/session key. If one queued message run never settles after a stuck agent/tool path, later Discord messages for that same session key remain behind the unresolved queue tail. To users, later messages can look silently dropped because no new automatic agent turn starts.\n\nManual session injection can still work because it bypasses the Discord inbound run queue.\n\n## Root cause\n\n`createDiscordMessageRunQueue()` delegates to `createChannelRunQueue()`, which serializes per key and intentionally imposes no per-task timeout. A non-settling Discord inbound job can therefore hold the queue tail indefinitely.\n\n## Fix\n\nWrap each Discord queued message run in a Discord-owned watchdog tied to the existing agent timeout resolver:\n\n- resolve the watchdog timeout from `runtime.agent.resolveAgentTimeoutMs({ cfg })`;\n- pass a merged abort signal into `processDiscordMessage`;\n- when that timeout fires, abort the signal;\n- commit replay keys for the timed-out job;\n- throw/log `DiscordMessageRunTimeoutError`;\n- allow the keyed queue to advance to later messages.\n\nThe focused test hook can still inject a short `runTimeoutMs` so the queue-tail behavior is testable without waiting for the real agent timeout.\n\nIf an older/minimal runtime mock does not expose `runtime.agent.resolveAgentTimeoutMs`, the watchdog is disabled rather than breaking dispatch.\n\nLate completion of the original timed-out job is ignored so replay keys are not committed twice.\n\n## Real behavior proof\n\nNon-production proof, using the Discord monitor queue regression suite on current `origin/main` with this patch applied.\n\nThe new regression test exercises the behavior at the Discord message-handler queue layer:\n\n1. enqueue message `m-1` for a Discord session key;\n2. make the first queued Discord run never resolve;\n3. enqueue message `m-2` for the same session key;\n4. advance the injected watchdog timeout;\n5. verify the first run's abort signal is aborted;\n6. verify the second same-session message is processed instead of staying stuck behind `m-1`;\n7. redeliver `m-1` and verify replay protection prevents duplicate processing;\n8. allow the original timed-out run to resolve late and verify it does not double-commit replay state or log a second failure.\n\nAdditional coverage verifies the default watchdog path uses the configured agent timeout resolver, so this PR does not impose a shorter Discord-specific production timeout.\n\nValidation command:\n\n```text\nopenclaw-heavy-run --backend auto -- pnpm exec vitest run extensions/discord/src/monitor/message-handler.queue.test.ts\n```\n\nResult:\n\n```text\n1 file passed, 20 tests passed\n```\n\nI did not run this against a live production Gateway/runtime. The proof uses an isolated source checkout and synthetic Discord inbound jobs so it can exercise the stuck-queue behavior without mutating live Discord sessions or runtime state.\n\n## Replay semantics\n\nA watchdog timeout is treated like a non-retryable consumed inbound delivery. This favors avoiding duplicate processing over replaying a message whose processing state is unknown.\n\n## Scope / relation to existing work\n\nThis is intentionally narrower than #79562. It does not add queue caps, drop policy, persistence, or global channel queue behavior changes. It only prevents a stuck Discord message run from blocking later same-session Discord inbound messages indefinitely.\n\nRelated: #9238, #75346, #29497 / #29532, #79562.\n\nA separate adjacent failure mode can still happen after a stuck run is aborted: session write locks may remain or block later writes, producing `SessionWriteLockTimeoutError`. That lock-cleanup/recovery seam is already covered by the session-lock issue/PR cluster (for example #21783, #31489, #86540, #86806) and is intentionally out of scope for this Discord queue-tail PR.\n\n## Risks / limitations\n\nThe watchdog aborts cooperatively. If downstream work ignores abort signals, it may still complete later, so a timed-out run can overlap with a newer same-session run. This is preferred over an indefinite queue stall but is not a hard cancellation mechanism.\n\nThe timeout ceiling follows the existing agent timeout resolver. It does not add a new 30-minute production timeout.\n\nFull root `tsc -p tsconfig.json --noEmit` was attempted in an isolated checkout before this revision but hit a Node heap OOM before type diagnostics. The focused Discord queue regression suite and diff check passed on current `origin/main`.\n\n## Tests\n\n```text\ngit diff --check\n```\n\n```text\nopenclaw-heavy-run --backend auto -- pnpm exec vitest run extensions/discord/src/monitor/message-handler.queue.test.ts\n```\n\nTargeted result:\n\n```text\n1 file passed, 20 tests passed\n```\n",
+        "branch": "fix-discord-inbound-run-watchdog",
+        "head_sha": "1440ed950a0dd9ac79fb9bf8abcac80eca708213",
+        "author": "anyech",
+        "labels": [
+          "channel: discord",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/discord/src/monitor/message-handler.queue.test.ts",
+            "additions": 170,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/message-handler.test-helpers.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/message-run-queue.ts",
+            "additions": 80,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/timeouts.ts",
+            "additions": 8,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-88251",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88251.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 96,
+          "counts": {
+            "FAILURE": 7,
+            "SUCCESS": 66,
+            "SKIPPED": 22,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "build-artifacts:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "build-artifacts:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:88251:4582253394:2026-05-30T08:21:56Z:re_review",
+      "comment_id": "4582253394",
+      "comment_version_key": "4582253394:2026-05-30T08:21:56Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88251#issuecomment-4582253394",
+      "repo": "openclaw/openclaw",
+      "issue_number": 88251,
+      "author": "anyech",
+      "author_id": 8743351,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-30T08:21:56Z",
+      "comment_updated_at": "2026-05-30T08:21:56Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -51,44 +166,44 @@
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] The remaining code blockers are narrow and mechanical enough for a focused repair pass, though maintainers still need to accept the privacy-over-delivery suppression tradeoff before merge.; Needs attention: The patch is intended to reduce prompt disclosure, but the dirty branch can undo current main's boot prompt persistence boundary unless the rebase preserves it.; Review finding: [P1] Preserve the current b... (sha=233f2804b2c13a9ac499386ac5bba24a0b1d11c1)",
-      "review_summary": "The PR wraps BOOT.md content as internal runtime context, adds a session-scoped boot echo guard, sanitizes message-tool visible send fields, suppresses emptied sends, adds focused tests, and edits CHANGELOG.md.\n\nPR surface: Source +219, Tests +454, Docs +1. Total +674 across 7 files.\n\nReproducibility: yes. The linked report and PR proof give a concrete fallback-model message-tool leak shape, and source inspection shows current main still builds BOOT.md as ordinary boot prompt text; I did not run tests in this read-only review.",
-      "review_followup": "- [P2] The remaining code blockers are narrow and mechanical enough for a focused repair pass, though maintainers still need to accept the privacy-over-delivery suppression tradeoff before merge.",
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "233f2804b2c13a9ac499386ac5bba24a0b1d11c1",
+      "expected_head_sha": null,
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1958,
+    "total_ms": 3066,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 490
+        "ms": 399
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1315
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 1456
+        "ms": 1322
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
