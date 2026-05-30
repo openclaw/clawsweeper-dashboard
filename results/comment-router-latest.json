@@ -1,20 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-30T07:25:50.811Z",
+  "generated_at": "2026-05-30T07:25:58.349Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-30T04:25:48.646Z",
+  "since": "2026-05-30T04:25:57.811Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
     88228
   ],
+  "comment_ids": [
+    4580477874
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -60,205 +63,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(message): keep automatic replies out of implicit sends",
-        "body": "## Summary\n\nThis PR fixes an automatic source-delivery edge case seen with OpenClaw + Feishu/Lark streaming cards + Codex:\n\n- In embedded runs that have an internal source-reply subscriber, accidental text-only `message(action=\"send\")` calls to the current source conversation now stay on the source-reply/card path.\n- MCP/CLI/default callers do **not** opt into that internal sink, so the same implicit send still uses normal outbound instead of being acknowledged and dropped.\n- Explicit routes, explicit targets, cross-channel sends, media, attachments, reply/threading, delivery modifiers, presentation/interactive payloads, and plugin-owned send options still use normal outbound.\n\nWhy this matters: previously Codex could emit the first visible answer through the shared `message` tool as a normal Feishu post while the final/footer came through the Feishu streaming card. The turn then looked split even though streaming cards were enabled.\n\n## Behavior Boundary\n\nThe automatic source-reply sink is intentionally narrow. It only applies when all of these are true:\n\n- `action === \"send\"`\n- `sourceReplyDeliveryMode === \"automatic\"`\n- the embedded runner opts in with `allowInternalSourceReplySink: true`\n- there is a current source channel context\n- the call has no explicit route/target to another context\n- the send payload is text-only and has no structured send semantics\n\nNormal outbound is preserved for:\n\n- explicit `target`, `to`, `channelId`, or `targets`\n- explicit different `channel`\n- same-channel sends when no internal source-reply consumer is present\n- media hints (`media`, `mediaUrl`, `base64`, `image`, paths, attachments, `mediaUrls`)\n- reply/thread controls (`replyTo`, `replyToId`, `threadId`, `threadId: null`)\n- Slack-style send controls (`topLevel: true`, `replyBroadcast: true`)\n- voice/silent/document/pin modifiers when enabled\n- `bestEffort` when present\n- `delivery`, `channelData`, `presentation`, `interactive`\n- plugin-owned send parameters\n\nNo-op false booleans such as `silent:false`, `asVoice:false`, `forceDocument:false`, `gifPlayback:false`, `topLevel:false`, and `replyBroadcast:false` are still treated as text-only.\n\n## Real behavior proof\n\n- Behavior or issue addressed: Automatic visible replies in Feishu/Lark streaming-card mode could be split when Codex emitted ordinary text through the shared `message(action=\"send\")` tool. The first visible answer appeared as a normal Feishu message, while the final/completion footer appeared in the streaming card.\n- Real environment tested: OpenClaw 2026.5.27 (`27ae826`) with Feishu/Lark p2p, Codex runtime, `messages.visibleReplies=automatic`, `channels.feishu.streaming=true`, `channels.feishu.footer.elapsed=true`, and `channels.feishu.footer.status=true`.\n- Exact steps or command run after this patch: Reproduced the production configuration, inspected the live Feishu/CardKit dispatcher logs, then validated the mitigation by removing the shared `message` tool from the active embedded agent so normal assistant text was forced through the automatic source-reply dispatcher. This patch implements the same routing intent narrowly in code and verifies it with source checkout tests.\n- Evidence after fix: Copied live terminal/log output from the real Feishu p2p setup showing automatic mode, streaming-card footer config, the `message` tool removed during live mitigation, and the reply completing through the streaming card path instead of a normal Feishu post:\n\n```text\n$ openclaw --version\nOpenClaw 2026.5.27 (27ae826)\n\n$ openclaw config get messages.visibleReplies\nautomatic\n$ openclaw config get channels.feishu.streaming\ntrue\n$ openclaw config get channels.feishu.footer.elapsed\ntrue\n$ openclaw config get channels.feishu.footer.status\ntrue\n$ openclaw config get agents.list\n[\n  {\n    \"id\": \"main\",\n    \"tools\": {\n      \"deny\": [\"...\", \"message\"]\n    }\n  }\n]\n\n2026-05-30T11:53:28.337+08:00 info feishu/card/reply-dispatcher ... reply mode resolved (effectiveReplyMode=auto, replyMode=streaming, chatType=p2p)\n2026-05-30T11:53:28.338+08:00 info feishu/card/reply-dispatcher ... footer config resolved (... useStreamingCards=true, rawFooter={\"elapsed\":true,\"status\":true}, resolvedFooter={\"status\":true,\"elapsed\":true,...})\n2026-05-30T11:53:29.511+08:00 info agents/tool-policy ... tool policy removed 1 tool(s) via agents.main.tools.deny: message; matched message\n2026-05-30T11:55:02.696+08:00 info feishu/card/streaming ... phase transition (from=idle, to=creating, source=ensureCardCreated)\n2026-05-30T11:55:03.688+08:00 info feishu/card/streaming ... sent CardKit card (messageId=redacted)\n2026-05-30T11:55:03.693+08:00 info feishu/card/streaming ... phase transition (from=streaming, to=completed, source=onIdle, reason=normal)\n2026-05-30T11:55:03.696+08:00 info channels/feishu ... dispatch complete (queuedFinal=true, replies=1)\n2026-05-30T11:55:04.329+08:00 info feishu/card/streaming ... reply completed, card finalized (elapsedMs=95990, isCardKit=true)\n```\n\n- Observed result after fix: The live mitigation produced a single finalized streaming card in the same Feishu p2p setup. In this branch, embedded automatic text-only current-source `message/send` calls now take that same source-reply/card path, while explicit or structured sends keep normal outbound behavior.\n- What was not tested: A patched source checkout was not driven end-to-end against Feishu because the available Lark credentials/scope and bot membership were insufficient for a patched GUI send. The source branch behavior is covered by focused runner/tool tests and the live production mitigation above demonstrates the affected real OpenClaw + Feishu runtime path.\n\n## Validation\n\nCommands run locally:\n\n- `npm exec --yes --package=pnpm@11.2.2 -- pnpm exec oxfmt --check ...` on the 14 changed files\n- `npm exec --yes --package=pnpm@11.2.2 -- pnpm exec oxlint ...` on the 14 changed files\n- `git diff --check`\n- `npm exec --yes --package=pnpm@11.2.2 -- pnpm exec node scripts/run-vitest.mjs run --config test/vitest/vitest.infra.config.ts src/infra/outbound/message-action-runner.send-validation.test.ts src/infra/outbound/message-action-params.test.ts src/infra/outbound/message-action-spec.test.ts` — 105 tests\n- `npm exec --yes --package=pnpm@11.2.2 -- pnpm exec node scripts/run-vitest.mjs run --config test/vitest/vitest.agents-tools.config.ts src/agents/tools/message-tool.test.ts` — 68 tests\n- `npm exec --yes --package=pnpm@11.2.2 -- pnpm exec node scripts/run-vitest.mjs run --config test/vitest/vitest.unit-fast.config.ts src/agents/embedded-agent-runner/run/payloads.test.ts src/agents/embedded-agent-runner/run/tool-media-payloads.test.ts` — 41 tests\n- `npm exec --yes --package=pnpm@11.2.2 -- pnpm exec node scripts/run-vitest.mjs run --config test/vitest/vitest.agents-support.config.ts src/agents/embedded-agent-subscribe.handlers.messages.test.ts` — 31 tests\n- `npm exec --yes --package=pnpm@11.2.2 -- pnpm exec node scripts/run-vitest.mjs run --config test/vitest/vitest.agents.config.ts src/agents/agent-tools.create-openclaw-coding-tools.test.ts` — 56 tests\n- `npm exec --yes --package=pnpm@11.2.2 -- pnpm tsgo:test:src`\n\nA local Codex review found a thread-control gap (`topLevel`, `threadId:null`, `replyBroadcast`, plugin send options). This update addresses it and adds regression coverage.\n\n## Risk\n\nHighest risk: accidentally capturing a legitimate current-channel send that had non-text semantics.\n\nMitigation:\n\n- the internal sink requires an explicit embedded-run opt-in\n- default/MCP/CLI callers stay on normal outbound\n- structured send detection now includes thread controls and plugin-owned send parameters\n- tests cover source-reply capture, no-consumer fallback, explicit target escape, channel alias handling, structured payload escape, no-op false options, and source-reply payload suppression behavior\n\n## AI-assisted\n\n- [x] AI-assisted PR.\n- [x] I reviewed the code path and understand the change.",
-        "branch": "codex/feishu-automatic-message-tool-replies",
-        "head_sha": "43af312dd41cf17f2989a87769f094beba343820",
-        "author": "qiangu",
-        "labels": [
-          "agents",
-          "size: L",
-          "extensions: codex",
-          "proof: supplied",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/codex/src/app-server/dynamic-tool-build.test.ts",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/dynamic-tool-build.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-tools.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/payloads.test.ts",
-            "additions": 32,
-            "deletions": 29,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/payloads.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/tool-media-payloads.test.ts",
-            "additions": 26,
-            "deletions": 23,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/tool-media-payloads.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-subscribe.handlers.messages.test.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-subscribe.handlers.messages.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openclaw-tools.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/message-tool.test.ts",
-            "additions": 40,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/message-tool.ts",
-            "additions": 26,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message-action-param-keys.ts",
-            "additions": 46,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message-action-runner.send-validation.test.ts",
-            "additions": 518,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message-action-runner.ts",
-            "additions": 150,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88228",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88228.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "counts": {
-            "SUCCESS": 80,
-            "SKIPPED": 21,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:88228:4581930095:2026-05-30T06:14:47Z:re_review",
-      "comment_id": "4581930095",
-      "comment_version_key": "4581930095:2026-05-30T06:14:47Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/88228#issuecomment-4581930095",
-      "repo": "openclaw/openclaw",
-      "issue_number": 88228,
-      "author": "qiangu",
-      "author_id": 21131737,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-30T06:14:47Z",
-      "comment_updated_at": "2026-05-30T06:14:47Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
       "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3348,
+    "total_ms": 1018,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 318
+        "ms": 523
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1828
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 1170
+        "ms": 480
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
