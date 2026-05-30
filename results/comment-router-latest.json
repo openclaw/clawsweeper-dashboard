@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-30T10:35:39.133Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-05-30T10:36:49.966Z",
+  "repo": "openclaw/clawsweeper",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-30T07:35:38.634Z",
+  "since": "2026-05-30T07:36:48.881Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    88288
+    230
   ],
-  "comment_ids": [
-    4582550242
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,30 +29,129 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/clawsweeper:230:4582548379:2026-05-30T10:36:46Z:clawsweeper_needs_human",
+      "comment_id": "4582548379",
+      "comment_version_key": "4582548379:2026-05-30T10:36:46Z",
+      "comment_url": "https://github.com/openclaw/clawsweeper/pull/230#issuecomment-4582548379",
+      "repo": "openclaw/clawsweeper",
+      "issue_number": 230,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-30T10:33:39Z",
+      "comment_updated_at": "2026-05-30T10:36:46Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] The PR is maintainer-authored and has no narrow code defect for an automated repair pass; maintainers should decide whether to accept the workflow status semantics and merge normally.; Cleared: The diff adds GitHub API reads and workflow output handling but does not broaden permissions, secrets, dependencies, or downloaded code execution. (sha=2eab61ea1b44183e361004c26d85bc9993d81992)",
+      "review_summary": "The PR adds durable verdict marker freshness checks to the event publish path and only marks event re-review runs Complete when the live marker matches the current PR head SHA.\n\nReproducibility: yes. Source inspection shows current main reports Complete from step outcomes alone, and the linked report describes repeated runs where the durable verdict marker stayed on the old head SHA.",
+      "review_followup": "- [P2] The PR is maintainer-authored and has no narrow code defect for an automated repair pass; maintainers should decide whether to accept the workflow status semantics and merge normally.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "2eab61ea1b44183e361004c26d85bc9993d81992",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(repair): gate event re-review completion on verdict marker freshness",
+        "body": "## Summary\n\n**Problem:** Event-driven `@clawsweeper re-review` reports `State: Complete` even when the durable verdict marker is never refreshed to the new head SHA. Labels (e.g. `status: ⏳ waiting on author`) then stay stuck and bury the PR.\n\n**Root cause:** The `Mark re-review complete` step in `.github/workflows/sweep.yml` set `state=\"Complete\"` purely from the three step exit outcomes (review / publish / route all `success`). It never verified that the durable `clawsweeper-verdict` marker advanced to the PR's current head. When apply ran against a report whose `pull_head_sha` was not refreshed (the review produced no fresh artifact, or the snapshot resolved to `missing` / `no changes`), the marker stayed pinned to the old SHA — yet the status still read `Complete`. This is a truthfulness gap in the completion gate, not the \"identical body → hash-skip sync\" path hypothesized in the issue: the marker SHA is part of the hashed body and `apply-artifacts` forces a reference sync (`review_comment_id: unknown`), so a fresh artifact always syncs; the marker only stays stale when no fresh artifact replaced the report.\n\n**Fix:** After a successful publish, `publish-event-result` compares the live durable verdict marker SHA against the current PR head and records `marker_fresh=1|0`. The completion gate now reports `Complete` only when `marker_fresh=1`; otherwise it reports `Incomplete` with a detail explaining the marker did not advance, so operators know to re-run instead of trusting a false `Complete`.\n\n### What changed\n- `src/repair/comment-router-core.ts`: two pure exported helpers — `durableVerdictMarkerSha()` (reuses the existing marker parser) and `eventReviewMarkerFreshness()` (reuses the existing `reviewedHeadShaBlockReason` to compare marker SHA vs current head; non-PR items are vacuously fresh).\n- `src/repair/publish-event-result.ts`: fetches the live durable review comment + current PR head, writes `marker_fresh` to `$GITHUB_OUTPUT`. Fully guarded — it never fails the publish step and defaults to `0` (unverified) on any error.\n- `.github/workflows/sweep.yml`: completion gate reports `Complete` only on `marker_fresh=1`, otherwise `Incomplete`.\n- `test/repair/comment-router-core.test.ts`: 5 focused cases (fresh / stale-old-head / no-marker / non-PR / marker-sha parse).\n\n### What did NOT change\n- `src/clawsweeper.ts` is untouched (no change to the review / marker generation path).\n- No config surface, no plugin/SDK surface, no dependency changes.\n- The normal path is unchanged: when the marker does advance, the run still reports `Complete`. Only the reported buggy scenario now reports `Incomplete` instead of a false `Complete`.\n\n### Scope\nThis makes the completion gate truthful and surfaces the stale-marker condition rather than force-refreshing the marker (which would mean touching the review/marker generation path). Hence `Refs #170` rather than `Fixes`: the deeper \"why did this particular re-review produce no fresh artifact\" can be diagnosed per-case once the gate stops masking it.\n\n## Verification\n- `pnpm run test:repair` (Node 24): 398 → 403 pass / 0 fail (+5 new tests, no regression).\n- `pnpm run check` (Node 24): exit 0 — `build:all`, `lint`, `test:unit`, `test:repair`, `test:coverage`, and `format:check` (\"All matched files use the correct format\") all green.\n\nRefs https://github.com/openclaw/clawsweeper/issues/170\n",
+        "branch": "fix/170-event-reReview-marker-freshness",
+        "head_sha": "2eab61ea1b44183e361004c26d85bc9993d81992",
+        "author": "openperf",
+        "labels": [
+          "merge-risk: 🚨 automation",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": ".github/workflows/sweep.yml",
+            "additions": 8,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/repair/comment-router-core.ts",
+            "additions": 25,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/repair/publish-event-result.ts",
+            "additions": 73,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/repair/comment-router-core.test.ts",
+            "additions": 61,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-clawsweeper-230",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-clawsweeper-230.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BLOCKED",
+        "review_decision": "",
+        "checks": {
+          "total": 5,
+          "counts": {
+            "CANCELLED": 1,
+            "SUCCESS": 4
+          },
+          "blockers": [
+            "notify:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "notify:CANCELLED"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 682,
+    "total_ms": 1276,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 488
+        "ms": 240
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 831
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 183
+        "ms": 179
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
