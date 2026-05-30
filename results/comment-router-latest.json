@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-30T10:26:09.301Z",
+  "generated_at": "2026-05-30T10:26:16.271Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-30T07:26:06.837Z",
+  "since": "2026-05-30T07:26:15.703Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -12,9 +12,9 @@
     83988
   ],
   "comment_ids": [
-    4582532884
+    4321978811
   ],
-  "status_comment_id": 4582532979,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -59,149 +59,36 @@
       "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-30T10:26:10.022Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 83988
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-30T10:26:11.057Z",
-          "response_comment_id": "4582532979",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(tts): defer text settlement for final-mode TTS to eliminate churn (#83511)",
-        "body": "## Summary\n\nWhen `messages.tts.mode = \"final\"`, `finalizeAcpTurnOutput()` calls `settleVisibleText()` before TTS synthesis. This flushes the accumulated text to the channel, then the voice note arrives as a separate supplement — causing delete-and-resend churn on Telegram and other surfaces.\n\nThis PR defers `settleVisibleText()` until after the TTS outcome is known, and includes the visible text in the TTS payload so Telegram can deliver it as a voice-note caption.\n\n## Root cause\n\n```\nCurrent main flow:\n  1. settleVisibleText()     → text message sent to Telegram\n  2. maybeApplyTtsToPayload  → voice note synthesized\n  3. deliver(voice + supplement) → voice note sent separately\n  Result: user sees text, then voice note, then text deleted = churn\n\nFixed flow:\n  1. Skip settleVisibleText()\n  2. maybeApplyTtsToPayload  → voice note synthesized\n  3. deliver(voice + text as caption) → one combined message\n  4. (If TTS fails → settleVisibleText() fallback)\n  Result: user sees one voice note with caption = no churn\n```\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `dispatch-acp.ts` | Defer `settleVisibleText()` when `ttsMode === \"final\"` + include text in TTS payload + fallback on failure |\n| `dispatch-acp.test.ts` | 4 new tests: deferred settlement for Telegram, eager settlement for non-caption channels, fallback on failure, immediate settlement for non-final |\n\n## Tests\n\n```\n$ node scripts/run-vitest.mjs src/auto-reply/reply/dispatch-acp.test.ts\n ✓ auto-reply (54 tests) 30ms\n Test Files  1 passed (1)\n      Tests  54 passed (54)\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Three issues fixed: (1) live ACP block text was delivered via sendBlockReply before the captioned final voice note in Telegram final-mode TTS, causing text-before-voice churn; (2) caption eligibility was hardcoded as `params.ttsChannel === \"telegram\"` in core dispatch code instead of using the existing channel capability seam; (3) accumulated text was silently lost when an ACP turn aborted before finalizeAcpTurnOutput() ran with block delivery suppressed.\n\n- **Real environment tested**: Docker container (`node:24`, linux arm64, Node.js v24.16.0), source at commit `6b35c715`, with `pnpm install --frozen-lockfile` inside the container.\n\n- **Failing proof before fix**: Two separate regressions verified:\n  1. Reverted source files to pre-capability-seam commit (`5aef407c`). The test `does not stream live ACP block text before captioned Telegram final TTS` fails: `sendBlockReply` was called 1 time. Tests: 1 failed | 56 passed (57).\n  2. Reverted source to pre-abort-fix (`5f64e410`). The test `delivers suppressed Telegram live ACP block text when the turn aborts before final TTS` fails. Tests: 1 failed | 57 passed (58).\n\n- **Exact steps or command run after this patch**:\n\n  ```bash\n  docker run --rm -v \"$(pwd)\":/src:ro -e CI=true -w /build node:24 bash -c \\'\n  cp -a /src/. /build/ && rm -rf node_modules\n  corepack enable && corepack prepare pnpm@latest --activate\n  pnpm install --frozen-lockfile\n  node scripts/run-vitest.mjs src/auto-reply/reply/dispatch-acp.test.ts\n  node scripts/run-vitest.mjs src/channels/plugins/tts-capabilities.test.ts\n  node scripts/run-vitest.mjs extensions/telegram/src/shared.test.ts\n  \\'\n  ```\n\n- **Evidence after fix**:\n\n  ```\n  ✓ auto-reply src/auto-reply/reply/dispatch-acp.test.ts (58 tests) 91ms\n  Test Files  1 passed (1)\n  Tests  58 passed (58)\n\n  ✓ channels src/channels/plugins/tts-capabilities.test.ts (1 test) 98ms\n  Test Files  1 passed (1)\n  Tests  1 passed (1)\n\n  ✓ extension-telegram extensions/telegram/src/shared.test.ts (11 tests) 63ms\n  Test Files  1 passed (1)\n  Tests  11 passed (11)\n  ```\n\n- **Observed result after fix**: All 58 dispatch-acp tests pass including regression tests for: (a) live block suppression in Telegram captioned final TTS path, (b) abort-safe text fallback when the turn aborts before finalization, (c) deferred settlement timing. The fix uses a channel capability seam (`resolveChannelTtsVoiceDelivery(channel)?.captionedFinalText`), suppresses live block delivery via the ACP projector, and flushes deferred text on abort/error paths via `deliverSuppressedCaptionedTextFallback()`. The capability contract is documented with JSDoc in `types.core.ts`.\n\n- **What was not tested**: Live Telegram TTS session (requires TTS provider credentials and a live Telegram bot conversation). The settlement deferral logic, live block suppression, abort fallback, capability seam, and all failure paths are validated by 58 unit tests in a Docker container.\n\nCloses #83511\n\n\n",
-        "branch": "fix/tts-final-text-before-audio-83511",
-        "head_sha": "6b35c715904620148b2576a9bcb4e191ecef60f0",
-        "author": "jerry-xin",
-        "labels": [
-          "channel: telegram",
-          "size: M",
-          "triage: mock-only-proof",
-          "mantis: telegram-visible-proof",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/telegram/src/shared.test.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/shared.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/acp-projector.ts",
-            "additions": 7,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-acp-delivery.ts",
-            "additions": 9,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-acp.test.ts",
-            "additions": 319,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-acp.ts",
-            "additions": 88,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/plugins/tts-capabilities.test.ts",
-            "additions": 3,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/plugins/types.core.ts",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83988",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83988.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 103,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 81,
-            "SKIPPED": 20,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "expected_head_sha": "18690856fa5c422b0d226968cc33a2c0d0d178a1",
+      "finding_id": "review-feedback",
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4779,
+    "total_ms": 1374,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 488
+        "ms": 557
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1963
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2303
+        "ms": 804
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
