@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-30T13:11:54.265Z",
+  "generated_at": "2026-05-30T13:12:29.350Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-30T10:11:51.233Z",
+  "since": "2026-05-30T10:12:28.706Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4582918387
   ],
-  "status_comment_id": 4582918501,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-05-30T13:11:15Z",
       "comment_updated_at": "2026-05-30T13:11:15Z",
-      "status_comment_id": 4582918501,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,192 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-30T13:11:55.302Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 83988
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-30T13:11:56.689Z",
-          "response_comment_id": "4582918501",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(tts): defer text settlement for final-mode TTS to eliminate churn (#83511)",
-        "body": "## Summary\n\nWhen `messages.tts.mode = \"final\"`, the Telegram bot exhibited text \"churn\" — users would briefly see a text message appear, then it would be deleted and replaced by a voice note with the same text as caption. This happened because two independent delivery paths were active simultaneously:\n\n1. **Draft stream path**: `onPartialReply` → `bot.api.sendMessage()` sent preview text immediately\n2. **ACP projector path**: `suppressBlockUserDelivery` blocked ACP block delivery but couldn't reach the upstream draft stream\n3. **TTS finalization**: voice note with caption sent after synthesis, then draft text deleted\n\nThis PR eliminates the churn by suppressing draft stream creation at source when captioned final TTS will be used.\n\n## Root cause\n\n```\nBefore (main):\n  1. onPartialReply fires → draft stream creates sendMessage preview → user sees text\n  2. TTS synthesis runs (2-5 seconds)\n  3. Voice note + caption delivered → draft text deleted\n  Result: user sees text flash then disappear = churn (#83511)\n\nAfter (this PR):\n  1. resolveCaptionedFinalTtsPlan() → willUseCaptionedFinalTts = true\n  2. canStreamAnswerDraft = false → NO draft stream created\n  3. TTS synthesis runs silently\n  4. Voice note + caption delivered as single message\n  Result: user sees only the voice note with caption = no churn\n```\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `src/tts/captioned-final-tts.ts` | **New** shared helper `resolveCaptionedFinalTtsPlan()` combining channel capability, TTS mode, and TTS status checks |\n| `src/tts/captioned-final-tts.test.ts` | **New** 4 unit tests for the shared helper |\n| `src/plugin-sdk/tts-runtime.ts` | Re-export `resolveCaptionedFinalTtsPlan` for extension access |\n| `docs/.generated/plugin-sdk-api-baseline.sha256` | Updated SDK API baseline hash |\n| `src/auto-reply/reply/dispatch-acp.ts` | Refactored to use shared helper instead of inline TTS logic; removed `channelTtsCapabilitiesRuntimeLoader` |\n| `src/auto-reply/reply/dispatch-acp.test.ts` | 4 regression tests for deferred settlement, block suppression, abort fallback |\n| `extensions/telegram/src/bot-message-dispatch.ts` | Added `isTelegramInboundAudioContext()`, `resolveTelegramSessionTtsAuto()`, and `!willUseCaptionedFinalTts` guard on `canStreamAnswerDraft` |\n| `extensions/telegram/src/bot-message-dispatch.test.ts` | 2 new tests: draft suppression when captioned TTS active, normal streaming when not |\n| `extensions/telegram/src/shared.ts` | `captionedFinalText` capability declaration |\n| `extensions/telegram/src/shared.test.ts` | Test for capability declaration |\n| `src/channels/plugins/types.core.ts` | JSDoc for `captionedFinalText` capability contract |\n| `src/channels/plugins/tts-capabilities.test.ts` | Capability seam test |\n| `src/auto-reply/reply/acp-projector.ts` | Block delivery suppression support |\n| `src/auto-reply/reply/dispatch-acp-delivery.ts` | Delivery coordinator for suppressed text fallback |\n\n## Tests\n\n```\n$ node scripts/run-vitest.mjs src/auto-reply/reply/dispatch-acp.test.ts\n ✓ 58 passed (58)\n\n$ node scripts/run-vitest.mjs src/tts/captioned-final-tts.test.ts\n ✓ 4 passed (4)\n\n$ node scripts/run-vitest.mjs extensions/telegram/src/bot-message-dispatch.test.ts\n ✓ 96 passed (96)\n\n$ node scripts/run-vitest.mjs extensions/telegram/src/shared.test.ts\n ✓ 11 passed (11)\n\n$ node scripts/run-vitest.mjs src/channels/plugins/tts-capabilities.test.ts\n ✓ 1 passed (1)\n\n$ pnpm plugin-sdk:api:check\n OK docs/.generated/plugin-sdk-api-baseline.sha256\n\nTotal: 170 tests passed across 5 test suites\n```\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Telegram TTS final-mode \"delete-and-resend churn\" — when TTS mode is `final`, users saw a text message flash briefly (2-5 seconds), then it disappeared and a voice note with caption appeared. Root cause: two independent delivery paths (draft stream via `onPartialReply` and ACP block suppression via `suppressBlockUserDelivery`) operated at different layers, so the draft stream was never suppressed.\n\n- **Real environment tested**: Local patched OpenClaw checkout at commit `d670d829`, macOS arm64, Node.js v24.10.0. Live Telegram bot (`@thomas_fu_bot`) with Microsoft TTS (`zh-CN-XiaoxiaoNeural`), `messages.tts.mode: \"final\"`, `messages.tts.auto: \"always\"`, `channels.telegram.streaming.mode: \"block\"`.\n\n- **Failing proof before fix (live Telegram)**:\n\n  ![Before fix — separate text message + voice message (churn)](https://cdn.deepminer.com.cn/im-test-xming/chat/5/f6138257d34c4372bf6b6143e44cb3f5____2060648631760850944/48AAB56AD0D1DC685CB3918F75AEB402)\n\n  User sent \"hello\" to the Telegram bot. The bot responded with **two separate messages**: a text message (\"老板好，好久不见！有什么需要效劳的？\") AND a voice note — instead of a single voice note with caption. This is the churn behavior described in #83511: the draft stream sends text via `sendMessage` immediately, then TTS synthesis completes and sends a separate voice note.\n\n- **Exact steps after this patch**:\n  1. Applied patch (commit `d670d829`) via `npm link`\n  2. Restarted Gateway: `openclaw gateway restart`\n  3. Sent messages from Telegram to the bot\n  4. Observed: voice note with caption appeared directly — no text flash\n\n- **Evidence after fix (live Telegram screenshot)**:\n\n  ![After fix — voice messages with caption, no text churn](https://cdn.deepminer.com.cn/im-test-xming/chat/5/f6138257d34c4372bf6b6143e44cb3f5____2060648631760850944/6937B66CC8A27C33B76FBD54155B542C)\n\n  The screenshot shows two voice messages from the bot, each with text caption in the same bubble. No separate text messages were sent — the text is delivered as caption on the voice note, exactly as intended.\n\n- **Observed result after fix**: Voice notes are delivered as a single message with text caption. No draft text message is created or deleted. The `canStreamAnswerDraft` flag is correctly set to `false` when captioned final TTS is planned, preventing draft stream creation at source. Non-TTS conversations continue to use normal streaming. Other channels (Discord, Slack, etc.) are unaffected.\n\n- **What was not tested**: Other TTS providers (only Microsoft TTS tested live). Group chat TTS behavior (tested in DM only). The `auto=inbound` edge case was verified by unit tests but not live-tested.\n\nCloses #83511\n",
-        "branch": "fix/tts-final-text-before-audio-83511",
-        "head_sha": "bd31a5c44495074e971d9531f9239571bb19b525",
-        "author": "jerry-xin",
-        "labels": [
-          "docs",
-          "channel: telegram",
-          "size: L",
-          "triage: needs-real-behavior-proof",
-          "mantis: telegram-visible-proof",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message-dispatch.test.ts",
-            "additions": 123,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message-dispatch.ts",
-            "additions": 83,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/shared.test.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/shared.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/acp-projector.ts",
-            "additions": 7,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-acp-delivery.ts",
-            "additions": 9,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-acp.test.ts",
-            "additions": 319,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-acp.ts",
-            "additions": 71,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/plugins/tts-capabilities.test.ts",
-            "additions": 3,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/plugins/types.core.ts",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/tts-runtime.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tts/captioned-final-tts.test.ts",
-            "additions": 89,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/tts/captioned-final-tts.ts",
-            "additions": 35,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83988",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83988.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 101,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 78,
-            "SKIPPED": 18,
-            "IN_PROGRESS": 3,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-state:IN_PROGRESS",
-            "checks-node-agentic-command-support:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor:IN_PROGRESS"
-          ],
-          "pending": [
-            "checks-node-core-runtime-infra-state:IN_PROGRESS",
-            "checks-node-agentic-command-support:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 6296,
+    "total_ms": 2307,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 605
+        "ms": 625
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2412
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 3252
+        "ms": 1663
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
