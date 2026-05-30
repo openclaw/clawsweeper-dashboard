@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-30T19:02:44.956Z",
+  "generated_at": "2026-05-30T19:03:24.449Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-30T16:02:42.319Z",
+  "since": "2026-05-30T16:03:21.861Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    87652
+    88067
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
-  "commands_seen": 3,
+  "scanned_comments": 4,
+  "commands_seen": 2,
   "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,17 +31,151 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:87652:4564509386:2026-05-30T19:02:39Z:clawsweeper_needs_human",
-      "comment_id": "4564509386",
-      "comment_version_key": "4564509386:2026-05-30T19:02:39Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/87652#issuecomment-4564509386",
+      "idempotency_key": "comment-router:openclaw/openclaw:88067:4583905016:2026-05-30T18:55:48Z:re_review",
+      "comment_id": "4583905016",
+      "comment_version_key": "4583905016:2026-05-30T18:55:48Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88067#issuecomment-4583905016",
       "repo": "openclaw/openclaw",
-      "issue_number": 87652,
+      "issue_number": 88067,
+      "author": "BSG2000",
+      "author_id": 5871824,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-30T18:55:48Z",
+      "comment_updated_at": "2026-05-30T18:55:48Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review please",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": "please.",
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-05-30T19:03:25.519Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 88067
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-30T19:03:26.850Z",
+          "response_comment_id": "4583905131",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(responses): drop orphaned assistant msg_* id when reasoning is dropped (#88019)",
+        "body": "## Summary\n\nFixes #88019.\n\nWhen an Azure/OpenAI **Responses** session falls back to a non-Responses model and later resumes a Responses model, `sanitizeSessionHistory` drops the replayable reasoning (`rs_*`) item via `downgradeOpenAIReasoningBlocks`. However, the paired assistant **text block kept its `textSignature`** (which carries the `msg_*` id), so the transport replayed an assistant message item referencing `msg_*` **without** its required `rs_*` reasoning item. Azure Responses then rejected the next turn with:\n\n```\n400 Item 'msg_...' provided without its required 'reasoning' item: 'rs_...'\n```\n\npermanently poisoning the session.\n\nThe transport's `isDifferentModel` guard cannot catch this: after returning to the original Responses model, `msg.model === model.id` again, so only the sanitizer (which compares against the prior model snapshot) knows the reasoning was dropped.\n\n## Changes\n\n- **`downgradeOpenAIReasoningBlocks`** (`src/agents/embedded-agent-helpers/openai.ts`): when it drops a replayable reasoning item from an assistant turn, it now also strips the `textSignature` from that turn's text blocks, so the `msg_*` id and its `rs_*` reasoning are removed together. The conversion layer then falls back to a synthetic, unpaired id that Azure accepts. Absence of the signature is robust through the rest of the sanitize pipeline.\n- **Unique synthetic fallback ids**: the synthetic id is derived from the per-message `msgIndex`, so multiple id-less text blocks in one assistant turn (e.g. `commentary` + `final_answer`) would collide on the same id. The fallback is now made unique per text block in **both** Responses conversion sites:\n  - `src/llm/providers/openai-responses-shared.ts` (shared provider path used by openai/azure/codex Responses)\n  - `src/agents/openai-transport-stream.ts` (embedded agent transport)\n\n## Tests\n\n- `embedded-agent-runner.sanitize-session-history.test.ts` — model-switch path drops the paired `msg_*` id.\n- `embedded-agent-helpers.sanitizeuserfacingtext.test.ts` — downgrade strips paired text signature(s), including the multi-text-block case.\n- `openai-responses.reasoning-replay.test.ts` — multiple id-less text blocks get distinct item ids.\n\nAll acceptance tests from the review pass:\n\n```\nnode scripts/run-vitest.mjs run \\\n  src/agents/embedded-agent-runner.sanitize-session-history.test.ts \\\n  src/agents/openai-transport-stream.test.ts \\\n  src/agents/openai-responses.reasoning-replay.test.ts \\\n  src/agents/embedded-agent-helpers.sanitizeuserfacingtext.test.ts \\\n  src/llm/providers/openai-responses-shared.test.ts\n# 675 passed\n```\n\noxlint and the plugin-sdk dts boundary typecheck are clean for the changed files.\n\n\n\n## Real behavior proof\n\nVerified against a **live Azure OpenAI Responses** deployment (model `gpt-5.5`), not mocks. The endpoint and ids are redacted. The run reproduces the exact failure from the issue and confirms the fix:\n\n```text\n# Real behavior proof — issue #88019 (live Azure OpenAI Responses, gpt-5.5)\nEndpoint: https://<azure-endpoint>/openai/v1/responses\n\n## STEP 1 — reasoning turn\nHTTP 200\noutput items: [{\"type\":\"reasoning\",\"id\":\"rs_030b62b5…8592\"},{\"type\":\"message\",\"id\":\"msg_030b62b…5590\",\"phase\":\"final_answer\"}]\npaired ids share a correlation prefix: reasoning=rs_030b62b5…8592  message=msg_030b62b…5590\nmessage item carries phase=\"final_answer\" (the metadata the fix preserves)\n\n## STEP 2 — BUG: replay assistant message item with its real msg_* id but WITHOUT the rs_* reasoning item\n(this is what openclaw did after a model fallback dropped the reasoning but kept the paired id)\nHTTP 400\nAzure error: Item 'msg_030b62b5…5590' of type 'message' was provided without its required 'reasoning' item: 'rs_030b62b5…8592'.\n\n## STEP 3 — FIX: same replay with the orphan msg_* id stripped (phase metadata preserved)\nHTTP 200\nconversation continues; assistant replied: \"DONE\"\n\n## RESULT\nSTEP 2 (orphan id replayed): HTTP 400 → Azure 400, bug reproduced\nSTEP 3 (orphan id stripped): HTTP 200 → accepted, fix works\n```\n\n**STEP 1** shows Azure issues the `reasoning` (`rs_*`) and `message` (`msg_*`) items as a correlated pair (shared id prefix), and the message carries `phase: \"final_answer\"` — the metadata the fix preserves.\n\n**STEP 2** replays the assistant `message` item with its real `msg_*` id but without the paired `rs_*` reasoning item — exactly what openclaw did after a model fallback dropped the reasoning while keeping the signed text block. Azure rejects the turn with the issue's verbatim error: *Item 'msg_…' … was provided without its required 'reasoning' item: 'rs_…'*.\n\n**STEP 3** replays the same turn with the orphan `msg_*` id stripped (and `{v:1,phase}` preserved) — the patched behavior. Azure accepts it (HTTP 200) and the conversation continues.\n\n> Note: Azure enforces this reasoning↔message pairing server-side (reproduced here via the stored-response path). Some endpoints are lenient on fully stateless replays, but the patch removes the hazard universally: openclaw never replays a reasoning-coupled `msg_*` id once its `rs_*` peer has been dropped.\n",
+        "branch": "fix/responses-replay-orphan-msgid",
+        "head_sha": "89bf8e9d235c85ca0cdc04c821cbe5147c08630e",
+        "author": "bsg2000",
+        "labels": [
+          "agents",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 session-state",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-helpers.sanitizeuserfacingtext.test.ts",
+            "additions": 90,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-helpers/openai.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner.sanitize-session-history.test.ts",
+            "additions": 114,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-responses.reasoning-replay.test.ts",
+            "additions": 62,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-transport-stream.ts",
+            "additions": 28,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/llm/providers/openai-responses-shared.ts",
+            "additions": 21,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-88067",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88067.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 108,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 76,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
+    },
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88067:4577413796:2026-05-29T16:23:02Z:clawsweeper_needs_human",
+      "comment_id": "4577413796",
+      "comment_version_key": "4577413796:2026-05-29T16:23:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88067#issuecomment-4577413796",
+      "repo": "openclaw/openclaw",
+      "issue_number": 88067,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-28T13:36:55Z",
-      "comment_updated_at": "2026-05-30T19:02:39Z",
+      "comment_created_at": "2026-05-29T16:15:19Z",
+      "comment_updated_at": "2026-05-29T16:23:02Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -52,251 +186,12 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] The remaining action is contributor-supplied parseable proof or maintainer proof override plus ordinary maintainer review, not an automated code repair.; Cleared: The diff only changes TypeScript doctor diagnostics and tests; it does not touch workflows, dependencies, lockfiles, secrets, permissions, package metadata, or artifact download/execute paths. (sha=e8a5749f63b2bd81c04eb69c0f449f6ecc430672)",
-      "review_summary": "The PR adds CLI and gateway doctor memory-dreaming diagnostics for memory-search-disabled or unavailable paths and covers them with focused command and gateway tests.\n\nPR surface: Source +54, Tests +133. Total +187 across 4 files.\n\nReproducibility: yes. by source inspection. Current main returns before dreaming diagnostics in both the CLI disabled-memory-search path and the gateway missing-manager path; I did not run a live current-main repro because this review is read-only.",
-      "review_followup": "- [P1] The remaining action is contributor-supplied parseable proof or maintainer proof override plus ordinary maintainer review, not an automated code repair.",
+      "repair_reason": "- [P1] Human review should require contributor-provided real behavior proof before merge; automation cannot prove the contributor’s Azure/OpenAI session recovery environment for them.; Cleared: The diff only changes TypeScript provider/session replay logic and tests; it does not alter dependencies, workflows, secrets, permissions, packaging, or supply-chain surfaces. (sha=4da0deaf5b020b86b39c772413fa400f38346557)",
+      "review_summary": "The PR strips paired Responses assistant message ids when replayable reasoning is dropped, makes synthetic fallback message ids unique across both Responses conversion paths, and adds regression coverage.\n\nPR surface: Source +39, Tests +159. Total +198 across 6 files.\n\nReproducibility: yes. from source, but not from a live run in this review. Current main drops replayable reasoning on model switches while the Responses conversion path still replays msg_* from textSignature; the linked report supplies the Azure 400 symptom.",
+      "review_followup": "- [P1] Human review should require contributor-provided real behavior proof before merge; automation cannot prove the contributor’s Azure/OpenAI session recovery environment for them.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "e8a5749f63b2bd81c04eb69c0f449f6ecc430672",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(doctor): report dreaming without memory search",
-        "body": "Fixes #87637\n\n## Summary\n- keep `doctor.memory.status` dreaming diagnostics visible when embedding memory search has no active manager\n- add a separate CLI doctor note for enabled memory-core dreaming when embedding memory search is disabled\n- cover both source-repro paths with focused gateway-methods and command tests\n\n## Verification\n- `pnpm install --frozen-lockfile`\n- `OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway-methods.config.ts src/gateway/server-methods/doctor.test.ts -t 'keeps dreaming status visible when memory search manager is missing' --reporter=verbose --testTimeout=10000`\n- `OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway-methods.config.ts src/gateway/server-methods/doctor.test.ts --reporter=dot --testTimeout=10000`\n- `OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.commands.config.ts src/commands/doctor-memory-search.test.ts -t 'distinguishes enabled memory-core dreaming when embedding memory search is disabled' --reporter=verbose --testTimeout=10000`\n- `OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.commands.config.ts src/commands/doctor-memory-search.test.ts --reporter=dot --testTimeout=10000`\n- `node_modules/.bin/oxfmt --check src/commands/doctor-memory-search.ts src/commands/doctor-memory-search.test.ts src/gateway/server-methods/doctor.ts src/gateway/server-methods/doctor.test.ts`\n- `node_modules/.bin/oxlint --tsconfig config/tsconfig/oxlint.core.json src/commands/doctor-memory-search.ts src/commands/doctor-memory-search.test.ts src/gateway/server-methods/doctor.ts src/gateway/server-methods/doctor.test.ts`\n- `git diff --check origin/main...HEAD`\n- `node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.test.src.json --pretty false --noEmit`\n\n## Real behavior proof\n\n**Behavior addressed:** `openclaw doctor` and `doctor.memory.status` now keep embedding memory search unavailable/disabled diagnostics separate from memory-core dreaming, so dreaming state remains visible when memory search is disabled or unavailable.\n\n**Real environment tested:** Linux x86_64, Node.js v22.22.0, HEAD `e8a5749f63b2bd81c04eb69c0f449f6ecc430672` based on `origin/main` `6464f8d1d9249953a338d1596fb22abb3b26f7b4`.\n\n**Exact steps or command run after this patch:**\n\n```bash\n# Build and run openclaw doctor with memory search disabled and dreaming enabled\npnpm build\n\n# Test config: agents.defaults.memorySearch.enabled=false, plugins.entries.memory-core.config.dreaming.enabled=true, frequency=\"0 */4 * * *\"\nOPENCLAW_CONFIG_PATH=/tmp/test-openclaw-no-memory.json node openclaw.mjs doctor\n```\n\n**Evidence after fix:**\n\n```\n$ OPENCLAW_CONFIG_PATH=/tmp/test-openclaw-no-memory.json node openclaw.mjs doctor\n\n[...config warnings for unrelated stale plugins omitted...]\n\n◇  Memory search ──────────────────────────────────────────╮\n│                                                          │\n│  Memory search is explicitly disabled (enabled: false).  │\n│                                                          │\n├──────────────────────────────────────────────────────────╯\n│\n◇  Memory dreaming ───────────────────────────────────────────────────╮\n│                                                                     │\n│  Memory-core dreaming is enabled independently of embedding memory  │\n│  search.                                                            │\n│  Dreaming schedule: 0 */4 * * *                                     │\n│  Verify: openclaw memory status --deep                              │\n│                                                                     │\n├─────────────────────────────────────────────────────────────────────╯\n```\n\n**Observed result after fix:** `openclaw doctor` shows a dedicated `Memory dreaming` section after the `Memory search` disabled note, confirming dreaming state remains visible even when embedding memory search is explicitly disabled. The `Memory dreaming` section reports the dreaming schedule and instructs the user to run `openclaw memory status --deep` to inspect dreaming state further.\n\n**What was not tested:** End-to-end `openclaw doctor` run against a live gateway with a real memory-core plugin and active dreaming session. The focused Vitest coverage exercises the source-repro paths (CLI disabled-memory-search path and gateway missing-manager path) directly.",
-        "branch": "issue-87637-dreaming-doctor-status",
-        "head_sha": "e8a5749f63b2bd81c04eb69c0f449f6ecc430672",
-        "author": "alix-007",
-        "labels": [
-          "gateway",
-          "commands",
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/commands/doctor-memory-search.test.ts",
-            "additions": 38,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor-memory-search.ts",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/doctor.test.ts",
-            "additions": 98,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/doctor.ts",
-            "additions": 78,
-            "deletions": 48,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-87652",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87652.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 108,
-          "counts": {
-            "FAILURE": 5,
-            "SUCCESS": 74,
-            "SKIPPED": 28,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-state:FAILURE",
-            "checks-node-agentic-control-plane-runtime:FAILURE",
-            "checks-node-agentic-command-support:FAILURE",
-            "checks-node-agentic-commands-doctor:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-state:FAILURE",
-            "checks-node-agentic-control-plane-runtime:FAILURE",
-            "checks-node-agentic-command-support:FAILURE",
-            "checks-node-agentic-commands-doctor:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:87652:4583907836:2026-05-30T18:56:34Z:re_review",
-      "comment_id": "4583907836",
-      "comment_version_key": "4583907836:2026-05-30T18:56:34Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/87652#issuecomment-4583907836",
-      "repo": "openclaw/openclaw",
-      "issue_number": 87652,
-      "author": "Alix-007",
-      "author_id": 267018309,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-30T18:56:34Z",
-      "comment_updated_at": "2026-05-30T18:56:34Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-30T19:02:47.187Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 87652
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-30T19:02:48.476Z",
-          "response_comment_id": "4582943123",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(doctor): report dreaming without memory search",
-        "body": "Fixes #87637\n\n## Summary\n- keep `doctor.memory.status` dreaming diagnostics visible when embedding memory search has no active manager\n- add a separate CLI doctor note for enabled memory-core dreaming when embedding memory search is disabled\n- cover both source-repro paths with focused gateway-methods and command tests\n\n## Verification\n- `pnpm install --frozen-lockfile`\n- `OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway-methods.config.ts src/gateway/server-methods/doctor.test.ts -t 'keeps dreaming status visible when memory search manager is missing' --reporter=verbose --testTimeout=10000`\n- `OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway-methods.config.ts src/gateway/server-methods/doctor.test.ts --reporter=dot --testTimeout=10000`\n- `OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.commands.config.ts src/commands/doctor-memory-search.test.ts -t 'distinguishes enabled memory-core dreaming when embedding memory search is disabled' --reporter=verbose --testTimeout=10000`\n- `OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.commands.config.ts src/commands/doctor-memory-search.test.ts --reporter=dot --testTimeout=10000`\n- `node_modules/.bin/oxfmt --check src/commands/doctor-memory-search.ts src/commands/doctor-memory-search.test.ts src/gateway/server-methods/doctor.ts src/gateway/server-methods/doctor.test.ts`\n- `node_modules/.bin/oxlint --tsconfig config/tsconfig/oxlint.core.json src/commands/doctor-memory-search.ts src/commands/doctor-memory-search.test.ts src/gateway/server-methods/doctor.ts src/gateway/server-methods/doctor.test.ts`\n- `git diff --check origin/main...HEAD`\n- `node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.test.src.json --pretty false --noEmit`\n\n## Real behavior proof\n\n**Behavior addressed:** `openclaw doctor` and `doctor.memory.status` now keep embedding memory search unavailable/disabled diagnostics separate from memory-core dreaming, so dreaming state remains visible when memory search is disabled or unavailable.\n\n**Real environment tested:** Linux x86_64, Node.js v22.22.0, HEAD `e8a5749f63b2bd81c04eb69c0f449f6ecc430672` based on `origin/main` `6464f8d1d9249953a338d1596fb22abb3b26f7b4`.\n\n**Exact steps or command run after this patch:**\n\n```bash\n# Build and run openclaw doctor with memory search disabled and dreaming enabled\npnpm build\n\n# Test config: agents.defaults.memorySearch.enabled=false, plugins.entries.memory-core.config.dreaming.enabled=true, frequency=\"0 */4 * * *\"\nOPENCLAW_CONFIG_PATH=/tmp/test-openclaw-no-memory.json node openclaw.mjs doctor\n```\n\n**Evidence after fix:**\n\n```\n$ OPENCLAW_CONFIG_PATH=/tmp/test-openclaw-no-memory.json node openclaw.mjs doctor\n\n[...config warnings for unrelated stale plugins omitted...]\n\n◇  Memory search ──────────────────────────────────────────╮\n│                                                          │\n│  Memory search is explicitly disabled (enabled: false).  │\n│                                                          │\n├──────────────────────────────────────────────────────────╯\n│\n◇  Memory dreaming ───────────────────────────────────────────────────╮\n│                                                                     │\n│  Memory-core dreaming is enabled independently of embedding memory  │\n│  search.                                                            │\n│  Dreaming schedule: 0 */4 * * *                                     │\n│  Verify: openclaw memory status --deep                              │\n│                                                                     │\n├─────────────────────────────────────────────────────────────────────╯\n```\n\n**Observed result after fix:** `openclaw doctor` shows a dedicated `Memory dreaming` section after the `Memory search` disabled note, confirming dreaming state remains visible even when embedding memory search is explicitly disabled. The `Memory dreaming` section reports the dreaming schedule and instructs the user to run `openclaw memory status --deep` to inspect dreaming state further.\n\n**What was not tested:** End-to-end `openclaw doctor` run against a live gateway with a real memory-core plugin and active dreaming session. The focused Vitest coverage exercises the source-repro paths (CLI disabled-memory-search path and gateway missing-manager path) directly.",
-        "branch": "issue-87637-dreaming-doctor-status",
-        "head_sha": "e8a5749f63b2bd81c04eb69c0f449f6ecc430672",
-        "author": "alix-007",
-        "labels": [
-          "gateway",
-          "commands",
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/commands/doctor-memory-search.test.ts",
-            "additions": 38,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor-memory-search.ts",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/doctor.test.ts",
-            "additions": 98,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/doctor.ts",
-            "additions": 78,
-            "deletions": 48,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-87652",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87652.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 108,
-          "counts": {
-            "FAILURE": 5,
-            "SUCCESS": 74,
-            "SKIPPED": 28,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-state:FAILURE",
-            "checks-node-agentic-control-plane-runtime:FAILURE",
-            "checks-node-agentic-command-support:FAILURE",
-            "checks-node-agentic-commands-doctor:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-state:FAILURE",
-            "checks-node-agentic-control-plane-runtime:FAILURE",
-            "checks-node-agentic-command-support:FAILURE",
-            "checks-node-agentic-commands-doctor:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:87652:4582943013:2026-05-30T13:21:52Z:re_review",
-      "comment_id": "4582943013",
-      "comment_version_key": "4582943013:2026-05-30T13:21:52Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/87652#issuecomment-4582943013",
-      "repo": "openclaw/openclaw",
-      "issue_number": 87652,
-      "author": "Alix-007",
-      "author_id": 267018309,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-30T13:21:52Z",
-      "comment_updated_at": "2026-05-30T13:21:52Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "4da0deaf5b020b86b39c772413fa400f38346557",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
@@ -305,23 +200,23 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 6910,
+    "total_ms": 5776,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 419
+        "ms": 440
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2200
+        "ms": 2127
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 4262
+        "ms": 3175
       },
       {
         "name": "append_ledger",
