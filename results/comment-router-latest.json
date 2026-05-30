@@ -1,19 +1,17 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-30T09:16:34.098Z",
+  "generated_at": "2026-05-30T09:16:44.950Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-30T06:16:33.440Z",
+  "since": "2026-05-30T06:16:42.879Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    84965
+    88281
   ],
-  "comment_ids": [
-    4582230044
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -33,62 +31,127 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:84965:4508958917:2026-05-30T09:16:14Z:clawsweeper_needs_human",
-      "comment_id": "4508958917",
-      "comment_version_key": "4508958917:2026-05-30T09:16:14Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84965#issuecomment-4508958917",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88281:4582349896:2026-05-30T09:16:40Z:clawsweeper_auto_repair",
+      "comment_id": "4582349896",
+      "comment_version_key": "4582349896:2026-05-30T09:16:40Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88281#issuecomment-4582349896",
       "repo": "openclaw/openclaw",
-      "issue_number": 84965,
+      "issue_number": 88281,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-21T13:55:13Z",
-      "comment_updated_at": "2026-05-30T09:16:14Z",
+      "comment_created_at": "2026-05-30T09:04:40Z",
+      "comment_updated_at": "2026-05-30T09:16:40Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] No narrow automated repair is identified; the remaining action is maintainer acceptance of the fallback semantics plus exact-head check gating.; Cleared: The diff only changes Discord outbound send logic and tests; it adds no dependencies, workflow execution, secret handling, permissions, or supply-chain surface. (sha=fcd19b7cc24bc071b911646c3ec07534eec48db3)",
-      "review_summary": "The PR catches unavailable Discord voice-adapter errors for `audioAsVoice` payloads with visible text, falls back to normal Discord text delivery with reply alias support, and adds a regression test.\n\nPR surface: Source +31, Tests +46. Total +77 across 3 files.\n\nReproducibility: yes. from source and the linked report: current main sends the first `audioAsVoice` media through `sendVoice` without catching the unavailable adapter error, and the report gives concrete OpenClaw 2026.5.19 cron steps. I did not run a live cron job in this read-only review.",
-      "review_followup": "- [P2] No narrow automated repair is identified; the remaining action is maintainer acceptance of the fallback semantics plus exact-head check gating.",
+      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=09a021a7c8514f81600acde297dfb40254e36fe2)",
+      "review_summary": "The PR adds an `AcpSessionManager.hasActiveTurn` probe, routes ACP task maintenance through it, and adds task-registry regression tests for stale and live ACP tasks.\n\nPR surface: Source +1, Tests +44. Total +45 across 4 files.\n\nReproducibility: yes. source inspection gives a high-confidence path: run a long ACP turn in the gateway, wait past the reconcile grace, then run standalone `openclaw tasks maintenance --apply`. The CLI process has an empty ACP active-turn map, so this patch can treat the live task as unbacked.",
+      "review_followup": "- [P2] A narrow repair can make ACP liveness authoritative only when maintenance runs in the owning gateway process, with focused regression coverage for standalone CLI maintenance.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "fcd19b7cc24bc071b911646c3ec07534eec48db3",
-      "finding_id": null,
+      "expected_head_sha": "09a021a7c8514f81600acde297dfb40254e36fe2",
+      "finding_id": "review-feedback",
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(tasks): reclaim ACP zombie runs blocking gateway restart",
+        "body": "### Summary\n\n- **Problem**: After a gateway crash (or `openclaw update`-time kill) mid-ACP-turn, the gateway can refuse to restart indefinitely. The reported symptom is a managed gateway \"blocked from restart/update\" with a stuck ACP run, surfacing after long uptimes (the reporter saw it at ~27 days).\n- **Root Cause**: The gateway blocks restart while any task record is still `status=running` with no `endedAt` (`getInspectableActiveTaskRestartBlockers`). Reconciliation reclaims such records once their backing session is gone, via `hasBackingSession`, which gates every runtime through a real liveness probe — cron through `isCronJobActive`, cli through an active run context — **except ACP**, which returned `Boolean(acpEntry.entry)`. A persistent ACP session keeps a durable session-store entry for its entire lifetime, and that entry survives a gateway crash. So a crashed ACP turn leaves a `running` record that `hasBackingSession` treats as \"backed\" forever: it is never reclaimed, never times out of the restart-blocker set, and wedges restart until the operator clears state manually.\n- **Fix**: Gate ACP backing on the in-process live-turn registry instead of entry existence. `AcpSessionManager` already tracks an authoritative per-session live-turn map (set when a prompt turn starts, deleted in the turn's `finally`; it is even used internally as the idle-eviction guard). This adds a small public probe `AcpSessionManager.hasActiveTurn(sessionKey)` and routes the ACP branch of `hasBackingSession` through it via the existing injected maintenance runtime. The per-turn invariant makes this exact: ACP task records are created when a prompt turn begins and marked terminal inside the same turn, before the live-turn entry is deleted — so `status=running` with no live turn is *only* a crash mid-turn, or the brief create→register startup window that the unchanged 5-minute reconcile grace already covers. A genuinely in-flight turn (even one hung with no output) keeps `hasActiveTurn` true and is never reclaimed; a crashed run becomes reclaimable once the grace expires. This is the generic liveness gate the issue asks for; it deliberately does **not** add the reporter's suggested max-runtime TTL, heartbeat-timeout, or `--force-restart` config knobs.\n- **What changed**:\n  - `src/acp/control-plane/manager.core.ts` — add public `hasActiveTurn(sessionKey)` reading the existing in-process live-turn map.\n  - `src/tasks/task-registry.maintenance.ts` — add `hasActiveAcpTurn` to the injected maintenance runtime (default delegates to `getAcpSessionManager().hasActiveTurn`); the ACP branch of `hasBackingSession` now returns it. Diagnostics/`explainActiveTaskRetention` route through the same function, so operator inspection updates automatically.\n- **What did NOT change (scope boundary)**:\n  - Config surface unchanged (no schema, defaults, doctor migrations, or `docs/reference/config` edits).\n  - Plugin surface unchanged (no plugin SDK, manifest, `extensions/api.ts` / `runtime-api.ts`, registry, or loader edits).\n  - Terminal-ACP-session cleanup (`shouldCloseTerminalAcpSession`) still reads the session-store entry; that path is untouched.\n  - The 5-minute reconcile grace and all non-ACP backing probes (cron, cli, subagent) are unchanged.\n  - No dependency / lockfile changes.\n\n### Reproduction\n\n1. A persistent ACP session is running a prompt turn; a `running` task record exists for that turn, and the durable session-store entry exists.\n2. The gateway crashes (or is killed by `openclaw update`) mid-turn. The in-process live-turn registry is gone, but the persisted session-store entry survives on disk.\n3. **Before this PR**: on restart, the `running` task record has no `endedAt`; `hasBackingSession` sees the surviving entry (`Boolean(acpEntry.entry) === true`) and treats it as backed forever. The record never reconciles to `lost`, stays in `getInspectableActiveTaskRestartBlockers()`, and blocks restart/update until the operator clears state by hand.\n4. **After this PR**: `hasBackingSession` consults `hasActiveAcpTurn`, which is false after a crash. Once the existing 5-minute reconcile grace expires, the record is marked `lost`, drops out of the restart-blocker set, and restart proceeds. A turn that is genuinely mid-flight keeps `hasActiveTurn` true and is never reclaimed.\n\n### Real behavior proof\n\n**Behavior addressed (#88205)**: a grace-expired `status=running` ACP task whose session-store entry survives a crash but whose prompt turn is no longer live is reclaimed (`lost`) and leaves the restart-blocker set; a `running` ACP task with a live in-flight turn is never reclaimed.\n\n**Real environment tested (Linux, Node 22, real-component vitest harness driving production `runTaskRegistryMaintenance` + `getInspectableActiveTaskRestartBlockers` + `hasBackingSession`)**: the harness builds real `TaskRecord`s and exercises the actual reconcile / restart-blocker code paths; only the leaf liveness probes (`hasActiveAcpTurn`, `readAcpSessionEntry`, `isCronJobActive`, `getAgentRunContext`) are injected through the same `taskRegistryMaintenanceRuntime` seam production uses to wire `getAcpSessionManager().hasActiveTurn`.\n\n**Exact steps or command run after this patch**:\n\n1. `node scripts/run-vitest.mjs src/tasks/task-registry.maintenance.issue-60299.test.ts --reporter=verbose` (AFTER fix)\n2. Temporarily revert the ACP branch of `hasBackingSession` to the shipped entry-existence check (`return Boolean(acpEntry.entry)`), rerun the same file (BEFORE fix), then restore\n3. `node scripts/run-vitest.mjs src/tasks/task-registry.test.ts`\n4. `node scripts/run-vitest.mjs src/acp/control-plane/manager.test.ts`\n5. `pnpm exec oxfmt --check --threads=1 src/acp/control-plane/manager.core.ts src/tasks/task-registry.maintenance.ts src/tasks/task-registry.maintenance.issue-60299.test.ts src/tasks/task-registry.test.ts`\n\n**Evidence after fix (verbatim vitest BEFORE/AFTER on the new regression tests)**:\n\n```text\n--- BEFORE FIX (ACP branch reverted to entry-existence check) ---\n × |tasks| ... > reclaims a stale running ACP task with no live turn even though its session-store entry survives 17ms\n   → expected +0 to be 1 // Object.is equality\n ✓ |tasks| ... > keeps a running ACP task live while a prompt turn is still in flight 2ms\n Test Files  1 failed (1)\n      Tests  1 failed | 17 passed (18)\n\n--- AFTER FIX (live-turn gate restored) ---\n ✓ |tasks| ... > reclaims a stale running ACP task with no live turn even though its session-store entry survives 2ms\n ✓ |tasks| ... > keeps a running ACP task live while a prompt turn is still in flight 1ms\n Test Files  1 passed (1)\n      Tests  18 passed (18)\n```\n\nCompanion suites green after fix: `src/tasks/task-registry.test.ts` 72/72, `src/acp/control-plane/manager.test.ts` 86/86; `oxfmt --check` clean on all four touched files.\n\n**Observed result after fix**:\n\n- The crashed-run zombie reconciles (`reconciled: 1`, status `lost`) and `getInspectableActiveTaskRestartBlockers()` becomes empty → restart unblocked.\n- A `running` ACP task with `hasActiveAcpTurn === true` is never reclaimed (`reconciled: 0`, stays `running`, still a blocker).\n- Reverting only the ACP branch to the shipped `Boolean(acpEntry.entry)` check flips the zombie-reclaim test red (`expected +0 to be 1` — the zombie is treated as backed), pinning the exact behavior this PR fixes.\n\n**What was not tested**:\n\n- End-to-end: a real opencode/codex ACP child crashing mid-turn on a managed gateway over a multi-day uptime, then a real `openclaw gateway restart` / `openclaw update`. The deterministic harness reproduces the necessary conditions (running record + surviving entry + no live turn) without a real backend or 27-day uptime.\n- Full `pnpm check` / full `pnpm test` broad gates — deferred to CI on this memory-constrained box.\n\n**Regression tests**:\n\n- `reclaims a stale running ACP task with no live turn even though its session-store entry survives` (#88205) — fails on the shipped entry-existence behavior, passes with the live-turn gate.\n- `keeps a running ACP task live while a prompt turn is still in flight` — passes before and after, guarding against the inverse regression (never over-reclaim a healthy in-flight turn).\n\n### Risk / Mitigation\n\n- **Risk**: over-reclaiming a live ACP session. **Mitigation**: the per-turn invariant — a `running` ACP record always coincides with a live turn during normal operation, and there is no `running` record between turns of a persistent session — plus `hasActiveTurn` staying true for any in-flight turn (including a hung-but-alive one) means only the crashed-run set is affected.\n- **Risk**: the brief window between task-record creation and live-turn registration during backend resolution could look like \"no live turn\". **Mitigation**: that window is covered by the unchanged 5-minute reconcile grace keyed off the task's own timestamps; nothing reclaims a record younger than the grace.\n- **Risk**: the change lives in two core files (`src/acp`, `src/tasks`). **Mitigation**: it narrows ACP \"backing\" from \"entry exists\" to \"a turn is live\" through the existing injected-runtime seam — ACP liveness stays owned by `AcpSessionManager`; tasks consults it exactly the way it consults cron/cli probes. Diff is small and additive (one public probe + one injected field + one branch rewrite).\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Gateway / orchestration (task-registry restart blockers / reconciliation)\n- [x] ACP agent runtime (`AcpSessionManager` live-turn liveness)\n\n### Linked Issue/PR\n\nFixes #88205\n",
+        "branch": "fix/88205-acp-zombie-restart-blocker",
+        "head_sha": "09a021a7c8514f81600acde297dfb40254e36fe2",
+        "author": "openperf",
+        "labels": [
+          "size: S",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/acp/control-plane/manager.core.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/tasks/task-registry.maintenance.issue-60299.test.ts",
+            "additions": 40,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/tasks/task-registry.maintenance.ts",
+            "additions": 4,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/tasks/task-registry.test.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-88281",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88281.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 108,
+          "counts": {
+            "SUCCESS": 78,
+            "CANCELLED": 1,
+            "SKIPPED": 28,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1383,
+    "total_ms": 2269,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 646
+        "ms": 196
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1860
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 726
+        "ms": 185
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
