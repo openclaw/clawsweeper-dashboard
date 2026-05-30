@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-30T10:39:42.763Z",
+  "generated_at": "2026-05-30T10:40:28.176Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-30T07:39:42.073Z",
+  "since": "2026-05-30T07:40:26.029Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    88295
+    88294
   ],
-  "comment_ids": [
-    4582558106
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,26 +29,117 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88294:4582531538:2026-05-30T10:40:22Z:clawsweeper_needs_human",
+      "comment_id": "4582531538",
+      "comment_version_key": "4582531538:2026-05-30T10:40:22Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88294#issuecomment-4582531538",
+      "repo": "openclaw/openclaw",
+      "issue_number": 88294,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-30T10:24:48Z",
+      "comment_updated_at": "2026-05-30T10:40:22Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- No ClawSweeper repair lane is needed because no concrete patch defect was found; maintainers can merge or request regression coverage through normal review.; Cleared: The diff only enriches an existing in-process gateway response and does not touch dependencies, secrets, auth, permissions, downloads, or code execution paths. (sha=70f18b825331fce443ae5434db651c6b2c2a2514)",
+      "review_summary": "The branch passes the matched cron job name into single-job run-log reads and backfills missing `jobName` fields in returned `cron.runs` entries.\n\nPR surface: Source +16. Total +16 across 2 files.\n\nReproducibility: yes. Source inspection shows current main omits `jobName` in the single-job `cron.runs` response while the UI falls back to `jobId`; the PR body adds before/after terminal proof from a real patched install.",
+      "review_followup": "- No ClawSweeper repair lane is needed because no concrete patch defect was found; maintainers can merge or request regression coverage through normal review.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "70f18b825331fce443ae5434db651c6b2c2a2514",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): include job name when reading single-job run history",
+        "body": "## Problem\n\nIn the Control UI **Cron → run history** pulldown, the section header for a single job's runs renders the raw job UUID instead of the human-readable job name. The view template already has `entry.jobName ?? entry.jobId` as the source for the header and Lit only falls back to the id when `jobName` is missing on the entry.\n\nThe fallback fires because the `cron.runs` gateway handler only attaches `jobName` to entries in the **all-jobs** scope. The **single-job** scope (used when the UI loads history for a specific job) returns log entries verbatim, so any historical JSONL records written before the writer started embedding `jobName` come back with `jobName` undefined.\n\n## Root Cause\n\n`src/gateway/server-methods/cron.ts` builds a `jobNameById` map and passes it to `readCronRunLogEntriesPageAll(...)` for the all-jobs branch:\n\n```ts\n// scope === \"all\"\nconst jobs = await context.cron.list({ includeDisabled: true });\nconst jobNameById = Object.fromEntries(/* ... */);\nconst page = await readCronRunLogEntriesPageAll({ /* ..., */ jobNameById });\n```\n\n…but the matching single-job branch calls `readCronRunLogEntriesPage(logPath, { ... })` without any job-name input. `src/cron/run-log.ts` then returns whatever `jobName` (or lack thereof) is on disk. Historical entries written before `jobName` was added to the run-log writer therefore reach the UI with `jobName === undefined`, and the render at `ui/src/ui/views/cron.ts` falls through to `entry.jobId`.\n\n## Fix\n\n- Add an optional `jobName?: string` to `ReadCronRunLogPageOptions`.\n- In `readCronRunLogEntriesPage`, after slicing the page, fill in `jobName` on each entry that does not already have one (non-clobbering; newer entries that already carry `jobName` from the writer are left untouched).\n- In the gateway `cron.runs` single-job branch, resolve the current job once via `context.cron.list({ includeDisabled: true })` and pass its `name` as `jobName` to `readCronRunLogEntriesPage`. If the job no longer exists, we pass `undefined` and behavior is unchanged from today.\n\nThe change mirrors what the all-jobs branch already does. No new dependencies, no schema migration, and no behavior change for entries that were already written with `jobName`.\n\n## Real behavior proof\n\n> Required by CONTRIBUTING.md. Real post-patch output from my own Pi running the patched gateway.\n\n**Setup:** Raspberry Pi 4 Model B (8GB, ARM64, Debian bookworm), OpenClaw 2026.5.27 (27ae826), Node 22.x. Patched the built dist files in `/usr/lib/node_modules/openclaw/dist/` with the equivalent of this diff, cleared `/var/tmp/openclaw-compile-cache`, restarted `openclaw.service`, and invoked the gateway's `cron.runs` method via the `openclaw cron runs --id <jobId>` CLI which uses the same WebSocket path the Control UI uses.\n\n**BEFORE (unpatched dist, original 2026.5.27 binary):**\n\n```\n$ openclaw cron runs --id 9e89b060-00ac-4e2d-8cc0-a9848f4a3e27 --limit 1 | grep -E 'jobName|jobId'\n      \"jobId\": \"9e89b060-00ac-4e2d-8cc0-a9848f4a3e27\",\n```\n\n(No `jobName` field present → Control UI falls back to rendering the raw UUID in the run-history header.)\n\n**AFTER (patched dist, same job, same JSONL):**\n\n```\n$ openclaw cron runs --id 9e89b060-00ac-4e2d-8cc0-a9848f4a3e27 --limit 1 | grep -i 'jobname'\n      \"jobName\": \"Twitter archive export\"\n```\n\nThe entry now carries the live job name (`\"Twitter archive export\"`), which is exactly what the Control UI's `entry.jobName ?? entry.jobId` render path consumes — so the header now shows the human-readable name instead of the UUID.\n\nFor the all-jobs scope, output is unchanged (that path already populated `jobName`). Build/typecheck validated via Cloudflare container (`pnpm build && pnpm tsgo:core && pnpm tsgo:extensions`, exit=0).\n\n**What was NOT tested:**\n\n- Windows / macOS runtime — only verified on Linux ARM64 (Pi).\n- Jobs whose stored run logs predate the `jobName` field AND whose underlying job has since been deleted: `context.cron.list(...)` won't include it, so `jobName` stays undefined for those entries (same as today — no regression, no improvement).\n- A Control UI screenshot: my Control UI is published via a tailnet-only nginx vhost and capturing a clean before/after screenshot through that stack is impractical to share here. The gateway response is the actual data source the UI's render path consumes, so equivalence with the UI behavior is direct.\n\n## Environment\n\n- OpenClaw version: 2026.5.27 (27ae826)\n- Platform: Raspberry Pi 4 Model B Rev 1.4 (8GB, ARM64, Debian bookworm)\n- Node: v22.x\n\n## AI Disclosure\n\n- [x] AI-assisted (GitHub Copilot)\n- [x] Human-run real behavior proof from own setup (Pi, patched dist)\n- [x] Understand what the code does\n- [x] Allow edits by maintainers enabled",
+        "branch": "fix/cron-history-job-name",
+        "head_sha": "70f18b825331fce443ae5434db651c6b2c2a2514",
+        "author": "kip-claw",
+        "labels": [
+          "gateway",
+          "size: XS",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/cron/run-log.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/cron.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-88294",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88294.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 108,
+          "counts": {
+            "FAILURE": 1,
+            "SUCCESS": 77,
+            "SKIPPED": 29,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1004,
+    "total_ms": 2451,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 680
+        "ms": 391
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1742
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 313
+        "ms": 292
       },
       {
         "name": "append_ledger",
