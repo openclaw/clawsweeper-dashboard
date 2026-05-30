@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-30T10:41:24.797Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-05-30T10:41:30.886Z",
+  "repo": "steipete/oracle",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-30T07:41:24.493Z",
+  "since": "2026-05-30T07:41:29.459Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    88297
+    232
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
-  "commands_seen": 0,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,158 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:steipete/oracle:232:4582462643:2026-05-30T10:41:24Z:clawsweeper_needs_human",
+      "comment_id": "4582462643",
+      "comment_version_key": "4582462643:2026-05-30T10:41:24Z",
+      "comment_url": "https://github.com/steipete/oracle/pull/232#issuecomment-4582462643",
+      "repo": "steipete/oracle",
+      "issue_number": 232,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-30T09:50:20Z",
+      "comment_updated_at": "2026-05-30T10:41:24Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] Needs author or maintainer repair for target candidate/fallback handling plus fresh latest-head real-browser proof; automation should not be the merge path while proof is missing.; Needs attention: The PR improves the earlier browser-wide target scan, but the remaining candidate-order and broad iframe handling still need attention before this security-sensitive CDP path lands.; Review finding: [P1] Keep the f... (sha=95903b6109e3dff7e50eed472c606f6e799218a7)",
+      "review_summary": "The PR changes Deep Research completion to prefer CDP target attachment for OOPIF reports, scopes target discovery with page-session auto-attach, exposes the page session id on browser-WSEndpoint clients, adds regression tests, and updates the changelog.\n\nReproducibility: yes. from source, with medium confidence: current main takes the Page frame path whenever both Page and client exist, while the PR discussion says the real report now lives in an OOPIF outside the main page frame tree. I did not run a live ChatGPT Deep Research session in this read-only review.",
+      "review_followup": "- [P2] Needs author or maintainer repair for target candidate/fallback handling plus fresh latest-head real-browser proof; automation should not be the merge path while proof is missing.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "95903b6109e3dff7e50eed472c606f6e799218a7",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(browser): extract Deep Research report from out-of-process iframe",
+        "body": "## Problem\n\nDeep Research runs via the browser engine stopped returning results. The session hangs until timeout (or stays stuck `running`), and harvest captures only the `\"ChatGPT said:\"` placeholder instead of the report.\n\n## Root cause\n\nChatGPT moved the Deep Research report out of the inline assistant turn and into a **doubly-nested, out-of-process sandboxed iframe**:\n\n```\nchatgpt.com/c/…                            → assistantCount: 0  (no report in the main DOM)\n └─ connector_openai_deep_research (OOPIF)  → body empty (sandbox shell)\n     └─ nested same-origin iframe           → the actual report (\"Research completed in …\")\n```\n\n`waitForDeepResearchCompletion` has two extraction paths:\n\n- `readDeepResearchFrameResult` — reads the **main page's** frame tree via isolated worlds. The OOPIF does **not** appear in the main page's frame tree, so `findDeepResearchFrameId` returns `null`. It can never see the report.\n- `readDeepResearchTargetResult` — attaches to the iframe's own CDP target and walks its nested frames. This one **can** read the report.\n\nThe dispatch was `Page ? frameResult : client ? targetResult : null`. In production **both `Page` and `client` are always passed** (see `index.ts` and `reattach.ts`), so it always took the broken frame path and the working target path was effectively dead code. The completion poll never saw `finished` (no assistant turn in the main DOM either), so the run timed out.\n\nA second guard (`hasActiveScopedResearch`) also depended on a main-DOM assistant turn that no longer exists, which would have blocked the report even after fixing dispatch.\n\n## Fix\n\n- Prefer the target-attach path (reaches the OOPIF + nested frames); fall back to the in-page frame path for legacy/inline rendering.\n- Treat a **target-confirmed** completion as authoritative even when the main DOM exposes no assistant turn, since the report now lives entirely in the OOPIF.\n\nThe scoped-staleness guard is preserved for the in-page frame path (target-confirmed completions read the live connector iframe directly, so they don't need the main-DOM corroboration).\n\n## Verification\n\nReattaching to a real completed Deep Research session now works end-to-end through the actual CLI:\n\n```\nMonitoring Deep Research (timeout: 40min)...\nDeep Research completed (6s elapsed)\n[browser] Saved deep-research-report artifact … deep-research-report.md (26.7 KB)\nReattach succeeded; session marked completed.\n```\n\nPreviously this same flow extracted only `\"ChatGPT said:\"` and ran to timeout.\n\n## Tests\n\n- Adds a regression test: production shape (both `Page` and `client` passed, scoped run, `minTurnIndex >= 0`) where the report is only reachable via the target path and the main DOM has no assistant turn → returns the report instead of hanging.\n- Existing staleness-protection test (`does not complete from an unscoped frame result during a scoped run`) still passes — the guard relaxation only applies to target-confirmed completions.\n- `deepResearch.test.ts`: 28 passed. Full browser suite: 399 passed / 1 skipped.\n\n## Known follow-up (not in this PR)\n\n`readDeepResearchTargetResult` enumerates targets browser-wide (`Target.getTargets`). With multiple ChatGPT tabs open in the persistent profile, each holding a completed Deep Research report, a run could in principle pick up another tab's report. A follow-up should scope target enumeration to the current page session (the `client` is already connected to the page target) and drop the browser-wide scan.",
+        "branch": "fix/deep-research-oopif-extraction",
+        "head_sha": "95903b6109e3dff7e50eed472c606f6e799218a7",
+        "author": "umutkeltek",
+        "labels": [
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof",
+          "P1",
+          "merge-risk: 🚨 security-boundary",
+          "merge-risk: 🚨 session-state"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/browser/actions/deepResearch.ts",
+            "additions": 56,
+            "deletions": 39,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/browser/chromeLifecycle.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "tests/browser/deepResearch.test.ts",
+            "additions": 313,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-steipete-oracle-232",
+        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-oracle-232.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 1,
+          "counts": {
+            "SUCCESS": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:steipete/oracle:232:4582514384:2026-05-30T10:15:41Z:re_review",
+      "comment_id": "4582514384",
+      "comment_version_key": "4582514384:2026-05-30T10:15:41Z",
+      "comment_url": "https://github.com/steipete/oracle/pull/232#issuecomment-4582514384",
+      "repo": "steipete/oracle",
+      "issue_number": 232,
+      "author": "umutkeltek",
+      "author_id": 35880258,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-30T10:15:41Z",
+      "comment_updated_at": "2026-05-30T10:15:41Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 512,
+    "total_ms": 2946,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 292
+        "ms": 407
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1001
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 208
+        "ms": 1508
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
