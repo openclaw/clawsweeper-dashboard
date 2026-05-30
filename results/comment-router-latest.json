@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-30T05:09:21.096Z",
+  "generated_at": "2026-05-30T05:14:06.694Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-30T02:09:20.701Z",
+  "since": "2026-05-30T02:14:05.003Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    75784
+    77067
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 2,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,18 +29,117 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:77067:4367968115:2026-05-30T05:12:11Z:clawsweeper_auto_repair",
+      "comment_id": "4367968115",
+      "comment_version_key": "4367968115:2026-05-30T05:12:11Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/77067#issuecomment-4367968115",
+      "repo": "openclaw/openclaw",
+      "issue_number": 77067,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-04T03:18:49Z",
+      "comment_updated_at": "2026-05-30T05:12:11Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=af382894416357356c4fc9e206f5ce6efd634d3e)",
+      "review_summary": "The PR adds QQBot WebSocket TCP keepalive/socket timeout handling, heartbeat interval logging, an explicit permessage-deflate option, tests, and an unreleased changelog entry.\n\nPR surface: Source +16, Tests +154, Docs +1. Total +171 across 3 files.\n\nReproducibility: no. We do not have a high-confidence live reproduction of the 9-minute delayed-delivery report, but current main and v2026.5.27 source inspection confirm QQBot lacks socket keepalive/timeout handling and heartbeat interval logging.",
+      "review_followup": "- [P1] Contributor action is needed before repair or merge: add inspectable real behavior proof and rebase the conflicting branch around the current ws-client helper.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "af382894416357356c4fc9e206f5ce6efd634d3e",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(qqbot): add TCP keepalive + heartbeat interval logging to prevent silent connection drops",
+        "body": "### Problem\n\n**Messages delayed by up to 9 minutes due to silent WebSocket connection failures.**\n\nOn 2026-05-04 07:13, a user sent a message via QQBot. The message was not received until 07:22:18 — **9 minutes of delay**. During this entire period, the OpenClaw gateway showed no errors, no reconnection attempts, and no heartbeat failures. The connection appeared healthy but was in fact dead.\n\n**What actually happened:**\n- The QQ WebSocket connection was open from 07:04:03 to 07:22:16 (18 minutes, no drops logged)\n- At 07:22:16, the connection abruptly closed with code `1006` (abnormal close, no close frame)\n- Immediately after reconnecting at 07:22:18, all queued messages arrived at once\n- **Conclusion:** The connection silently died well before 07:13, but neither the client nor the QQ server detected it. Messages were buffered server-side and only delivered after the client reconnect.\n\n**Why no detection?** The existing QQBot gateway implementation has two gaps:\n1. **No TCP keepalive** — The `ws` library was instantiated without `setKeepAlive`, meaning the OS-level TCP connection is not probed. Network middleboxes (routers, NAT, firewalls) silently drop idle connections without sending RST/FIN.\n2. **No heartbeat timeout detection** — If the server sends a `HEARTBEAT_ACK` on time, the client assumes the connection is healthy. But if the `HEARTBEAT_ACK` is lost in transit (because the underlying TCP path is dead), the client never notices. There is no timeout or ACK validation.\n\n**Root cause:** The 1006 abnormal close indicates the connection was terminated without a proper WebSocket close frame — likely at the TCP or network layer (NAT timeout, silent packet drop). The client had no way to detect this before receiving a message, because there was no lower-level keepalive probe and no heartbeat ACK timeout.\n\n### Solution\n\n**Three changes in `extensions/qqbot/src/engine/gateway/gateway-connection.ts`:**\n\n#### 1. TCP Keepalive (Prevention)\n```typescript\nconst socket = (ws as unknown as { _socket: Socket | null })._socket;\nif (socket) {\n  socket.setKeepAlive(true, 30_000);  // probe every 30s\n  socket.setTimeout(60_000);          // 60s with no data → timeout\n  socket.on(\"timeout\", () => {\n    log?.warn?.(`WebSocket socket timeout — closing and reconnecting`);\n    ws.close();  // triggers existing reconnect flow\n  });\n}\n```\n\n- `setKeepAlive(true, 30_000)` — OS sends TCP keepalive probes every 30 seconds, keeping NAT mappings alive and detecting dead connections at the transport layer\n- `setTimeout(60_000)` — if no data (including keepalive ACK) is received for 60 seconds, the socket is considered dead and closed, triggering an immediate reconnect\n\n#### 2. Heartbeat Interval Logging (Debugging)\n```typescript\nconst interval = d.heartbeat_interval;\nthis.ctx.log?.info(`Heartbeat interval: ${interval}ms (${(interval / 1000).toFixed(1)}s)`);\n```\n\n- Logs the heartbeat interval sent by the QQ server on every connect/resume\n- Previously unknown: QQ server uses **41.25 seconds**, not a round number\n- Critical for diagnosing heartbeat-related issues in the future\n\n#### 3. WebSocket Compression\n```typescript\nperMessageDeflate: true\n```\n- Standard best practice for `ws` library; reduces bandwidth for JSON payloads\n\n### Verification\n\n- **7 new unit tests** for keepalive and heartbeat logging logic\n- **50 existing tests** pass (message-queue, outbound-dispatch, inbound-pipeline, envelope-stage)\n- **Live deployment test:** After deploying, TCP socket timeout was correctly detected on a dead connection at 10:38:48, triggering automatic reconnect. Heartbeat interval logged as `41250ms (41.3s)`.\n\n### Expected Impact\n\n- **Before:** Dead connections go undetected for minutes. Users see message delays of 5-10 minutes. Only a manual restart or the next server-side close triggers reconnect.\n- **After:** Dead connections detected within 60 seconds via TCP keepalive timeout. Automatic reconnect restores message delivery. Heartbeat interval visible in logs for troubleshooting.",
+        "branch": "fix/qqbot-ws-keepalive",
+        "head_sha": "af382894416357356c4fc9e206f5ce6efd634d3e",
+        "author": "allonz",
+        "labels": [
+          "stale",
+          "size: S",
+          "channel: qqbot",
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/qqbot/src/engine/gateway/gateway-connection.keepalive.test.ts",
+            "additions": 154,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/qqbot/src/engine/gateway/gateway-connection.ts",
+            "additions": 16,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-77067",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-77067.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "",
+        "checks": {
+          "total": 12,
+          "counts": {
+            "SUCCESS": 3,
+            "FAILURE": 1,
+            "SKIPPED": 8
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 665,
+    "total_ms": 2040,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 383
+        "ms": 469
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 1208
       },
       {
         "name": "classify_commands",
@@ -48,7 +147,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 270
+        "ms": 336
       },
       {
         "name": "append_ledger",
