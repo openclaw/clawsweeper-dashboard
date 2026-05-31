@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-31T05:01:04.221Z",
+  "generated_at": "2026-05-31T05:20:56.976Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-31T02:01:02.608Z",
+  "since": "2026-05-31T02:20:56.688Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    77067
+    78579
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
-  "commands_seen": 2,
+  "scanned_comments": 2,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,254 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:77067:4367968115:2026-05-31T05:00:55Z:clawsweeper_needs_human",
-      "comment_id": "4367968115",
-      "comment_version_key": "4367968115:2026-05-31T05:00:55Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/77067#issuecomment-4367968115",
-      "repo": "openclaw/openclaw",
-      "issue_number": 77067,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-04T03:18:49Z",
-      "comment_updated_at": "2026-05-31T05:00:55Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=af382894416357356c4fc9e206f5ce6efd634d3e)",
-      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +16, Tests +154, Docs +1. Total +171 across 3 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
-      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "af382894416357356c4fc9e206f5ce6efd634d3e",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(qqbot): add TCP keepalive + heartbeat interval logging to prevent silent connection drops",
-        "body": "### Problem\n\n**Messages delayed by up to 9 minutes due to silent WebSocket connection failures.**\n\nOn 2026-05-04 07:13, a user sent a message via QQBot. The message was not received until 07:22:18 — **9 minutes of delay**. During this entire period, the OpenClaw gateway showed no errors, no reconnection attempts, and no heartbeat failures. The connection appeared healthy but was in fact dead.\n\n**What actually happened:**\n- The QQ WebSocket connection was open from 07:04:03 to 07:22:16 (18 minutes, no drops logged)\n- At 07:22:16, the connection abruptly closed with code `1006` (abnormal close, no close frame)\n- Immediately after reconnecting at 07:22:18, all queued messages arrived at once\n- **Conclusion:** The connection silently died well before 07:13, but neither the client nor the QQ server detected it. Messages were buffered server-side and only delivered after the client reconnect.\n\n**Why no detection?** The existing QQBot gateway implementation has two gaps:\n1. **No TCP keepalive** — The `ws` library was instantiated without `setKeepAlive`, meaning the OS-level TCP connection is not probed. Network middleboxes (routers, NAT, firewalls) silently drop idle connections without sending RST/FIN.\n2. **No heartbeat timeout detection** — If the server sends a `HEARTBEAT_ACK` on time, the client assumes the connection is healthy. But if the `HEARTBEAT_ACK` is lost in transit (because the underlying TCP path is dead), the client never notices. There is no timeout or ACK validation.\n\n**Root cause:** The 1006 abnormal close indicates the connection was terminated without a proper WebSocket close frame — likely at the TCP or network layer (NAT timeout, silent packet drop). The client had no way to detect this before receiving a message, because there was no lower-level keepalive probe and no heartbeat ACK timeout.\n\n### Solution\n\n**Three changes in `extensions/qqbot/src/engine/gateway/gateway-connection.ts`:**\n\n#### 1. TCP Keepalive (Prevention)\n```typescript\nconst socket = (ws as unknown as { _socket: Socket | null })._socket;\nif (socket) {\n  socket.setKeepAlive(true, 30_000);  // probe every 30s\n  socket.setTimeout(60_000);          // 60s with no data → timeout\n  socket.on(\"timeout\", () => {\n    log?.warn?.(`WebSocket socket timeout — closing and reconnecting`);\n    ws.close();  // triggers existing reconnect flow\n  });\n}\n```\n\n- `setKeepAlive(true, 30_000)` — OS sends TCP keepalive probes every 30 seconds, keeping NAT mappings alive and detecting dead connections at the transport layer\n- `setTimeout(60_000)` — if no data (including keepalive ACK) is received for 60 seconds, the socket is considered dead and closed, triggering an immediate reconnect\n\n#### 2. Heartbeat Interval Logging (Debugging)\n```typescript\nconst interval = d.heartbeat_interval;\nthis.ctx.log?.info(`Heartbeat interval: ${interval}ms (${(interval / 1000).toFixed(1)}s)`);\n```\n\n- Logs the heartbeat interval sent by the QQ server on every connect/resume\n- Previously unknown: QQ server uses **41.25 seconds**, not a round number\n- Critical for diagnosing heartbeat-related issues in the future\n\n#### 3. WebSocket Compression\n```typescript\nperMessageDeflate: true\n```\n- Standard best practice for `ws` library; reduces bandwidth for JSON payloads\n\n### Verification\n\n- **7 new unit tests** for keepalive and heartbeat logging logic\n- **50 existing tests** pass (message-queue, outbound-dispatch, inbound-pipeline, envelope-stage)\n- **Live deployment test:** After deploying, TCP socket timeout was correctly detected on a dead connection at 10:38:48, triggering automatic reconnect. Heartbeat interval logged as `41250ms (41.3s)`.\n\n### Expected Impact\n\n- **Before:** Dead connections go undetected for minutes. Users see message delays of 5-10 minutes. Only a manual restart or the next server-side close triggers reconnect.\n- **After:** Dead connections detected within 60 seconds via TCP keepalive timeout. Automatic reconnect restores message delivery. Heartbeat interval visible in logs for troubleshooting.",
-        "branch": "fix/qqbot-ws-keepalive",
-        "head_sha": "af382894416357356c4fc9e206f5ce6efd634d3e",
-        "author": "allonz",
-        "labels": [
-          "size: S",
-          "channel: qqbot",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🌊 off-meta tidepool",
-          "merge-risk: 🚨 message-delivery",
-          "merge-risk: 🚨 availability"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qqbot/src/engine/gateway/gateway-connection.keepalive.test.ts",
-            "additions": 154,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/qqbot/src/engine/gateway/gateway-connection.ts",
-            "additions": 16,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-77067",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-77067.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 12,
-          "counts": {
-            "SUCCESS": 3,
-            "CANCELLED": 1,
-            "SKIPPED": 8
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:76069:4364147399:2026-05-02T15:35:21Z:freeform_assist",
-      "comment_id": "4364147399",
-      "comment_version_key": "4364147399:2026-05-02T15:35:21Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/76069#issuecomment-4364147399",
-      "repo": "openclaw/openclaw",
-      "issue_number": 76069,
-      "author": "Takhoffman",
-      "author_id": 781889,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-02T15:35:21Z",
-      "comment_updated_at": "2026-05-02T15:35:21Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "is what this pr trying to do already possible with configuration changes. please look at and explain the debounce feature and if and how this overlaps with that.",
-      "intent": "freeform_assist",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": "is what this pr trying to do already possible with configuration changes. Please look at and explain the debounce feature and if and how this overlaps with that.",
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "write",
-      "target": {
-        "kind": "pull_request",
-        "title": "feat: add messaging window command",
-        "body": "## Summary\n- add `/messaging_window` and `/messaging-window` to manage inbound message batching windows from chat\n- support status, global defaults, per-channel overrides, off, reset, and friendly shorthands like `/messaging_window 3s`, `/messaging_window current 5s`, and `/messaging_window telegram off`\n- improve Telegram native command UX with clear quick-pick buttons for all-channel and current-channel windows\n- document the command in slash command and message flow docs\n\n## Tests\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/auto-reply/reply/commands-parse.test.ts src/auto-reply/reply/commands-messaging-window.test.ts src/auto-reply/commands-registry.test.ts extensions/telegram/src/bot-native-commands.test.ts --reporter=dot`\n- `pnpm tsgo:core:test`\n- `OPENCLAW_BUNDLED_PLUGINS_DIR=/Users/salomonzarruk/Documents/openclaw-contribution/openclaw/dist/extensions pnpm openclaw --dev config validate`\n\n## Manual check\n- Tested through a dev Telegram bot with `--dev` profile and confirmed the messaging window command can be configured from Telegram.",
-        "branch": "codex/messaging-window-command",
-        "head_sha": "208402570b3feba5f34cd226dfd48ee4dd821d60",
-        "author": "zarruk",
-        "labels": [
-          "docs",
-          "size: L",
-          "triage: needs-real-behavior-proof",
-          "rating: 🌊 off-meta tidepool"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/concepts/messages.md",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/tools/slash-commands.md",
-            "additions": 30,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/commands-registry.shared.ts",
-            "additions": 38,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/commands-handlers.runtime.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/commands-messaging-window.test.ts",
-            "additions": 267,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auto-reply/reply/commands-messaging-window.ts",
-            "additions": 232,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auto-reply/reply/commands-parse.test.ts",
-            "additions": 56,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/messaging-window-command.ts",
-            "additions": 144,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-76069",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-76069.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 113,
-          "counts": {
-            "SUCCESS": 85,
-            "FAILURE": 1,
-            "SKIPPED": 26,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": true,
-      "author_readonly_authorized": false,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1976,
+    "total_ms": 478,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 461
+        "ms": 272
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1137
+        "ms": 5
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 350
+        "ms": 189
       },
       {
         "name": "append_ledger",
