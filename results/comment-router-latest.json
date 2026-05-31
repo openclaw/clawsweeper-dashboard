@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-31T22:04:35.447Z",
+  "generated_at": "2026-05-31T22:05:06.394Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-31T19:04:33.149Z",
+  "since": "2026-05-31T19:05:05.912Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4588232337
   ],
-  "status_comment_id": 4588232442,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-05-31T22:03:58Z",
       "comment_updated_at": "2026-05-31T22:03:58Z",
-      "status_comment_id": 4588232442,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,140 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-31T22:04:36.515Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 88315
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-31T22:04:37.720Z",
-          "response_comment_id": "4588232442",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(agents): generalized native compaction ownership for CLI backends",
-        "body": "## Summary\n\n- Add `ownsNativeCompaction` capability to `CliBackendPlugin` so backends that manage their own transcript compaction can declare it and OpenClaw defers instead of fighting or hard-failing the turn\n- Claude-cli is the first adopter: Claude Code compacts its own transcript internally, so OpenClaw returns a no-op from the compaction path\n- Codex's existing native-harness compaction path is unchanged (agentHarnessId match still routes to the harness endpoint)\n- Generalizes the partial fix in #87785 (codex-scoped) to a capability any CLI backend can opt into\n\n## Problem\n\n`claude-cli` runs Claude Code, which owns its own transcript and auto-compacts when context fills. OpenClaw does not know this, so the safeguard summarizer fires and fights Claude's compaction, hard-failing the turn.\n\nThe current workaround is `contextTokens: 1_000_000` so the safeguard never fires. This PR removes the need for that workaround.\n\n## Behavior proof\n\nProduction compaction failure captured from a live claude-cli session (session `39bd8759`, 2026-05-16T21:59:57Z):\n\n```\n[assistant] [provider: openclaw, model: delivery-mirror]\nContext limit exceeded during compaction. I've reset our conversation\nto start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting\n`agents.defaults.compaction.reserveTokensFloor` to 20000 or higher\nin your config.\n```\n\nThis is the exact failure mode this PR prevents: OpenClaw's safeguard summarizer fires on a claude-cli session that already manages its own compaction, exceeds its budget fighting the backend's own compaction lifecycle, and force-resets the conversation. With `ownsNativeCompaction: true`, the lifecycle returns a no-op and the session continues normally.\n\nThe workaround currently deployed (`contextTokens: 1_000_000`) masks the issue by preventing the safeguard from ever firing. This PR fixes the root cause.\n\n## Changes\n\n**`src/plugins/cli-backend.types.ts`** -- `ownsNativeCompaction?: boolean` on `CliBackendPlugin`\n\n**`src/agents/cli-backends.ts`** -- Propagated through `ResolvedCliBackend`, `FallbackCliBackendPolicy`, and all 4 resolution paths\n\n**`src/agents/command/cli-compaction.ts`** -- Added `resolveCliBackendConfig` to injectable deps. In `runCliTurnCompactionLifecycle`, when `ownsNativeCompaction` is true and no native harness endpoint exists, returns a no-op early\n\n**`extensions/anthropic/cli-backend.ts`** -- `ownsNativeCompaction: true` on claude-cli\n\n## Scope\n\nOnly changes behavior for CLI backends that explicitly opt in via `ownsNativeCompaction: true`. Every other backend keeps the existing safeguard. Does not touch the embedded runner path.\n\n## Not tested\n\n- acpx / copilot backends (candidates for future adoption, not wired in this PR)\n- Full e2e filling a context window with the fix applied (validated via unit tests covering the exact code path + production failure evidence above)\n\n## Risk / mitigation\n\n- **Risk:** A backend incorrectly declares ownership but does not actually compact -- context grows unbounded. **Mitigation:** Opt-in flag, not default; only set on claude-cli which is known to own compaction.\n- **Risk:** Breaks existing codex path. **Mitigation:** `ownsNativeCompaction` early-out only fires when `isNativeHarnessCompactionSession` returns false; codex sessions with `agentHarnessId` still route to the existing native harness path. Verified by test.\n\n## Test plan\n\n- [x] Backend with `ownsNativeCompaction` and no harness endpoint skips compaction (no-op)\n- [x] Backend without `ownsNativeCompaction` compacts normally via context engine\n- [x] Backend with `ownsNativeCompaction` AND agentHarnessId uses existing native harness path\n- [x] `resolveCliBackendConfig(\"claude-cli\")` returns `ownsNativeCompaction: true`\n- [x] All 30 existing cli-compaction tests pass (no regressions)\n- [x] All 48 existing cli-backends tests pass (no regressions)\n\n\n---\n\n## Over-budget reproduction & explicit context-cap fix\n\nThe defer is proven deterministically on the real code path (see **Test plan**): without the flag OpenClaw compaction runs (`cli-compaction.test.ts:1139`); with the flag and no harness endpoint OpenClaw defers to the backend (`cli-compaction.test.ts:1071`).\n\n```\nnpx vitest run src/agents/command/cli-compaction.test.ts -t \"ownsNativeCompaction\"\n→ Test Files 2 passed (2); Tests 6 passed | 24 skipped (30)\n```\n\nA live over-budget capture was initially hard to synthesize because `resolveContextTokensForModel` short-circuited to the GA 1M window **before** consulting a configured value, so an operator could not budget below the native window to exercise the over-budget path. **This PR's second commit fixes that root cause:** an explicit `models.providers.*.contextTokens` **cap** now wins over the GA-1M default (a declared `contextWindow` still does not — GA stays authoritative for the native window). With a low `contextTokens` cap the over-budget branch is reachable for a claude-cli session, where this PR's `ownsNativeCompaction` deferral no-ops it and the session continues via Claude's own compaction — the documented `contextTokens` \"budget below the native contextWindow\" behavior now works as specified, and claude-cli opts out of OpenClaw compaction like codex's native-harness path.\n\n",
-        "branch": "feat/generalized-native-compaction-ownership",
-        "head_sha": "4433d31efc305a66b98e6c6505c5c4883c2d5e81",
-        "author": "anagnorisis2peripeteia",
-        "labels": [
-          "agents",
-          "size: M",
-          "extensions: anthropic",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/anthropic/cli-backend.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/cli-backends.test.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/cli-backends.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/command/cli-compaction.test.ts",
-            "additions": 215,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/command/cli-compaction.ts",
-            "additions": 19,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/context.ts",
-            "additions": 36,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/cli-backend.types.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88315",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88315.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 41,
-          "counts": {
-            "FAILURE": 1,
-            "SKIPPED": 35,
-            "SUCCESS": 5
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5328,
+    "total_ms": 1815,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 628
+        "ms": 469
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1657
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 3018
+        "ms": 1333
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
