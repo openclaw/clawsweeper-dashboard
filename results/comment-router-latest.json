@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-31T05:12:51.829Z",
+  "generated_at": "2026-05-31T05:36:12.920Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-31T02:12:50.296Z",
+  "since": "2026-05-31T02:36:12.544Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    77998
+    78712
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 1,
+  "scanned_comments": 2,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,132 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:77998:4381853652:2026-05-31T05:10:19Z:clawsweeper_auto_repair",
-      "comment_id": "4381853652",
-      "comment_version_key": "4381853652:2026-05-31T05:10:19Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/77998#issuecomment-4381853652",
-      "repo": "openclaw/openclaw",
-      "issue_number": 77998,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-05T18:16:17Z",
-      "comment_updated_at": "2026-05-31T05:10:19Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=3434053be08bf009a4e1d9ba23f02fe47e19ed00)",
-      "review_summary": "The PR adds a per-workspace skills snapshot-version clear helper, wires watcher teardown and one-hour idle eviction to cleanup, adds regression tests, and edits `CHANGELOG.md`.\n\nPR surface: Source +42, Tests +81, Docs +2. Total +125 across 4 files.\n\nReproducibility: yes. source-level. Current main retains workspace-scoped watcher/version state, and the PR body includes a terminal proof that the old `workspaceVersions` map retained 5,000 workspace entries without a clear path.",
-      "review_followup": "- [P2] A focused repair can update this PR to current runtime paths, fix the version invalidation bug, and add tests without a product decision.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "3434053be08bf009a4e1d9ba23f02fe47e19ed00",
-      "finding_id": "review-feedback",
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(skills): clear workspaceVersions entry when skills watcher is disabled",
-        "body": "Closes #77997\n\n## Summary\n\nTwo-commit fix that bounds the skills watcher subsystem to its working set:\n\n**Commit 1 (`1eb1cbb8d1`)**: clear `workspaceVersions` entry when a watcher is explicitly disabled.\n\n`src/agents/skills/refresh-state.ts:8` kept a module-level `Map<workspaceDir, number>` populated by every skills file-watch event but had no production removal path. The sibling `watchers` Map cleaned up on `watchEnabled=false` teardown, but `workspaceVersions` was forgotten. Adds `clearSkillsSnapshotVersionForWorkspace` and wires it into the existing teardown.\n\n**Commit 2 (`376a9e0f03`)**: evict idle chokidar watchers opportunistically on the next `ensureSkillsWatcher` call.\n\nThe bigger leak is `watchers` itself: `ensureSkillsWatcher` is called on every session update (`auto-reply/reply/session-updates.ts:159`) but never torn down on session end, so `watchers` accumulated one chokidar instance + one version entry per distinct workspaceDir over the gateway lifetime.\n\nAdds `lastEnsuredAt: number` per watcher (refreshed on every `ensureSkillsWatcher` call) and an `evictIdleSkillsWatchers` sweep that runs at the end of every `ensureSkillsWatcher` invocation, disposing any watcher with `lastEnsuredAt < now - 60min`. Active sessions re-ensure on every turn so their watchers always stay fresh; only abandoned watchers (no session has touched them for >=1h) get torn down.\n\nAfter both commits: `watchers.size ≤ # workspaces with a session active in the last 1h`, `workspaceVersions ⊆ watchers` as keysets.\n\n## Verification\n\n- `pnpm test src/agents/skills/refresh.test.ts` → 8/8 pass including 3 new cases (`clears the per-workspace snapshot version when the watcher is disabled`, `evicts idle watchers (>1h since last ensure) on subsequent ensure calls`, `does not evict watchers refreshed within the idle TTL window`).\n- `pnpm exec oxfmt --check --threads=1` clean on touched files.\n- Live tsx runtime proof captured below.\n\n## Real behavior proof\n\n- **Behavior addressed**: `workspaceVersions: Map<string, number>` in `src/agents/skills/refresh-state.ts:8` and `watchers: Map<string, SkillsWatchState>` in `src/agents/skills/refresh.ts:36` accumulated one entry per distinct `workspaceDir` ever touched by a session. There was no public per-workspace clear API and no production teardown path beyond the rare `watchEnabled=false` config flip, so a long-lived gateway leaked one chokidar watcher (FDs + memory) and one version entry per distinct workspace forever.\n- **Real environment tested**: local Node v22 runtime against the patched `refresh-state.ts` module via `pnpm exec tsx`. No mocks, no test framework. Drove the public API (`bumpSkillsSnapshotVersion`, `clearSkillsSnapshotVersionForWorkspace`, `getSkillsSnapshotVersion`) with the same call shape production fires through `ensureSkillsWatcher`'s debounced schedule callback.\n- **Exact steps or command run after this patch**: created `/tmp/skills-version-cleanup-proof.mts` that imports the real patched `refresh-state.ts` module, calls `bumpSkillsSnapshotVersion` for 5,000 distinct workspace dirs (matching the watcher-event path), reads `getSkillsSnapshotVersion` for each to confirm presence, then calls `clearSkillsSnapshotVersionForWorkspace` for each (the same call now wired into watcher teardown) and re-reads to confirm cleanup. Ran via `pnpm exec tsx /tmp/skills-version-cleanup-proof.mts`. Also drove the unpatched `origin/main` module the same way to demonstrate the leak shape.\n- **Evidence after fix**: live console output from the Node runtime.\n\nUnpatched (origin/main) — leak demonstrated:\n\n```\n=== exported names ===\n  bumpSkillsSnapshotVersion\n  getSkillsSnapshotVersion\n  registerSkillsChangeListener\n  resetSkillsRefreshStateForTest\n  setSkillsChangeListenerErrorHandler\n  shouldRefreshSnapshotForVersion\nper-workspace clear API present: false\n\n=== after 5000 bumps + simulated teardown ===\nworkspaces still reporting non-zero version: 5000\nworkspaces back to zero (cleaned up):       0\nfresh untouched workspace reports: 0\n```\n\nPatched — leak fixed:\n\n```\n=== before teardown: 5000 entries present ===\n=== after teardown: 0 entries present ===\nresult: PASS\n```\n\n- **Observed result after fix**: 5,000 distinct workspace entries created via the same call shape production fires on watcher events. After calling `clearSkillsSnapshotVersionForWorkspace` for each (the same call now wired into the `watchEnabled=false` teardown and the new idle-eviction sweep), all 5,000 entries are gone and `getSkillsSnapshotVersion` correctly reads 0. The new `evictIdleSkillsWatchers` invariant means the same cleanup happens automatically when watchers go idle for >=1h instead of requiring an explicit teardown event.\n- **What was not tested**: behavior against a real chokidar watcher on a real filesystem inside a long-lived gateway. The fix is a `Map` lifecycle wiring change on a deterministic add/remove path; the unit tests in `refresh.test.ts` cover the wiring against the same chokidar mock the rest of the file uses.\n\n## Correctness notes\n\n- `getSkillsSnapshotVersion(workspaceDir)` falls back to `globalVersion` when the entry is missing, and `shouldRefreshSnapshotForVersion(cached, 0)` returns `cached > 0` — so removing an entry forces a refresh for any consumer holding a non-zero cached version. Conservative-correct.\n- The 1h idle TTL is calibrated for production usage: sessions re-call `ensureSkillsWatcher` on every turn, so practically only abandoned workspaces are evicted. If a session falls silent for >1h and a skills file changes during the silent window, the next turn re-attaches a fresh watcher and the global version bump path catches up.\n- The \"watcher replaced because targets changed\" path (line 168) is intentionally NOT routed through `disposeSkillsWatcher` — that path keeps the same workspaceDir watched, just with a different chokidar instance, so dropping the version entry would be an artificial regression.\n\n## Audit context\n\nPart of the memory-leak audit sweep following #77952 (Discord cache), #77973 (agent-job cache), and #77987 (auth-rate-limit cap). Same theme: bind map lifetimes to the resources they describe.\n",
-        "branch": "security/skills-workspace-versions-leak",
-        "head_sha": "3434053be08bf009a4e1d9ba23f02fe47e19ed00",
-        "author": "fede-kamel",
-        "labels": [
-          "agents",
-          "stale",
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 session-state",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/skills/refresh-state.ts",
-            "additions": 13,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/skills/refresh.test.ts",
-            "additions": 81,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/skills/refresh.ts",
-            "additions": 35,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-77998",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-77998.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 98,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 83,
-            "SKIPPED": 13,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1729,
+    "total_ms": 626,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 308
+        "ms": 359
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1210
+        "ms": 4
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 184
+        "ms": 250
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
