@@ -30,13 +30,14 @@ export function formatTimestamp(value) {
 }
 
 export function percent(value, total) {
-  return total > 0 ? `${((value / total) * 100).toFixed(1)}%` : "0.0%";
+  return total > 0 ? `${((value / total) * 100).toFixed(1)}%` : "N/A";
 }
 
 export function truncate(value, max = 110) {
   const text = tableCell(value);
   if (text.length <= max) return text;
-  return `${text.slice(0, Math.max(0, max - 3)).trimEnd()}...`;
+  if (max < 4) return text.slice(0, max);
+  return `${text.slice(0, max - 3).trimEnd()}...`;
 }
 
 export function rowsOrNone(rows, columns) {

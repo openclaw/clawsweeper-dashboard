@@ -228,7 +228,7 @@ function repairActionTargetsPullRequest(action) {
 }
 
 function inspectionRow(row) {
-  return `| ${clusterLink(row.record)} | ${tableCell(row.state)} | ${truncate(row.reason, 150)} | ${clusterLink(row.record)} | ${runLink(row.record)} |`;
+  return `| ${tableCell(String(row.record.cluster_id ?? ""))} | ${tableCell(row.state)} | ${truncate(row.reason, 150)} | ${clusterLink(row.record)} | ${runLink(row.record)} |`;
 }
 
 function fixRow(row) {
@@ -238,5 +238,5 @@ function fixRow(row) {
 
 function closeRow(row) {
   const action = row.action;
-  return `| ${targetLink(row.record, action)} | ${tableCell(action.action)} | ${truncate(action.title ?? "")} | ${formatTimestamp(action.closed_at ?? action.merged_at ?? row.record.published_at)} | ${clusterLink(row.record)} | ${clusterLink(row.record)} | ${runLink(row.record)} |`;
+  return `| ${targetLink(row.record, action)} | ${tableCell(action.action)} | ${truncate(action.title ?? "")} | ${formatTimestamp(action.closed_at ?? action.merged_at ?? row.record.published_at)} | ${tableCell(String(row.record.cluster_id ?? ""))} | ${clusterLink(row.record)} | ${runLink(row.record)} |`;
 }

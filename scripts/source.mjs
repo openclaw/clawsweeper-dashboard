@@ -29,7 +29,11 @@ export function readText(file) {
 
 export function readJson(file, fallback = null) {
   if (!fs.existsSync(file)) return fallback;
-  return JSON.parse(fs.readFileSync(file, "utf8"));
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (error) {
+    throw new Error(`[clawsweeper-state] readJson: malformed JSON in ${file}`, { cause: error });
+  }
 }
 
 export function writeText(file, text) {

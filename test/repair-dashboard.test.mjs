@@ -18,6 +18,7 @@ test("repair dashboard links shorthand targets through the source repo", () => {
       run_url: "https://github.com/openclaw/clawsweeper/actions/runs/12345",
       workflow_conclusion: "success",
       published_at: "2026-05-02T19:00:00.000Z",
+      needs_human: ["manual review required"],
       fix_actions: [
         {
           target: "#789",
@@ -60,4 +61,17 @@ test("repair dashboard links shorthand targets through the source repo", () => {
   assert.match(dashboard, /\[#901\]\(https:\/\/github\.com\/openclaw\/openclaw\/pull\/901\)/);
   assert.doesNotMatch(dashboard, /\[#123\]\(#123\)/);
   assert.doesNotMatch(dashboard, /\[#789\]\(#789\)/);
+
+  // Cluster column in "Clusters Needing Inspection" must be plain text, not a link
+  assert.match(dashboard, /\| repair-target-links \|/);
+  assert.doesNotMatch(
+    dashboard,
+    /\| \[repair-target-links\][^\n]* \| [^\n]* \| [^\n]* \| \[repair-target-links\]/,
+  );
+
+  // Cluster column in "Latest Repair Closures" must be plain text; Report column has the link
+  assert.doesNotMatch(
+    dashboard,
+    /\| \[repair-target-links\][^\n]* \| \[repair-target-links\]/,
+  );
 });
