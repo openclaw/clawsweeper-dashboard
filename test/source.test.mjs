@@ -24,29 +24,23 @@ test("readJson parses valid JSON", () => {
   }
 });
 
-test("readJson returns fallback and warns on malformed JSON", (t) => {
+test("readJson throws on malformed JSON", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "clawsweeper-source-"));
   try {
     const file = path.join(dir, "bad.json");
     fs.writeFileSync(file, "{bad json", "utf8");
-    const warn = t.mock.method(console, "warn");
-    const result = readJson(file, "FALLBACK");
-    assert.equal(result, "FALLBACK");
-    assert.equal(warn.mock.calls.length, 1);
-    assert.match(warn.mock.calls[0].arguments[0], /malformed JSON/);
-    assert.match(warn.mock.calls[0].arguments[0], /bad\.json/);
+    assert.throws(() => readJson(file, "FALLBACK"), /malformed JSON in .*bad\.json/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("readJson returns null fallback (default) on malformed JSON", (t) => {
+test("readJson throws on malformed JSON without a fallback", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "clawsweeper-source-"));
   try {
     const file = path.join(dir, "truncated.json");
     fs.writeFileSync(file, '{"incomplete":', "utf8");
-    t.mock.method(console, "warn");
-    assert.equal(readJson(file), null);
+    assert.throws(() => readJson(file), /malformed JSON in .*truncated\.json/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
