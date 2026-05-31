@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-31T11:44:05.517Z",
+  "generated_at": "2026-05-31T11:44:44.312Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-31T08:44:04.118Z",
+  "since": "2026-05-31T08:44:43.697Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4586584679
   ],
-  "status_comment_id": 4586584788,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-05-31T11:43:35Z",
       "comment_updated_at": "2026-05-31T11:43:35Z",
-      "status_comment_id": 4586584788,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,168 +61,30 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-31T11:44:06.107Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 88238
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-31T11:44:07.044Z",
-          "response_comment_id": "4586584788",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "perf(memory): batch memory embeddings across files",
-        "body": "## Summary\n\n- Problem: batch memory indexing submitted provider batch jobs one file at a time, so many small memory and session files underfilled providers that support large batch jobs.\n- Solution: built-in provider runtimes explicitly opt into source-wide batching; custom runtimes without that opt-in keep the previous per-file `batchEmbed` contract.\n- What changed: `manager-embedding-ops.ts` only source-wide batches runtimes with `sourceWideBatchEmbed: true`, flushes each source-wide group at 1024 files or 4096 chunks, and keeps per-file writes; OpenAI, Gemini, and Voyage opt in explicitly.\n- What did NOT change: FTS-only indexing, configured cache behavior, stale-file pruning, multimodal fallbacks, and third-party provider runtimes without opt-in remain on existing per-file paths.\n\nFixes #88009\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** built-in provider runtimes can batch small dirty memory and session files together by source, while unopted custom runtimes still receive one file's chunks per `batchEmbed` call.\n- **Real environment tested:** Linux worktree at `pr-88238-redlabels`, Node 22, production memory manager path with local test provider runtimes covering source-wide opt-in and no-opt-in compatibility.\n- **Exact steps or command run after this patch:**\n\n  ```bash\n  node --import tsx --input-type=module <<'JS'\n  import fs from \"node:fs/promises\";\n  import os from \"node:os\";\n  import path from \"node:path\";\n  import { clearMemoryEmbeddingProviders, registerMemoryEmbeddingProvider } from \"openclaw/plugin-sdk/memory-core-host-engine-embeddings\";\n  import { closeAllMemorySearchManagers, getMemorySearchManager } from \"./extensions/memory-core/src/memory/index.ts\";\n\n  const root = await fs.mkdtemp(path.join(os.tmpdir(), \"openclaw-memory-batch-proof-\"));\n  const workspace = path.join(root, \"workspace\");\n  const memoryDir = path.join(workspace, \"memory\");\n  await fs.mkdir(memoryDir, { recursive: true });\n  await fs.writeFile(path.join(memoryDir, \"a.md\"), \"# A\\nAlpha memory line.\", \"utf-8\");\n  await fs.writeFile(path.join(memoryDir, \"b.md\"), \"# B\\nBeta memory line.\", \"utf-8\");\n  await fs.writeFile(path.join(memoryDir, \"c.md\"), \"# C\\nGamma memory line.\", \"utf-8\");\n\n  const batchSubmissions = [];\n  const vectorFor = (text) => [text.includes(\"Alpha\") ? 1 : 0, text.includes(\"Beta\") ? 1 : 0, text.includes(\"Gamma\") ? 1 : 0];\n  clearMemoryEmbeddingProviders();\n  registerMemoryEmbeddingProvider({\n    id: \"proof-batch\",\n    defaultModel: \"proof-embed\",\n    transport: \"remote\",\n    create: async () => ({\n      provider: {\n        id: \"proof-batch\",\n        model: \"proof-embed\",\n        embedQuery: async (text) => vectorFor(text),\n        embedBatch: async (texts) => texts.map(vectorFor),\n      },\n      runtime: {\n        id: \"proof-batch\",\n        sourceWideBatchEmbed: true,\n        batchEmbed: async ({ chunks }) => {\n          batchSubmissions.push(chunks.map((chunk) => chunk.text));\n          return chunks.map((chunk) => vectorFor(chunk.text));\n        },\n      },\n    }),\n  });\n\n  const result = await getMemorySearchManager({ cfg: { agents: { defaults: { workspace, memorySearch: { provider: \"proof-batch\", model: \"proof-embed\", store: { path: path.join(workspace, \"index.sqlite\"), vector: { enabled: false } }, chunking: { tokens: 4000, overlap: 0 }, sync: { watch: false, onSessionStart: false, onSearch: false }, remote: { nonBatchConcurrency: 1, batch: { enabled: true, wait: true, concurrency: 2, pollIntervalMs: 0, timeoutMinutes: 1 } } } }, list: [{ id: \"main\", default: true }] } }, agentId: \"main\" });\n  await result.manager.sync({ reason: \"proof\" });\n  const status = result.manager.status();\n  console.log(JSON.stringify({ filesCreated: [\"a.md\", \"b.md\", \"c.md\"], batchSubmissionCount: batchSubmissions.length, batchSubmissionSizes: batchSubmissions.map((items) => items.length), batchedTexts: batchSubmissions[0], indexedFiles: status.files, indexedChunks: status.chunks, batchStatus: status.batch }, null, 2));\n  await closeAllMemorySearchManagers();\n  clearMemoryEmbeddingProviders();\n  await fs.rm(root, { recursive: true, force: true });\n  JS\n  ```\n\n- **Evidence after fix:** Copied terminal console output from the command above:\n\n  ```json\n  {\n    \"filesCreated\": [\n      \"a.md\",\n      \"b.md\",\n      \"c.md\"\n    ],\n    \"batchSubmissionCount\": 1,\n    \"batchSubmissionSizes\": [\n      3\n    ],\n    \"batchedTexts\": [\n      \"# A\\nAlpha memory line.\",\n      \"# B\\nBeta memory line.\",\n      \"# C\\nGamma memory line.\"\n    ],\n    \"indexedFiles\": 3,\n    \"indexedChunks\": 3,\n    \"batchStatus\": {\n      \"enabled\": true,\n      \"failures\": 0,\n      \"limit\": 2,\n      \"wait\": true,\n      \"concurrency\": 2,\n      \"pollIntervalMs\": 0,\n      \"timeoutMs\": 60000\n    }\n  }\n  ```\n\n- **Observed result after fix:** an opted-in runtime batches dirty memory files together, forced CLI-style memory+sessions indexing submits one memory batch and one session batch, custom runtimes without opt-in stay per-file, and source-wide groups are bounded at 1024 files or 4096 chunks so the 833-file maintainer repro fits in one runtime batch.\n- **What was not tested:** a live remote embedding provider batch job; the proof uses the production memory manager and provider-runtime batch seam with a local provider adapter to avoid external credentials.\n\n## Regression Test Plan\n\n- Coverage level: extension unit/integration tests plus direct production-path proof.\n- Target test file: `extensions/memory-core/src/memory/index.test.ts`.\n- Scenario locked in: opted-in dirty memory files batch together, unopted custom runtimes stay per-file, source-wide memory batches are bounded at 1024 files / 4096 chunks, and forced CLI-style memory+sessions indexing batches session transcripts across files as a single source batch.\n- Why this is the smallest reliable guardrail: it exercises the real sync/index manager path where dirty files are collected and provider runtime batch submission is invoked.\n\n## Verification\n\n```bash\nnode scripts/run-vitest.mjs extensions/memory-core/src/memory/index.test.ts -t \"batches\"\npnpm test:extension memory-core\npnpm tsgo:extensions\npnpm tsgo:test:extensions\npnpm check:changed\ngit diff --check\n```\n\nLatest local results:\n\n```text\nnode scripts/run-vitest.mjs extensions/memory-core/src/memory/index.test.ts -t \"batches\"\nTest Files 1 passed (1)\nTests 4 passed | 20 skipped (24)\n\npnpm test:extension memory-core\nTest Files 59 passed (59)\nTests 766 passed (766)\n\npnpm check:changed\nlanes=core, coreTests, extensions, extensionTests\nall changed gates completed successfully\n```\n\n## Root Cause\n\n- Root cause: memory and session sync built one task per dirty file and each task called `indexFile`, so runtime `batchEmbed` only ever received chunks from that one file.\n- Missing detection / guardrail: existing tests verified batching multiple chunks already passed together, but not source-wide opt-in compatibility, bounded source-wide grouping, or forced memory+session indexing.\n",
-        "branch": "feat/issue-88009",
-        "head_sha": "1154262872b1f27cd171ef74e06861299ba0a416",
-        "author": "mushuiyu886",
-        "labels": [
-          "extensions: memory-core",
-          "size: XL",
-          "extensions: openai",
-          "proof: supplied",
-          "extensions: google",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "extensions/google/memory-embedding-adapter.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/embeddings.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/generic-embedding-provider.bridge.test.ts",
-            "additions": 18,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/index.test.ts",
-            "additions": 213,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager-embedding-ops.ts",
-            "additions": 132,
-            "deletions": 42,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager-sync-ops.ts",
-            "additions": 155,
-            "deletions": 58,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openai/memory-embedding-adapter.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/voyage/memory-embedding-adapter.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/memory-host-sdk/src/host/batch-runner.ts",
-            "additions": 21,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/embedding-provider-types.ts",
-            "additions": 17,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/memory-embedding-providers.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/openai-compatible-embedding-provider.test.ts",
-            "additions": 164,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/openai-compatible-embedding-provider.ts",
-            "additions": 315,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88238",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88238.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 9,
-          "counts": {
-            "SKIPPED": 4,
-            "SUCCESS": 5
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3364,
+    "total_ms": 2691,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 490
+        "ms": 603
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 894
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 1951
+        "ms": 2074
       },
       {
         "name": "append_ledger",
