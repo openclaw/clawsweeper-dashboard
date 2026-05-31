@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-31T11:37:06.547Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-05-31T11:37:10.606Z",
+  "repo": "steipete/CodexBar",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-31T08:37:04.386Z",
+  "since": "2026-05-31T08:37:10.410Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    88523
+    1240
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,156 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88523:4585810609:2026-05-31T11:37:01Z:clawsweeper_auto_repair",
-      "comment_id": "4585810609",
-      "comment_version_key": "4585810609:2026-05-31T11:37:01Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/88523#issuecomment-4585810609",
-      "repo": "openclaw/openclaw",
-      "issue_number": 88523,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-31T05:28:36Z",
-      "comment_updated_at": "2026-05-31T11:37:01Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=011ee5e0231f5b13996d9725e4163dcfced669b3)",
-      "review_summary": "The PR adds an optional `lastHandoffPending` delivery flag and uses it in subagent cleanup/resume retry guards so busy-parent completion handoffs can retry past the 3-attempt cap until the hard expiry, with regression coverage.\n\nPR surface: Source +25, Tests +106. Total +131 across 7 files.\n\nReproducibility: yes. source inspection and the reporter log give a high-confidence path: current main returns `completion_handoff_pending` for busy parent completion handoffs while both cleanup and resume guards still apply the retry cap. I did not run a live multi-subagent gateway reproduction.",
-      "review_followup": "- [P2] There is a narrow repair: prevent stale `lastHandoffPending` from exempting later no-result failures and cover it with a regression test.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "011ee5e0231f5b13996d9725e4163dcfced669b3",
-      "finding_id": "review-feedback",
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(subagents): stop dropping concurrent completion handoffs at the retry cap",
-        "body": "### Summary\n\n- **Problem**: Issue #88383 reports that when several subagents that each owe their parent a completion message finish at nearly the same time, some completions are silently dropped — the parent agent never receives those results. The give-up log shows `Subagent announce give up (retry-limit) ... retries=3 endedAgo=124s deliveryError=\"completion agent handoff is still pending; direct-primary: completion agent handoff is still pending\"`.\n- **Root Cause**: A completed subagent that owes a completion message delivers it by running the *parent* agent (the \"completion-agent handoff\" in `src/agents/subagent-announce-delivery.ts`). A session can only run one turn at a time, so when completions arrive together they serialize through the parent; each attempt that finds the parent busy returns the transient `completion_handoff_pending` result — the parent run was queued by `isGatewayAgentRunPending` and **never executed**, so the attempt spent no model turn and will succeed once the parent frees up. Completion flows are *already* granted a 30-minute hard-expiry window (`ANNOUNCE_COMPLETION_HARD_EXPIRY_MS`) precisely to wait out that backpressure, but **two** retry-budget guards still applied the `MAX_ANNOUNCE_RETRY_COUNT` (3) cap to every flow: `resolveDeferredCleanupDecision` (`src/agents/subagent-registry-cleanup.ts`) and the resume preflight in `resumeSubagentRun` (`src/agents/subagent-registry.ts`). After 3 pending attempts (~2 min, matching `endedAgo=124s`) the completion is abandoned with `reason: \"retry-limit\"`, far short of the intended window. (An earlier revision of this PR fixed only the decision helper; the resume preflight would still have dropped the completion on the next scheduled retry — so both guards are fixed here.)\n- **Fix**: Persist whether the last announce attempt was the transient `completion_handoff_pending` on the delivery record (`SubagentCompletionDeliveryState.lastHandoffPending`), and exempt that case from the retry-count cap in **both** guards for completion flows, leaving the 30-minute hard expiry as the bound. Genuine soft delivery failures — which *did* consume a parent turn — still honor the 3-retry cap, and non-completion flows are unchanged.\n- **What changed**:\n  - `src/agents/subagent-registry.types.ts` — add optional `lastHandoffPending?: boolean` to `SubagentCompletionDeliveryState`.\n  - `src/agents/subagent-delivery-state.ts` — carry the field through `mergeDeliveryState`; add `getDeliveryLastHandoffPending` accessor.\n  - `src/agents/subagent-registry-lifecycle.ts` — `onDeliveryResult` persists `lastHandoffPending = (delivery.reason === \"completion_handoff_pending\")` (and clears it on delivery), so both guards read one source of truth.\n  - `src/agents/subagent-registry-cleanup.ts` — `resolveDeferredCleanupDecision` skips the retry-count give-up for a completion flow when `getDeliveryLastHandoffPending(entry)` is true.\n  - `src/agents/subagent-registry.ts` — the `resumeSubagentRun` preflight mirrors the same exemption: a completion handoff-pending retry is bounded by the hard expiry, not the count cap.\n  - Tests: `subagent-registry-cleanup.test.ts` (decision matrix) and `subagent-registry.lifecycle-retry-grace.e2e.test.ts` (resume-path regression driving the real `resumeSubagentRun`).\n- **What did NOT change (scope boundary)**:\n  - The 30-minute completion hard-expiry and the 3-retry cap constants are untouched — no raised timeout, no new cap.\n  - Non-completion flows keep both the 5-minute expiry and the 3-retry cap; genuine (non-pending) completion failures still hit the cap.\n  - `lastHandoffPending` is an additive, optional, backward-compatible field on the subagent-registry delivery record (absent on old records → `false`).\n  - Config surface unchanged (no schema, defaults, doctor migrations, or `docs/reference/config` edits).\n  - Plugin surface unchanged (no plugin SDK, manifest, `extensions/api.ts` / `runtime-api.ts`, registry, or loader edits).\n  - Session store surface unchanged (no `sessions.json` format, transcript jsonl format, or store-loader edits — relevant given the June SQLite migration).\n  - Session write-lock acquisition is untouched (`src/agents/session-write-lock.ts`); this PR changes only the announce give-up accounting, so the `session file locked (timeout 60000ms)` line in the report is not affected by it either way.\n\n### Reproduction\n\n1. Spawn 3 subagents in parallel from one parent session, each owing a completion message (e.g. a trader agent spawns 3 coder subagents).\n2. Have them finish within seconds of each other so their completion announces arrive together.\n3. The completions serialize through the parent; the ones that find it busy get `completion_handoff_pending`.\n4. **Before this PR**: each pending attempt counts against the 3-retry cap; after 3 attempts (~2 min) the cleanup decision and/or the resume preflight gives up with `reason: \"retry-limit\"` and the subagent result is dropped — the parent never receives it (matching `retries=3 endedAgo=124s`).\n5. **After this PR**: the transient pending outcome no longer counts against the cap for completion flows in either guard; the announce keeps retrying with backoff until the parent frees up and delivers, or until the 30-minute hard expiry.\n\n### Real behavior proof\n\n**Behavior addressed (#88383)**: a completion-message subagent no longer drops its result at the 3-retry cap while the parent is transiently busy — in both the cleanup decision and the resume preflight; it keeps retrying until delivery or the 30-minute hard expiry. Genuine non-pending failures and non-completion flows still honor the cap.\n\n**Real environment tested (Linux, Node 22)**: a real-component tsx harness drives the production `resolveDeferredCleanupDecision`, and a resume-path regression test drives the production `resumeSubagentRun` through the registry with a seeded busy completion handoff past the cap.\n\n**Exact steps or command run after this patch**:\n\n1. `node_modules/.bin/tsx /tmp/qmd88383/repro.mts` (real-component decision sweep)\n2. `node scripts/run-vitest.mjs src/agents/subagent-registry-cleanup.test.ts src/agents/subagent-registry.lifecycle-retry-grace.e2e.test.ts src/agents/subagent-registry-lifecycle.test.ts src/agents/subagent-delivery-state.test.ts`\n3. `node scripts/run-vitest.mjs src/agents/subagent-announce-delivery.test.ts src/agents/subagent-announce.timeout.test.ts src/agents/subagent-registry.announce-loop-guard.test.ts`\n4. `pnpm tsgo:core`; `pnpm exec oxfmt --check --threads=1`; `node scripts/run-oxlint.mjs` on the changed files\n\n**Evidence after fix (verbatim real-component harness output)**:\n\n```text\n========== #88383 real-component completion-announce give-up sweep ==========\n\nDrives production resolveDeferredCleanupDecision (src/agents/subagent-registry-cleanup.ts).\n\n--- SCENARIO A: BEFORE-equivalent (completion flow, attempts past cap, last failure NOT pending) ---\n  decision: {\"kind\":\"give-up\",\"reason\":\"retry-limit\",\"retryCount\":6}\n  >>> drops the completion at retry-limit (matches issue #88383 before fix)\n\n--- SCENARIO B: AFTER FIX (completion flow, attempts past cap, transient handoff-pending) ---\n  decision: {\"kind\":\"retry\",\"retryCount\":6,\"resumeDelayMs\":6000}\n  >>> keeps retrying through parent backpressure (bounded by 30-min hard expiry)\n\n--- SCENARIO C: SAFETY — non-completion flow + pending still hits the cap ---\n  decision: {\"kind\":\"give-up\",\"reason\":\"retry-limit\",\"retryCount\":3}\n  >>> retry-count cap preserved for non-completion flows\n\n--- SCENARIO D: BOUND — busy completion handoff past the 30-min hard expiry gives up ---\n  decision: {\"kind\":\"give-up\",\"reason\":\"expiry\",\"retryCount\":6}\n  >>> still bounded by hard expiry (no unbounded retry)\n\n========== VERDICT ==========\nA before-equiv give-up:retry-limit = true\nB after-fix retry (not dropped)    = true\nC non-completion cap preserved     = true\nD completion hard-expiry bound     = true\n\nPASS — fix exempts only transient handoff-pending for completion flows; cap + hard-expiry bounds intact.\n```\n\n**Vitest output for the touched suites (decision + lifecycle + resume-path e2e)**:\n\n```text\n subagent-registry-cleanup.test.ts        Tests  8 passed (8)\n subagent-registry-lifecycle.test.ts      Tests 30 passed (30)\n subagent-registry.lifecycle-retry-grace.e2e.test.ts  Tests 11 passed (11)\n```\n\nThe two new e2e cases drive the real `resumeSubagentRun`: `resume keeps a busy completion handoff past the retry cap instead of dropping it (#88383)` (fails with the unchanged resume guard, since attemptCount ≥ cap suspended at retry-limit) and `resume still gives up at the retry cap when the last completion failure was not pending`.\n\n**Observed result after fix**:\n\n- A busy completion handoff at `attemptCount=5` returns `retry` from the decision helper and is **not** suspended by the resume preflight (Scenario A → B; resume e2e), so concurrent completions are no longer dropped while the parent serializes them.\n- A non-completion flow / non-pending completion failure at the cap still gives up `retry-limit` (Scenario C; second resume e2e) — the cap is preserved where it was the intended bound.\n- A completion handoff past the 30-minute hard expiry still gives up `expiry` (Scenario D) — retries stay bounded.\n\n**What was not tested**:\n\n- End-to-end live multi-agent gateway run (3 parallel subagents on the reporter's setup). The harness and the resume-path e2e drive the production decision/resume logic deterministically with the lifecycle inputs, but do not start a real announce / model HTTP call.\n- The separate `session file locked (timeout 60000ms)` parent-turn-persist symptom — a distinct same-session lock-contention path, not the dropped-completion give-up addressed here.\n\n**Regression tests**:\n\n- `subagent-registry-cleanup.test.ts` → decision-matrix cases for the pending exemption, the preserved cap on non-pending failures, and the hard-expiry bound.\n- `subagent-registry.lifecycle-retry-grace.e2e.test.ts` → resume-path cases that drive the real `resumeSubagentRun` past the cap. Existing lifecycle (30/30), retry-grace e2e (now 11/11), and announce-delivery/timeout/loop-guard (110/110) suites stay green.\n\n### Risk / Mitigation\n\n- **Risk**: A completion flow whose parent is wedged forever would keep retrying instead of stopping at 3 attempts. **Mitigation**: the unchanged 30-minute hard expiry bounds both guards (Scenario D + resume preflight), and each retry is a cheap pending check that consumes no model turn.\n- **Risk**: A genuine (non-pending) completion delivery failure could be retried longer than intended. **Mitigation**: the exemption is gated strictly on the persisted `completion_handoff_pending` outcome; every other failure reason still hits the 3-retry cap (Scenario C + the non-pending resume e2e case).\n- **Risk**: Two guards could drift. **Mitigation**: both read one persisted source (`getDeliveryLastHandoffPending`) and the comments cross-reference each other; the resume-path e2e covers the previously-missed guard.\n- **Risk**: The change cannot make delivery worse than before — it only *narrows* when a completion flow gives up; non-completion flows are unchanged.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n\n### Linked Issue/PR\n\nRefs #88383\n",
-        "branch": "fix/88383-completion-announce-retry",
-        "head_sha": "011ee5e0231f5b13996d9725e4163dcfced669b3",
-        "author": "openperf",
-        "labels": [
-          "agents",
-          "size: S",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 message-delivery",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/agents/subagent-delivery-state.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/subagent-registry-cleanup.test.ts",
-            "additions": 50,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/subagent-registry-cleanup.ts",
-            "additions": 11,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/subagent-registry-lifecycle.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/subagent-registry.lifecycle-retry-grace.e2e.test.ts",
-            "additions": 56,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/subagent-registry.ts",
-            "additions": 19,
-            "deletions": 13,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/subagent-registry.types.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88523",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88523.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 145,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 31,
-            "SUCCESS": 110,
-            "IN_PROGRESS": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "ci-timings-summary:IN_PROGRESS"
-          ],
-          "pending": [
-            "ci-timings-summary:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2448,
+    "total_ms": 304,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 298
+        "ms": 182
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1849
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 274
+        "ms": 109
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
