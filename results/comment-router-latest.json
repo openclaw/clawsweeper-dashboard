@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-31T09:11:02.269Z",
+  "generated_at": "2026-05-31T09:12:53.592Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-31T06:10:59.826Z",
+  "since": "2026-05-31T06:12:53.375Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    88329
+    88569
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 6,
-  "commands_seen": 3,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,422 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88329:4582865834:2026-05-31T09:10:54Z:clawsweeper_auto_repair",
-      "comment_id": "4582865834",
-      "comment_version_key": "4582865834:2026-05-31T09:10:54Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/88329#issuecomment-4582865834",
-      "repo": "openclaw/openclaw",
-      "issue_number": 88329,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-30T12:47:55Z",
-      "comment_updated_at": "2026-05-31T09:10:54Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=b3f8ce10d9f3d8d657bd68f1ac0bd66350e7f7d7)",
-      "review_summary": "The PR adds quota-exhaustion-only fallback expansion for user-pinned agent sessions, updates agent-scope tests, and changes model failover docs to describe user pins as preferences on long-term quota limits.\n\nPR surface: Source +60, Tests +56, Docs 0. Total +116 across 6 files.\n\nReproducibility: yes. from source and submitted before-fix logs: current main returns no fallback candidates for user-sourced model overrides, and the PR body shows chain_exhausted on a quota error. I did not run a live quota-exhaustion provider repro in this read-only review.",
-      "review_followup": "- [P1] This needs maintainer product/compatibility judgment and contributor after-fix proof; automation cannot supply the contributor's real-provider proof for this external PR.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "b3f8ce10d9f3d8d657bd68f1ac0bd66350e7f7d7",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: user-pinned model falls back to global chain on quota exhaustion",
-        "body": "## Problem\n\nWhen a user selects a model via \\`/model <name>\\`, \\`modelOverride\\` is stored in \\`sessions.json\\` with \\`modelOverrideSource: \\\"user\\\"\\`. The \\`resolveEffectiveModelFallbacks\\` function returns \\`[]\\` for user-sourced overrides, making \\`hasFallbackCandidates = false\\`.\n\nWhen the pinned model hits a **long-term** failure (weekly/monthly quota exhaustion, subscription limit), every subsequent message fails with:\n\n\\`\\`\\`\n⚠️ All models are temporarily rate-limited. Please try again in a few minutes.\n\\`\\`\\`\n\nThis is a complete outage — no recovery path short of manually editing \\`sessions.json\\`.\n\n**Root cause** (\\`src/agents/agent-scope.ts\\`):\n\n\\`\\`\\`typescript\nif (!canUseConfiguredFallbacks) {\n  return [];  // disables entire fallback chain for user-pinned sessions\n}\n\\`\\`\\`\n\n**Reproduction:**\n1. Use \\`/model glm-5\\` (or any model with a weekly quota)\n2. Exhaust the weekly quota (error 1310 from zhipuai)\n3. Every new message fails — even after gateway restart — because \\`sessions.json\\` persists \\`modelOverride\\` across sessions and new sessions inherit the pin\n\n## Fix\n\nReturn the global fallback chain instead of \\`[]\\`. The user's intent when pinning a model is to **prefer** it, not to disable recovery when it's unavailable. The pinned model remains the **first** candidate and is always tried first.\n\nFor subagent sessions, the subagent-specific fallback chain is used (same as auto-selected subagents), rather than the generic agent/default chain.\n\n## Behavior change\n\n| Scenario | Before | After |\n|---|---|---|\n| User-pinned model temporarily rate-limited | Error surfaced | Falls back to next model |\n| User-pinned model quota exhausted (days/weeks) | Permanent outage | Falls back to next model |\n| User-pinned subagent model quota exhausted | Permanent outage | Falls back to subagent fallback chain |\n| No model pin / auto-fallback pin | Unchanged | Unchanged |\n\n## Real behavior proof\n\nTwo occurrences captured in local gateway logs on 2026-05-30 (before this fix), both showing the same subagent \\`zai/glm-5\\` session hitting the weekly quota with zero fallback candidates:\n\n**Occurrence 1 — 2026-05-30T13:14 CST**\n\nSession \\`b640381c\\` (subagent \\`a093b44d\\`), run \\`f6f7e336\\`:\n\n\\`\\`\\`\n# trajectory event: model.fallback_step\n{\n  \"type\": \"model.fallback_step\",\n  \"ts\": \"2026-05-30T05:14:09.631Z\",\n  \"sessionKey\": \"agent:main:subagent:a093b44d-8405-4e1d-a3bd-00ccb1c2b7e5\",\n  \"provider\": \"zai\",\n  \"modelId\": \"glm-5\",\n  \"data\": {\n    \"fallbackStepFromModel\": \"zai/glm-5\",\n    \"fallbackStepFromFailureReason\": \"rate_limit\",\n    \"fallbackStepFromFailureDetail\": \"429 您已达到每周/每月使用上限，您的限额将在 2026-05-31 10:00:31 重置。\",\n    \"fallbackStepChainPosition\": 1,\n    \"fallbackStepFinalOutcome\": \"chain_exhausted\"   // ← chain position 1 + exhausted = 0 candidates\n  }\n}\n\\`\\`\\`\n\nGateway log at the same moment:\n\\`\\`\\`\n2026-05-30T13:14:09.778+08:00 [ws] ⇄ res ✗ agent errorCode=UNAVAILABLE\n  errorMessage=FailoverError: ⚠️ API rate limit reached. Please try again later.\n  runId=f6f7e336-85e2-4db7-825e-59ec76b32a07\n\\`\\`\\`\n\n**Occurrence 2 — 2026-05-30T15:23 CST (2 hours later, same quota, still no fallback)**\n\nSession \\`f455173a\\` (subagent \\`90f819dc\\`), run \\`625ffb86\\`:\n\n\\`\\`\\`\n# trajectory event: model.fallback_step\n{\n  \"type\": \"model.fallback_step\",\n  \"ts\": \"2026-05-30T07:23:05.922Z\",\n  \"sessionKey\": \"agent:main:subagent:90f819dc-fdfa-4ad3-9b3f-8c16b3cb250a\",\n  \"provider\": \"zai\",\n  \"modelId\": \"glm-5\",\n  \"data\": {\n    \"fallbackStepFromModel\": \"zai/glm-5\",\n    \"fallbackStepFromFailureReason\": \"rate_limit\",\n    \"fallbackStepFromFailureDetail\": \"429 您已达到每周/每月使用上限，您的限额将在 2026-05-31 10:00:31 重置。\",\n    \"fallbackStepChainPosition\": 1,\n    \"fallbackStepFinalOutcome\": \"chain_exhausted\"\n  }\n}\n\\`\\`\\`\n\nGateway log:\n\\`\\`\\`\n2026-05-30T15:23:06.062+08:00 [ws] ⇄ res ✗ agent errorCode=UNAVAILABLE\n  errorMessage=FailoverError: ⚠️ API rate limit reached. Please try again later.\n  runId=625ffb86-eee4-4e97-8b7b-7bcdad2bb55c\n\\`\\`\\`\n\n**Key signal:** \\`fallbackStepChainPosition: 1\\` with \\`fallbackStepFinalOutcome: \\\"chain_exhausted\\\"\\` means the fallback chain had **zero candidates** — the bug. After the fix, the same quota-exhaustion event would advance to the next model in the configured chain instead of immediately declaring \\`chain_exhausted\\`.",
-        "branch": "fix/user-model-pin-fallback-on-quota-exhausted",
-        "head_sha": "b3f8ce10d9f3d8d657bd68f1ac0bd66350e7f7d7",
-        "author": "knowcheng",
-        "labels": [
-          "docs",
-          "agents",
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "docs/concepts/model-failover.md",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/concepts/models.md",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-command.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-scope.test.ts",
-            "additions": 56,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-scope.ts",
-            "additions": 22,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/model-fallback.ts",
-            "additions": 29,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88329",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88329.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 148,
-          "counts": {
-            "FAILURE": 8,
-            "SUCCESS": 112,
-            "SKIPPED": 27,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-fast-contracts-plugins-b:FAILURE",
-            "checks-fast-contracts-channels-b:FAILURE",
-            "checks-node-agentic-control-plane-agent-chat:FAILURE",
-            "checks-node-agentic-agents-core:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-fast-contracts-plugins-b:FAILURE",
-            "checks-fast-contracts-channels-b:FAILURE",
-            "checks-node-agentic-control-plane-agent-chat:FAILURE",
-            "checks-node-agentic-agents-core:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:88329:4586234938:2026-05-31T08:58:53Z:re_review",
-      "comment_id": "4586234938",
-      "comment_version_key": "4586234938:2026-05-31T08:58:53Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/88329#issuecomment-4586234938",
-      "repo": "openclaw/openclaw",
-      "issue_number": 88329,
-      "author": "Knowcheng",
-      "author_id": 61039813,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-31T08:58:53Z",
-      "comment_updated_at": "2026-05-31T08:58:53Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: user-pinned model falls back to global chain on quota exhaustion",
-        "body": "## Problem\n\nWhen a user selects a model via \\`/model <name>\\`, \\`modelOverride\\` is stored in \\`sessions.json\\` with \\`modelOverrideSource: \\\"user\\\"\\`. The \\`resolveEffectiveModelFallbacks\\` function returns \\`[]\\` for user-sourced overrides, making \\`hasFallbackCandidates = false\\`.\n\nWhen the pinned model hits a **long-term** failure (weekly/monthly quota exhaustion, subscription limit), every subsequent message fails with:\n\n\\`\\`\\`\n⚠️ All models are temporarily rate-limited. Please try again in a few minutes.\n\\`\\`\\`\n\nThis is a complete outage — no recovery path short of manually editing \\`sessions.json\\`.\n\n**Root cause** (\\`src/agents/agent-scope.ts\\`):\n\n\\`\\`\\`typescript\nif (!canUseConfiguredFallbacks) {\n  return [];  // disables entire fallback chain for user-pinned sessions\n}\n\\`\\`\\`\n\n**Reproduction:**\n1. Use \\`/model glm-5\\` (or any model with a weekly quota)\n2. Exhaust the weekly quota (error 1310 from zhipuai)\n3. Every new message fails — even after gateway restart — because \\`sessions.json\\` persists \\`modelOverride\\` across sessions and new sessions inherit the pin\n\n## Fix\n\nReturn the global fallback chain instead of \\`[]\\`. The user's intent when pinning a model is to **prefer** it, not to disable recovery when it's unavailable. The pinned model remains the **first** candidate and is always tried first.\n\nFor subagent sessions, the subagent-specific fallback chain is used (same as auto-selected subagents), rather than the generic agent/default chain.\n\n## Behavior change\n\n| Scenario | Before | After |\n|---|---|---|\n| User-pinned model temporarily rate-limited | Error surfaced | Falls back to next model |\n| User-pinned model quota exhausted (days/weeks) | Permanent outage | Falls back to next model |\n| User-pinned subagent model quota exhausted | Permanent outage | Falls back to subagent fallback chain |\n| No model pin / auto-fallback pin | Unchanged | Unchanged |\n\n## Real behavior proof\n\nTwo occurrences captured in local gateway logs on 2026-05-30 (before this fix), both showing the same subagent \\`zai/glm-5\\` session hitting the weekly quota with zero fallback candidates:\n\n**Occurrence 1 — 2026-05-30T13:14 CST**\n\nSession \\`b640381c\\` (subagent \\`a093b44d\\`), run \\`f6f7e336\\`:\n\n\\`\\`\\`\n# trajectory event: model.fallback_step\n{\n  \"type\": \"model.fallback_step\",\n  \"ts\": \"2026-05-30T05:14:09.631Z\",\n  \"sessionKey\": \"agent:main:subagent:a093b44d-8405-4e1d-a3bd-00ccb1c2b7e5\",\n  \"provider\": \"zai\",\n  \"modelId\": \"glm-5\",\n  \"data\": {\n    \"fallbackStepFromModel\": \"zai/glm-5\",\n    \"fallbackStepFromFailureReason\": \"rate_limit\",\n    \"fallbackStepFromFailureDetail\": \"429 您已达到每周/每月使用上限，您的限额将在 2026-05-31 10:00:31 重置。\",\n    \"fallbackStepChainPosition\": 1,\n    \"fallbackStepFinalOutcome\": \"chain_exhausted\"   // ← chain position 1 + exhausted = 0 candidates\n  }\n}\n\\`\\`\\`\n\nGateway log at the same moment:\n\\`\\`\\`\n2026-05-30T13:14:09.778+08:00 [ws] ⇄ res ✗ agent errorCode=UNAVAILABLE\n  errorMessage=FailoverError: ⚠️ API rate limit reached. Please try again later.\n  runId=f6f7e336-85e2-4db7-825e-59ec76b32a07\n\\`\\`\\`\n\n**Occurrence 2 — 2026-05-30T15:23 CST (2 hours later, same quota, still no fallback)**\n\nSession \\`f455173a\\` (subagent \\`90f819dc\\`), run \\`625ffb86\\`:\n\n\\`\\`\\`\n# trajectory event: model.fallback_step\n{\n  \"type\": \"model.fallback_step\",\n  \"ts\": \"2026-05-30T07:23:05.922Z\",\n  \"sessionKey\": \"agent:main:subagent:90f819dc-fdfa-4ad3-9b3f-8c16b3cb250a\",\n  \"provider\": \"zai\",\n  \"modelId\": \"glm-5\",\n  \"data\": {\n    \"fallbackStepFromModel\": \"zai/glm-5\",\n    \"fallbackStepFromFailureReason\": \"rate_limit\",\n    \"fallbackStepFromFailureDetail\": \"429 您已达到每周/每月使用上限，您的限额将在 2026-05-31 10:00:31 重置。\",\n    \"fallbackStepChainPosition\": 1,\n    \"fallbackStepFinalOutcome\": \"chain_exhausted\"\n  }\n}\n\\`\\`\\`\n\nGateway log:\n\\`\\`\\`\n2026-05-30T15:23:06.062+08:00 [ws] ⇄ res ✗ agent errorCode=UNAVAILABLE\n  errorMessage=FailoverError: ⚠️ API rate limit reached. Please try again later.\n  runId=625ffb86-eee4-4e97-8b7b-7bcdad2bb55c\n\\`\\`\\`\n\n**Key signal:** \\`fallbackStepChainPosition: 1\\` with \\`fallbackStepFinalOutcome: \\\"chain_exhausted\\\"\\` means the fallback chain had **zero candidates** — the bug. After the fix, the same quota-exhaustion event would advance to the next model in the configured chain instead of immediately declaring \\`chain_exhausted\\`.",
-        "branch": "fix/user-model-pin-fallback-on-quota-exhausted",
-        "head_sha": "b3f8ce10d9f3d8d657bd68f1ac0bd66350e7f7d7",
-        "author": "knowcheng",
-        "labels": [
-          "docs",
-          "agents",
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "docs/concepts/model-failover.md",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/concepts/models.md",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-command.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-scope.test.ts",
-            "additions": 56,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-scope.ts",
-            "additions": 22,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/model-fallback.ts",
-            "additions": 29,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88329",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88329.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 148,
-          "counts": {
-            "FAILURE": 8,
-            "SUCCESS": 112,
-            "SKIPPED": 27,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-fast-contracts-plugins-b:FAILURE",
-            "checks-fast-contracts-channels-b:FAILURE",
-            "checks-node-agentic-control-plane-agent-chat:FAILURE",
-            "checks-node-agentic-agents-core:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-fast-contracts-plugins-b:FAILURE",
-            "checks-fast-contracts-channels-b:FAILURE",
-            "checks-node-agentic-control-plane-agent-chat:FAILURE",
-            "checks-node-agentic-agents-core:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:88329:4586008174:2026-05-31T07:04:14Z:re_review",
-      "comment_id": "4586008174",
-      "comment_version_key": "4586008174:2026-05-31T07:04:14Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/88329#issuecomment-4586008174",
-      "repo": "openclaw/openclaw",
-      "issue_number": 88329,
-      "author": "Knowcheng",
-      "author_id": 61039813,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-31T07:04:14Z",
-      "comment_updated_at": "2026-05-31T07:04:14Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: user-pinned model falls back to global chain on quota exhaustion",
-        "body": "## Problem\n\nWhen a user selects a model via \\`/model <name>\\`, \\`modelOverride\\` is stored in \\`sessions.json\\` with \\`modelOverrideSource: \\\"user\\\"\\`. The \\`resolveEffectiveModelFallbacks\\` function returns \\`[]\\` for user-sourced overrides, making \\`hasFallbackCandidates = false\\`.\n\nWhen the pinned model hits a **long-term** failure (weekly/monthly quota exhaustion, subscription limit), every subsequent message fails with:\n\n\\`\\`\\`\n⚠️ All models are temporarily rate-limited. Please try again in a few minutes.\n\\`\\`\\`\n\nThis is a complete outage — no recovery path short of manually editing \\`sessions.json\\`.\n\n**Root cause** (\\`src/agents/agent-scope.ts\\`):\n\n\\`\\`\\`typescript\nif (!canUseConfiguredFallbacks) {\n  return [];  // disables entire fallback chain for user-pinned sessions\n}\n\\`\\`\\`\n\n**Reproduction:**\n1. Use \\`/model glm-5\\` (or any model with a weekly quota)\n2. Exhaust the weekly quota (error 1310 from zhipuai)\n3. Every new message fails — even after gateway restart — because \\`sessions.json\\` persists \\`modelOverride\\` across sessions and new sessions inherit the pin\n\n## Fix\n\nReturn the global fallback chain instead of \\`[]\\`. The user's intent when pinning a model is to **prefer** it, not to disable recovery when it's unavailable. The pinned model remains the **first** candidate and is always tried first.\n\nFor subagent sessions, the subagent-specific fallback chain is used (same as auto-selected subagents), rather than the generic agent/default chain.\n\n## Behavior change\n\n| Scenario | Before | After |\n|---|---|---|\n| User-pinned model temporarily rate-limited | Error surfaced | Falls back to next model |\n| User-pinned model quota exhausted (days/weeks) | Permanent outage | Falls back to next model |\n| User-pinned subagent model quota exhausted | Permanent outage | Falls back to subagent fallback chain |\n| No model pin / auto-fallback pin | Unchanged | Unchanged |\n\n## Real behavior proof\n\nTwo occurrences captured in local gateway logs on 2026-05-30 (before this fix), both showing the same subagent \\`zai/glm-5\\` session hitting the weekly quota with zero fallback candidates:\n\n**Occurrence 1 — 2026-05-30T13:14 CST**\n\nSession \\`b640381c\\` (subagent \\`a093b44d\\`), run \\`f6f7e336\\`:\n\n\\`\\`\\`\n# trajectory event: model.fallback_step\n{\n  \"type\": \"model.fallback_step\",\n  \"ts\": \"2026-05-30T05:14:09.631Z\",\n  \"sessionKey\": \"agent:main:subagent:a093b44d-8405-4e1d-a3bd-00ccb1c2b7e5\",\n  \"provider\": \"zai\",\n  \"modelId\": \"glm-5\",\n  \"data\": {\n    \"fallbackStepFromModel\": \"zai/glm-5\",\n    \"fallbackStepFromFailureReason\": \"rate_limit\",\n    \"fallbackStepFromFailureDetail\": \"429 您已达到每周/每月使用上限，您的限额将在 2026-05-31 10:00:31 重置。\",\n    \"fallbackStepChainPosition\": 1,\n    \"fallbackStepFinalOutcome\": \"chain_exhausted\"   // ← chain position 1 + exhausted = 0 candidates\n  }\n}\n\\`\\`\\`\n\nGateway log at the same moment:\n\\`\\`\\`\n2026-05-30T13:14:09.778+08:00 [ws] ⇄ res ✗ agent errorCode=UNAVAILABLE\n  errorMessage=FailoverError: ⚠️ API rate limit reached. Please try again later.\n  runId=f6f7e336-85e2-4db7-825e-59ec76b32a07\n\\`\\`\\`\n\n**Occurrence 2 — 2026-05-30T15:23 CST (2 hours later, same quota, still no fallback)**\n\nSession \\`f455173a\\` (subagent \\`90f819dc\\`), run \\`625ffb86\\`:\n\n\\`\\`\\`\n# trajectory event: model.fallback_step\n{\n  \"type\": \"model.fallback_step\",\n  \"ts\": \"2026-05-30T07:23:05.922Z\",\n  \"sessionKey\": \"agent:main:subagent:90f819dc-fdfa-4ad3-9b3f-8c16b3cb250a\",\n  \"provider\": \"zai\",\n  \"modelId\": \"glm-5\",\n  \"data\": {\n    \"fallbackStepFromModel\": \"zai/glm-5\",\n    \"fallbackStepFromFailureReason\": \"rate_limit\",\n    \"fallbackStepFromFailureDetail\": \"429 您已达到每周/每月使用上限，您的限额将在 2026-05-31 10:00:31 重置。\",\n    \"fallbackStepChainPosition\": 1,\n    \"fallbackStepFinalOutcome\": \"chain_exhausted\"\n  }\n}\n\\`\\`\\`\n\nGateway log:\n\\`\\`\\`\n2026-05-30T15:23:06.062+08:00 [ws] ⇄ res ✗ agent errorCode=UNAVAILABLE\n  errorMessage=FailoverError: ⚠️ API rate limit reached. Please try again later.\n  runId=625ffb86-eee4-4e97-8b7b-7bcdad2bb55c\n\\`\\`\\`\n\n**Key signal:** \\`fallbackStepChainPosition: 1\\` with \\`fallbackStepFinalOutcome: \\\"chain_exhausted\\\"\\` means the fallback chain had **zero candidates** — the bug. After the fix, the same quota-exhaustion event would advance to the next model in the configured chain instead of immediately declaring \\`chain_exhausted\\`.",
-        "branch": "fix/user-model-pin-fallback-on-quota-exhausted",
-        "head_sha": "b3f8ce10d9f3d8d657bd68f1ac0bd66350e7f7d7",
-        "author": "knowcheng",
-        "labels": [
-          "docs",
-          "agents",
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "docs/concepts/model-failover.md",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/concepts/models.md",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-command.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-scope.test.ts",
-            "additions": 56,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-scope.ts",
-            "additions": 22,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/model-fallback.ts",
-            "additions": 29,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88329",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88329.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 148,
-          "counts": {
-            "FAILURE": 8,
-            "SUCCESS": 112,
-            "SKIPPED": 27,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-fast-contracts-plugins-b:FAILURE",
-            "checks-fast-contracts-channels-b:FAILURE",
-            "checks-node-agentic-control-plane-agent-chat:FAILURE",
-            "checks-node-agentic-agents-core:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-fast-contracts-plugins-b:FAILURE",
-            "checks-fast-contracts-channels-b:FAILURE",
-            "checks-node-agentic-control-plane-agent-chat:FAILURE",
-            "checks-node-agentic-agents-core:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2798,
+    "total_ms": 332,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 502
+        "ms": 203
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1924
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 343
+        "ms": 116
       },
       {
         "name": "append_ledger",
