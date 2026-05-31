@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-31T10:19:28.121Z",
+  "generated_at": "2026-05-31T10:20:12.323Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-31T07:19:27.904Z",
+  "since": "2026-05-31T07:20:10.334Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    88586
+    88583
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,145 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88583:4586372724:2026-05-31T10:20:07Z:clawsweeper_auto_repair",
+      "comment_id": "4586372724",
+      "comment_version_key": "4586372724:2026-05-31T10:20:07Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88583#issuecomment-4586372724",
+      "repo": "openclaw/openclaw",
+      "issue_number": 88583,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-31T10:07:08Z",
+      "comment_updated_at": "2026-05-31T10:20:07Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=e9f0b331b8130ac7eae293da1d4cefc40a26b220)",
+      "review_summary": "The PR adds optional sessionId ownership to in-memory agent lifecycle events/run contexts and skips session lifecycle persistence when the event owner sessionId differs from the current session row.\n\nPR surface: Source +48, Tests +38. Total +86 across 6 files.\n\nReproducibility: yes. from source inspection: queued followups register the stamped sessionId before preflight compaction, while preflight can later mutate the same run to a rotated sessionId. I did not run tests because this was a read-only review.",
+      "review_followup": "- [P2] There is a narrow mechanical repair: keep the guard, synchronize the stamped run context after preflight session rotation, and add the missing regression test.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "e9f0b331b8130ac7eae293da1d4cefc40a26b220",
+      "finding_id": "review-feedback",
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): reject pre-reset run lifecycle events from clobbering the rotated session row",
+        "body": "### Summary\n\n- **Problem**: Issue #88538 reports that `sessions.reset` rotates a channel session to a fresh `sessionId`, but an old in-flight embedded run can still emit later lifecycle `start`/`end`/`error` events. Those events are persisted onto the **new** session row, leaving the fresh session marked `running`/`failed` even though `hasActiveRun=false`. A pre-reset run's terminal error overwrote a post-reset row's status.\n- **Root Cause**: `persistGatewaySessionLifecycleEvent` in `src/gateway/session-lifecycle-state.ts` resolves the target SessionEntry purely by `sessionKey` (`loadSessionEntry(params.sessionKey)` → `updateSessionStoreEntry`) and writes `status`/`startedAt`/`endedAt`/`runtimeMs` with **no `sessionId` identity check**. After `sessions.reset` rotates the key to a new sessionId, a late lifecycle event from the old run still resolves that key and clobbers the new row. Lifecycle events carried `runId` but not the owning run's `sessionId`, and the runId→context map is cleared before the terminal event persists — so the owning sessionId had to be carried on the event itself.\n- **Fix**: Carry the owning run's `sessionId` on lifecycle events and reject persistence when it differs from the current row's sessionId.\n  - `emitAgentEvent` stamps the owning `sessionId` (from the registered run context) onto lifecycle-stream events at emit time, so it survives the run-context clear.\n  - `persistGatewaySessionLifecycleEvent` skips the write when the event's owning sessionId and the current row's sessionId are both known and differ (`isStaleLifecycleEventForSession`).\n  - This is the same identity-guard pattern the codebase already uses for reset/rebind hazards; it covers all lifecycle emitters centrally via the runId→context stamp rather than per-emitter.\n- **What changed**:\n  - `src/infra/agent-events.ts` — add `sessionId?` to `AgentEventPayload` and `AgentRunContext`; carry it through `registerAgentRunContext` merge; stamp it onto lifecycle events in `emitAgentEvent`.\n  - `src/gateway/session-lifecycle-state.ts` — add the pure `isStaleLifecycleEventForSession` guard; apply it inside the `updateSessionStoreEntry` callback (race-safe against the live entry); `LifecycleEventLike` now also picks `sessionId`.\n  - `src/auto-reply/reply/agent-runner-execution.ts`, `src/auto-reply/reply/followup-runner.ts` — register the embedded run's `sessionId` in its run context so the stamp has a value.\n  - Tests in `session-lifecycle-state.test.ts` (guard decision) and `agent-events.test.ts` (lifecycle-event sessionId stamping).\n- **What did NOT change (scope boundary)**:\n  - Guard only skips when **both** the owning and current sessionIds are known and differ; when the owning sessionId is absent (any emitter that doesn't stamp it) behavior is unchanged — never a new false-skip.\n  - `sessionId` is an additive optional field on the in-memory event/run-context shapes (no persisted format change).\n  - The pure derivers (`deriveGatewaySessionLifecycleSnapshot` / `derivePersistedSessionLifecyclePatch`) are unchanged.\n  - Config surface unchanged (no schema, defaults, doctor migrations, or `docs/reference/config`).\n  - Plugin surface unchanged (no plugin SDK, manifest, `extensions/*` api/runtime-api, registry/loader).\n  - Gateway protocol unchanged.\n\n### Reproduction\n\n1. A channel session hits a long/overflowing embedded run.\n2. `sessions.reset` returns a new sessionId for the same channel `sessionKey`.\n3. The old pre-reset run then emits a terminal `error` (or `start`/`end`) lifecycle event.\n4. **Before this PR**: the event resolves the rotated row by sessionKey and overwrites it to `failed`/`running` though the failing run belonged to the old sessionId.\n5. **After this PR**: the event carries the old run's sessionId; persistence sees it differs from the rotated row's sessionId and skips the write, leaving the fresh session intact.\n\n### Real behavior proof\n\n**Behavior addressed (#88538)**: a lifecycle event from a pre-`sessions.reset` run no longer mutates the post-reset session row; the owning sessionId is stamped on lifecycle events and persistence rejects mismatches.\n\n**Real environment tested (Linux, Node 22 — Vitest against the production emit + guard functions)**: `emitAgentEvent` lifecycle sessionId stamping and the `isStaleLifecycleEventForSession` persistence guard, exercised directly.\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs src/gateway/session-lifecycle-state.test.ts src/infra/agent-events.test.ts`; `pnpm tsgo:core`; `pnpm check:test-types`; `pnpm exec oxfmt --check`; `node scripts/run-oxlint.mjs` on the changed files.\n\n**Evidence after fix (Vitest output for the touched files)**:\n\n```text\n session-lifecycle-state.test.ts   Tests  11 passed (11)\n agent-events.test.ts              Tests  13 passed (13)\n```\n\nThe new cases: `treats a pre-reset run's lifecycle event as stale once the row's sessionId rotated (#88538)`, `applies lifecycle events whose owning sessionId matches the current row`, `does not guard when the owning sessionId is unknown (preserves legacy behavior)`, and `stamps the owning sessionId onto lifecycle events for reset-stale guarding (#88538)`.\n\n**Observed result after fix**:\n\n- A lifecycle event whose owning sessionId differs from the current row's sessionId is treated as stale → persistence returns `null` (no mutation).\n- A matching sessionId still applies normally; an unknown owning sessionId preserves the prior behavior (no false-skip).\n- `emitAgentEvent` stamps the owning sessionId onto `lifecycle`-stream events only; other streams stay unstamped.\n\n**What was not tested**:\n\n- The live Slack channel-overflow + reset race end-to-end on the reporter's deployment. The emit-side stamp and the persistence guard are covered deterministically by unit tests against the production functions; a full gateway store round-trip was not driven.\n\n**Regression tests**:\n\n- `session-lifecycle-state.test.ts` → guard-decision cases (stale-rotated / matching / unknown-owner).\n- `agent-events.test.ts` → lifecycle sessionId stamping; existing sequencing/redaction cases remain green.\n\n### Risk / Mitigation\n\n- **Risk**: A legitimate event could be skipped. **Mitigation**: the guard fires only when both sessionIds are known and differ; equal ids and unknown-owner cases always apply, so it cannot drop a correctly-targeted event.\n- **Risk**: An emitter that doesn't stamp sessionId stays unguarded. **Mitigation**: the stamp is centralized in `emitAgentEvent` from the run context (keyed by runId), so any emitter whose run registered a sessionId is covered; unstamped events keep prior behavior (safe).\n- **Risk**: Added field on a hot event shape. **Mitigation**: one optional field, only stamped for lifecycle events, no persisted-format or protocol change.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [x] Sessions / storage\n\n### Linked Issue/PR\n\nFixes #88538\n",
+        "branch": "fix/88538-reset-stale-lifecycle-guard",
+        "head_sha": "e9f0b331b8130ac7eae293da1d4cefc40a26b220",
+        "author": "openperf",
+        "labels": [
+          "gateway",
+          "size: S",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/followup-runner.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-lifecycle-state.test.ts",
+            "additions": 19,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/session-lifecycle-state.ts",
+            "additions": 32,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/agent-events.test.ts",
+            "additions": 19,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/agent-events.ts",
+            "additions": 18,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-88583",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88583.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 145,
+          "counts": {
+            "SUCCESS": 113,
+            "SKIPPED": 30,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "build-artifacts:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "build-artifacts:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 356,
+    "total_ms": 2186,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 206
+        "ms": 233
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1740
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 139
+        "ms": 184
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
