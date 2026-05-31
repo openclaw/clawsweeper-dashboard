@@ -1,22 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-31T03:06:33.430Z",
+  "generated_at": "2026-05-31T03:06:56.743Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-31T00:06:31.482Z",
+  "since": "2026-05-31T00:06:54.828Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    58853
+    52365
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 15,
-  "commands_seen": 5,
-  "actionable": 1,
+  "scanned_comments": 9,
+  "commands_seen": 2,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,17 +31,171 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:58853:4355234597:2026-05-31T03:06:27Z:clawsweeper_needs_human",
-      "comment_id": "4355234597",
-      "comment_version_key": "4355234597:2026-05-31T03:06:27Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/58853#issuecomment-4355234597",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:52365:4339464999:2026-05-31T03:06:52Z:clawsweeper_auto_repair",
+      "comment_id": "4339464999",
+      "comment_version_key": "4339464999:2026-05-31T03:06:52Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/52365#issuecomment-4339464999",
       "repo": "openclaw/openclaw",
-      "issue_number": 58853,
+      "issue_number": 52365,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-30T18:34:56Z",
-      "comment_updated_at": "2026-05-31T03:06:27Z",
+      "comment_created_at": "2026-04-28T22:13:52Z",
+      "comment_updated_at": "2026-05-31T03:06:52Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=cc04f683060333c55f45ca2508060ab8387875e6)",
+      "review_summary": "Adds a model-fallback `beforeAttempt` stop hook, threads cron deadline access into isolated cron execution, skips near-deadline fallback attempts, and adds cron/fallback tests.\n\nPR surface: Source +125, Tests +510, Other 0. Total +635 across 12 files.\n\nReproducibility: Source-reproducible, not live-reproduced here: current main lacks a deadline-aware `beforeAttempt` gate, so a cron fallback can still start with effectively no remaining outer budget. The reported production log and touched code path are coherent, but the current-head proof still needs refresh.",
+      "review_followup": "- [P1] Manual review is needed because the contributor proof is stale and the remaining blocker mixes a code correctness fix with current-head real behavior evidence.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "cc04f683060333c55f45ca2508060ab8387875e6",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): stop fallback attempts when cron budget is exhausted",
+        "body": "## Problem\n\nWhen a cron job's primary model times out near the cron deadline, the fallback model is started but immediately killed by the same cron timeout — receiving effectively 0ms to make an LLM request. The fallback never gets a fair chance to respond, and the user sees a misleading `cron: job execution timed out` error attributed to the fallback model.\n\n**Observed in production logs (2026-03-22):**\n\n```\n[08:10:30.733] anthropic/claude-opus-4-6 attempt=1/2 reason=unknown err='Request was aborted.' duration=28667ms\n[08:10:30.735] openai-codex/gpt-5.4    attempt=2/2 reason=timeout err='cron: job execution timed out' duration=0ms\n```\n\nThe cron timeout wraps the entire fallback chain. When the primary model consumes most of the budget, the fallback model is allocated ~0ms and fails immediately.\n\n## Solution\n\n1. **Propagate the cron deadline** (`deadlineAtMs`) from `executeJobCoreWithTimeout` through the cron service state down to `runCronIsolatedAgentTurn`.\n\n2. **Add a `beforeAttempt` hook** to `runWithModelFallback` that is called before each candidate attempt. If it returns `{ type: 'stop' }`, the fallback chain stops and preserves the original error from the previous attempt.\n\n3. **Check remaining budget** in the cron layer's `beforeAttempt` callback. If less than `min(30s, timeout/4)` remains before the cron deadline, the fallback is skipped with a clear message:\n   > `Skipping fallback: only 50ms remain before cron timeout (need at least 30000ms).`\n\nThis ensures:\n- The primary model's real error is preserved (not masked by a fake cron timeout on the fallback)\n- No wasted LLM API calls that would be aborted instantly\n- The `beforeAttempt` hook is generic and reusable for other pre-attempt checks\n\n## Changes\n\n- `src/agents/model-fallback.ts` — Add `beforeAttempt` hook + `stop_before_candidate` decision type\n- `src/cron/service/timer.ts` — Compute and pass `deadlineAtMs` to job execution\n- `src/cron/isolated-agent/run.ts` — Use `beforeAttempt` to check remaining cron budget\n- `src/cron/service/state.ts` + `src/gateway/server-cron.ts` — Thread `deadlineAtMs` through interfaces\n\n## Tests\n\n- `model-fallback.test.ts` — beforeAttempt stop behavior\n- `run.fallback-time-budget.test.ts` — Cron deadline propagation + fallback budget exhaustion\n- `service.issue-regressions.test.ts` — Deadline passed to isolated runs\n\n\n## Real behavior proof\n\n**Behavior or issue addressed:** Cron isolated agent-turn jobs should not start a model fallback when the primary attempt has consumed almost the whole cron deadline and the fallback would be killed immediately by the same timeout.\n\n**Real environment tested:** Local OpenClaw checkout on branch `fix/cron-fallback-timeout` at `008791fa10`, macOS host, Node 22. The proof command uses the same fallback budget formula added in this branch and the cron job shape from the affected isolated agent-turn surface.\n\n**Exact steps or command run after this patch:** Ran `node .artifacts/pr-52365-real-behavior-proof.mjs` locally after the patch, then ran `pnpm test src/cron/isolated-agent/run.fallback-time-budget.test.ts -- --reporter=verbose` as supplemental coverage for the same gate.\n\n**Evidence after fix:** Terminal output from the local reproduction command:\n\n```\n$ node .artifacts/pr-52365-real-behavior-proof.mjs\ncron fallback budget repro\njob: sessionTarget=isolated wakeMode=next-heartbeat payload=agentTurn timeoutSeconds=60\nprimary attempt: consumed 59900ms of a 60000ms cron deadline\nfallback check: remainingMs=100; fallbackMinRemainingMs=15000\nbefore(upstream/main): runWithModelFallback had no beforeAttempt budget gate -> fallbackAttempted=true\nafter(this branch): fallbackAttempted=false\nafter stop: Skipping fallback: only 100ms remain before cron timeout (need at least 15000ms).\n```\n\nSupplemental targeted test output:\n\n```\n$ pnpm test src/cron/isolated-agent/run.fallback-time-budget.test.ts -- --reporter=verbose\n✓ allows fallback attempts when the per-attempt budget fits inside the remaining cron deadline\n✓ uses agents.defaults.timeoutSeconds for fallback budget when job timeoutSeconds is unset\n✓ stops new fallback attempts when the per-attempt budget no longer fits\nTest Files  1 passed (1)\nTests  3 passed (3)\n```\n\n**Observed result after fix:** With only 100ms left before the cron deadline and a 15,000ms minimum fallback budget, the after-fix gate returns `fallbackAttempted=false` and reports `Skipping fallback: only 100ms remain before cron timeout (need at least 15000ms).` The before behavior had no `beforeAttempt` budget gate, so the fallback candidate was started even though it could only receive about 0ms.\n\n**What was not tested:** Live Anthropic/OpenAI API calls were not run for this proof; the local reproduction covers the cron fallback budget decision and the targeted test covers the runtime hook path with mocked provider execution.\n",
+        "branch": "fix/cron-fallback-timeout",
+        "head_sha": "cc04f683060333c55f45ca2508060ab8387875e6",
+        "author": "imwyvern",
+        "labels": [
+          "gateway",
+          "scripts",
+          "agents",
+          "size: L",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/test-projects.test-support.mjs",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback-observation.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback.test.ts",
+            "additions": 98,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback.ts",
+            "additions": 56,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run-executor.ts",
+            "additions": 32,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run.fallback-time-budget.test.ts",
+            "additions": 279,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/state.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.test.ts",
+            "additions": 121,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.ts",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-cron.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/test-projects.test.ts",
+            "additions": 13,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-52365",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-52365.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BLOCKED",
+        "review_decision": "",
+        "checks": {
+          "total": 146,
+          "counts": {
+            "SUCCESS": 114,
+            "SKIPPED": 30,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-core-runtime-media-ui:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-core-runtime-media-ui:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:52365:4345794045:2026-04-29T16:55:17Z:clawsweeper_needs_human",
+      "comment_id": "4345794045",
+      "comment_version_key": "4345794045:2026-04-29T16:55:17Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/52365#issuecomment-4345794045",
+      "repo": "openclaw/openclaw",
+      "issue_number": 52365,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-04-29T16:55:17Z",
+      "comment_updated_at": "2026-04-29T16:55:17Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -52,53 +206,104 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- No ClawSweeper repair is needed; the branch is ready for normal maintainer merge handling once required checks finish.; Cleared: The diff adds read-only diagnostic file reads and fixed-argument environment probes, with no dependency, workflow, lockfile, credential, or write-path change found. (sha=13055b0bfc815e33326f2334401396bc8bf69c92)",
-      "review_summary": "The branch adds a read-only WSL/WSL2 Doctor health contribution, registers it in Doctor health/conversion lists, and tests WSL config parsing plus resource-warning behavior.\n\nPR surface: Source +541, Tests +361. Total +902 across 4 files.\n\nReproducibility: not applicable. this is a feature PR for a new Doctor diagnostic rather than a reported failing behavior. The branch does include real WSL2 output and injected low-resource cases to validate the new behavior.",
-      "review_followup": "- No ClawSweeper repair is needed; the branch is ready for normal maintainer merge handling once required checks finish.",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=48a621558196d879d9ef8d084a606b5fc4d5ba02)",
+      "review_summary": "The PR adds a pre-attempt stop hook to model fallback, threads cron deadline information into isolated cron execution, and adds tests for skipping fallback attempts when little cron budget remains.",
+      "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "13055b0bfc815e33326f2334401396bc8bf69c92",
+      "expected_head_sha": "48a621558196d879d9ef8d084a606b5fc4d5ba02",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "feat(doctor): add WSL environment diagnostics check [AI-assisted]",
-        "body": "## Summary\n\nAdd a Doctor health contribution that proactively detects WSL/WSL2\nenvironments and surfaces environment context + resource configuration\nissues that are not covered by any existing check.\n\n## Problem\n\nWSL2 is the recommended way to run OpenClaw on Windows, but `openclaw\ndoctor` has no dedicated WSL diagnostics. WSL-related hints are\nscattered across the gateway daemon flow (systemd-unavailable only) and\nonboard (win32 platform only). Users hitting WSL-specific issues —\nlow memory limits, insufficient processor allocation, or missing\n.wslconfig — get no guidance from Doctor.\n\n## Changes\n\n**New file: `src/commands/doctor-wsl.ts`**\n- Detects WSL/WSL2 via existing `src/infra/wsl.ts` helpers\n- Displays a one-line environment summary: WSL version, kernel,\n  systemd status, memory limit, processor count\n- Reads `.wslconfig` from the Windows side using `wslvar`/`wslpath`\n  for reliable path resolution (with heuristic fallback)\n- Warns when memory limit < 4GB or processor count < 2\n- Hints about missing `.wslconfig` when host memory is limited\n- Silently skips on non-WSL platforms (zero overhead)\n- systemd diagnostics intentionally left to the gateway daemon flow\n  to avoid duplicate messaging\n\n**New file: `src/commands/doctor-wsl.test.ts`**\n- 27 unit tests covering INI parser, memory string parser,\n  diagnostic note builder, and summary builder\n\n**Modified: `src/flows/doctor-health-contributions.ts`**\n- Register `doctor:wsl-environment` contribution (inserted before\n  `doctor:systemd-linger`)\n- Added import + thin wrapper function (8 lines total)\n\n## Testing\n\n- `pnpm check` — 0 errors, 0 warnings\n- `pnpm vitest run src/commands/doctor-wsl.test.ts` — 27/27 passed\n- `pnpm build` — clean build\n- Manually verified on WSL2 (Ubuntu 24.04, kernel 6.6.87.2,\n  systemd enabled, .wslconfig with 8GB/4 processors)\n\n## AI Disclosure\n\n- **AI-assisted**: yes — developed with Claude Opus as coding partner\n- **Degree of testing**: fully tested (27 unit tests + lint + build)\n- **Understanding**: I understand what the code does — it reads\n  /etc/wsl.conf, .wslconfig, and /proc/version to collect WSL\n  environment info, then emits Doctor notes via the standard\n  note() API when resource issues are detected\n- **How AI was used**: architecture analysis of the Doctor\n  contribution system, code generation, test generation, and\n  iterative lint/test fixes\n\n## Notes\n\n- This is a read-only diagnostic; it does not modify any config\n- The contribution pattern follows existing Doctor conventions\n  (createDoctorHealthContribution + note())\n- First-time contributor — happy to adjust based on review feedback\n\n---\n\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Doctor had no WSL-specific health check, despite WSL logic being scattered across several files. WSL2 users with misconfigured resource limits (low memory/CPU in .wslconfig) or disabled systemd hit silent degradation. This adds a `doctor:wsl-environment` health contribution that detects WSL2, reads systemd state, kernel version, and resource limits, and warns on low memory/CPU.\n\n- **Real environment tested:** Linux running under genuine WSL2 (Ubuntu 24.04, Windows 11 host), Node.js 24.14.0, OpenClaw built from this PR head. Exercised the exported `collectWSLDiagnostics()`, `buildWSLInfoSummary()`, and `buildWSLDiagnosticNotes()` against this machine's actual WSL2 state plus injected low-resource scenarios.\n\n- **Exact steps or command run after this patch:** invoked the patched WSL diagnostic functions against the real WSL2 environment and injected configs via tsx:\n```bash\n$ node --import tsx run-wsl-check.ts\n```\n\n- **Evidence after fix:** Actual output. (1) is read from this real WSL2 machine; (2) and (3) inject low-resource configs to exercise the warning logic:\n```\nReal WSL2 environment (this machine):\n  summary: WSL2 · kernel 6.6.87.2-microsoft-standard-WSL2 · systemd OK\n  isWSL2: true | systemd: true | visibleMemGB: 16\n  warnings: (none - healthy)\n\nInjected .wslconfig memory=2GB, processors=1:\n  WSL memory limit is 2GB - this may be too low for OpenClaw.\n  Recommended: at least 4GB. Edit %USERPROFILE%\\.wslconfig [wsl2] memory=8GB\n  WSL processor limit is 1 - OpenClaw performs better with 2+ cores.\n\nInjected no .wslconfig + ~3GB visible memory:\n  No .wslconfig found. WSL is currently limited to ~3GB memory.\n  Tip: create %USERPROFILE%\\.wslconfig to set explicit resource limits.\n```\n\n- **Observed result after fix:** On the real healthy WSL2 environment (16GB visible, systemd enabled) the summary line renders and no warning is emitted. Injecting a low .wslconfig (2GB / 1 core) triggers memory and processor warnings with actionable .wslconfig edits; injecting no-.wslconfig with ~3GB visible memory triggers a \"create .wslconfig\" tip. Detection is gated to WSL2 (WSL1 and non-WSL skip).\n\n- **What was not tested:** The full `openclaw doctor` end-to-end TUI invocation was not captured here (it triggers a heavy dist build); the patched diagnostic functions are exercised directly against the real WSL2 environment and the same data the Doctor contribution consumes. Reading the Windows-side .wslconfig file returned null on this host (resolved separately from the visible-memory probe, which read correctly).\n",
-        "branch": "feat/doctor-wsl-environment-diagnostics",
-        "head_sha": "13055b0bfc815e33326f2334401396bc8bf69c92",
-        "author": "alkor2000",
+        "title": "fix(cron): stop fallback attempts when cron budget is exhausted",
+        "body": "## Problem\n\nWhen a cron job's primary model times out near the cron deadline, the fallback model is started but immediately killed by the same cron timeout — receiving effectively 0ms to make an LLM request. The fallback never gets a fair chance to respond, and the user sees a misleading `cron: job execution timed out` error attributed to the fallback model.\n\n**Observed in production logs (2026-03-22):**\n\n```\n[08:10:30.733] anthropic/claude-opus-4-6 attempt=1/2 reason=unknown err='Request was aborted.' duration=28667ms\n[08:10:30.735] openai-codex/gpt-5.4    attempt=2/2 reason=timeout err='cron: job execution timed out' duration=0ms\n```\n\nThe cron timeout wraps the entire fallback chain. When the primary model consumes most of the budget, the fallback model is allocated ~0ms and fails immediately.\n\n## Solution\n\n1. **Propagate the cron deadline** (`deadlineAtMs`) from `executeJobCoreWithTimeout` through the cron service state down to `runCronIsolatedAgentTurn`.\n\n2. **Add a `beforeAttempt` hook** to `runWithModelFallback` that is called before each candidate attempt. If it returns `{ type: 'stop' }`, the fallback chain stops and preserves the original error from the previous attempt.\n\n3. **Check remaining budget** in the cron layer's `beforeAttempt` callback. If less than `min(30s, timeout/4)` remains before the cron deadline, the fallback is skipped with a clear message:\n   > `Skipping fallback: only 50ms remain before cron timeout (need at least 30000ms).`\n\nThis ensures:\n- The primary model's real error is preserved (not masked by a fake cron timeout on the fallback)\n- No wasted LLM API calls that would be aborted instantly\n- The `beforeAttempt` hook is generic and reusable for other pre-attempt checks\n\n## Changes\n\n- `src/agents/model-fallback.ts` — Add `beforeAttempt` hook + `stop_before_candidate` decision type\n- `src/cron/service/timer.ts` — Compute and pass `deadlineAtMs` to job execution\n- `src/cron/isolated-agent/run.ts` — Use `beforeAttempt` to check remaining cron budget\n- `src/cron/service/state.ts` + `src/gateway/server-cron.ts` — Thread `deadlineAtMs` through interfaces\n\n## Tests\n\n- `model-fallback.test.ts` — beforeAttempt stop behavior\n- `run.fallback-time-budget.test.ts` — Cron deadline propagation + fallback budget exhaustion\n- `service.issue-regressions.test.ts` — Deadline passed to isolated runs\n\n\n## Real behavior proof\n\n**Behavior or issue addressed:** Cron isolated agent-turn jobs should not start a model fallback when the primary attempt has consumed almost the whole cron deadline and the fallback would be killed immediately by the same timeout.\n\n**Real environment tested:** Local OpenClaw checkout on branch `fix/cron-fallback-timeout` at `008791fa10`, macOS host, Node 22. The proof command uses the same fallback budget formula added in this branch and the cron job shape from the affected isolated agent-turn surface.\n\n**Exact steps or command run after this patch:** Ran `node .artifacts/pr-52365-real-behavior-proof.mjs` locally after the patch, then ran `pnpm test src/cron/isolated-agent/run.fallback-time-budget.test.ts -- --reporter=verbose` as supplemental coverage for the same gate.\n\n**Evidence after fix:** Terminal output from the local reproduction command:\n\n```\n$ node .artifacts/pr-52365-real-behavior-proof.mjs\ncron fallback budget repro\njob: sessionTarget=isolated wakeMode=next-heartbeat payload=agentTurn timeoutSeconds=60\nprimary attempt: consumed 59900ms of a 60000ms cron deadline\nfallback check: remainingMs=100; fallbackMinRemainingMs=15000\nbefore(upstream/main): runWithModelFallback had no beforeAttempt budget gate -> fallbackAttempted=true\nafter(this branch): fallbackAttempted=false\nafter stop: Skipping fallback: only 100ms remain before cron timeout (need at least 15000ms).\n```\n\nSupplemental targeted test output:\n\n```\n$ pnpm test src/cron/isolated-agent/run.fallback-time-budget.test.ts -- --reporter=verbose\n✓ allows fallback attempts when the per-attempt budget fits inside the remaining cron deadline\n✓ uses agents.defaults.timeoutSeconds for fallback budget when job timeoutSeconds is unset\n✓ stops new fallback attempts when the per-attempt budget no longer fits\nTest Files  1 passed (1)\nTests  3 passed (3)\n```\n\n**Observed result after fix:** With only 100ms left before the cron deadline and a 15,000ms minimum fallback budget, the after-fix gate returns `fallbackAttempted=false` and reports `Skipping fallback: only 100ms remain before cron timeout (need at least 15000ms).` The before behavior had no `beforeAttempt` budget gate, so the fallback candidate was started even though it could only receive about 0ms.\n\n**What was not tested:** Live Anthropic/OpenAI API calls were not run for this proof; the local reproduction covers the cron fallback budget decision and the targeted test covers the runtime hook path with mocked provider execution.\n",
+        "branch": "fix/cron-fallback-timeout",
+        "head_sha": "cc04f683060333c55f45ca2508060ab8387875e6",
+        "author": "imwyvern",
         "labels": [
-          "commands",
+          "gateway",
+          "scripts",
+          "agents",
           "size: L",
           "proof: supplied",
-          "proof: sufficient",
           "P2",
-          "rating: 🦞 diamond lobster",
-          "status: 👀 ready for maintainer look"
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/commands/doctor-wsl.test.ts",
-            "additions": 361,
+            "path": "scripts/test-projects.test-support.mjs",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback-observation.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback.test.ts",
+            "additions": 98,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback.ts",
+            "additions": 56,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run-executor.ts",
+            "additions": 32,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/run.fallback-time-budget.test.ts",
+            "additions": 279,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/commands/doctor-wsl.ts",
-            "additions": 524,
+            "path": "src/cron/isolated-agent/run.ts",
+            "additions": 20,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/flows/doctor-health-contributions.ts",
+            "path": "src/cron/service/state.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.test.ts",
+            "additions": 121,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.ts",
             "additions": 11,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/flows/doctor-health-conversion-plan.ts",
-            "additions": 6,
+            "path": "src/gateway/server-cron.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/test-projects.test.ts",
+            "additions": 13,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
@@ -106,452 +311,45 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-58853",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-58853.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-52365",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-52365.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BLOCKED",
         "review_decision": "",
         "checks": {
-          "total": 145,
+          "total": 146,
           "counts": {
-            "SUCCESS": 113,
-            "SKIPPED": 31,
+            "SUCCESS": 114,
+            "SKIPPED": 30,
+            "FAILURE": 1,
             "NEUTRAL": 1
           },
-          "blockers": [],
+          "blockers": [
+            "checks-node-core-runtime-media-ui:FAILURE"
+          ],
           "pending": [],
-          "terminalBlockers": []
+          "terminalBlockers": [
+            "checks-node-core-runtime-media-ui:FAILURE"
+          ]
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
       "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:58853:4585534953:2026-05-31T03:01:23Z:re_review",
-      "comment_id": "4585534953",
-      "comment_version_key": "4585534953:2026-05-31T03:01:23Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/58853#issuecomment-4585534953",
-      "repo": "openclaw/openclaw",
-      "issue_number": 58853,
-      "author": "vincentkoc",
-      "author_id": 25068,
-      "author_association": "MEMBER",
-      "comment_created_at": "2026-05-31T03:01:23Z",
-      "comment_updated_at": "2026-05-31T03:01:23Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-05-31T03:06:34.079Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 58853
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-05-31T03:06:35.131Z",
-          "response_comment_id": "4585535029",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "admin",
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(doctor): add WSL environment diagnostics check [AI-assisted]",
-        "body": "## Summary\n\nAdd a Doctor health contribution that proactively detects WSL/WSL2\nenvironments and surfaces environment context + resource configuration\nissues that are not covered by any existing check.\n\n## Problem\n\nWSL2 is the recommended way to run OpenClaw on Windows, but `openclaw\ndoctor` has no dedicated WSL diagnostics. WSL-related hints are\nscattered across the gateway daemon flow (systemd-unavailable only) and\nonboard (win32 platform only). Users hitting WSL-specific issues —\nlow memory limits, insufficient processor allocation, or missing\n.wslconfig — get no guidance from Doctor.\n\n## Changes\n\n**New file: `src/commands/doctor-wsl.ts`**\n- Detects WSL/WSL2 via existing `src/infra/wsl.ts` helpers\n- Displays a one-line environment summary: WSL version, kernel,\n  systemd status, memory limit, processor count\n- Reads `.wslconfig` from the Windows side using `wslvar`/`wslpath`\n  for reliable path resolution (with heuristic fallback)\n- Warns when memory limit < 4GB or processor count < 2\n- Hints about missing `.wslconfig` when host memory is limited\n- Silently skips on non-WSL platforms (zero overhead)\n- systemd diagnostics intentionally left to the gateway daemon flow\n  to avoid duplicate messaging\n\n**New file: `src/commands/doctor-wsl.test.ts`**\n- 27 unit tests covering INI parser, memory string parser,\n  diagnostic note builder, and summary builder\n\n**Modified: `src/flows/doctor-health-contributions.ts`**\n- Register `doctor:wsl-environment` contribution (inserted before\n  `doctor:systemd-linger`)\n- Added import + thin wrapper function (8 lines total)\n\n## Testing\n\n- `pnpm check` — 0 errors, 0 warnings\n- `pnpm vitest run src/commands/doctor-wsl.test.ts` — 27/27 passed\n- `pnpm build` — clean build\n- Manually verified on WSL2 (Ubuntu 24.04, kernel 6.6.87.2,\n  systemd enabled, .wslconfig with 8GB/4 processors)\n\n## AI Disclosure\n\n- **AI-assisted**: yes — developed with Claude Opus as coding partner\n- **Degree of testing**: fully tested (27 unit tests + lint + build)\n- **Understanding**: I understand what the code does — it reads\n  /etc/wsl.conf, .wslconfig, and /proc/version to collect WSL\n  environment info, then emits Doctor notes via the standard\n  note() API when resource issues are detected\n- **How AI was used**: architecture analysis of the Doctor\n  contribution system, code generation, test generation, and\n  iterative lint/test fixes\n\n## Notes\n\n- This is a read-only diagnostic; it does not modify any config\n- The contribution pattern follows existing Doctor conventions\n  (createDoctorHealthContribution + note())\n- First-time contributor — happy to adjust based on review feedback\n\n---\n\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Doctor had no WSL-specific health check, despite WSL logic being scattered across several files. WSL2 users with misconfigured resource limits (low memory/CPU in .wslconfig) or disabled systemd hit silent degradation. This adds a `doctor:wsl-environment` health contribution that detects WSL2, reads systemd state, kernel version, and resource limits, and warns on low memory/CPU.\n\n- **Real environment tested:** Linux running under genuine WSL2 (Ubuntu 24.04, Windows 11 host), Node.js 24.14.0, OpenClaw built from this PR head. Exercised the exported `collectWSLDiagnostics()`, `buildWSLInfoSummary()`, and `buildWSLDiagnosticNotes()` against this machine's actual WSL2 state plus injected low-resource scenarios.\n\n- **Exact steps or command run after this patch:** invoked the patched WSL diagnostic functions against the real WSL2 environment and injected configs via tsx:\n```bash\n$ node --import tsx run-wsl-check.ts\n```\n\n- **Evidence after fix:** Actual output. (1) is read from this real WSL2 machine; (2) and (3) inject low-resource configs to exercise the warning logic:\n```\nReal WSL2 environment (this machine):\n  summary: WSL2 · kernel 6.6.87.2-microsoft-standard-WSL2 · systemd OK\n  isWSL2: true | systemd: true | visibleMemGB: 16\n  warnings: (none - healthy)\n\nInjected .wslconfig memory=2GB, processors=1:\n  WSL memory limit is 2GB - this may be too low for OpenClaw.\n  Recommended: at least 4GB. Edit %USERPROFILE%\\.wslconfig [wsl2] memory=8GB\n  WSL processor limit is 1 - OpenClaw performs better with 2+ cores.\n\nInjected no .wslconfig + ~3GB visible memory:\n  No .wslconfig found. WSL is currently limited to ~3GB memory.\n  Tip: create %USERPROFILE%\\.wslconfig to set explicit resource limits.\n```\n\n- **Observed result after fix:** On the real healthy WSL2 environment (16GB visible, systemd enabled) the summary line renders and no warning is emitted. Injecting a low .wslconfig (2GB / 1 core) triggers memory and processor warnings with actionable .wslconfig edits; injecting no-.wslconfig with ~3GB visible memory triggers a \"create .wslconfig\" tip. Detection is gated to WSL2 (WSL1 and non-WSL skip).\n\n- **What was not tested:** The full `openclaw doctor` end-to-end TUI invocation was not captured here (it triggers a heavy dist build); the patched diagnostic functions are exercised directly against the real WSL2 environment and the same data the Doctor contribution consumes. Reading the Windows-side .wslconfig file returned null on this host (resolved separately from the visible-memory probe, which read correctly).\n",
-        "branch": "feat/doctor-wsl-environment-diagnostics",
-        "head_sha": "13055b0bfc815e33326f2334401396bc8bf69c92",
-        "author": "alkor2000",
-        "labels": [
-          "commands",
-          "size: L",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦞 diamond lobster",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/commands/doctor-wsl.test.ts",
-            "additions": 361,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/commands/doctor-wsl.ts",
-            "additions": 524,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/flows/doctor-health-contributions.ts",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/flows/doctor-health-conversion-plan.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-58853",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-58853.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BLOCKED",
-        "review_decision": "",
-        "checks": {
-          "total": 145,
-          "counts": {
-            "SUCCESS": 113,
-            "SKIPPED": 31,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": true,
-      "author_readonly_authorized": false
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:58853:4510555767:2026-05-21T16:54:18Z:re_review",
-      "comment_id": "4510555767",
-      "comment_version_key": "4510555767:2026-05-21T16:54:18Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/58853#issuecomment-4510555767",
-      "repo": "openclaw/openclaw",
-      "issue_number": 58853,
-      "author": "alkor2000",
-      "author_id": 131229172,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-21T16:54:18Z",
-      "comment_updated_at": "2026-05-21T16:54:18Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(doctor): add WSL environment diagnostics check [AI-assisted]",
-        "body": "## Summary\n\nAdd a Doctor health contribution that proactively detects WSL/WSL2\nenvironments and surfaces environment context + resource configuration\nissues that are not covered by any existing check.\n\n## Problem\n\nWSL2 is the recommended way to run OpenClaw on Windows, but `openclaw\ndoctor` has no dedicated WSL diagnostics. WSL-related hints are\nscattered across the gateway daemon flow (systemd-unavailable only) and\nonboard (win32 platform only). Users hitting WSL-specific issues —\nlow memory limits, insufficient processor allocation, or missing\n.wslconfig — get no guidance from Doctor.\n\n## Changes\n\n**New file: `src/commands/doctor-wsl.ts`**\n- Detects WSL/WSL2 via existing `src/infra/wsl.ts` helpers\n- Displays a one-line environment summary: WSL version, kernel,\n  systemd status, memory limit, processor count\n- Reads `.wslconfig` from the Windows side using `wslvar`/`wslpath`\n  for reliable path resolution (with heuristic fallback)\n- Warns when memory limit < 4GB or processor count < 2\n- Hints about missing `.wslconfig` when host memory is limited\n- Silently skips on non-WSL platforms (zero overhead)\n- systemd diagnostics intentionally left to the gateway daemon flow\n  to avoid duplicate messaging\n\n**New file: `src/commands/doctor-wsl.test.ts`**\n- 27 unit tests covering INI parser, memory string parser,\n  diagnostic note builder, and summary builder\n\n**Modified: `src/flows/doctor-health-contributions.ts`**\n- Register `doctor:wsl-environment` contribution (inserted before\n  `doctor:systemd-linger`)\n- Added import + thin wrapper function (8 lines total)\n\n## Testing\n\n- `pnpm check` — 0 errors, 0 warnings\n- `pnpm vitest run src/commands/doctor-wsl.test.ts` — 27/27 passed\n- `pnpm build` — clean build\n- Manually verified on WSL2 (Ubuntu 24.04, kernel 6.6.87.2,\n  systemd enabled, .wslconfig with 8GB/4 processors)\n\n## AI Disclosure\n\n- **AI-assisted**: yes — developed with Claude Opus as coding partner\n- **Degree of testing**: fully tested (27 unit tests + lint + build)\n- **Understanding**: I understand what the code does — it reads\n  /etc/wsl.conf, .wslconfig, and /proc/version to collect WSL\n  environment info, then emits Doctor notes via the standard\n  note() API when resource issues are detected\n- **How AI was used**: architecture analysis of the Doctor\n  contribution system, code generation, test generation, and\n  iterative lint/test fixes\n\n## Notes\n\n- This is a read-only diagnostic; it does not modify any config\n- The contribution pattern follows existing Doctor conventions\n  (createDoctorHealthContribution + note())\n- First-time contributor — happy to adjust based on review feedback\n\n---\n\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Doctor had no WSL-specific health check, despite WSL logic being scattered across several files. WSL2 users with misconfigured resource limits (low memory/CPU in .wslconfig) or disabled systemd hit silent degradation. This adds a `doctor:wsl-environment` health contribution that detects WSL2, reads systemd state, kernel version, and resource limits, and warns on low memory/CPU.\n\n- **Real environment tested:** Linux running under genuine WSL2 (Ubuntu 24.04, Windows 11 host), Node.js 24.14.0, OpenClaw built from this PR head. Exercised the exported `collectWSLDiagnostics()`, `buildWSLInfoSummary()`, and `buildWSLDiagnosticNotes()` against this machine's actual WSL2 state plus injected low-resource scenarios.\n\n- **Exact steps or command run after this patch:** invoked the patched WSL diagnostic functions against the real WSL2 environment and injected configs via tsx:\n```bash\n$ node --import tsx run-wsl-check.ts\n```\n\n- **Evidence after fix:** Actual output. (1) is read from this real WSL2 machine; (2) and (3) inject low-resource configs to exercise the warning logic:\n```\nReal WSL2 environment (this machine):\n  summary: WSL2 · kernel 6.6.87.2-microsoft-standard-WSL2 · systemd OK\n  isWSL2: true | systemd: true | visibleMemGB: 16\n  warnings: (none - healthy)\n\nInjected .wslconfig memory=2GB, processors=1:\n  WSL memory limit is 2GB - this may be too low for OpenClaw.\n  Recommended: at least 4GB. Edit %USERPROFILE%\\.wslconfig [wsl2] memory=8GB\n  WSL processor limit is 1 - OpenClaw performs better with 2+ cores.\n\nInjected no .wslconfig + ~3GB visible memory:\n  No .wslconfig found. WSL is currently limited to ~3GB memory.\n  Tip: create %USERPROFILE%\\.wslconfig to set explicit resource limits.\n```\n\n- **Observed result after fix:** On the real healthy WSL2 environment (16GB visible, systemd enabled) the summary line renders and no warning is emitted. Injecting a low .wslconfig (2GB / 1 core) triggers memory and processor warnings with actionable .wslconfig edits; injecting no-.wslconfig with ~3GB visible memory triggers a \"create .wslconfig\" tip. Detection is gated to WSL2 (WSL1 and non-WSL skip).\n\n- **What was not tested:** The full `openclaw doctor` end-to-end TUI invocation was not captured here (it triggers a heavy dist build); the patched diagnostic functions are exercised directly against the real WSL2 environment and the same data the Doctor contribution consumes. Reading the Windows-side .wslconfig file returned null on this host (resolved separately from the visible-memory probe, which read correctly).\n",
-        "branch": "feat/doctor-wsl-environment-diagnostics",
-        "head_sha": "13055b0bfc815e33326f2334401396bc8bf69c92",
-        "author": "alkor2000",
-        "labels": [
-          "commands",
-          "size: L",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦞 diamond lobster",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/commands/doctor-wsl.test.ts",
-            "additions": 361,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/commands/doctor-wsl.ts",
-            "additions": 524,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/flows/doctor-health-contributions.ts",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/flows/doctor-health-conversion-plan.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-58853",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-58853.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BLOCKED",
-        "review_decision": "",
-        "checks": {
-          "total": 145,
-          "counts": {
-            "SUCCESS": 113,
-            "SKIPPED": 31,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:58853:4510473449:2026-05-21T16:43:19Z:re_review",
-      "comment_id": "4510473449",
-      "comment_version_key": "4510473449:2026-05-21T16:43:19Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/58853#issuecomment-4510473449",
-      "repo": "openclaw/openclaw",
-      "issue_number": 58853,
-      "author": "alkor2000",
-      "author_id": 131229172,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-21T16:43:19Z",
-      "comment_updated_at": "2026-05-21T16:43:19Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(doctor): add WSL environment diagnostics check [AI-assisted]",
-        "body": "## Summary\n\nAdd a Doctor health contribution that proactively detects WSL/WSL2\nenvironments and surfaces environment context + resource configuration\nissues that are not covered by any existing check.\n\n## Problem\n\nWSL2 is the recommended way to run OpenClaw on Windows, but `openclaw\ndoctor` has no dedicated WSL diagnostics. WSL-related hints are\nscattered across the gateway daemon flow (systemd-unavailable only) and\nonboard (win32 platform only). Users hitting WSL-specific issues —\nlow memory limits, insufficient processor allocation, or missing\n.wslconfig — get no guidance from Doctor.\n\n## Changes\n\n**New file: `src/commands/doctor-wsl.ts`**\n- Detects WSL/WSL2 via existing `src/infra/wsl.ts` helpers\n- Displays a one-line environment summary: WSL version, kernel,\n  systemd status, memory limit, processor count\n- Reads `.wslconfig` from the Windows side using `wslvar`/`wslpath`\n  for reliable path resolution (with heuristic fallback)\n- Warns when memory limit < 4GB or processor count < 2\n- Hints about missing `.wslconfig` when host memory is limited\n- Silently skips on non-WSL platforms (zero overhead)\n- systemd diagnostics intentionally left to the gateway daemon flow\n  to avoid duplicate messaging\n\n**New file: `src/commands/doctor-wsl.test.ts`**\n- 27 unit tests covering INI parser, memory string parser,\n  diagnostic note builder, and summary builder\n\n**Modified: `src/flows/doctor-health-contributions.ts`**\n- Register `doctor:wsl-environment` contribution (inserted before\n  `doctor:systemd-linger`)\n- Added import + thin wrapper function (8 lines total)\n\n## Testing\n\n- `pnpm check` — 0 errors, 0 warnings\n- `pnpm vitest run src/commands/doctor-wsl.test.ts` — 27/27 passed\n- `pnpm build` — clean build\n- Manually verified on WSL2 (Ubuntu 24.04, kernel 6.6.87.2,\n  systemd enabled, .wslconfig with 8GB/4 processors)\n\n## AI Disclosure\n\n- **AI-assisted**: yes — developed with Claude Opus as coding partner\n- **Degree of testing**: fully tested (27 unit tests + lint + build)\n- **Understanding**: I understand what the code does — it reads\n  /etc/wsl.conf, .wslconfig, and /proc/version to collect WSL\n  environment info, then emits Doctor notes via the standard\n  note() API when resource issues are detected\n- **How AI was used**: architecture analysis of the Doctor\n  contribution system, code generation, test generation, and\n  iterative lint/test fixes\n\n## Notes\n\n- This is a read-only diagnostic; it does not modify any config\n- The contribution pattern follows existing Doctor conventions\n  (createDoctorHealthContribution + note())\n- First-time contributor — happy to adjust based on review feedback\n\n---\n\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Doctor had no WSL-specific health check, despite WSL logic being scattered across several files. WSL2 users with misconfigured resource limits (low memory/CPU in .wslconfig) or disabled systemd hit silent degradation. This adds a `doctor:wsl-environment` health contribution that detects WSL2, reads systemd state, kernel version, and resource limits, and warns on low memory/CPU.\n\n- **Real environment tested:** Linux running under genuine WSL2 (Ubuntu 24.04, Windows 11 host), Node.js 24.14.0, OpenClaw built from this PR head. Exercised the exported `collectWSLDiagnostics()`, `buildWSLInfoSummary()`, and `buildWSLDiagnosticNotes()` against this machine's actual WSL2 state plus injected low-resource scenarios.\n\n- **Exact steps or command run after this patch:** invoked the patched WSL diagnostic functions against the real WSL2 environment and injected configs via tsx:\n```bash\n$ node --import tsx run-wsl-check.ts\n```\n\n- **Evidence after fix:** Actual output. (1) is read from this real WSL2 machine; (2) and (3) inject low-resource configs to exercise the warning logic:\n```\nReal WSL2 environment (this machine):\n  summary: WSL2 · kernel 6.6.87.2-microsoft-standard-WSL2 · systemd OK\n  isWSL2: true | systemd: true | visibleMemGB: 16\n  warnings: (none - healthy)\n\nInjected .wslconfig memory=2GB, processors=1:\n  WSL memory limit is 2GB - this may be too low for OpenClaw.\n  Recommended: at least 4GB. Edit %USERPROFILE%\\.wslconfig [wsl2] memory=8GB\n  WSL processor limit is 1 - OpenClaw performs better with 2+ cores.\n\nInjected no .wslconfig + ~3GB visible memory:\n  No .wslconfig found. WSL is currently limited to ~3GB memory.\n  Tip: create %USERPROFILE%\\.wslconfig to set explicit resource limits.\n```\n\n- **Observed result after fix:** On the real healthy WSL2 environment (16GB visible, systemd enabled) the summary line renders and no warning is emitted. Injecting a low .wslconfig (2GB / 1 core) triggers memory and processor warnings with actionable .wslconfig edits; injecting no-.wslconfig with ~3GB visible memory triggers a \"create .wslconfig\" tip. Detection is gated to WSL2 (WSL1 and non-WSL skip).\n\n- **What was not tested:** The full `openclaw doctor` end-to-end TUI invocation was not captured here (it triggers a heavy dist build); the patched diagnostic functions are exercised directly against the real WSL2 environment and the same data the Doctor contribution consumes. Reading the Windows-side .wslconfig file returned null on this host (resolved separately from the visible-memory probe, which read correctly).\n",
-        "branch": "feat/doctor-wsl-environment-diagnostics",
-        "head_sha": "13055b0bfc815e33326f2334401396bc8bf69c92",
-        "author": "alkor2000",
-        "labels": [
-          "commands",
-          "size: L",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦞 diamond lobster",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/commands/doctor-wsl.test.ts",
-            "additions": 361,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/commands/doctor-wsl.ts",
-            "additions": 524,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/flows/doctor-health-contributions.ts",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/flows/doctor-health-conversion-plan.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-58853",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-58853.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BLOCKED",
-        "review_decision": "",
-        "checks": {
-          "total": 145,
-          "counts": {
-            "SUCCESS": 113,
-            "SKIPPED": 31,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:58853:4508007388:2026-05-21T11:57:05Z:re_review",
-      "comment_id": "4508007388",
-      "comment_version_key": "4508007388:2026-05-21T11:57:05Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/58853#issuecomment-4508007388",
-      "repo": "openclaw/openclaw",
-      "issue_number": 58853,
-      "author": "alkor2000",
-      "author_id": 131229172,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-21T11:57:05Z",
-      "comment_updated_at": "2026-05-21T11:57:05Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(doctor): add WSL environment diagnostics check [AI-assisted]",
-        "body": "## Summary\n\nAdd a Doctor health contribution that proactively detects WSL/WSL2\nenvironments and surfaces environment context + resource configuration\nissues that are not covered by any existing check.\n\n## Problem\n\nWSL2 is the recommended way to run OpenClaw on Windows, but `openclaw\ndoctor` has no dedicated WSL diagnostics. WSL-related hints are\nscattered across the gateway daemon flow (systemd-unavailable only) and\nonboard (win32 platform only). Users hitting WSL-specific issues —\nlow memory limits, insufficient processor allocation, or missing\n.wslconfig — get no guidance from Doctor.\n\n## Changes\n\n**New file: `src/commands/doctor-wsl.ts`**\n- Detects WSL/WSL2 via existing `src/infra/wsl.ts` helpers\n- Displays a one-line environment summary: WSL version, kernel,\n  systemd status, memory limit, processor count\n- Reads `.wslconfig` from the Windows side using `wslvar`/`wslpath`\n  for reliable path resolution (with heuristic fallback)\n- Warns when memory limit < 4GB or processor count < 2\n- Hints about missing `.wslconfig` when host memory is limited\n- Silently skips on non-WSL platforms (zero overhead)\n- systemd diagnostics intentionally left to the gateway daemon flow\n  to avoid duplicate messaging\n\n**New file: `src/commands/doctor-wsl.test.ts`**\n- 27 unit tests covering INI parser, memory string parser,\n  diagnostic note builder, and summary builder\n\n**Modified: `src/flows/doctor-health-contributions.ts`**\n- Register `doctor:wsl-environment` contribution (inserted before\n  `doctor:systemd-linger`)\n- Added import + thin wrapper function (8 lines total)\n\n## Testing\n\n- `pnpm check` — 0 errors, 0 warnings\n- `pnpm vitest run src/commands/doctor-wsl.test.ts` — 27/27 passed\n- `pnpm build` — clean build\n- Manually verified on WSL2 (Ubuntu 24.04, kernel 6.6.87.2,\n  systemd enabled, .wslconfig with 8GB/4 processors)\n\n## AI Disclosure\n\n- **AI-assisted**: yes — developed with Claude Opus as coding partner\n- **Degree of testing**: fully tested (27 unit tests + lint + build)\n- **Understanding**: I understand what the code does — it reads\n  /etc/wsl.conf, .wslconfig, and /proc/version to collect WSL\n  environment info, then emits Doctor notes via the standard\n  note() API when resource issues are detected\n- **How AI was used**: architecture analysis of the Doctor\n  contribution system, code generation, test generation, and\n  iterative lint/test fixes\n\n## Notes\n\n- This is a read-only diagnostic; it does not modify any config\n- The contribution pattern follows existing Doctor conventions\n  (createDoctorHealthContribution + note())\n- First-time contributor — happy to adjust based on review feedback\n\n---\n\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Doctor had no WSL-specific health check, despite WSL logic being scattered across several files. WSL2 users with misconfigured resource limits (low memory/CPU in .wslconfig) or disabled systemd hit silent degradation. This adds a `doctor:wsl-environment` health contribution that detects WSL2, reads systemd state, kernel version, and resource limits, and warns on low memory/CPU.\n\n- **Real environment tested:** Linux running under genuine WSL2 (Ubuntu 24.04, Windows 11 host), Node.js 24.14.0, OpenClaw built from this PR head. Exercised the exported `collectWSLDiagnostics()`, `buildWSLInfoSummary()`, and `buildWSLDiagnosticNotes()` against this machine's actual WSL2 state plus injected low-resource scenarios.\n\n- **Exact steps or command run after this patch:** invoked the patched WSL diagnostic functions against the real WSL2 environment and injected configs via tsx:\n```bash\n$ node --import tsx run-wsl-check.ts\n```\n\n- **Evidence after fix:** Actual output. (1) is read from this real WSL2 machine; (2) and (3) inject low-resource configs to exercise the warning logic:\n```\nReal WSL2 environment (this machine):\n  summary: WSL2 · kernel 6.6.87.2-microsoft-standard-WSL2 · systemd OK\n  isWSL2: true | systemd: true | visibleMemGB: 16\n  warnings: (none - healthy)\n\nInjected .wslconfig memory=2GB, processors=1:\n  WSL memory limit is 2GB - this may be too low for OpenClaw.\n  Recommended: at least 4GB. Edit %USERPROFILE%\\.wslconfig [wsl2] memory=8GB\n  WSL processor limit is 1 - OpenClaw performs better with 2+ cores.\n\nInjected no .wslconfig + ~3GB visible memory:\n  No .wslconfig found. WSL is currently limited to ~3GB memory.\n  Tip: create %USERPROFILE%\\.wslconfig to set explicit resource limits.\n```\n\n- **Observed result after fix:** On the real healthy WSL2 environment (16GB visible, systemd enabled) the summary line renders and no warning is emitted. Injecting a low .wslconfig (2GB / 1 core) triggers memory and processor warnings with actionable .wslconfig edits; injecting no-.wslconfig with ~3GB visible memory triggers a \"create .wslconfig\" tip. Detection is gated to WSL2 (WSL1 and non-WSL skip).\n\n- **What was not tested:** The full `openclaw doctor` end-to-end TUI invocation was not captured here (it triggers a heavy dist build); the patched diagnostic functions are exercised directly against the real WSL2 environment and the same data the Doctor contribution consumes. Reading the Windows-side .wslconfig file returned null on this host (resolved separately from the visible-memory probe, which read correctly).\n",
-        "branch": "feat/doctor-wsl-environment-diagnostics",
-        "head_sha": "13055b0bfc815e33326f2334401396bc8bf69c92",
-        "author": "alkor2000",
-        "labels": [
-          "commands",
-          "size: L",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦞 diamond lobster",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/commands/doctor-wsl.test.ts",
-            "additions": 361,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/commands/doctor-wsl.ts",
-            "additions": 524,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/flows/doctor-health-contributions.ts",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/flows/doctor-health-conversion-plan.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-58853",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-58853.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BLOCKED",
-        "review_decision": "",
-        "checks": {
-          "total": 145,
-          "counts": {
-            "SUCCESS": 113,
-            "SKIPPED": 31,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4120,
+    "total_ms": 2148,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 306
+        "ms": 324
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1621
+        "ms": 1576
       },
       {
         "name": "classify_commands",
@@ -559,11 +357,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2157
+        "ms": 223
       },
       {
         "name": "append_ledger",
-        "ms": 2
+        "ms": 0
       }
     ]
   }
