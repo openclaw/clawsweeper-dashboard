@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-31T16:11:24.992Z",
+  "generated_at": "2026-05-31T16:11:24.043Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-31T13:11:24.756Z",
+  "since": "2026-05-31T13:11:22.238Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    88694
+    88676
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +29,173 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88676:4587142910:2026-05-31T16:11:19Z:clawsweeper_auto_repair",
+      "comment_id": "4587142910",
+      "comment_version_key": "4587142910:2026-05-31T16:11:19Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88676#issuecomment-4587142910",
+      "repo": "openclaw/openclaw",
+      "issue_number": 88676,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-31T15:23:38Z",
+      "comment_updated_at": "2026-05-31T16:11:19Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=74385e7d2d81a631fe9f2ce219767c2b6ba4f18d)",
+      "review_summary": "The PR adds durable memory-flush failure fields, failure lifecycle events, automatic transcript force truncation after three failures, and tests around failure, recovery, and truncation paths.\n\nPR surface: Source +233, Tests +209. Total +442 across 3 files.\n\nReproducibility: yes. for the source-level bug: current main catches non-abort memory-flush failures without durable recovery state, and the caller can return the visible flush error before the normal reply. A live provider-crash reproduction is still not supplied.",
+      "review_followup": "- [P1] Human review is needed to approve or revise the destructive session-truncation policy; the reserved-key fix is mechanical but not the only blocker.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "74385e7d2d81a631fe9f2ce219767c2b6ba4f18d",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(auto-reply): add memory flush failure tracking with escalation to force-truncate",
+        "body": "## Summary\n\nFix memory flush failure permanently wedging sessions by adding independent failure tracking with bounded retry and provider-independent force-truncate escalation.\n\nWhen session tokens exceed the `memoryFlush` threshold, OpenClaw spawns an embedded agent turn to produce a handoff summary before truncating history. If this provider call fails (connection closed, 5xx, timeout), the catch block previously only logged and showed a warning — no state was persisted. Since `hasAlreadyFlushedForCurrentCompaction()` still returned `false`, every subsequent message re-triggered the same doomed flush, creating an infinite loop where no user message was ever answered.\n\n## Changes\n\n### `src/config/sessions/types.ts` (+6 lines)\n\nNew optional `SessionEntry` fields for independent failure tracking:\n- `memoryFlushFailureCount` — consecutive failures since last successful flush\n- `memoryFlushLastFailedAt` — timestamp of last failed attempt\n- `memoryFlushLastFailureError` — truncated error message (max 200 chars)\n\n### `src/auto-reply/reply/agent-runner-memory.ts` (+229/-2 lines)\n\n**Failure tracking (catch block, line ~1491):**\n- Non-abort failures: increment `memoryFlushFailureCount`, persist timestamp and truncated error\n- Abort errors (user cancel, gateway restart): no failure metadata persisted, flush retries next message\n- Lifecycle event emitted: `memory_flush_failed` with attempt count and error\n\n**Force-truncate escalation (3 consecutive failures):**\n- Provider-independent: mechanically truncates JSONL transcript to last 20 messages\n- Prepends system marker: `[Session context was automatically truncated due to repeated memory flush failures...]`\n- Resets all failure counters and token estimates\n- Uses `writeTextAtomic` for safe file replacement\n- Lifecycle event emitted: `memory_flush_force_truncate`\n- Visible warning sent to user\n\n**Success path cleanup (line ~1473):**\n- Successful flushes now clear all failure tracking fields\n\n### `src/auto-reply/reply/agent-runner-memory.test.ts` (+211 lines)\n\nFive new test cases:\n1. `increments memoryFlushFailureCount on non-abort flush failure` — verifies counter, timestamp, error, and lifecycle event\n2. `does not track failure on abort error` — verifies abort exclusion\n3. `clears failure counters on successful flush` — verifies success resets all failure metadata\n4. `triggers force-truncate after MAX_FLUSH_FAILURES consecutive failures` — verifies transcript truncation, marker insertion, counter reset, and lifecycle event\n5. `next message retries flush after failure` — verifies no retry suppression (unlike v1 approach)\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: memoryFlush failure permanently wedges sessions in an infinite flush→fail→flush retry loop, with no escalation path (Issue #85645)\n- **Real environment tested**: Docker container (`node:24-bookworm`, Node.js `v24.16.0`, Linux `aarch64`), local patched checkout at commit `74385e7d`\n- **Failing proof before fix**: On `upstream/main` (commit `827ceb55`), the catch block has zero state persistence and zero escalation. The five test cases authored in this PR do not exist on upstream/main:\n\n```\n# upstream/main catch block — no failure tracking, no escalation:\n  } catch (err) {\n    logVerbose(`memory flush run failed: ${String(err)}`);\n    const visibleErrorPayload = buildMemoryFlushErrorPayload(err);\n    if (visibleErrorPayload) {\n      params.onVisibleErrorPayloads?.([visibleErrorPayload]);\n    }\n  }\n```\n\n- **Exact steps or command run after this patch**:\n\n```bash\n# Docker build\ndocker build -t openclaw-test -f Dockerfile.test .\n\n# Target tests (39 tests, 5 new)\ndocker run --rm openclaw-test\n\n# Regression tests (40 tests)\ndocker run --rm openclaw-test node scripts/run-vitest.mjs \\\n  src/auto-reply/reply/reply-state.test.ts\n```\n\n- **Evidence after fix**:\n\n```\n# Target tests:\n ✓  auto-reply  src/auto-reply/reply/agent-runner-memory.test.ts (39 tests) 1120ms\n Test Files  1 passed (1)\n      Tests  39 passed (39)\n\n# Regression tests:\n ✓  auto-reply  src/auto-reply/reply/reply-state.test.ts (40 tests) 31ms\n Test Files  1 passed (1)\n      Tests  40 passed (40)\n```\n\n- **Observed result after fix**:\n  - Failure path: catch block increments `memoryFlushFailureCount` (independent of success marker), emits `memory_flush_failed` lifecycle event, and does NOT suppress retry on next message\n  - Escalation path: after 3 consecutive failures, `forceTruncateSession()` mechanically truncates the JSONL to last 20 messages + system marker, resets all counters, emits `memory_flush_force_truncate` lifecycle event — no LLM required\n  - Recovery path: successful flush after transient failure clears all failure metadata\n  - Force-truncate test verifies: 25 messages → truncated to 20 + marker (22 lines total), old messages dropped, counters reset\n\n- **What was not tested**: Live end-to-end provider crash with a real OpenClaw Gateway instance. The force-truncate path is tested against real JSONL files on disk but with mocked `runWithModelFallback` rejection. Live provider crash would require a provider that crashes on demand.\n\n## Test plan\n\n- [x] `node scripts/run-vitest.mjs src/auto-reply/reply/agent-runner-memory.test.ts` — 39 tests passed (Docker + local)\n- [x] `node scripts/run-vitest.mjs src/auto-reply/reply/reply-state.test.ts` — 40 tests passed (Docker + local)\n- [x] `git diff --check` — no whitespace issues\n- [x] No AI markers in commit, code, or comments\n\nPartially addresses #85645 (implements failure tracking, bounded retry, and provider-independent force-truncate escalation; configurable escalation policy is out of scope for this PR)\n",
+        "branch": "fix/memory-flush-failure-escalation",
+        "head_sha": "74385e7d2d81a631fe9f2ce219767c2b6ba4f18d",
+        "author": "jerry-xin",
+        "labels": [
+          "size: M",
+          "proof: supplied",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/agent-runner-memory.test.ts",
+            "additions": 209,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-memory.ts",
+            "additions": 229,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/types.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-88676",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88676.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 149,
+          "counts": {
+            "SUCCESS": 110,
+            "SKIPPED": 29,
+            "FAILURE": 9,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "build-artifacts:FAILURE",
+            "checks-node-agentic-agents-core:FAILURE",
+            "check-guards:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "build-artifacts:FAILURE",
+            "checks-node-agentic-agents-core:FAILURE",
+            "check-guards:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:88676:4587245358:2026-05-31T16:05:45Z:re_review",
+      "comment_id": "4587245358",
+      "comment_version_key": "4587245358:2026-05-31T16:05:45Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88676#issuecomment-4587245358",
+      "repo": "openclaw/openclaw",
+      "issue_number": 88676,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-31T16:05:45Z",
+      "comment_updated_at": "2026-05-31T16:05:45Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 379,
+    "total_ms": 2812,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 222
+        "ms": 215
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1572
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 143
+        "ms": 995
       },
       {
         "name": "append_ledger",
