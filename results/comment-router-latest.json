@@ -1,22 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-31T10:42:32.218Z",
+  "generated_at": "2026-05-31T10:42:32.061Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-31T07:42:31.792Z",
+  "since": "2026-05-31T07:42:29.514Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    88591
+    88563
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
-  "actionable": 0,
+  "scanned_comments": 10,
+  "commands_seen": 3,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,26 +29,372 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88563:4586184085:2026-05-31T10:42:26Z:clawsweeper_needs_human",
+      "comment_id": "4586184085",
+      "comment_version_key": "4586184085:2026-05-31T10:42:26Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88563#issuecomment-4586184085",
+      "repo": "openclaw/openclaw",
+      "issue_number": 88563,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-31T08:33:08Z",
+      "comment_updated_at": "2026-05-31T10:42:26Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] No automated code repair is indicated; the remaining blocker is maintainer validation or override for live Codex auth cold-start behavior.; Cleared: No concrete security or supply-chain regression was found; the auth-provider routing uncertainty is tracked as merge risk rather than a security defect. (sha=201eae8a5824501f123f9071edd86794694dc539)",
+      "review_summary": "The PR adds a plugin-harness static-catalog retry before model-resolution failover and adds an embedded-runner regression test for Codex cold-start resolution of `openai/gpt-5.3-codex`.\n\nPR surface: Source +19, Tests +85. Total +104 across 2 files.\n\nReproducibility: yes. source inspection gives a high-confidence reproduction path: current main latches the failed `skipAgentDiscovery` result for plugin-owned harnesses before consulting the bundled static catalog. I did not run a live credentialed gateway restart.",
+      "review_followup": "- [P1] No automated code repair is indicated; the remaining blocker is maintainer validation or override for live Codex auth cold-start behavior.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "201eae8a5824501f123f9071edd86794694dc539",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): resolve exact static-catalog models for plugin-harness cold start (#88510)",
+        "body": "## Summary\n\nFixes #88510. After a gateway restart, a session using a plugin-harness-owned transport (the Codex harness) for `openai/gpt-5.3-codex` fails with `Unknown model: openai-codex/gpt-5.3-codex` and is forced onto a fallback provider, even though the model ships in the OpenAI plugin manifest.\n\n**Root cause** (`src/agents/embedded-agent-runner/run.ts`): model resolution first runs a fast `skipAgentDiscovery` dynamic pass. The Codex dynamic resolver (`resolveCodexForwardCompatModel`) only synthesizes 5.5/5.4-family IDs and returns `undefined` for `gpt-5.3-codex`. When that dynamic pass misses *and* a plugin harness owns transport, the runner latched the failed resolution (`modelResolution = firstModelResolution`) and failed over — **before the model's own bundled static catalog was ever consulted**. The latch intentionally skips OpenClaw-native `ensureOpenClawModelsJson` discovery for plugin harnesses (they own their model space), but it also skipped the plugin's own manifest catalog, which already contains `gpt-5.3-codex`.\n\n**Fix:** before latching the failed resolution, retry against the plugin's bundled static catalog via the existing `allowBundledStaticCatalogFallback` option, keeping `skipAgentDiscovery: true` so no OpenClaw-native discovery is forced. Exact static-cataloged models resolve on the fast path; genuinely unknown models still fail over with the original error.\n\n**Why this is not one-sided** (sibling surfaces): the OpenClaw-native path (`pluginHarnessOwnsTransport === false`) is unchanged and was never broken — on a dynamic miss it already falls through to `ensureOpenClawModelsJson` discovery, which resolves `gpt-5.3-codex` from the same manifest. Only the plugin-harness latch short-circuited that, so the repair is scoped there. The fix is generic (any exact static-cataloged model under any plugin harness), not a `gpt-5.3-codex`-specific hardcode.\n\n## Verification\n\nLocal (Node 22.19.0, pnpm 11.2.2):\n\n- `node scripts/run-vitest.mjs src/agents/embedded-agent-runner.e2e.test.ts` — 14/14 pass (includes new regression test).\n- Acceptance suite green: `embedded-agent-runner.e2e.test.ts` (14), `embedded-agent-runner/model.test.ts` + `model.static-catalog.test.ts` (106), `config/config.model-ref-validation.test.ts` (3).\n- `pnpm tsgo:core` — exit 0.\n- `npx oxfmt --check` on both files — clean.\n- Regression test red-proof: reverting only the fix makes the new test fail with the exact issue symptom `FailoverError: Unknown model: openai/gpt-5.3-codex`; with the fix it passes.\n- (Test results above are supplemental, not the real-behavior proof; see below.)\n\n## Real behavior proof\n\n- **Behavior addressed:** plugin-harness (Codex) cold-start resolution of an exact static-cataloged model (`openai/gpt-5.3-codex`) no longer fails over to a different provider.\n- **Real environment tested:** the real OpenClaw production resolvers executed in this checkout (`node_modules/.bin/tsx`) — `buildOpenAIProvider().resolveDynamicModel(...)`, the actual fast-pass resolver the gateway calls at agent startup, and `resolveBundledStaticCatalogModel(...)` against the real shipped `extensions/openai/openclaw.plugin.json`. No mocks, no test framework.\n- **Exact steps or command run after this patch:** built a Codex-transport context and called the real resolvers, printing their return values to the console.\n\n**Copied live console output after fix (real production resolvers, no mocks/tests):**\n\n```\n# Real cold-start causal chain for openai/gpt-5.3-codex (issue #88510)\n\n## A. Real Codex dynamic resolver (the fast pass the runner uses at startup)\n  resolveDynamicModel(\"gpt-5.3-codex\")  => undefined\n  resolveDynamicModel(\"gpt-5.5\")        => id=gpt-5.5 provider=openai api=openai-chatgpt-responses contextWindow=400000\n\n## B. Real bundled OpenAI static catalog (consulted before failover by this PR)\n  resolveBundledStaticCatalogModel(\"gpt-5.3-codex\")       => id=gpt-5.3-codex provider=openai api=openai-responses contextWindow=400000\n  resolveBundledStaticCatalogModel(\"gpt-5.3-codex-spark\") => undefined\n\n# RESULT: cold-start dynamic miss confirmed; bundled static catalog resolves the model\n```\n\n- **Evidence after fix:** the real fast-pass resolver returns nothing for `gpt-5.3-codex` (while resolving siblings like `gpt-5.5`), and the real shipped static catalog returns the model (`id=gpt-5.3-codex provider=openai contextWindow=400000`). This is the exact cold-start path the PR repairs: the runner now consults catalog B before failing over, instead of failing over on miss A.\n- **Observed result after fix:** `openai/gpt-5.3-codex` resolves from the bundled catalog on the cold fast path instead of raising `Unknown model` and falling back to another provider.\n- **What was not tested:** a live macOS gateway restart against the real OpenAI Codex backend is not producible in this environment (no production ChatGPT/Codex credentials; the full offline provider-runtime hook bootstrap blocks outside a real gateway). The real resolver functions that decide cold-start routing were run directly instead. Given the live-backend constraint, a maintainer `proof:` override may be appropriate.\n",
+        "branch": "fix/88510-codex-coldstart-static-catalog",
+        "head_sha": "201eae8a5824501f123f9071edd86794694dc539",
+        "author": "yetval",
+        "labels": [
+          "agents",
+          "size: S",
+          "triage: mock-only-proof",
+          "P1",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 auth-provider",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner.e2e.test.ts",
+            "additions": 85,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run.ts",
+            "additions": 20,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-88563",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88563.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 145,
+          "counts": {
+            "FAILURE": 10,
+            "SUCCESS": 104,
+            "SKIPPED": 30,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "checks-fast-contracts-plugins-b:FAILURE",
+            "checks-fast-contracts-channels-b:FAILURE",
+            "checks-node-agentic-control-plane-agent-chat:FAILURE",
+            "checks-node-agentic-agents-core:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "checks-fast-contracts-plugins-b:FAILURE",
+            "checks-fast-contracts-channels-b:FAILURE",
+            "checks-node-agentic-control-plane-agent-chat:FAILURE",
+            "checks-node-agentic-agents-core:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:88563:4586297796:2026-05-31T09:29:36Z:re_review",
+      "comment_id": "4586297796",
+      "comment_version_key": "4586297796:2026-05-31T09:29:36Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88563#issuecomment-4586297796",
+      "repo": "openclaw/openclaw",
+      "issue_number": 88563,
+      "author": "yetval",
+      "author_id": 102706514,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-31T09:29:36Z",
+      "comment_updated_at": "2026-05-31T09:29:36Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-05-31T10:42:32.772Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 88563
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-05-31T10:42:33.655Z",
+          "response_comment_id": "4586297876",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): resolve exact static-catalog models for plugin-harness cold start (#88510)",
+        "body": "## Summary\n\nFixes #88510. After a gateway restart, a session using a plugin-harness-owned transport (the Codex harness) for `openai/gpt-5.3-codex` fails with `Unknown model: openai-codex/gpt-5.3-codex` and is forced onto a fallback provider, even though the model ships in the OpenAI plugin manifest.\n\n**Root cause** (`src/agents/embedded-agent-runner/run.ts`): model resolution first runs a fast `skipAgentDiscovery` dynamic pass. The Codex dynamic resolver (`resolveCodexForwardCompatModel`) only synthesizes 5.5/5.4-family IDs and returns `undefined` for `gpt-5.3-codex`. When that dynamic pass misses *and* a plugin harness owns transport, the runner latched the failed resolution (`modelResolution = firstModelResolution`) and failed over — **before the model's own bundled static catalog was ever consulted**. The latch intentionally skips OpenClaw-native `ensureOpenClawModelsJson` discovery for plugin harnesses (they own their model space), but it also skipped the plugin's own manifest catalog, which already contains `gpt-5.3-codex`.\n\n**Fix:** before latching the failed resolution, retry against the plugin's bundled static catalog via the existing `allowBundledStaticCatalogFallback` option, keeping `skipAgentDiscovery: true` so no OpenClaw-native discovery is forced. Exact static-cataloged models resolve on the fast path; genuinely unknown models still fail over with the original error.\n\n**Why this is not one-sided** (sibling surfaces): the OpenClaw-native path (`pluginHarnessOwnsTransport === false`) is unchanged and was never broken — on a dynamic miss it already falls through to `ensureOpenClawModelsJson` discovery, which resolves `gpt-5.3-codex` from the same manifest. Only the plugin-harness latch short-circuited that, so the repair is scoped there. The fix is generic (any exact static-cataloged model under any plugin harness), not a `gpt-5.3-codex`-specific hardcode.\n\n## Verification\n\nLocal (Node 22.19.0, pnpm 11.2.2):\n\n- `node scripts/run-vitest.mjs src/agents/embedded-agent-runner.e2e.test.ts` — 14/14 pass (includes new regression test).\n- Acceptance suite green: `embedded-agent-runner.e2e.test.ts` (14), `embedded-agent-runner/model.test.ts` + `model.static-catalog.test.ts` (106), `config/config.model-ref-validation.test.ts` (3).\n- `pnpm tsgo:core` — exit 0.\n- `npx oxfmt --check` on both files — clean.\n- Regression test red-proof: reverting only the fix makes the new test fail with the exact issue symptom `FailoverError: Unknown model: openai/gpt-5.3-codex`; with the fix it passes.\n- (Test results above are supplemental, not the real-behavior proof; see below.)\n\n## Real behavior proof\n\n- **Behavior addressed:** plugin-harness (Codex) cold-start resolution of an exact static-cataloged model (`openai/gpt-5.3-codex`) no longer fails over to a different provider.\n- **Real environment tested:** the real OpenClaw production resolvers executed in this checkout (`node_modules/.bin/tsx`) — `buildOpenAIProvider().resolveDynamicModel(...)`, the actual fast-pass resolver the gateway calls at agent startup, and `resolveBundledStaticCatalogModel(...)` against the real shipped `extensions/openai/openclaw.plugin.json`. No mocks, no test framework.\n- **Exact steps or command run after this patch:** built a Codex-transport context and called the real resolvers, printing their return values to the console.\n\n**Copied live console output after fix (real production resolvers, no mocks/tests):**\n\n```\n# Real cold-start causal chain for openai/gpt-5.3-codex (issue #88510)\n\n## A. Real Codex dynamic resolver (the fast pass the runner uses at startup)\n  resolveDynamicModel(\"gpt-5.3-codex\")  => undefined\n  resolveDynamicModel(\"gpt-5.5\")        => id=gpt-5.5 provider=openai api=openai-chatgpt-responses contextWindow=400000\n\n## B. Real bundled OpenAI static catalog (consulted before failover by this PR)\n  resolveBundledStaticCatalogModel(\"gpt-5.3-codex\")       => id=gpt-5.3-codex provider=openai api=openai-responses contextWindow=400000\n  resolveBundledStaticCatalogModel(\"gpt-5.3-codex-spark\") => undefined\n\n# RESULT: cold-start dynamic miss confirmed; bundled static catalog resolves the model\n```\n\n- **Evidence after fix:** the real fast-pass resolver returns nothing for `gpt-5.3-codex` (while resolving siblings like `gpt-5.5`), and the real shipped static catalog returns the model (`id=gpt-5.3-codex provider=openai contextWindow=400000`). This is the exact cold-start path the PR repairs: the runner now consults catalog B before failing over, instead of failing over on miss A.\n- **Observed result after fix:** `openai/gpt-5.3-codex` resolves from the bundled catalog on the cold fast path instead of raising `Unknown model` and falling back to another provider.\n- **What was not tested:** a live macOS gateway restart against the real OpenAI Codex backend is not producible in this environment (no production ChatGPT/Codex credentials; the full offline provider-runtime hook bootstrap blocks outside a real gateway). The real resolver functions that decide cold-start routing were run directly instead. Given the live-backend constraint, a maintainer `proof:` override may be appropriate.\n",
+        "branch": "fix/88510-codex-coldstart-static-catalog",
+        "head_sha": "201eae8a5824501f123f9071edd86794694dc539",
+        "author": "yetval",
+        "labels": [
+          "agents",
+          "size: S",
+          "triage: mock-only-proof",
+          "P1",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 auth-provider",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner.e2e.test.ts",
+            "additions": 85,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run.ts",
+            "additions": 20,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-88563",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88563.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 145,
+          "counts": {
+            "FAILURE": 10,
+            "SUCCESS": 104,
+            "SKIPPED": 30,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "checks-fast-contracts-plugins-b:FAILURE",
+            "checks-fast-contracts-channels-b:FAILURE",
+            "checks-node-agentic-control-plane-agent-chat:FAILURE",
+            "checks-node-agentic-agents-core:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "checks-fast-contracts-plugins-b:FAILURE",
+            "checks-fast-contracts-channels-b:FAILURE",
+            "checks-node-agentic-control-plane-agent-chat:FAILURE",
+            "checks-node-agentic-agents-core:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:88563:4586213954:2026-05-31T08:47:48Z:re_review",
+      "comment_id": "4586213954",
+      "comment_version_key": "4586213954:2026-05-31T08:47:48Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88563#issuecomment-4586213954",
+      "repo": "openclaw/openclaw",
+      "issue_number": 88563,
+      "author": "yetval",
+      "author_id": 102706514,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-31T08:47:48Z",
+      "comment_updated_at": "2026-05-31T08:47:48Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): resolve exact static-catalog models for plugin-harness cold start (#88510)",
+        "body": "## Summary\n\nFixes #88510. After a gateway restart, a session using a plugin-harness-owned transport (the Codex harness) for `openai/gpt-5.3-codex` fails with `Unknown model: openai-codex/gpt-5.3-codex` and is forced onto a fallback provider, even though the model ships in the OpenAI plugin manifest.\n\n**Root cause** (`src/agents/embedded-agent-runner/run.ts`): model resolution first runs a fast `skipAgentDiscovery` dynamic pass. The Codex dynamic resolver (`resolveCodexForwardCompatModel`) only synthesizes 5.5/5.4-family IDs and returns `undefined` for `gpt-5.3-codex`. When that dynamic pass misses *and* a plugin harness owns transport, the runner latched the failed resolution (`modelResolution = firstModelResolution`) and failed over — **before the model's own bundled static catalog was ever consulted**. The latch intentionally skips OpenClaw-native `ensureOpenClawModelsJson` discovery for plugin harnesses (they own their model space), but it also skipped the plugin's own manifest catalog, which already contains `gpt-5.3-codex`.\n\n**Fix:** before latching the failed resolution, retry against the plugin's bundled static catalog via the existing `allowBundledStaticCatalogFallback` option, keeping `skipAgentDiscovery: true` so no OpenClaw-native discovery is forced. Exact static-cataloged models resolve on the fast path; genuinely unknown models still fail over with the original error.\n\n**Why this is not one-sided** (sibling surfaces): the OpenClaw-native path (`pluginHarnessOwnsTransport === false`) is unchanged and was never broken — on a dynamic miss it already falls through to `ensureOpenClawModelsJson` discovery, which resolves `gpt-5.3-codex` from the same manifest. Only the plugin-harness latch short-circuited that, so the repair is scoped there. The fix is generic (any exact static-cataloged model under any plugin harness), not a `gpt-5.3-codex`-specific hardcode.\n\n## Verification\n\nLocal (Node 22.19.0, pnpm 11.2.2):\n\n- `node scripts/run-vitest.mjs src/agents/embedded-agent-runner.e2e.test.ts` — 14/14 pass (includes new regression test).\n- Acceptance suite green: `embedded-agent-runner.e2e.test.ts` (14), `embedded-agent-runner/model.test.ts` + `model.static-catalog.test.ts` (106), `config/config.model-ref-validation.test.ts` (3).\n- `pnpm tsgo:core` — exit 0.\n- `npx oxfmt --check` on both files — clean.\n- Regression test red-proof: reverting only the fix makes the new test fail with the exact issue symptom `FailoverError: Unknown model: openai/gpt-5.3-codex`; with the fix it passes.\n- (Test results above are supplemental, not the real-behavior proof; see below.)\n\n## Real behavior proof\n\n- **Behavior addressed:** plugin-harness (Codex) cold-start resolution of an exact static-cataloged model (`openai/gpt-5.3-codex`) no longer fails over to a different provider.\n- **Real environment tested:** the real OpenClaw production resolvers executed in this checkout (`node_modules/.bin/tsx`) — `buildOpenAIProvider().resolveDynamicModel(...)`, the actual fast-pass resolver the gateway calls at agent startup, and `resolveBundledStaticCatalogModel(...)` against the real shipped `extensions/openai/openclaw.plugin.json`. No mocks, no test framework.\n- **Exact steps or command run after this patch:** built a Codex-transport context and called the real resolvers, printing their return values to the console.\n\n**Copied live console output after fix (real production resolvers, no mocks/tests):**\n\n```\n# Real cold-start causal chain for openai/gpt-5.3-codex (issue #88510)\n\n## A. Real Codex dynamic resolver (the fast pass the runner uses at startup)\n  resolveDynamicModel(\"gpt-5.3-codex\")  => undefined\n  resolveDynamicModel(\"gpt-5.5\")        => id=gpt-5.5 provider=openai api=openai-chatgpt-responses contextWindow=400000\n\n## B. Real bundled OpenAI static catalog (consulted before failover by this PR)\n  resolveBundledStaticCatalogModel(\"gpt-5.3-codex\")       => id=gpt-5.3-codex provider=openai api=openai-responses contextWindow=400000\n  resolveBundledStaticCatalogModel(\"gpt-5.3-codex-spark\") => undefined\n\n# RESULT: cold-start dynamic miss confirmed; bundled static catalog resolves the model\n```\n\n- **Evidence after fix:** the real fast-pass resolver returns nothing for `gpt-5.3-codex` (while resolving siblings like `gpt-5.5`), and the real shipped static catalog returns the model (`id=gpt-5.3-codex provider=openai contextWindow=400000`). This is the exact cold-start path the PR repairs: the runner now consults catalog B before failing over, instead of failing over on miss A.\n- **Observed result after fix:** `openai/gpt-5.3-codex` resolves from the bundled catalog on the cold fast path instead of raising `Unknown model` and falling back to another provider.\n- **What was not tested:** a live macOS gateway restart against the real OpenAI Codex backend is not producible in this environment (no production ChatGPT/Codex credentials; the full offline provider-runtime hook bootstrap blocks outside a real gateway). The real resolver functions that decide cold-start routing were run directly instead. Given the live-backend constraint, a maintainer `proof:` override may be appropriate.\n",
+        "branch": "fix/88510-codex-coldstart-static-catalog",
+        "head_sha": "201eae8a5824501f123f9071edd86794694dc539",
+        "author": "yetval",
+        "labels": [
+          "agents",
+          "size: S",
+          "triage: mock-only-proof",
+          "P1",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 auth-provider",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner.e2e.test.ts",
+            "additions": 85,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run.ts",
+            "additions": 20,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-88563",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88563.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 145,
+          "counts": {
+            "FAILURE": 10,
+            "SUCCESS": 104,
+            "SKIPPED": 30,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "checks-fast-contracts-plugins-b:FAILURE",
+            "checks-fast-contracts-channels-b:FAILURE",
+            "checks-node-agentic-control-plane-agent-chat:FAILURE",
+            "checks-node-agentic-agents-core:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "checks-fast-contracts-plugins-b:FAILURE",
+            "checks-fast-contracts-channels-b:FAILURE",
+            "checks-node-agentic-control-plane-agent-chat:FAILURE",
+            "checks-node-agentic-agents-core:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1876,
+    "total_ms": 4602,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 412
+        "ms": 257
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 2272
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 4
       },
       {
         "name": "execute_commands",
-        "ms": 1451
+        "ms": 2042
       },
       {
         "name": "append_ledger",
