@@ -1,15 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-31T10:57:59.110Z",
+  "generated_at": "2026-05-31T10:58:10.404Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-31T07:57:57.125Z",
+  "since": "2026-05-31T07:58:09.397Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
     88583
+  ],
+  "comment_ids": [
+    4581769058
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -60,115 +63,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): reject pre-reset run lifecycle events from clobbering the rotated session row",
-        "body": "### Summary\n\n- **Problem**: Issue #88538 reports that `sessions.reset` rotates a channel session to a fresh `sessionId`, but an old in-flight embedded run can still emit later lifecycle `start`/`end`/`error` events. Those events are persisted onto the **new** session row, leaving the fresh session marked `running`/`failed` even though `hasActiveRun=false`. A pre-reset run's terminal error overwrote a post-reset row's status.\n- **Root Cause**: `persistGatewaySessionLifecycleEvent` in `src/gateway/session-lifecycle-state.ts` resolves the target SessionEntry purely by `sessionKey` (`loadSessionEntry(params.sessionKey)` → `updateSessionStoreEntry`) and writes `status`/`startedAt`/`endedAt`/`runtimeMs` with **no `sessionId` identity check**. After `sessions.reset` rotates the key to a new sessionId, a late lifecycle event from the old run still resolves that key and clobbers the new row. Lifecycle events carried `runId` but not the owning run's `sessionId`, and the runId→context map is cleared before the terminal event persists — so the owning sessionId had to be carried on the event itself.\n- **Fix**: Carry the owning run's `sessionId` on lifecycle events and reject persistence when it differs from the current row's sessionId.\n  - `emitAgentEvent` stamps the owning `sessionId` (from the registered run context) onto lifecycle-stream events at emit time, so it survives the run-context clear.\n  - `persistGatewaySessionLifecycleEvent` skips the write when the event's owning sessionId and the current row's sessionId are both known and differ (`isStaleLifecycleEventForSession`).\n  - This is the same identity-guard pattern the codebase already uses for reset/rebind hazards; it covers all lifecycle emitters centrally via the runId→context stamp rather than per-emitter.\n- **What changed**:\n  - `src/infra/agent-events.ts` — add `sessionId?` to `AgentEventPayload` and `AgentRunContext`; carry it through `registerAgentRunContext` merge; stamp it onto lifecycle events in `emitAgentEvent`.\n  - `src/gateway/session-lifecycle-state.ts` — add the pure `isStaleLifecycleEventForSession` guard; apply it inside the `updateSessionStoreEntry` callback (race-safe against the live entry); `LifecycleEventLike` now also picks `sessionId`.\n  - `src/auto-reply/reply/agent-runner-execution.ts`, `src/auto-reply/reply/followup-runner.ts` — register the embedded run's starting `sessionId` in its run context so the stamp has a value.\n  - `src/agents/embedded-agent-runner/run.ts` — refresh the run context's `sessionId` whenever the live session rotates (compaction creates a new session id mid-run), so a legitimate rotated run's terminal event matches the rotated row and is NOT treated as stale. Only an external `sessions.reset` (which rotates the row without going through the run's own rotation) stays mismatched.\n  - Tests in `session-lifecycle-state.test.ts` (guard decision) and `agent-events.test.ts` (lifecycle-event sessionId stamping + rotation refresh).\n- **What did NOT change (scope boundary)**:\n  - Guard only skips when **both** the owning and current sessionIds are known and differ; when the owning sessionId is absent (any emitter that doesn't stamp it) behavior is unchanged — never a new false-skip.\n  - `sessionId` is an additive optional field on the in-memory event/run-context shapes (no persisted format change).\n  - The pure derivers (`deriveGatewaySessionLifecycleSnapshot` / `derivePersistedSessionLifecyclePatch`) are unchanged.\n  - Config surface unchanged (no schema, defaults, doctor migrations, or `docs/reference/config`).\n  - Plugin surface unchanged (no plugin SDK, manifest, `extensions/*` api/runtime-api, registry/loader).\n  - Gateway protocol unchanged.\n\n### Reproduction\n\n1. A channel session hits a long/overflowing embedded run.\n2. `sessions.reset` returns a new sessionId for the same channel `sessionKey`.\n3. The old pre-reset run then emits a terminal `error` (or `start`/`end`) lifecycle event.\n4. **Before this PR**: the event resolves the rotated row by sessionKey and overwrites it to `failed`/`running` though the failing run belonged to the old sessionId.\n5. **After this PR**: the event carries the old run's sessionId; persistence sees it differs from the rotated row's sessionId and skips the write, leaving the fresh session intact.\n\n### Real behavior proof\n\n**Behavior addressed (#88538)**: a lifecycle event from a pre-`sessions.reset` run no longer mutates the post-reset session row; the owning sessionId is stamped on lifecycle events and persistence rejects mismatches.\n\n**Real environment tested (Linux, Node 22 — Vitest against the production emit + guard functions)**: `emitAgentEvent` lifecycle sessionId stamping and the `isStaleLifecycleEventForSession` persistence guard, exercised directly.\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs src/gateway/session-lifecycle-state.test.ts src/infra/agent-events.test.ts`; `pnpm tsgo:core`; `pnpm check:test-types`; `pnpm exec oxfmt --check`; `node scripts/run-oxlint.mjs` on the changed files.\n\n**Evidence after fix (Vitest output for the touched files)**:\n\n```text\n session-lifecycle-state.test.ts   Tests  11 passed (11)\n agent-events.test.ts              Tests  13 passed (13)\n```\n\nThe new cases: `treats a pre-reset run's lifecycle event as stale once the row's sessionId rotated (#88538)`, `applies lifecycle events whose owning sessionId matches the current row`, `does not guard when the owning sessionId is unknown (preserves legacy behavior)`, `stamps the owning sessionId onto lifecycle events for reset-stale guarding (#88538)`, and `refreshes the stamped sessionId after a mid-run session rotation (#88538)`.\n\n**Observed result after fix**:\n\n- A lifecycle event whose owning sessionId differs from the current row's sessionId is treated as stale → persistence returns `null` (no mutation).\n- A matching sessionId still applies normally; an unknown owning sessionId preserves the prior behavior (no false-skip).\n- `emitAgentEvent` stamps the owning sessionId onto `lifecycle`-stream events only; other streams stay unstamped.\n\n**What was not tested**:\n\n- The live Slack channel-overflow + reset race end-to-end on the reporter's deployment. The emit-side stamp and the persistence guard are covered deterministically by unit tests against the production functions; a full gateway store round-trip was not driven.\n\n**Regression tests**:\n\n- `session-lifecycle-state.test.ts` → guard-decision cases (stale-rotated / matching / unknown-owner).\n- `agent-events.test.ts` → lifecycle sessionId stamping; existing sequencing/redaction cases remain green.\n\n### Risk / Mitigation\n\n- **Risk**: A legitimate event could be skipped — specifically a run whose session rotates mid-run via compaction. **Mitigation**: `run.ts` refreshes the run context's sessionId on every live-session rotation, so the run's lifecycle events always carry its current sessionId and match the rotated row; the guard fires only when both sessionIds are known and differ (i.e., an external reset rotated the row out from under the run), and equal/unknown-owner cases always apply.\n- **Risk**: An emitter that doesn't stamp sessionId stays unguarded. **Mitigation**: the stamp is centralized in `emitAgentEvent` from the run context (keyed by runId), so any emitter whose run registered a sessionId is covered; unstamped events keep prior behavior (safe).\n- **Risk**: Added field on a hot event shape. **Mitigation**: one optional field, only stamped for lifecycle events, no persisted-format or protocol change.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [x] Sessions / storage\n\n### Linked Issue/PR\n\nFixes #88538\n",
-        "branch": "fix/88538-reset-stale-lifecycle-guard",
-        "head_sha": "11e05dd2bc375cb7dda303e5689e67b4e33ec4b0",
-        "author": "openperf",
-        "labels": [
-          "gateway",
-          "agents",
-          "size: S",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-runner/run.ts",
-            "additions": 7,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/followup-runner.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-lifecycle-state.test.ts",
-            "additions": 19,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-lifecycle-state.ts",
-            "additions": 32,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/agent-events.test.ts",
-            "additions": 38,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/agent-events.ts",
-            "additions": 16,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88583",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88583.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 139,
-          "counts": {
-            "SUCCESS": 115,
-            "SKIPPED": 23,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2245,
+    "total_ms": 1513,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 339
+        "ms": 994
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1631
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 247
+        "ms": 507
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
