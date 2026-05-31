@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-05-31T05:04:46.994Z",
+  "generated_at": "2026-05-31T05:12:21.489Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-31T02:04:45.306Z",
+  "since": "2026-05-31T02:12:21.163Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    77973
+    77800
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -29,110 +29,18 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:77973:4381618622:2026-05-31T05:04:24Z:clawsweeper_needs_human",
-      "comment_id": "4381618622",
-      "comment_version_key": "4381618622:2026-05-31T05:04:24Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/77973#issuecomment-4381618622",
-      "repo": "openclaw/openclaw",
-      "issue_number": 77973,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-05T17:39:58Z",
-      "comment_updated_at": "2026-05-31T05:04:24Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=442f42495253dece7550c920a8c36c74776f786f)",
-      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +24, Tests +16, Docs +1. Total +41 across 3 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
-      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "442f42495253dece7550c920a8c36c74776f786f",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): cap agentRunCache to prevent unbounded growth under run fan-out",
-        "body": "Closes #77976\n\n## Summary\n\n`src/gateway/server-methods/agent-job.ts` keeps an in-process `agentRunCache: Map<runId, AgentRunSnapshot>` populated by every terminal lifecycle event. There is a 10-minute TTL pruned on every `set` via `pruneAgentRunCache`, but **no max-size cap**. Under sustained subagent fan-out (lots of `agent.run` lifecycle traffic), the snapshot map grew in lockstep with run rate up to \"all runs in the last 10 minutes\" before the next TTL sweep could bound it. Same shape as the Discord REST entity cache fixed in #77952.\n\nThis change adds:\n\n- `AGENT_RUN_CACHE_MAX_ENTRIES` (default 5,000) and an `enforceAgentRunCacheMaxEntries` pass that runs after each `agentRunCache.set`, dropping oldest entries by Map insertion order until size ≤ max.\n- `__testing.getAgentRunCacheSize()`, `__testing.resetAgentRunCache()`, and `__testing.agentRunCacheMaxEntries` so the cap is regression-testable.\n- A regression test in `server-methods.test.ts` that drives `MAX + 25` unique end-lifecycle events through the real `emitAgentEvent` path and asserts size pins at the cap.\n\nThe sibling Maps in this file (`agentRunStarts`, `agentRunWaiterCounts`, `pendingAgentRunErrors`, `pendingAgentRunTimeouts`) are already lifecycle-bound via `start`/`end`/wait-register paths; only the terminal-snapshot cache lacked a hard cap.\n\n## Verification\n\n- `pnpm test src/gateway/server-methods/server-methods.test.ts` → 82/82 pass including new `caps agentRunCache at AGENT_RUN_CACHE_MAX_ENTRIES via FIFO drop`.\n- `pnpm exec oxfmt --check --threads=1 src/gateway/server-methods/agent-job.ts src/gateway/server-methods/server-methods.test.ts CHANGELOG.md` clean.\n- Live tsx runtime proof included below in **Real behavior proof**.\n\n## Real behavior proof\n\n- **Behavior addressed**: `agentRunCache` had a TTL but no hard cap; under sustained run fan-out it could hold every run snapshot from the past 10 minutes simultaneously, scaling with run rate × 10 min and capped only by process restart or quiet periods.\n- **Real environment tested**: local Node v22 runtime against the real patched `agent-job.ts` module (no mocks, no test framework). Driven via `pnpm exec tsx` against the actual `emitAgentEvent` lifecycle path that production code uses.\n- **Exact steps or command run after this patch**: ran `/tmp/agent-job-cache-proof.mts` which imports the real patched module and `emitAgentEvent`, then drives `MAX + 50 = 5,050` unique terminal lifecycle events through the real listener and prints `__testing.getAgentRunCacheSize()` at intervals.\n- **Evidence after fix**: live console output captured directly from the node runtime:\n\n```\nagentRunCacheMaxEntries: 5000\nemitting 5050 unique end-lifecycle events...\n  emitted     0  cacheSize=1\n  emitted  1000  cacheSize=1001\n  emitted  2000  cacheSize=2001\n  emitted  3000  cacheSize=3001\n  emitted  4000  cacheSize=4001\n  emitted  5000  cacheSize=5000\nfinal cacheSize after 5050 unique runs: 5000\nexpected ≤ 5000: PASS\n```\n\n- **Observed result after fix**: cache grows linearly to 5,000, then `enforceAgentRunCacheMaxEntries` pins it at exactly 5,000 across the remaining 50 inserts. Oldest snapshots evicted by Map insertion order (FIFO over insertion-order; on every set the new key moves to the tail, so this is effectively close-to-LRU for repeat runs and FIFO for unique-runId floods).\n- **What was not tested**: behavior against a real long-running gateway with thousands of concurrent subagents. The fix is purely a `Map` cap on a deterministic insert path and the runtime demo exercises the same listener / record path that production runs through.\n\n## Notes for reviewer\n\n- The TTL prune (`pruneAgentRunCache`) and the new cap (`enforceAgentRunCacheMaxEntries`) compose: TTL prunes before insert, cap enforces after insert. Either alone is insufficient — TTL doesn't bound under sustained insert rate, cap doesn't free expired-but-still-inside-cap entries.\n- Cap value 5,000 was chosen to mirror the Discord cache cap precedent and gives ~10 minutes of headroom at ~8 runs/sec sustained terminal events, which is generously above any realistic single-gateway run rate.\n- This is part of a small audit sweep following #77952; same shape, different module.",
-        "branch": "security/agent-job-cache-bound",
-        "head_sha": "442f42495253dece7550c920a8c36c74776f786f",
-        "author": "fede-kamel",
-        "labels": [
-          "gateway",
-          "stale",
-          "size: XS",
-          "proof: supplied",
-          "rating: 🌊 off-meta tidepool"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/agent-job.ts",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/server-methods.test.ts",
-            "additions": 17,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-77973",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-77973.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 113,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 85,
-            "SKIPPED": 26,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1880,
+    "total_ms": 514,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 276
+        "ms": 312
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1394
+        "ms": 0
       },
       {
         "name": "classify_commands",
@@ -140,11 +48,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 180
+        "ms": 188
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
