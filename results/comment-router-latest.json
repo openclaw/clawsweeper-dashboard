@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-01T05:07:33.344Z",
+  "generated_at": "2026-06-01T05:08:31.346Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-01T02:07:32.977Z",
+  "since": "2026-06-01T02:08:30.054Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    78798
+    78069
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 3,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,18 +29,147 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:78069:4383091077:2026-06-01T05:08:08Z:clawsweeper_needs_human",
+      "comment_id": "4383091077",
+      "comment_version_key": "4383091077:2026-06-01T05:08:08Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/78069#issuecomment-4383091077",
+      "repo": "openclaw/openclaw",
+      "issue_number": 78069,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-05T21:13:23Z",
+      "comment_updated_at": "2026-06-01T05:08:08Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=64418967dc69dd68f4d991a1608a221f8019a2f0)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +172, Tests +510, Docs +20. Total +702 across 8 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "64418967dc69dd68f4d991a1608a221f8019a2f0",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(matrix): transcribe inbound voice notes before mention gate",
+        "body": "\n## Summary\n\n- **Problem**: Inbound voice messages on Matrix reach the agent as raw audio attachments with no transcript. The model improvises a reply instead of answering, and `requireMention: true` rooms drop voice notes entirely because there's no text to match the mention regex.\n- **Why it matters**: Discord, Telegram, WhatsApp, and Feishu already transcribe inbound voice via `transcribeFirstAudio` before the mention gate. Matrix is the lone holdout — voice-only Matrix users have no way to talk to their agent.\n- **What changed**: Wire the existing `transcribeFirstAudio` helper into the Matrix monitor handler before the mention gate, mirroring the Discord/Telegram pattern. The transcript feeds into the mention check (so a voice note that says the bot's name reaches the agent in `requireMention` rooms) and into `BodyForAgent` (so the agent reads the transcript instead of a placeholder). `MediaTranscribedIndexes` is set so downstream tools don't re-transcribe the same audio.\n- **What did NOT change (scope boundary)**: No core media-understanding changes. No new config keys (operators control via the existing global `tools.media.audio.enabled`). Outbound TTS untouched. E2EE crypto path untouched (decryption stays inside `downloadMatrixMedia`; preflight receives the plaintext path). No changes to other channels.\n\n## Change Type (select all)\n\n- [x] Feature\n\n## Scope (select all touched areas)\n\n- [x] Integrations\n\n## Linked Issue/PR\n\n- Closes #78016\n- [ ] This PR fixes a bug or regression\n\n## Root Cause (if applicable)\n\nN/A — feature parity request, not a regression.\n\n## Regression Test Plan (if applicable)\n\nN/A — feature parity. Test coverage:\n\n- 15 unit tests in `extensions/matrix/src/matrix/monitor/preflight-audio.test.ts` covering the audio-detection predicate, transcript formatter, and runtime caller (happy paths, error swallowing, abort-signal short-circuit, MediaPaths/MediaTypes ctx shape).\n- 9 integration tests in `extensions/matrix/src/matrix/monitor/handler.audio-preflight.test.ts` covering: DM voice notes, `m.file` with audio mime, mention-gate bypass via transcript, mention-gate drop without transcript match, transcription failure fallback, non-audio bypass, single-download verification, encrypted (E2EE) audio, and size-limit handling.\n- Existing `handler.test.ts`, `handler.media-failure.test.ts`, and the rest of the matrix monitor suite: 396/396 passing, no regressions.\n\n## User-visible / Behavior Changes\n\n- Inbound voice notes (`m.audio`, plus `m.file` carrying an `audio/*` mimetype) on Matrix now get transcribed before the mention gate. A voice note that mentions the bot by name (per the existing `mentionRegexes`) bypasses `requireMention: true` rooms, matching Discord/Telegram.\n- The transcript is wrapped with `[Audio transcript (machine-generated, untrusted)]: …` framing (with `JSON.stringify` escaping) so prompt-injection content inside the audio cannot impersonate system instructions.\n- Bare-filename audio bodies (e.g. `voice.ogg`, auto-set by Element) are replaced with the existing `[matrix audio attachment]` placeholder so the agent sees a clear audio marker rather than a stray filename. The download-failed path was already doing this; we extend it to the success path for audio specifically.\n- Operators can disable globally via `tools.media.audio.enabled: false`.\n\n## Diagram (if applicable)\n\n```text\nBefore:\n[user voice note] -> [Matrix handler]\n  -> mention gate (drops if requireMention:true & no @mention text)\n  -> media download\n  -> agent ctx { MediaPath, MediaUrl, BodyForAgent: \"[matrix media]\" }\n  -> agent improvises a reply about \"an audio attachment\"\n\nAfter:\n[user voice note] -> [Matrix handler]\n  -> audio detect + early download + transcribeFirstAudio\n  -> mention gate (sees transcript text, can match @bot mentions)\n  -> agent ctx { MediaPath, MediaUrl, BodyForAgent: \"[Audio transcript ...]: \\\"...\\\"\", MediaTranscribedIndexes: [0] }\n  -> agent answers the spoken question\n```\n\n## Security Impact (required)\n\n- New permissions/capabilities? **No.**\n- Secrets/tokens handling changed? **No.**\n- New/changed network calls? **No new outbound endpoint** — uses the operator's existing `tools.media.audio.provider`, the same one Discord/Telegram/WhatsApp/Feishu already call. No new API keys required.\n- Command/tool execution surface changed? **No.**\n- Data access scope changed? **Yes (minor)** — audio attachment bytes (decrypted plaintext for E2EE rooms) are now sent to the operator-configured STT provider on Matrix, matching peer-channel behavior. Mitigation: gated by `tools.media.audio.enabled`; documented in `docs/channels/matrix.md`.\n\n## Repro + Verification\n\n### Environment\n\n- OS: Linux (Debian)\n- Runtime/container: OpenClaw gateway in Docker\n- Model/provider: OpenAI `gpt-4o-mini-transcribe` (via `tools.media.audio.provider: openai`)\n- Integration/channel: Matrix (self-hosted Synapse, Element clients)\n- Relevant config (redacted): `tools.media.audio.{enabled, provider: openai, model: gpt-4o-mini-transcribe}`\n\n### Steps\n\n1. Send a voice note from Element to a Matrix bot in a `requireMention: true` room, saying the bot's name in the recording.\n2. Send a voice note in a DM to the bot, with no text caption.\n3. Send a non-audio attachment (e.g. an image) to the same room to confirm unchanged behavior.\n\n### Expected\n\n- (1) Bot transcribes the voice note, sees the spoken bot mention in the transcript, and replies normally.\n- (2) Bot replies based on the transcribed body.\n- (3) Behavior unchanged from main.\n\n### Actual\n\n- (1) (2) (3) Asserted by integration tests in `handler.audio-preflight.test.ts`. Live end-to-end on a personal homeserver is deferred (see Human Verification below).\n\n## Evidence\n\n- [x] Failing test/log before + passing after — the integration test file was authored TDD-style. Initial run showed 5 failed assertions on `expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1)`; once the handler was wired, all 9 cases turned green.\n- [ ] Trace/log snippets — N/A; tests mock `downloadMatrixMedia` and `transcribeFirstAudio` following the Discord pattern.\n- [ ] Screenshot/recording — N/A.\n- [ ] Perf numbers — N/A.\n\n## Human Verification (required)\n\n- **Verified scenarios**: TDD-driven integration tests covering DM voice, room-mention-bypass via transcript, room-mention-drop without match, transcription-failure fallback, non-audio bypass, single-download verification, E2EE-encrypted audio, and size-limit handling. All 9 cases green. Full matrix monitor suite runs clean (396/396, including pre-existing `handler.media-failure.test.ts` and `handler.body-for-agent.test.ts`).\n- **Edge cases checked**: Encrypted media (`file: { url, key, iv, hashes, v }`) decryption + transcription path. `m.file` with audio mimetype. Bare-filename body normalization. Abort signal short-circuit before SDK load. Empty / undefined transcript fallthrough.\n- **What I did NOT verify**: Live end-to-end run against my own Synapse + Element clients on this branch. Reason: testing a fork build requires a custom Docker image; the framework-side path (`transcribeFirstAudio`) is exercised by the existing `src/media-understanding` test suite, and our handler integration is locked in by the new tests.\n\n## Review Conversations\n\n- [ ] I replied to or resolved every bot review conversation I addressed in this PR.\n- [ ] I left unresolved only the conversations that still need reviewer or maintainer judgment.\n\n## Compatibility / Migration\n\n- Backward compatible? **Yes** — additive only.\n- Config/env changes? **No** — reuses existing `tools.media.audio` configuration.\n- Migration needed? **No.**\n\n## Risks and Mitigations\n\n- **Risk**: Prompt injection via voice transcript (\"ignore prior instructions and …\").\n  - **Mitigation**: Transcript is wrapped with `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify(transcript)}` framing before reaching the agent body, mirroring Telegram exactly. `JSON.stringify` escapes control characters and quote chars.\n- **Risk**: STT cost amplification — every audio message in a watched room triggers an STT API call.\n  - **Mitigation**: Operator-controlled via `tools.media.audio.enabled`. Existing room/sender allowlist in the Matrix handler runs BEFORE the preflight code, so unauthorized senders never trigger transcription.\n- **Risk**: Reordering the audio download (now runs before mention gate) could shift failure semantics.\n  - **Mitigation**: The existing media block now reuses the preflight result via `!media && !mediaDownloadFailed` guards. Same exception types propagate through the same logger paths. Existing `handler.media-failure.test.ts` still passes unchanged.\n\n---\n\n### Notes for reviewers\n\n- The audio download + error-handling block in `handler.ts` duplicates ~25 lines with the existing media block (different scope, slightly different `encrypted: Boolean(...)` flag). Kept as-is for minimal-diff. Happy to extract into a helper if preferred.\n- The early content-extraction block at handler.ts ~876-887 (`earlyContentInfo` etc.) duplicates the later block at ~1088-1096 because the audio path needs the info BEFORE the mention gate while non-audio doesn't. Same minimal-diff trade-off.\n- No `disableAudioPreflight` per-room knob (Telegram has one). Operators rely on global `tools.media.audio.enabled: false`. Easy to add if the team wants finer-grained control — happy to send a follow-up.\n\nThis PR was developed with AI — `[AI-assisted]`.\n\nSuggested reviewer: @gumadeiras (Matrix-area maintainer).\n\n---\n\nP.S. I didn't tested it live so far. Still need to. First lets send the pr and lets see from there.\n",
+        "branch": "matrix-inbound-audio-preflight",
+        "head_sha": "64418967dc69dd68f4d991a1608a221f8019a2f0",
+        "author": "frankdierolf",
+        "labels": [
+          "docs",
+          "channel: matrix",
+          "size: L",
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "rating: 🌊 off-meta tidepool",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/channels/matrix.md",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/matrix/CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/matrix/src/matrix/monitor/handler.audio-preflight.test.ts",
+            "additions": 352,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/matrix/src/matrix/monitor/handler.ts",
+            "additions": 97,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/matrix/src/matrix/monitor/preflight-audio.runtime.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/matrix/src/matrix/monitor/preflight-audio.test.ts",
+            "additions": 158,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/matrix/src/matrix/monitor/preflight-audio.ts",
+            "additions": 72,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-78069",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-78069.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "",
+        "checks": {
+          "total": 12,
+          "counts": {
+            "CANCELLED": 1,
+            "FAILURE": 1,
+            "SKIPPED": 8,
+            "SUCCESS": 2
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 629,
+    "total_ms": 1511,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 349
+        "ms": 374
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 899
       },
       {
         "name": "classify_commands",
@@ -48,11 +177,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 262
+        "ms": 206
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
