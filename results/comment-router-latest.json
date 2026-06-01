@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-01T05:09:56.730Z",
+  "generated_at": "2026-06-01T05:12:15.950Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-01T02:09:54.563Z",
+  "since": "2026-06-01T02:12:15.642Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    88922
+    78492
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 2,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,116 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88922:4589701193:2026-06-01T05:09:48Z:clawsweeper_needs_human",
-      "comment_id": "4589701193",
-      "comment_version_key": "4589701193:2026-06-01T05:09:48Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/88922#issuecomment-4589701193",
-      "repo": "openclaw/openclaw",
-      "issue_number": 88922,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-01T05:04:08Z",
-      "comment_updated_at": "2026-06-01T05:09:48Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] No automated code repair is needed; the remaining blocker is contributor-supplied real behavior proof or maintainer override.; Cleared: The diff only adds a Google request payload field and tests; it does not change dependencies, workflows, secrets, package scripts, or other code-execution surfaces. (sha=7fa9662a46748347e25c36a9ce904686b37723a8)",
-      "review_summary": "The branch forwards non-empty Google transport stop lists to `generationConfig.stopSequences` and adds focused tests for populated and empty stop lists.\n\nPR surface: Source +3, Tests +29. Total +32 across 2 files.\n\nReproducibility: yes. source-reproducible: `extraParams.stop` reaches `streamParams.stop`, while current main's Google request builder omits it from `generationConfig`. I did not run the failing test in this read-only review.",
-      "review_followup": "- [P1] No automated code repair is needed; the remaining blocker is contributor-supplied real behavior proof or maintainer override.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "7fa9662a46748347e25c36a9ce904686b37723a8",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(google): forward stop sequences to Gemini generationConfig",
-        "body": "## Summary\n\nThe live Google/Gemini transport never forwards configured stop sequences to the model. `buildGoogleGenerativeAiParams` in `extensions/google/transport-stream.ts` builds `generationConfig` from `temperature`, `maxTokens`, and `thinkingConfig`, but drops `options.stop` — so Gemini and Vertex generate past where the user asked them to stop.\n\n- The `stop` field is part of the shared `StreamOptions` contract (`packages/llm-core/src/types.ts:60`), documented as forwarded \"to their native request field, such as OpenAI `stop` or Anthropic `stop_sequences`.\" Gemini's native field is `generationConfig.stopSequences`.\n- It is a real user path: `src/agents/embedded-agent-runner/extra-params.ts:511` plumbs `normalizeStopSequences(extraParams.stop)` into `streamParams.stop`.\n- Every other provider maps it — OpenAI (`openai-transport-stream.ts:3662`), Anthropic (`anthropic-transport-stream.ts:849`), Mistral (`mistral.ts:287`), and the now-unused core Google sibling (`google-shared.ts:484`). The live extension transport was the lone omission; the mapping was lost when the Google transport was internalized into the plugin in `bb46b79d3c`.\n\nFix mirrors the existing sibling guard:\n\n```ts\nif (options?.stop !== undefined && options.stop.length > 0) {\n  generationConfig.stopSequences = options.stop;\n}\n```\n\n### Sibling-surface completeness\n\nThis is the only live text-generation request builder that drops `stop`. Checked the adjacent surfaces:\n\n- `buildGoogleGemini3FirstResponseRetryParams` clones the original request and only mutates `thinkingConfig`, so `stopSequences` is preserved through the zero-output retry path (no change needed).\n- The image-generation, realtime-voice, and speech providers build their own `generationConfig` for non-text modalities where stop sequences do not apply.\n\n## Verification\n\n- `oxfmt --check` on touched files — clean\n- `node scripts/run-oxlint.mjs` on touched files — clean (exit 0)\n- `pnpm tsgo:extensions` and `pnpm tsgo:extensions:test` — exit 0\n- `node scripts/run-vitest.mjs extensions/google/transport-stream.test.ts` — 60 passed\n- `git diff --check` — clean\n\n## Real behavior proof\n\n- Behavior addressed: Before this patch, a stop sequence configured for a Gemini/Vertex model (for example `stop: [\"\\n\\nObservation:\"]`) is silently dropped from the request body, so the model ignores it. After this patch the request body carries `generationConfig.stopSequences`, matching every other provider and Gemini's documented API field.\n- Real environment tested: Real OpenClaw source checkout on macOS at current `upstream/main`, exercising the actual `buildGoogleGenerativeAiParams` request-body builder (the exact `generationConfig` object POSTed to the Gemini/Vertex `generateContent` endpoint), not a mock.\n- Exact steps or command run after this patch: deterministic before/after against the real module — revert only the production file to `upstream/main`, run the test (reproduces the bug), restore the fix, re-run (passes):\n\n```\ngit checkout upstream/main -- extensions/google/transport-stream.ts\nnode scripts/run-vitest.mjs extensions/google/transport-stream.test.ts\ngit checkout HEAD -- extensions/google/transport-stream.ts\nnode scripts/run-vitest.mjs extensions/google/transport-stream.test.ts\n```\n\n- Evidence after fix: With the production file reverted (bug present):\n\n```\n× forwards configured stop sequences to the Gemini generationConfig\nTests  1 failed | 59 passed (60)\n```\n\n  With the fix restored:\n\n```\nTests  60 passed (60)\n```\n\n- Observed result after fix: The Gemini/Vertex request body includes `generationConfig.stopSequences` equal to the configured stop list when non-empty, and omits it when the list is empty.\n- What was not tested: No live paid Gemini/Vertex API round-trip was made (no API key in this environment); proof is at the request-payload level. Gemini honoring `stopSequences` is a documented API guarantee and the field name matches the typed `@google/genai` contract.\n",
-        "branch": "fix/google-stop-sequences",
-        "head_sha": "7fa9662a46748347e25c36a9ce904686b37723a8",
-        "author": "coder999999999",
-        "labels": [
-          "size: XS",
-          "proof: supplied",
-          "extensions: google",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/google/transport-stream.test.ts",
-            "additions": 29,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/google/transport-stream.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88922",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88922.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 157,
-          "counts": {
-            "SUCCESS": 125,
-            "CANCELLED": 1,
-            "SKIPPED": 31
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2353,
+    "total_ms": 491,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 292
+        "ms": 296
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1860
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 173
+        "ms": 183
       },
       {
         "name": "append_ledger",
