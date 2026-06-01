@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-01T02:45:02.028Z",
+  "generated_at": "2026-06-01T02:45:12.849Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-31T23:45:00.154Z",
+  "since": "2026-05-31T23:45:12.325Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    88769
+    88874
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
+  "scanned_comments": 2,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,191 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88769:4587934013:2026-06-01T02:44:57Z:clawsweeper_needs_human",
-      "comment_id": "4587934013",
-      "comment_version_key": "4587934013:2026-06-01T02:44:57Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/88769#issuecomment-4587934013",
-      "repo": "openclaw/openclaw",
-      "issue_number": 88769,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-31T20:07:58Z",
-      "comment_updated_at": "2026-06-01T02:44:57Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=c34c20e28f8d69fe87ae51d6b6848d1c0a863d88)",
-      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +251, Tests +282. Total +533 across 6 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
-      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "c34c20e28f8d69fe87ae51d6b6848d1c0a863d88",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): keep inline <think> reasoning out of OpenAI-compatible visible text",
-        "body": "## Summary\n\nFixes #88741.\n\nWhen a model streams inline `<think>…</think>` reasoning in `delta.content` over the OpenAI-compatible streaming path (e.g. `minimax/MiniMax-M2.7`), the parsers routed the raw `delta.content` string straight into a **visible text** content part. Combined with the provider mirroring the same reasoning into `reasoning_content` (which becomes a `thinking` part), the assistant message ended up with the chain-of-thought in *both* the text part and the thinking part — and channel renderers (Telegram, Discord) show the text part, leaking the CoT verbatim before the answer. The leak is also persisted into the session content parts.\n\nThis adds a stateful streaming reasoning-tag text filter (`createReasoningTagTextFilter`) — a direct sibling of the existing `createDeepSeekTextFilter` — that strips inline `<think>/<thinking>/<thought>/antthinking` spans from the **visible text** stream at the parser boundary, using the exact same tag vocabulary as the already-shipped delivery-time `stripReasoningTagsFromText` sanitizer. It is wired into both OpenAI-compatible parsers:\n\n- `src/agents/openai-transport-stream.ts` (active transport-stream path) — chained after the DSML filter in the visible-text path.\n- `src/llm/providers/openai-completions.ts` (legacy `openai-completions` provider path) — content routed through the filter before being appended to the text block.\n\nReasoning still reaches the thinking channel via the existing `reasoning_content` / structured-thinking paths, so the reported case (reasoning mirrored into both `delta.content` and `reasoning_content`) now produces clean visible text **and a single thinking part — with no new duplication into thinking**. An unclosed-`<think>` recovery flush ensures a malformed stream never drops the answer. This sits in front of the delivery-time sanitizer, which remains as defense-in-depth.\n\nThe filter is **code-region aware**, matching the `stripReasoningTagsFromText` contract: literal `<think>` examples inside inline (`` `…` ``) and fenced (```` ``` ````/`~~~`) code are preserved, while a real reasoning span after an *unclosed* backtick is still stripped (inline code is only honored when it actually closes).\n\n### Review follow-up\n\nAddresses the ClawSweeper review on this PR:\n- **P1 (preserve literal tag examples):** the filter now tracks fenced/inline code state, so documentation that shows `<think>` inside code keeps it verbatim.\n- **P1 (regression coverage):** added filter unit tests for inline/fenced/tilde code (including split-across-chunk cases) plus parity assertions against `stripReasoningTagsFromText`, and a legacy-parser integration test for a fenced/inline `<think>` example.\n- **P1 (real behavior proof):** the runtime capture below replaces the earlier source-only evidence.\n\n## Real behavior proof\n\n- **Behavior addressed:** Inline `<think>…</think>` reasoning streamed in `delta.content` (with mirrored `reasoning_content`) no longer leaks into the channel-visible text content part on either OpenAI-compatible parser; the reasoning is present only in the hidden thinking part.\n- **Real environment tested:** The actual OpenClaw runtime stream path, exercised end-to-end through the production `createOpenAICompletionsTransportStreamFn` entrypoint against a real loopback HTTP server streaming OpenAI-compatible SSE chunks that emulate `minimax/MiniMax-M2.7` (inline `<think>` in `delta.content`, mirrored in `reasoning_content`). Run on Node 22.19.0 via `tsx`. This drives the real provider/runtime code path and real SSE parsing — no live MiniMax API key was available in this environment, so a hosted MiniMax credential was substituted with a faithful local SSE emulation of its stream shape.\n- **Exact steps or command run after this patch:**\n  - After the patch (clean): `tsx tmp-repro-think.ts`\n  - Before the patch (leak), for comparison: `git checkout HEAD~1 -- src/agents/openai-transport-stream.ts src/llm/providers/openai-completions.ts src/shared/text/reasoning-tags.ts && tsx tmp-repro-think.ts` (then restored to `HEAD`).\n- **Evidence after fix:** Captured terminal output from the real runtime run.\n\n  Before the patch — the chain-of-thought leaks into the channel-visible text, and the persisted parts duplicate it into both `text` and `thinking` (matching the report):\n\n  ```\n  MODEL: minimax/MiniMax-M2.7 over OpenAI-compatible stream (real runtime, loopback SSE)\n  CHANNEL-VISIBLE TEXT (what Telegram/Discord renders):\n    \"<think>User wants thrillers. Recommend three.</think>Here are three great thrillers.\"\n  THINKING (hidden reasoning channel):\n    \"User wants thrillers. Recommend three.\"\n  PERSISTED ASSISTANT CONTENT PARTS:\n    [text] \"<think>User wants thrillers. \"\n    [thinking] \"User wants thrillers. \"\n    [text] \"Recommend three.</think>\"\n    [thinking] \"Recommend three.\"\n    [text] \"Here are three great thrillers.\"\n  CoT LEAKED INTO VISIBLE TEXT: YES (BUG)\n  ```\n\n  After the patch — the visible text carries only the answer; reasoning remains solely in the hidden thinking part:\n\n  ```\n  MODEL: minimax/MiniMax-M2.7 over OpenAI-compatible stream (real runtime, loopback SSE)\n  CHANNEL-VISIBLE TEXT (what Telegram/Discord renders):\n    \"Here are three great thrillers.\"\n  THINKING (hidden reasoning channel):\n    \"User wants thrillers. Recommend three.\"\n  PERSISTED ASSISTANT CONTENT PARTS:\n    [thinking] \"User wants thrillers. Recommend three.\"\n    [text] \"Here are three great thrillers.\"\n  CoT LEAKED INTO VISIBLE TEXT: NO (clean)\n  ```\n- **Observed result after fix:** The channel-visible text equals only the answer (`\"Here are three great thrillers.\"`) and contains neither `<think>` nor the reasoning prose; the reasoning appears only in the hidden thinking part (`\"User wants thrillers. Recommend three.\"`), as a single part with no duplication.\n- **What was not tested:** A live `minimax/MiniMax-M2.7` run against a real hosted MiniMax endpoint over a real Telegram/Discord channel (no provider API key was available in this environment).\n\n## Verification\n\nBeyond the runtime capture above, automated coverage was added and run green (supplemental):\n\n- Streaming-filter unit tests incl. code-region preservation and `stripReasoningTagsFromText` parity: `src/shared/text/reasoning-tags.test.ts` (84 passing).\n- Parser integration tests: `src/agents/openai-transport-stream.test.ts` (214 passing) and `src/llm/providers/openai-completions.test.ts` (8 passing, incl. a fenced/inline `<think>` example). The active-parser leak case fails on `HEAD~1` and passes on this branch.\n- Prod typecheck (`tsgo:core`), `oxfmt --check`, and `oxlint` on the changed files all pass.\n",
-        "branch": "fix/openai-stream-think-tag-leak",
-        "head_sha": "c34c20e28f8d69fe87ae51d6b6848d1c0a863d88",
-        "author": "yetval",
-        "labels": [
-          "agents",
-          "size: L",
-          "proof: supplied",
-          "P1",
-          "rating: 🌊 off-meta tidepool",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "merge-risk: 🚨 security-boundary"
-        ],
-        "files": [
-          {
-            "path": "src/agents/openai-transport-stream.test.ts",
-            "additions": 98,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openai-transport-stream.ts",
-            "additions": 16,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/openai-completions.test.ts",
-            "additions": 64,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/openai-completions.ts",
-            "additions": 21,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/shared/text/reasoning-tags.test.ts",
-            "additions": 121,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/shared/text/reasoning-tags.ts",
-            "additions": 232,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88769",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88769.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 160,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 28,
-            "SUCCESS": 122,
-            "FAILURE": 7,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-core-fast:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-boundaries-a:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-runtime-topology-architecture:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-core-fast:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-boundaries-a:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-runtime-topology-architecture:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:88769:4588979288:2026-06-01T01:52:21Z:re_review",
-      "comment_id": "4588979288",
-      "comment_version_key": "4588979288:2026-06-01T01:52:21Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/88769#issuecomment-4588979288",
-      "repo": "openclaw/openclaw",
-      "issue_number": 88769,
-      "author": "yetval",
-      "author_id": 102706514,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-01T01:52:21Z",
-      "comment_updated_at": "2026-06-01T01:52:21Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2873,
+    "total_ms": 892,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 234
+        "ms": 512
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1622
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 986
+        "ms": 367
       },
       {
         "name": "append_ledger",
