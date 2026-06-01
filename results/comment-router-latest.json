@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-01T10:06:15.071Z",
+  "generated_at": "2026-06-01T10:07:33.919Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-01T07:06:11.760Z",
+  "since": "2026-06-01T07:07:31.558Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    89039
+    87304
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 23,
+  "commands_seen": 4,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,182 +31,484 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89039:4591504568:2026-06-01T10:06:07Z:clawsweeper_auto_repair",
-      "comment_id": "4591504568",
-      "comment_version_key": "4591504568:2026-06-01T10:06:07Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-4591504568",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:87304:4555169939:2026-06-01T10:07:27Z:clawsweeper_needs_human",
+      "comment_id": "4555169939",
+      "comment_version_key": "4555169939:2026-06-01T10:07:27Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/87304#issuecomment-4555169939",
       "repo": "openclaw/openclaw",
-      "issue_number": 89039,
+      "issue_number": 87304,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-01T09:57:55Z",
-      "comment_updated_at": "2026-06-01T10:06:07Z",
+      "comment_created_at": "2026-05-27T13:55:13Z",
+      "comment_updated_at": "2026-06-01T10:07:27Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=ca478695aa4965ad69e6530d6f24335669233453)",
-      "review_summary": "The PR wraps embedded steering writes in owned transcript context, adds session-takeover phase/user-facing handling, and disables OpenAI SDK retries by default across OpenAI transport paths with focused tests.\n\nPR surface: Source +37, Tests +164. Total +201 across 13 files.\n\nReproducibility: yes. for the source-level failure shape, but not as a live transport repro: current tests and source show takeover aborts fallback and cleanup can wrap a prompt error, while the PR has no real environment proof.",
-      "review_followup": "- [P1] The PR needs contributor changes plus real behavior proof; automation cannot supply the contributor's after-fix environment proof for this external PR.",
+      "repair_reason": "- [P1] No narrow automated repair remains; maintainers need to accept the fail-closed upgrade policy and coordinate the overlapping installer PRs.; Cleared: No concrete security or supply-chain regression was found; the diff adds a fail-closed decision before npm install and does not add dependencies, workflows, permissions, lifecycle hooks, or secret handling. (sha=f7f4fd5e41a3717de92271befaece25024d2d7c6)",
+      "review_summary": "The PR adds managed npm update conflict detection that fails closed when a release-managed plugin target would downgrade a newer package.json direct dependency pin, plus focused regression tests and gateway test type-fixture adjustments.\n\nPR surface: Source +48, Tests +435. Total +483 across 6 files.\n\nReproducibility: yes. Source inspection of current main shows update-mode installs write the requested dependency spec and return dry-run success before any newer-pin conflict gate; the linked issue and PR proof cover the user-pinned newer version path.",
+      "review_followup": "- [P1] No narrow automated repair remains; maintainers need to accept the fail-closed upgrade policy and coordinate the overlapping installer PRs.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "ca478695aa4965ad69e6530d6f24335669233453",
+      "expected_head_sha": "f7f4fd5e41a3717de92271befaece25024d2d7c6",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix: prevent silent message loss from EmbeddedAttemptSessionTakeoverError",
-        "body": "## Summary\n\nWhen the OpenAI SDK retried an `ECONNRESET` internally (default `maxRetries=2`), the session write lock was released during the retry window. Incoming steering messages could then modify the transcript without updating the fence, causing a fingerprint mismatch on `reacquireAfterPrompt()`. The resulting `EmbeddedAttemptSessionTakeoverError` was caught by `model-fallback.ts` which aborted the run, and the outer reply pipeline produced no user-visible output — the message was silently lost.\n\n## Root Cause Chain\n\n```\nAPI ECONNRESET\n  → OpenAI SDK default maxRetries=2, internal retry\n  → session write lock released during retry window\n  → incoming message arrives via queueHandle.queueMessage\n  → activeSession.steer writes directly (bypassing withOwnedSessionTranscriptWrites)\n  → transcript changes without updating fence\n  → original attempt reacquireAfterPrompt() fingerprint mismatch\n  → EmbeddedAttemptSessionTakeoverError thrown\n  → model-fallback.ts aborts the run\n  → outer layer hits generic failure branch\n  → assistantTexts/payloads never enter buildReplyPayloads()\n  → message silently lost (user sees generic error or nothing)\n```\n\n## Fix\n\nFour coordinated changes that address the bug at multiple layers:\n\n### 1. Wrap steering in `withOwnedSessionTranscriptWrites` (`attempt.ts`)\nSteering writes that arrive during prompt lock release now go through `withOwnedSessionTranscriptWrites`, keeping fence tracking consistent and preventing the fingerprint mismatch that triggers the takeover error.\n\n### 2. Dedicated error handler for takeover (`agent-runner-execution.ts`, `failover-error.ts`)\nAdded `isEmbeddedAttemptSessionTakeoverError()` export and a dedicated catch block in `runAgentTurnWithFallback`. Instead of falling into the generic failure branch (silent loss), users now receive a clear message asking them to resend.\n\n### 3. Disable OpenAI SDK internal retries (`openai-completions.ts`, `openai-responses-shared.ts`, `openai-transport-stream.ts`)\nSet `maxRetries: 0` across all three OpenAI transport paths so retry logic is controlled at the higher model-fallback level, not inside the SDK where it can release and reacquire locks unexpectedly. The `options?.maxRetries` passthrough is preserved for callers that explicitly need SDK-level retries.\n\n### 4. Phase tracking in `EmbeddedAttemptSessionTakeoverError` (`attempt.session-lock.ts`)\nAdded a `phase` field (`prompt_reacquire`, `cleanup`, `write`, `fence_check`) for better diagnostics when this error does occur. Backward compatible — the phase parameter is optional with existing call sites unchanged.\n\n## Tests\n\nAll affected test suites pass (609 tests total):\n\n| Test File | Tests |\n|-----------|-------|\n| `attempt.session-lock.test.ts` | 45 |\n| `failover-error.test.ts` | 83 |\n| `agent-runner-execution.test.ts` | 153 |\n| `openai-completions.test.ts` | 17 |\n| `openai-responses-shared.test.ts` | 8 |\n| `model-fallback.test.ts` | 76 |\n| `openai-transport-stream.test.ts` | 227 |\n\nNew test coverage includes:\n- Backward compatibility for `assertSessionFileFence` without phase parameter\n- Takeover detection during owned steering writes\n- `isEmbeddedAttemptSessionTakeoverError` export validation\n- User-facing error message for session takeover scenario\n- SDK retries disabled by default across all transport paths\n- `buildOpenAISdkRequestOptions` always returns `maxRetries: 0`\n\n## Changed Files (13 files, +221/-20)\n\n- `src/agents/embedded-agent-runner/run/attempt.session-lock.ts`\n- `src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts`\n- `src/agents/embedded-agent-runner/run/attempt.ts`\n- `src/agents/failover-error.ts`\n- `src/agents/failover-error.test.ts`\n- `src/auto-reply/reply/agent-runner-execution.ts`\n- `src/auto-reply/reply/agent-runner-execution.test.ts`\n- `src/llm/providers/openai-completions.ts`\n- `src/llm/providers/openai-completions.test.ts`\n- `src/llm/providers/openai-responses-shared.ts`\n- `src/llm/providers/openai-responses-shared.test.ts`\n- `src/agents/openai-transport-stream.ts`\n- `src/agents/openai-transport-stream.test.ts`\n\nFixes #87180\n",
-        "branch": "fix/session-takeover-silent-message-loss-87180",
-        "head_sha": "ca478695aa4965ad69e6530d6f24335669233453",
-        "author": "jerry-xin",
+        "title": "fix(update): fail closed on managed plugin pin conflicts",
+        "body": "`openclaw update` could silently downgrade a user-pinned managed plugin direct dependency. After the maintainer policy note, this PR now implements the conflict/fail-closed behavior instead of preserving the newer pin automatically.\n\nFixes #85184.\n\n## Affected surface\n\n- `src/plugins/install.ts`\n  - `installPluginFromManagedNpmRoot`\n  - managed npm update-mode conflict handling\n- `src/infra/npm-managed-root.ts`\n  - `upsertManagedNpmRootDependency`\n  - release-managed dependency spec writing\n- Tests:\n  - `src/plugins/install.npm-spec.test.ts`\n  - `src/infra/npm-managed-root.test.ts`\n\n## Scope\n\n- Release-managed plugin versions remain authoritative for the managed npm root write path.\n- In explicit update mode, if the managed npm project already has a newer direct dependency pin than the release-managed target, the update fails closed instead of downgrading or silently preserving it.\n- The conflict is detected before `npm install`, including the case where the package payload is missing and `resolveEffectiveInstallMode()` would otherwise fall back from update to install.\n- The error names the package, current package.json pin, release target, and the operator choices: use release-managed version, keep the user pin explicitly, or abort.\n- Existing install mode, equal versions, older managed versions, peer repair, and unrelated dependency updates keep the existing behavior.\n\n## Real behavior proof\n\n- Behavior or issue addressed: An update-mode managed npm plugin install now refuses to automatically choose between a user-pinned newer direct dependency and the release-managed target.\n- Real environment tested: macOS local development machine, current PR head `851c6d9f1388`, real OpenClaw source imported with `node --import tsx`, real npm metadata lookup for `@martian-engineering/lossless-claw@0.10.0`, temporary managed npm root outside the repository.\n- Exact steps or command run after this patch: Create a temporary managed npm project with `package.json` pinning `@martian-engineering/lossless-claw` to `0.11.2`; run `installPluginFromNpmSpec(..., { spec: \"@martian-engineering/lossless-claw@0.10.0\", mode: \"update\" })`; verify the result fails closed, the package.json pin remains `0.11.2`, and no npm install artifacts are created.\n- Evidence after fix:\n\n```json\n{\n  \"proof\": \"OpenClaw PR #87304 managed plugin pin conflict proof\",\n  \"head\": \"851c6d9f1388\",\n  \"packageName\": \"@martian-engineering/lossless-claw\",\n  \"requestedUpdateSpec\": \"@martian-engineering/lossless-claw@0.10.0\",\n  \"existingPackageJsonPin\": \"0.11.2\",\n  \"result\": {\n    \"ok\": false,\n    \"error\": \"Managed plugin dependency conflict for @martian-engineering/lossless-claw: current package.json pin is 0.11.2 but OpenClaw release target is 0.10.0. Non-interactive update is refusing to choose automatically. Use the release-managed version, keep the user pin explicitly, or abort.\"\n  },\n  \"finalPackageJsonPin\": \"0.11.2\",\n  \"npmInstallRan\": false,\n  \"tempRoot\": \"<tmp>/openclaw-pr87304-policy-proof-hlkUGi\"\n}\n```\n\nLocal validation after the rewrite:\n\n```text\n$ node scripts/run-vitest.mjs run --config test/vitest/vitest.plugins.config.ts src/plugins/install.npm-spec.test.ts\nTest Files  1 passed (1)\nTests  45 passed (45)\n\n$ node scripts/run-vitest.mjs run --config test/vitest/vitest.infra.config.ts src/infra/npm-managed-root.test.ts\nTest Files  1 passed (1)\nTests  19 passed (19)\n\n$ ./node_modules/.bin/oxfmt --check src/plugins/install.ts src/plugins/install.npm-spec.test.ts src/infra/npm-managed-root.ts src/infra/npm-managed-root.test.ts\nAll matched files use the correct format.\n\n$ git diff --check && git diff --check origin/main..HEAD && node scripts/check-no-conflict-markers.mjs\n(exit 0)\n\n$ gitleaks protect --staged --redact\nno leaks found\n```\n\n`pnpm check:changed --base origin/main` currently reaches the repo guards and then fails in core typecheck on `src/gateway/server-session-key.ts(55,5)`. This file is unchanged by this PR and matches current `origin/main`; I left that baseline issue out of this policy PR.\n\n- Observed result after fix: The update returns an actionable conflict error, leaves the user pin unchanged, and does not run npm install.\n- What was not tested: I did not implement an interactive chooser in this patch. The current install boundary is non-interactive, so this PR establishes the fail-closed behavior and error shape that an interactive update flow can later use.\n\n## Coverage note\n\nThis remains the open PR for #85184. Codegraph-reported overlap with #86122, #87477, and #87573 is in the shared plugin install/update functions; the policy behavior above should remain the compatibility point for those edits.",
+        "branch": "wolf/update-preserve-newer-plugin-pins",
+        "head_sha": "f7f4fd5e41a3717de92271befaece25024d2d7c6",
+        "author": "luoyanglang",
         "labels": [
-          "agents",
+          "gateway",
           "size: M",
-          "triage: needs-real-behavior-proof",
+          "proof: supplied",
+          "proof: sufficient",
           "P1",
-          "rating: 🧂 unranked krab",
+          "rating: 🐚 platinum hermit",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts",
-            "additions": 68,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.ts",
-            "additions": 22,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 4,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/failover-error.test.ts",
-            "additions": 4,
+            "path": "src/gateway/server-plugins.test.ts",
+            "additions": 0,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/failover-error.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openai-transport-stream.test.ts",
-            "additions": 2,
+            "path": "src/gateway/server-startup.test.ts",
+            "additions": 1,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/openai-transport-stream.ts",
-            "additions": 2,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
+            "path": "src/infra/npm-managed-root.test.ts",
             "additions": 32,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/agent-runner-execution.ts",
-            "additions": 19,
+            "path": "src/infra/npm-managed-root.ts",
+            "additions": 9,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/llm/providers/openai-completions.test.ts",
-            "additions": 17,
-            "deletions": 1,
+            "path": "src/plugins/install.npm-spec.test.ts",
+            "additions": 407,
+            "deletions": 3,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/llm/providers/openai-completions.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/openai-responses-shared.test.ts",
-            "additions": 45,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/openai-responses-shared.ts",
-            "additions": 1,
-            "deletions": 1,
+            "path": "src/plugins/install.ts",
+            "additions": 39,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89039",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89039.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-87304",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87304.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 161,
+          "total": 160,
           "counts": {
-            "CANCELLED": 2,
+            "SUCCESS": 128,
             "SKIPPED": 30,
-            "SUCCESS": 126,
             "IN_PROGRESS": 1,
-            "FAILURE": 1,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-core-runtime-infra-file-safety:IN_PROGRESS",
-            "check-test-types:FAILURE"
+            "checks-node-core-runtime-infra-file-safety:IN_PROGRESS"
           ],
           "pending": [
             "checks-node-core-runtime-infra-file-safety:IN_PROGRESS"
           ],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "check-test-types:FAILURE"
-          ]
+          "terminalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:87304:4583481743:2026-05-30T16:54:34Z:re_review",
+      "comment_id": "4583481743",
+      "comment_version_key": "4583481743:2026-05-30T16:54:34Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/87304#issuecomment-4583481743",
+      "repo": "openclaw/openclaw",
+      "issue_number": 87304,
+      "author": "luoyanglang",
+      "author_id": 238804951,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-30T16:54:34Z",
+      "comment_updated_at": "2026-05-30T16:54:34Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(update): fail closed on managed plugin pin conflicts",
+        "body": "`openclaw update` could silently downgrade a user-pinned managed plugin direct dependency. After the maintainer policy note, this PR now implements the conflict/fail-closed behavior instead of preserving the newer pin automatically.\n\nFixes #85184.\n\n## Affected surface\n\n- `src/plugins/install.ts`\n  - `installPluginFromManagedNpmRoot`\n  - managed npm update-mode conflict handling\n- `src/infra/npm-managed-root.ts`\n  - `upsertManagedNpmRootDependency`\n  - release-managed dependency spec writing\n- Tests:\n  - `src/plugins/install.npm-spec.test.ts`\n  - `src/infra/npm-managed-root.test.ts`\n\n## Scope\n\n- Release-managed plugin versions remain authoritative for the managed npm root write path.\n- In explicit update mode, if the managed npm project already has a newer direct dependency pin than the release-managed target, the update fails closed instead of downgrading or silently preserving it.\n- The conflict is detected before `npm install`, including the case where the package payload is missing and `resolveEffectiveInstallMode()` would otherwise fall back from update to install.\n- The error names the package, current package.json pin, release target, and the operator choices: use release-managed version, keep the user pin explicitly, or abort.\n- Existing install mode, equal versions, older managed versions, peer repair, and unrelated dependency updates keep the existing behavior.\n\n## Real behavior proof\n\n- Behavior or issue addressed: An update-mode managed npm plugin install now refuses to automatically choose between a user-pinned newer direct dependency and the release-managed target.\n- Real environment tested: macOS local development machine, current PR head `851c6d9f1388`, real OpenClaw source imported with `node --import tsx`, real npm metadata lookup for `@martian-engineering/lossless-claw@0.10.0`, temporary managed npm root outside the repository.\n- Exact steps or command run after this patch: Create a temporary managed npm project with `package.json` pinning `@martian-engineering/lossless-claw` to `0.11.2`; run `installPluginFromNpmSpec(..., { spec: \"@martian-engineering/lossless-claw@0.10.0\", mode: \"update\" })`; verify the result fails closed, the package.json pin remains `0.11.2`, and no npm install artifacts are created.\n- Evidence after fix:\n\n```json\n{\n  \"proof\": \"OpenClaw PR #87304 managed plugin pin conflict proof\",\n  \"head\": \"851c6d9f1388\",\n  \"packageName\": \"@martian-engineering/lossless-claw\",\n  \"requestedUpdateSpec\": \"@martian-engineering/lossless-claw@0.10.0\",\n  \"existingPackageJsonPin\": \"0.11.2\",\n  \"result\": {\n    \"ok\": false,\n    \"error\": \"Managed plugin dependency conflict for @martian-engineering/lossless-claw: current package.json pin is 0.11.2 but OpenClaw release target is 0.10.0. Non-interactive update is refusing to choose automatically. Use the release-managed version, keep the user pin explicitly, or abort.\"\n  },\n  \"finalPackageJsonPin\": \"0.11.2\",\n  \"npmInstallRan\": false,\n  \"tempRoot\": \"<tmp>/openclaw-pr87304-policy-proof-hlkUGi\"\n}\n```\n\nLocal validation after the rewrite:\n\n```text\n$ node scripts/run-vitest.mjs run --config test/vitest/vitest.plugins.config.ts src/plugins/install.npm-spec.test.ts\nTest Files  1 passed (1)\nTests  45 passed (45)\n\n$ node scripts/run-vitest.mjs run --config test/vitest/vitest.infra.config.ts src/infra/npm-managed-root.test.ts\nTest Files  1 passed (1)\nTests  19 passed (19)\n\n$ ./node_modules/.bin/oxfmt --check src/plugins/install.ts src/plugins/install.npm-spec.test.ts src/infra/npm-managed-root.ts src/infra/npm-managed-root.test.ts\nAll matched files use the correct format.\n\n$ git diff --check && git diff --check origin/main..HEAD && node scripts/check-no-conflict-markers.mjs\n(exit 0)\n\n$ gitleaks protect --staged --redact\nno leaks found\n```\n\n`pnpm check:changed --base origin/main` currently reaches the repo guards and then fails in core typecheck on `src/gateway/server-session-key.ts(55,5)`. This file is unchanged by this PR and matches current `origin/main`; I left that baseline issue out of this policy PR.\n\n- Observed result after fix: The update returns an actionable conflict error, leaves the user pin unchanged, and does not run npm install.\n- What was not tested: I did not implement an interactive chooser in this patch. The current install boundary is non-interactive, so this PR establishes the fail-closed behavior and error shape that an interactive update flow can later use.\n\n## Coverage note\n\nThis remains the open PR for #85184. Codegraph-reported overlap with #86122, #87477, and #87573 is in the shared plugin install/update functions; the policy behavior above should remain the compatibility point for those edits.",
+        "branch": "wolf/update-preserve-newer-plugin-pins",
+        "head_sha": "f7f4fd5e41a3717de92271befaece25024d2d7c6",
+        "author": "luoyanglang",
+        "labels": [
+          "gateway",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/server-plugins.test.ts",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/npm-managed-root.test.ts",
+            "additions": 32,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/npm-managed-root.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/install.npm-spec.test.ts",
+            "additions": 407,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/install.ts",
+            "additions": 39,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-87304",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87304.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 160,
+          "counts": {
+            "SUCCESS": 128,
+            "SKIPPED": 30,
+            "IN_PROGRESS": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-core-runtime-infra-file-safety:IN_PROGRESS"
+          ],
+          "pending": [
+            "checks-node-core-runtime-infra-file-safety:IN_PROGRESS"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:87304:4583456841:2026-05-30T16:43:15Z:re_review",
+      "comment_id": "4583456841",
+      "comment_version_key": "4583456841:2026-05-30T16:43:15Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/87304#issuecomment-4583456841",
+      "repo": "openclaw/openclaw",
+      "issue_number": 87304,
+      "author": "luoyanglang",
+      "author_id": 238804951,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-30T16:43:15Z",
+      "comment_updated_at": "2026-05-30T16:43:15Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(update): fail closed on managed plugin pin conflicts",
+        "body": "`openclaw update` could silently downgrade a user-pinned managed plugin direct dependency. After the maintainer policy note, this PR now implements the conflict/fail-closed behavior instead of preserving the newer pin automatically.\n\nFixes #85184.\n\n## Affected surface\n\n- `src/plugins/install.ts`\n  - `installPluginFromManagedNpmRoot`\n  - managed npm update-mode conflict handling\n- `src/infra/npm-managed-root.ts`\n  - `upsertManagedNpmRootDependency`\n  - release-managed dependency spec writing\n- Tests:\n  - `src/plugins/install.npm-spec.test.ts`\n  - `src/infra/npm-managed-root.test.ts`\n\n## Scope\n\n- Release-managed plugin versions remain authoritative for the managed npm root write path.\n- In explicit update mode, if the managed npm project already has a newer direct dependency pin than the release-managed target, the update fails closed instead of downgrading or silently preserving it.\n- The conflict is detected before `npm install`, including the case where the package payload is missing and `resolveEffectiveInstallMode()` would otherwise fall back from update to install.\n- The error names the package, current package.json pin, release target, and the operator choices: use release-managed version, keep the user pin explicitly, or abort.\n- Existing install mode, equal versions, older managed versions, peer repair, and unrelated dependency updates keep the existing behavior.\n\n## Real behavior proof\n\n- Behavior or issue addressed: An update-mode managed npm plugin install now refuses to automatically choose between a user-pinned newer direct dependency and the release-managed target.\n- Real environment tested: macOS local development machine, current PR head `851c6d9f1388`, real OpenClaw source imported with `node --import tsx`, real npm metadata lookup for `@martian-engineering/lossless-claw@0.10.0`, temporary managed npm root outside the repository.\n- Exact steps or command run after this patch: Create a temporary managed npm project with `package.json` pinning `@martian-engineering/lossless-claw` to `0.11.2`; run `installPluginFromNpmSpec(..., { spec: \"@martian-engineering/lossless-claw@0.10.0\", mode: \"update\" })`; verify the result fails closed, the package.json pin remains `0.11.2`, and no npm install artifacts are created.\n- Evidence after fix:\n\n```json\n{\n  \"proof\": \"OpenClaw PR #87304 managed plugin pin conflict proof\",\n  \"head\": \"851c6d9f1388\",\n  \"packageName\": \"@martian-engineering/lossless-claw\",\n  \"requestedUpdateSpec\": \"@martian-engineering/lossless-claw@0.10.0\",\n  \"existingPackageJsonPin\": \"0.11.2\",\n  \"result\": {\n    \"ok\": false,\n    \"error\": \"Managed plugin dependency conflict for @martian-engineering/lossless-claw: current package.json pin is 0.11.2 but OpenClaw release target is 0.10.0. Non-interactive update is refusing to choose automatically. Use the release-managed version, keep the user pin explicitly, or abort.\"\n  },\n  \"finalPackageJsonPin\": \"0.11.2\",\n  \"npmInstallRan\": false,\n  \"tempRoot\": \"<tmp>/openclaw-pr87304-policy-proof-hlkUGi\"\n}\n```\n\nLocal validation after the rewrite:\n\n```text\n$ node scripts/run-vitest.mjs run --config test/vitest/vitest.plugins.config.ts src/plugins/install.npm-spec.test.ts\nTest Files  1 passed (1)\nTests  45 passed (45)\n\n$ node scripts/run-vitest.mjs run --config test/vitest/vitest.infra.config.ts src/infra/npm-managed-root.test.ts\nTest Files  1 passed (1)\nTests  19 passed (19)\n\n$ ./node_modules/.bin/oxfmt --check src/plugins/install.ts src/plugins/install.npm-spec.test.ts src/infra/npm-managed-root.ts src/infra/npm-managed-root.test.ts\nAll matched files use the correct format.\n\n$ git diff --check && git diff --check origin/main..HEAD && node scripts/check-no-conflict-markers.mjs\n(exit 0)\n\n$ gitleaks protect --staged --redact\nno leaks found\n```\n\n`pnpm check:changed --base origin/main` currently reaches the repo guards and then fails in core typecheck on `src/gateway/server-session-key.ts(55,5)`. This file is unchanged by this PR and matches current `origin/main`; I left that baseline issue out of this policy PR.\n\n- Observed result after fix: The update returns an actionable conflict error, leaves the user pin unchanged, and does not run npm install.\n- What was not tested: I did not implement an interactive chooser in this patch. The current install boundary is non-interactive, so this PR establishes the fail-closed behavior and error shape that an interactive update flow can later use.\n\n## Coverage note\n\nThis remains the open PR for #85184. Codegraph-reported overlap with #86122, #87477, and #87573 is in the shared plugin install/update functions; the policy behavior above should remain the compatibility point for those edits.",
+        "branch": "wolf/update-preserve-newer-plugin-pins",
+        "head_sha": "f7f4fd5e41a3717de92271befaece25024d2d7c6",
+        "author": "luoyanglang",
+        "labels": [
+          "gateway",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/server-plugins.test.ts",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/npm-managed-root.test.ts",
+            "additions": 32,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/npm-managed-root.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/install.npm-spec.test.ts",
+            "additions": 407,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/install.ts",
+            "additions": 39,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-87304",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87304.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 160,
+          "counts": {
+            "SUCCESS": 128,
+            "SKIPPED": 30,
+            "IN_PROGRESS": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-core-runtime-infra-file-safety:IN_PROGRESS"
+          ],
+          "pending": [
+            "checks-node-core-runtime-infra-file-safety:IN_PROGRESS"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:87304:4555488199:2026-05-27T14:31:27Z:re_review",
+      "comment_id": "4555488199",
+      "comment_version_key": "4555488199:2026-05-27T14:31:27Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/87304#issuecomment-4555488199",
+      "repo": "openclaw/openclaw",
+      "issue_number": 87304,
+      "author": "luoyanglang",
+      "author_id": 238804951,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-27T14:31:27Z",
+      "comment_updated_at": "2026-05-27T14:31:27Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(update): fail closed on managed plugin pin conflicts",
+        "body": "`openclaw update` could silently downgrade a user-pinned managed plugin direct dependency. After the maintainer policy note, this PR now implements the conflict/fail-closed behavior instead of preserving the newer pin automatically.\n\nFixes #85184.\n\n## Affected surface\n\n- `src/plugins/install.ts`\n  - `installPluginFromManagedNpmRoot`\n  - managed npm update-mode conflict handling\n- `src/infra/npm-managed-root.ts`\n  - `upsertManagedNpmRootDependency`\n  - release-managed dependency spec writing\n- Tests:\n  - `src/plugins/install.npm-spec.test.ts`\n  - `src/infra/npm-managed-root.test.ts`\n\n## Scope\n\n- Release-managed plugin versions remain authoritative for the managed npm root write path.\n- In explicit update mode, if the managed npm project already has a newer direct dependency pin than the release-managed target, the update fails closed instead of downgrading or silently preserving it.\n- The conflict is detected before `npm install`, including the case where the package payload is missing and `resolveEffectiveInstallMode()` would otherwise fall back from update to install.\n- The error names the package, current package.json pin, release target, and the operator choices: use release-managed version, keep the user pin explicitly, or abort.\n- Existing install mode, equal versions, older managed versions, peer repair, and unrelated dependency updates keep the existing behavior.\n\n## Real behavior proof\n\n- Behavior or issue addressed: An update-mode managed npm plugin install now refuses to automatically choose between a user-pinned newer direct dependency and the release-managed target.\n- Real environment tested: macOS local development machine, current PR head `851c6d9f1388`, real OpenClaw source imported with `node --import tsx`, real npm metadata lookup for `@martian-engineering/lossless-claw@0.10.0`, temporary managed npm root outside the repository.\n- Exact steps or command run after this patch: Create a temporary managed npm project with `package.json` pinning `@martian-engineering/lossless-claw` to `0.11.2`; run `installPluginFromNpmSpec(..., { spec: \"@martian-engineering/lossless-claw@0.10.0\", mode: \"update\" })`; verify the result fails closed, the package.json pin remains `0.11.2`, and no npm install artifacts are created.\n- Evidence after fix:\n\n```json\n{\n  \"proof\": \"OpenClaw PR #87304 managed plugin pin conflict proof\",\n  \"head\": \"851c6d9f1388\",\n  \"packageName\": \"@martian-engineering/lossless-claw\",\n  \"requestedUpdateSpec\": \"@martian-engineering/lossless-claw@0.10.0\",\n  \"existingPackageJsonPin\": \"0.11.2\",\n  \"result\": {\n    \"ok\": false,\n    \"error\": \"Managed plugin dependency conflict for @martian-engineering/lossless-claw: current package.json pin is 0.11.2 but OpenClaw release target is 0.10.0. Non-interactive update is refusing to choose automatically. Use the release-managed version, keep the user pin explicitly, or abort.\"\n  },\n  \"finalPackageJsonPin\": \"0.11.2\",\n  \"npmInstallRan\": false,\n  \"tempRoot\": \"<tmp>/openclaw-pr87304-policy-proof-hlkUGi\"\n}\n```\n\nLocal validation after the rewrite:\n\n```text\n$ node scripts/run-vitest.mjs run --config test/vitest/vitest.plugins.config.ts src/plugins/install.npm-spec.test.ts\nTest Files  1 passed (1)\nTests  45 passed (45)\n\n$ node scripts/run-vitest.mjs run --config test/vitest/vitest.infra.config.ts src/infra/npm-managed-root.test.ts\nTest Files  1 passed (1)\nTests  19 passed (19)\n\n$ ./node_modules/.bin/oxfmt --check src/plugins/install.ts src/plugins/install.npm-spec.test.ts src/infra/npm-managed-root.ts src/infra/npm-managed-root.test.ts\nAll matched files use the correct format.\n\n$ git diff --check && git diff --check origin/main..HEAD && node scripts/check-no-conflict-markers.mjs\n(exit 0)\n\n$ gitleaks protect --staged --redact\nno leaks found\n```\n\n`pnpm check:changed --base origin/main` currently reaches the repo guards and then fails in core typecheck on `src/gateway/server-session-key.ts(55,5)`. This file is unchanged by this PR and matches current `origin/main`; I left that baseline issue out of this policy PR.\n\n- Observed result after fix: The update returns an actionable conflict error, leaves the user pin unchanged, and does not run npm install.\n- What was not tested: I did not implement an interactive chooser in this patch. The current install boundary is non-interactive, so this PR establishes the fail-closed behavior and error shape that an interactive update flow can later use.\n\n## Coverage note\n\nThis remains the open PR for #85184. Codegraph-reported overlap with #86122, #87477, and #87573 is in the shared plugin install/update functions; the policy behavior above should remain the compatibility point for those edits.",
+        "branch": "wolf/update-preserve-newer-plugin-pins",
+        "head_sha": "f7f4fd5e41a3717de92271befaece25024d2d7c6",
+        "author": "luoyanglang",
+        "labels": [
+          "gateway",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/server-plugins.test.ts",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup.test.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/npm-managed-root.test.ts",
+            "additions": 32,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/npm-managed-root.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/install.npm-spec.test.ts",
+            "additions": 407,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/install.ts",
+            "additions": 39,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-87304",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87304.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 160,
+          "counts": {
+            "SUCCESS": 128,
+            "SKIPPED": 30,
+            "IN_PROGRESS": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-core-runtime-infra-file-safety:IN_PROGRESS"
+          ],
+          "pending": [
+            "checks-node-core-runtime-infra-file-safety:IN_PROGRESS"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3584,
+    "total_ms": 2604,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 397
+        "ms": 510
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2899
+        "ms": 1834
       },
       {
         "name": "classify_commands",
@@ -214,7 +516,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 260
+        "ms": 231
       },
       {
         "name": "append_ledger",
