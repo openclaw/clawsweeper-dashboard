@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-01T11:59:46.156Z",
+  "generated_at": "2026-06-01T12:00:03.633Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-01T08:59:43.307Z",
+  "since": "2026-06-01T09:00:03.321Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    88645
+    89069
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,137 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88645:4586916129:2026-06-01T11:59:39Z:clawsweeper_auto_repair",
-      "comment_id": "4586916129",
-      "comment_version_key": "4586916129:2026-06-01T11:59:39Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/88645#issuecomment-4586916129",
-      "repo": "openclaw/openclaw",
-      "issue_number": 88645,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-31T13:54:34Z",
-      "comment_updated_at": "2026-06-01T11:59:39Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=5db1b98eeb979c72c1ce6cfd8a3671e68b5203de)",
-      "review_summary": "The branch adds a JSON5 fallback to `parseStreamingJson`, changes OpenAI completions tool-call argument accumulation, and adds parser unit tests for linked llama.cpp cron argument corruption.\n\nPR surface: Source +37, Tests +133. Total +170 across 3 files.\n\nReproducibility: yes. for the patch defects from source: the active embedded OpenAI transport still appends raw argument chunks, and the new tail-skip branch drops valid repeated incremental fragments. I did not run a live llama.cpp reproduction.",
-      "review_followup": "- [P1] Contributor action is needed for code fixes and real behavior proof; automation should not take over while the external proof gate is still missing.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "5db1b98eeb979c72c1ce6cfd8a3671e68b5203de",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(llm): use JSON5 as intermediate fallback in parseStreamingJson to avoid partial-json key corruption",
-        "body": "## Summary\n\nTwo-part fix for JSON key corruption when local llamacpp models stream tool call arguments (issue #88439):\n\n1. **Streaming chunk dedup** (`openai-completions.ts`): Detect servers that re-send the full accumulated arguments in each delta (instead of incremental fragments). Prevents malformed JSON from overlapping content.\n\n2. **JSON5 fallback** (`json-parse.ts`): Insert JSON5.parse as an intermediate parser before partial-json. Handles non-strict JSON that local models may produce, without the key-concatenation bug in partial-json v0.1.7.\n\n## Root Cause\n\nllama.cpp servers can send the **full** accumulated tool call arguments in each streaming delta, not just the diff. The existing code blindly appends every delta:\n\n```\nprev: {\"name\": \"evidence-test\"\ndelta: {\"name\": \"evidence-test\", \"payload\": {...}}\naccumulated: {\"name\": \"evidence-test\"{\"name\": \"evidence-test\", \"payload\": {...}}\n```\n\nThis overlapping content is malformed JSON. When `JSON.parse` fails, `partial-json` tries to salvage it but corrupts adjacent keys: `\"name\"` + `\"payload\"` → `\"namePayload\"`.\n\n## Fix\n\n### Part 1: `openai-completions.ts` — streaming chunk dedup\n\nDetect overlapping deltas before accumulation:\n- If `delta.startsWith(prev)`: server is re-sending full content → replace\n- If `prev.endsWith(delta)`: duplicate tail → skip\n- Otherwise: normal incremental delta → append\n\n### Part 2: `json-parse.ts` — JSON5 fallback\n\nInsert JSON5.parse between `parseJsonWithRepair` and `partial-json` in the fallback chain. JSON5 (already a dep at v2.2.3) handles trailing commas, single quotes, comments, and unquoted keys that local models may produce.\n\n## Unit tests\n\n19 tests in `json-parse.test.ts`:\n- Upstream `\\u` escape repair tests (rebased)\n- Adjacent key regression test (exact pattern from #88439)\n- JSON5 trailing commas, single quotes, comments\n- Incomplete streaming fragments, control character repair\n- Invalid input, `repairJson` structure preservation\n\n## Real behavior proof\n\nBehavior or issue addressed: Two-fold: (1) llamacpp servers send overlapping tool call argument deltas causing JSON corruption; (2) partial-json v0.1.7 corrupts adjacent JSON keys when parsing malformed accumulated content.\n\nReal environment tested: macOS 15.4 (darwin arm64), Node.js v22.22.3.\n\nExact steps or command run after this patch: Ran unit tests (`json-parse.test.ts`) with the exact nested JSON structure from #88439 bug report plus additional edge cases. The streaming chunk dedup logic was verified by inspection against the specific failure pattern.\n\nEvidence after fix:\n```\n✓ parseStreamingJson › adjacent keys correctly (regression for #88439)\n✓ parseStreamingJson › JSON5 trailing commas\n✓ parseStreamingJson › JSON5 single-quoted strings\n✓ parseStreamingJson › JSON5 comments\n✓ repairJson invalid \\u escapes › repairs broken \\u\n✓ repairJson invalid \\u escapes › preserves valid \\uXXXX\n✓ repairJson invalid \\u escapes › recovers streaming tool-call args\n✓ parseStreamingJson › valid JSON, incomplete fragments, control chars\n✓ parseStreamingJson › empty/invalid input → {}\n✓ parseJsonWithRepair › parse, repair, throw\n✓ repairJson › escape newlines, preserve structure, preserve whitespace\n```\n19 tests pass, 0 fail.\n\nObserved result after fix:\n- JSON key concatenation cannot happen: valid JSON is parsed by `JSON.parse` directly. Non-strict JSON (trailing commas, etc.) is handled by JSON5. Overlapping streaming chunks are deduplicated before accumulation. Only as a last resort does partial-json handle truly incomplete fragments.\n- The exact corruption pattern from #88439 (`namePayload`, `scheduleKind`, `sessionTargetName`) produces 0 corrupted keys.\n\nWhat was not tested: Live end-to-end test with a real llama.cpp server. The streaming chunk dedup fix addresses the root cause identified from the failure pattern.\n\n## Related\n\nCloses #88439\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
-        "branch": "fix/parseStreamingJson-json5-fallback-88439",
-        "head_sha": "5db1b98eeb979c72c1ce6cfd8a3671e68b5203de",
-        "author": "whiteyzy",
-        "labels": [
-          "size: S",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/llm/providers/openai-completions.ts",
-            "additions": 15,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/utils/json-parse.test.ts",
-            "additions": 133,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/utils/json-parse.ts",
-            "additions": 23,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88645",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88645.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 161,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 31,
-            "SUCCESS": 124,
-            "IN_PROGRESS": 2,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-core-runtime-infra-file-safety:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:FAILURE",
-            "checks-node-agentic-control-plane-startup-core:IN_PROGRESS"
-          ],
-          "pending": [
-            "checks-node-core-runtime-infra-file-safety:IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-core:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-core-runtime-media-ui:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3208,
+    "total_ms": 517,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 431
+        "ms": 298
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2403
-      },
-      {
-        "name": "classify_commands",
         "ms": 2
       },
       {
+        "name": "classify_commands",
+        "ms": 0
+      },
+      {
         "name": "execute_commands",
-        "ms": 339
+        "ms": 205
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
