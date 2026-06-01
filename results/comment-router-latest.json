@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-01T07:33:24.675Z",
+  "generated_at": "2026-06-01T07:33:30.575Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-01T04:33:21.403Z",
+  "since": "2026-06-01T04:33:28.444Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    88983
+    88908
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88983:4590429987:2026-06-01T07:33:17Z:clawsweeper_auto_repair",
-      "comment_id": "4590429987",
-      "comment_version_key": "4590429987:2026-06-01T07:33:17Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/88983#issuecomment-4590429987",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88908:4589575955:2026-06-01T07:33:24Z:clawsweeper_auto_repair",
+      "comment_id": "4589575955",
+      "comment_version_key": "4589575955:2026-06-01T07:33:24Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88908#issuecomment-4589575955",
       "repo": "openclaw/openclaw",
-      "issue_number": 88983,
+      "issue_number": 88908,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-01T07:29:00Z",
-      "comment_updated_at": "2026-06-01T07:33:17Z",
+      "comment_created_at": "2026-06-01T04:31:56Z",
+      "comment_updated_at": "2026-06-01T07:33:24Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -52,39 +52,80 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=85ba7cdfbe884cc51a076b63dc691b02db38724c)",
-      "review_summary": "The PR attempts to clear gateway service marker env vars from the startup auto-update child command and expands the update-startup test expectation.\n\nPR surface: Source +2, Tests +6. Total +8 across 2 files.\n\nReproducibility: yes. source-backed: the service environment sets the markers, the startup updater spawns through `runCommandWithTimeout`, and the update guard blocks when those markers remain. I did not run a live launchd/npm auto-update path in this read-only review.",
-      "review_followup": "- [P1] The contributor needs to correct the env-removal implementation and add real behavior proof before merge; ClawSweeper repair should not replace missing external proof on this PR.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=40d049040eed308268855928895e879d5cebcefc)",
+      "review_summary": "The PR adds a gateway post-shutdown exit watchdog, shutdown-aware live-probe 503 responses, stricter supervised lock health checks, zombie-detection logs/traces, and focused regression tests.\n\nPR surface: Source +194, Tests +253. Total +447 across 8 files.\n\nReproducibility: yes. Current main shows /healthz returns 200 for live probes and lock recovery treats any status below 500 as healthy; the PR body also includes live terminal proof of the same predicate on rh-bot.lan.",
+      "review_followup": "- [P2] Needs author and maintainer handling before merge: fix the restart-killing watchdog, decide the live-probe compatibility contract, and refresh validation on the final shape.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "85ba7cdfbe884cc51a076b63dc691b02db38724c",
+      "expected_head_sha": "40d049040eed308268855928895e879d5cebcefc",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(update): strip service markers for auto updates",
-        "body": "Fixes #78492.\n\n## Summary\n- clears inherited `OPENCLAW_SERVICE_MARKER` / `OPENCLAW_SERVICE_KIND` for auto-update child commands\n- preserves `OPENCLAW_AUTO_UPDATE=1` so the update command still knows it is an auto-update run\n- extends the startup update test to cover the service-marker inheritance case\n\n## Test plan\n- `git diff --check`\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.infra.config.ts src/infra/update-startup.test.ts` (13 tests)\n\nNote: commit hook was skipped after the targeted test because this isolated worktree uses a temporary `node_modules` symlink; the hook attempted an interactive pnpm install and aborted before commit.\n",
-        "branch": "issue-78492-auto-update-env",
-        "head_sha": "85ba7cdfbe884cc51a076b63dc691b02db38724c",
-        "author": "alix-007",
+        "title": "fix(gateway): force exit on zombie shutdown + 503 healthz during shutdown",
+        "body": "## Summary\n\nOn rh-bot.lan at 2026-05-31 21:31 a gateway PID (71842) logged `[shutdown] completed cleanly in 5ms`, but the node process never exited. It held port 18789 for 2h13m. Every subsequent launchd-spawned gateway then took the lock-recovery path: probe `/healthz`, see 200 from the zombie, log `gateway already running under launchd; existing gateway is healthy, leaving it in control`, and exit 0. launchd's `KeepAlive.SuccessfulExit=false` kept new gateways down. The bot was offline for about 2h13m until manual `kill -9` plus `launchctl kickstart -k`.\n\nThe original SIGKILL of the parent process is the separate root cause documented in memory `project_rh_bot_isolated_session_sigkill.md` (`openclaw isolated-session` spawn pattern). This PR fixes the second-order defenses that should have prevented the zombie from blocking restart, not the SIGKILL itself.\n\n## Layer 1: force exit after every clean shutdown\n\n`src/gateway/server-close.ts:738` already logs `shutdown completed cleanly in Xms`, but a stray handle (HTTP keep-alive, telegram fetch, plugin native handle) can keep the event loop alive after every owned subsystem closed. `src/cli/gateway-cli/run-loop.ts:382` has an existing `armForceExitTimer(SHUTDOWN_TIMEOUT_MS)` safety net, but it only arms for `runAcceptedRequest` (signal-driven), not for the `closeOnStartupFailure` path in `src/gateway/server.impl.ts:1059`. That gap is exactly the rh-bot incident shape.\n\nThis PR adds `armGatewayPostShutdownExitWatchdog` in `server-close.ts`. After \"completed cleanly\" is logged, an unref'd `setTimeout` is armed (default 5_000ms, configurable via `OPENCLAW_GATEWAY_POST_SHUTDOWN_EXIT_TIMEOUT_MS`). When it fires:\n- emit a structured `shutdownLog.warn` with the active-handle constructor summary (via `process._getActiveHandles` or `getActiveResourcesInfo`)\n- record the `gateway.shutdown.zombie_detected` restart trace event for OTel/Loki\n- call `process.exit(0)`\n\nBecause the timer is unref'd, a healthy natural exit always wins. The watchdog only fires when something else holds the loop open. The injected callback shape (`armPostShutdownExitWatchdog` parameter on `createGatewayCloseHandler`) keeps vitest workers from killing themselves during the suite.\n\n## Layer 2: 503 on /healthz during shutdown, plus tighter preflight\n\nThe deployed `handleGatewayProbeRequest` in `src/gateway/server-http.ts` returns 200 unconditionally for `/healthz`. A zombie still holding its HTTP listener therefore answers 200, and `probeGatewayHealthz` in `src/cli/gateway-cli/run.ts:369` accepts it as healthy (success criterion was `statusCode < 500`). The lock-recovery loop then logs `gateway already running under launchd; existing gateway is healthy, leaving it in control` and returns void to the supervisor, which respawns nothing.\n\nThis PR adds a module-level shutting-down flag in `server-close.ts`, flipped to `shutting_down` at the start of the close handler (before any await). `handleGatewayProbeRequest` consults that flag via injectable `getShuttingDown` accessor (defaults to `isGatewayShuttingDown`). When live probes (`/health`, `/healthz`) run while shutting down, they return 503 with body `{ \"live\": false, \"phase\": \"shutting_down\" }`. A `gateway.healthz.shutting_down_response` warn log fires once per shutdown sequence so the cascade is queryable in Loki without spamming.\n\n`probeGatewayHealthz` is tightened to accept only `statusCode === 200`. The previous `< 500` admitted the new 503 (and any 4xx misconfig), defeating the layer 2 purpose. The lock-recovery loop now also emits `gateway.preflight.zombie_detected` (warn log plus restart trace event) when the lock is held but the probe is unhealthy, so subsequent supervisor cycles can be correlated.\n\nThe flag resets at the start of `startGatewayServer` so the in-process restart path returns to a `running` state before `/healthz` starts answering 200 again.\n\n## OTel / Loki instrumentation\n\nAll four events emit via the existing `gatewayLog`/`shutdownLog`/`gatewayProbeLog` subsystems plus `recordGatewayRestartTrace`:\n\n- `gateway.shutdown.zombie_detected` (Layer 1 trace) when the post-shutdown watchdog fires\n- `gateway.healthz.shutting_down_response` (Layer 2 warn log) when /healthz returns 503 during shutdown\n- `gateway.preflight.zombie_detected` (Layer 2 warn log + trace) when supervised lock recovery sees a held lock but an unhealthy probe\n- the existing `restart.close.total` trace already covers clean-path shutdown completion\n\nNo new export plumbing is needed; the existing diagnostics-otel / Loki shipper consumes these events.\n\n## Verification\n\nLocal Vitest with the patch applied:\n\n```\n$ node scripts/run-vitest.mjs run src/gateway/server-close.test.ts src/gateway/server-http.probe.test.ts src/gateway/probe.close-drain.test.ts src/gateway/server.preauth-hardening.test.ts src/cli/gateway-cli/run.supervised-lock.test.ts\nTest Files  4 passed (4)\n     Tests  59 passed (59)\nTest Files  1 passed (1)\n     Tests  10 passed (10)\n```\n\n`pnpm build` clean. `node scripts/run-oxlint-shards.mjs --only=core --threads=4` clean. `node scripts/check-dynamic-import-warts.mjs` shows only the pre-existing `mcp-cli.ts` advisory, unchanged by this PR.\n\n## Real behavior proof\n\nBehavior addressed: gateway zombie shutdown that left rh-bot offline 2h13m on 2026-05-31. With this PR the watchdog forces `process.exit(0)` so launchd reaps the PID, and `/healthz` returns 503 during shutdown so the next supervisor cycle does not defer to a draining instance.\n\nReal environment tested: live deployed openclaw gateway on rh-bot.lan, build SHA 23804e610c (incident reproducer). The deployed bundle is the exact code that exhibited the bug; the proof script exercises both the deployed predicate and the patched predicate against real HTTP servers, plus the watchdog state machine.\n\nExact steps or command run after this patch:\n\n```\nscp /tmp/proof-zombie-amittell.mjs alexm@rh-bot.lan:/tmp/proof-zombie-amittell.mjs\nssh alexm@rh-bot.lan 'cd /tmp && node proof-zombie-amittell.mjs'\nssh alexm@rh-bot.lan 'curl -s -o /dev/null -w \"%{http_code}\\n\" http://127.0.0.1:18789/healthz'\n```\n\nEvidence after fix:\n\n```\n== gateway zombie-shutdown fix proof ==\nhost: rh-bot.lan\nnode: v25.8.2\ndate: 2026-06-01T04:28:32.289Z\n\n[PASS] case1 deployed handler returns 200 mid-shutdown so old preflight defers to zombie :: accepted=true\n[PASS] case2 patched predicate (=== 200) rejects 503 as unhealthy :: accepted=false\n[PASS] case3 patched predicate accepts a healthy 200 response :: accepted=true\n[PASS] case4 watchdog calls exitProcess(0) after timeout :: exited=true; warnMessages=1\n[PASS] case4 watchdog warn log names the timeout in ms :: gateway shutdown completed but node process still alive after 50ms; forcing process.exit(0)\n[PASS] case5 cancelling the watchdog prevents the forced exit :: exited=false\n[PASS] case6a healthz returns 200 ok:true when running :: {\"statusCode\":200,\"body\":{\"ok\":true,\"status\":\"live\"}}\n[PASS] case6b healthz returns 503 live:false phase:shutting_down when shutdown started :: {\"statusCode\":503,\"body\":{\"live\":false,\"phase\":\"shutting_down\"}}\n\nPROOF SUMMARY  passed=8  failed=0\n```\n\nLive deployed gateway healthz hit (confirms the case 1 handler shape the proof script reproduces):\n\n```\n$ curl -s -w \"status=%{http_code}\\n\" http://127.0.0.1:18789/healthz\nstatus=200\n{\"ok\":true,\"status\":\"live\"}\n```\n\nObserved result after fix: case 1 confirms the deployed handler shape responsible for the incident. Cases 2 and 3 confirm the patched probe predicate. Cases 4 and 5 confirm the watchdog forces exit on the deployed Node runtime and stops cleanly when cancelled. Cases 6a and 6b confirm the healthz state machine returns the canonical 200 ok body when running and the 503 `{ live: false, phase: \"shutting_down\" }` body the moment the shutdown flag is set.\n\nWhat was not tested: a true end-to-end shutdown of a real OpenClaw gateway on rh-bot with the new bundle (requires deployment of this branch); the long-running TCP keepalive vs telegram-fetch handle-leak scenario, which the watchdog handles by design (any stray handle keeps the loop alive past the watchdog timeout, and the watchdog forces exit regardless of the specific handle source).\n",
+        "branch": "fix/gateway-shutdown-zombie-exit",
+        "head_sha": "40d049040eed308268855928895e879d5cebcefc",
+        "author": "amittell",
         "labels": [
-          "size: XS",
-          "triage: needs-real-behavior-proof",
-          "P2",
+          "gateway",
+          "cli",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
           "rating: 🧂 unranked krab",
-          "status: 📣 needs proof"
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/infra/update-startup.test.ts",
-            "additions": 6,
+            "path": "src/cli/gateway-cli/run.supervised-lock.test.ts",
+            "additions": 93,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/gateway-cli/run.ts",
+            "additions": 18,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-close.test.ts",
+            "additions": 91,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-close.ts",
+            "additions": 134,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/infra/update-startup.ts",
+            "path": "src/gateway/server-http.probe.test.ts",
+            "additions": 72,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-http.ts",
+            "additions": 37,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-runtime-state.ts",
             "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.impl.ts",
+            "additions": 5,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
@@ -92,26 +133,32 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88983",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88983.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-88908",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88908.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 162,
+          "total": 166,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 31,
-            "SUCCESS": 128,
+            "SUCCESS": 131,
+            "SKIPPED": 30,
+            "FAILURE": 4,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:CANCELLED"
+            "checks-node-agentic-control-plane-agent-chat:FAILURE",
+            "checks-node-agentic-control-plane-auth-node:FAILURE",
+            "checks-node-agentic-control-plane-startup-core:FAILURE",
+            "checks-node-agentic-gateway-core:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
+            "checks-node-agentic-control-plane-agent-chat:FAILURE",
+            "checks-node-agentic-control-plane-auth-node:FAILURE",
+            "checks-node-agentic-control-plane-startup-core:FAILURE",
+            "checks-node-agentic-gateway-core:FAILURE"
           ]
         }
       },
@@ -122,15 +169,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3628,
+    "total_ms": 2333,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 507
+        "ms": 327
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2750
+        "ms": 1790
       },
       {
         "name": "classify_commands",
@@ -138,7 +185,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 345
+        "ms": 189
       },
       {
         "name": "append_ledger",
