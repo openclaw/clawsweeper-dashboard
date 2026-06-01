@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-01T22:12:54.390Z",
+  "generated_at": "2026-06-01T22:13:19.758Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-01T19:12:51.668Z",
+  "since": "2026-06-01T19:13:17.911Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    89038
+    89040
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
-  "commands_seen": 2,
+  "scanned_comments": 4,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89038:4591486635:2026-06-01T22:12:49Z:clawsweeper_auto_repair",
-      "comment_id": "4591486635",
-      "comment_version_key": "4591486635:2026-06-01T22:12:49Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89038#issuecomment-4591486635",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89040:4591541970:2026-06-01T22:13:15Z:clawsweeper_auto_repair",
+      "comment_id": "4591541970",
+      "comment_version_key": "4591541970:2026-06-01T22:13:15Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4591541970",
       "repo": "openclaw/openclaw",
-      "issue_number": 89038,
+      "issue_number": 89040,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-01T09:55:53Z",
-      "comment_updated_at": "2026-06-01T22:12:49Z",
+      "comment_created_at": "2026-06-01T10:02:20Z",
+      "comment_updated_at": "2026-06-01T22:13:15Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -52,63 +52,87 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=8044f234b8356cb0e141dcce91a3e1cfa8d3307b)",
-      "review_summary": "The PR adds send-capability filtering to outbound channel plugin resolution, drains QQBot pending deliveries on gateway ready/resumed callbacks, and adds focused unit tests for both paths.\n\nPR surface: Source +58, Tests +222. Total +280 across 4 files.\n\nReproducibility: yes. by source and issue evidence: current main returns the first matching loaded channel plugin, while https://github.com/openclaw/openclaw/issues/88955 includes timed QQBot reconnect logs with the exact outbound error. I did not independently rerun a live QQBot 4009 reconnect in this read-only review.",
-      "review_followup": "- [P1] Human review should request the resolver-scope fix and contributor-supplied reconnect-drain proof; automation cannot provide the external QQBot environment evidence.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=1b037d67a295dbe581f20955878817bec4037404)",
+      "review_summary": "The PR changes embedded-run bootstrap context loading to async file reads, capped extra-bootstrap glob traversal, yielded internal hooks, bootstrap timing logs, and focused tests.\n\nPR surface: Source +156, Tests +213. Total +369 across 8 files.\n\nReproducibility: unclear. the linked issue has concrete timing/liveness logs, and current main still has sync bootstrap reads plus uncapped glob expansion, but I did not reproduce the 14-22s event-loop stall locally.",
+      "review_followup": "- [P1] Human review is needed because contributor real-behavior proof is missing and the extra-bootstrap cap is a compatibility/product decision, not a purely mechanical repair lane.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "8044f234b8356cb0e141dcce91a3e1cfa8d3307b",
+      "expected_head_sha": "1b037d67a295dbe581f20955878817bec4037404",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix: skip setup-only channel plugins in outbound resolution and drain pending deliveries on qqbot reconnect",
-        "body": "## Summary\n\nWhen the qqbot WebSocket reconnects after a session timeout (close code `4009`), `resolveOutboundChannelPlugin()` returns a setup-only plugin stub that lacks any send capability. This causes the `\"Outbound not configured for channel: qqbot\"` error, and all messages queued during the disconnection window are permanently lost.\n\n## Root Cause\n\n`resolveOutboundChannelPlugin()` resolves the first matching plugin entry for a channel id without verifying that the entry actually has send capability (`outbound.sendText`, `message.send.text`, etc.). During qqbot WebSocket reconnection, a setup-only plugin entry (registered for configuration/pairing but not for message delivery) shadows the real sending plugin, causing the resolution to short-circuit with a non-functional stub.\n\nRegression introduced in 2026.5.28 (commit `e932160`).\n\n## Fix\n\n### 1. Outbound channel resolution guard (`channel-resolution.ts`)\n\nAdd a `channelPluginCanSend()` predicate that checks for any of the 10 known send methods across both the legacy `outbound` adapter and the newer `message.send` adapter:\n\n- `outbound.sendText / sendMedia / sendPayload / sendPoll / sendFormattedText / sendFormattedMedia`\n- `message.send.text / media / payload / poll`\n\nAll six resolution paths (three pre-bootstrap, three post-bootstrap) now use this guard. Setup-only entries are skipped and the fallback chain continues to the next candidate.\n\n### 2. Drain pending deliveries on qqbot reconnect (`extensions/qqbot/src/channel.ts`)\n\nThe `onReady` and `onResumed` gateway callbacks now call `drainPendingDeliveries()` from the plugin SDK delivery queue runtime, recovering messages that were queued while the WebSocket was disconnected. The drain is:\n\n- Filtered by channel (`qqbot`) and account id, with a fallback for default-account entries where `accountId` may be `undefined`\n- Deduplicated via `drainKey` to prevent concurrent drains\n- Wrapped in try/catch so drain failures do not break the reconnection flow\n\n## Tests\n\n- `channel-resolution.test.ts`: 15 tests (3 new — setup-only skip, legacy outbound adapter, poll-only outbound)\n- `channel.test.ts`: 2 tests (new file — onReady drain, onResumed drain)\n- `deliver.test.ts`: 93 tests (regression suite, all passing)\n\nFixes #88955.\n\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: After a QQ Bot WebSocket disconnect (session takeover / close code 4009), `resolveOutboundChannelPlugin()` returned a setup-only plugin stub instead of the runtime entry, causing `\"Outbound not configured for channel: qqbot\"` and dropping all pending deliveries.\n\n- **Real environment tested**: Local patched OpenClaw checkout at `5fe751e6e7f` (branch `fix/qqbot-reconnect-outbound-88955`), macOS arm64, Node.js v24.10.0. QQ Bot plugin `@openclaw/qqbot@2026.5.31-beta.4` with live QQ Bot credentials (appId `1904107660`).\n\n- **Failing proof before fix**: On stock OpenClaw 2026.5.28 (the regression-introducing version, commit `e932160`), the `@openclaw/qqbot` plugin's dual-entry architecture registers both a setup-only entry and a runtime entry for channel id `qqbot`. During reconnect windows, `resolveOutboundChannelPlugin()` could resolve the setup-only entry (which lacks any send methods), producing `\"Outbound not configured for channel: qqbot\"`. The `channelPluginCanSend()` guard did not exist prior to this patch.\n\n- **Exact steps run after this patch**:\n  1. Built and installed patched OpenClaw from fix branch (`npm pack --ignore-scripts && npm install -g`)\n  2. Installed `@openclaw/qqbot@2026.5.31-beta.4` plugin (has setup-only + runtime dual-entry architecture)\n  3. Configured live QQ Bot credentials, started gateway — plugin connected successfully (WebSocket connected → Gateway ready)\n  4. Verified normal message round-trip: sent QQ message \"hahahallo\" → bot received, processed, replied with text + voice (200 OK)\n  5. Forced WebSocket disconnect via session takeover (new WebSocket connection with same credentials sends Identify, QQ server drops old connection)\n  6. Confirmed disconnect: 3.5-minute gap in qqbot logs (22:33:03 → 22:36:40), no heartbeat activity\n  7. **During disconnect window**: ran `openclaw message send --channel qqbot --target \"<userId>\" --message \"断连测试消息\"` to trigger outbound resolution while WebSocket was down\n  8. Message delivered successfully: `✅ Sent via QQ Bot. Message ID: ROBOT1.0_bU8K...`\n  9. Verified user received the message on QQ client\n\n- **Evidence after fix**:\n  ```\n  # Outbound send during disconnect — successful\n  $ openclaw message send --channel qqbot --target \"60D51AA744175ECB336F8BA726468001\" --message \"断连测试消息\"\n  ✅ Sent via QQ Bot. Message ID: ROBOT1.0_bU8KkObuKOskqTqPWOnbBj30UZOk0fCrcK95whqQlWOXrB1qbm06Cbt56Q.gxh3Me1IT-VtSHZYJq6DdMVS76w!!\n\n  # Full log scan — zero occurrences of the error\n  $ grep -c \"Outbound not configured\" ~/Library/Logs/openclaw/gateway.log\n  0\n\n  # Inbound message after reconnect — also successful\n  [22:36:40] Processing message from 60D51AA7...: hahahallo\n  [22:36:59] Sent markdown chunk (28/28 chars) with 0 HTTP images (c2c)\n  [22:37:03] Sent local media: voice-...mp3\n  ```\n\n- **Observed result after fix**: The `channelPluginCanSend()` guard correctly skipped the setup-only plugin entry (which has no `sendText`/`sendMedia`/etc. methods) and resolved the runtime entry with full send capability. Outbound messages sent during the WebSocket disconnect window were delivered successfully instead of being dropped with an error.\n\n- **What was not tested**: The `drainPendingDeliveries()` mechanism (Fix 2 in qqbot plugin's `onReady`/`onResumed` callbacks) was not independently verified because the outbound resolution fix (Fix 1) prevented message loss at the core level. Live 4009 close-code-triggered reconnect was simulated via session takeover rather than waiting for a natural heartbeat timeout. Multi-shard configurations were not tested.\n",
-        "branch": "fix/qqbot-reconnect-outbound-88955",
-        "head_sha": "8044f234b8356cb0e141dcce91a3e1cfa8d3307b",
+        "title": "perf: avoid event-loop stall during embedded_run bootstrap-context",
+        "body": "## Summary\n\nFix event-loop stalls during `embedded_run` bootstrap-context that block the event loop for 14-22 seconds, causing message loss.\n\n### Root causes addressed\n\n1. **Synchronous file I/O** — `readFileSync`/`closeSync` in workspace file loading blocks the event loop while reading root bootstrap files (AGENTS.md, SOUL.md, etc.)\n2. **Unbounded glob walks** — `fs.glob` for extra bootstrap files traverses the entire workspace tree without limits, including `.git`/`node_modules` directories\n3. **Uninterrupted hook chains** — `triggerInternalHook` executes all handlers back-to-back without yielding\n\n### Changes\n\n**`src/agents/workspace.ts`**\n- Replace sync `readFileSync`/`closeSync` with callback-based async `readFdToString`/`closeFdAsync`\n- Parallelize root bootstrap file reads via `Promise.all` (previously serial `for` loop)\n- Bound glob walks: visit limit (20,000), match limit (128), `setImmediate` yield every 256 entries\n- Exclude `.git`, `node_modules`, `dist`, `.next`, `.turbo`, `__pycache__` from glob traversal\n- Suppress `closeFdAsync` rejections to avoid masking read errors on NFS/FUSE\n\n**`src/hooks/internal-hooks.ts`**\n- Add `yieldBetweenHandlers` option with `setImmediate` yield between hook handlers\n- Add per-handler timing instrumentation with handler index reporting\n- Log warnings for slow handlers exceeding 500ms threshold\n\n**`src/agents/embedded-agent-runner/run/attempt.ts`**\n- Instrument bootstrap-context substages (`workspace-file-load`, `hook-overrides`) with `performance.now` timing\n- Log substage durations when total bootstrap-context exceeds 2 seconds\n- Enable `yieldBetweenHandlers` for `agent:bootstrap` hook triggers\n\n**`src/agents/bootstrap-files.ts`** / **`src/agents/bootstrap-hooks.ts`**\n- Support new async workspace file loading and timing callback interfaces\n\n### Tests\n\n- `workspace.test.ts` — 3 new tests for async fd read (happy path, cache hit, fd close on failure)\n- `workspace.load-extra-bootstrap-files.test.ts` — 2 new tests for ignored directory filtering and glob match cap enforcement\n- `internal-hooks.test.ts` — 3 new tests for yield-between-handlers ordering, handler timing reporting, and slow handler warning\n\nAll existing tests pass without modification.\n\n### Performance impact\n\n- Root bootstrap file loading: serial sync → parallel async (estimated 3-5x speedup for 8 files)\n- Glob walks: unbounded → capped at 20K entries with periodic yields (prevents multi-second stalls on large workspaces)\n- Hook chains: uninterrupted → yielded (prevents monopolizing the event loop during bootstrap)\n\nCloses #87509\n",
+        "branch": "fix/bootstrap-context-event-loop-stall",
+        "head_sha": "1b037d67a295dbe581f20955878817bec4037404",
         "author": "jerry-xin",
         "labels": [
-          "size: M",
-          "channel: qqbot",
+          "agents",
+          "size: L",
           "triage: needs-real-behavior-proof",
           "P1",
           "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 session-state",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "extensions/qqbot/src/channel.test.ts",
-            "additions": 164,
+            "path": "src/agents/bootstrap-files.ts",
+            "additions": 9,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/qqbot/src/channel.ts",
-            "additions": 31,
+            "path": "src/agents/bootstrap-hooks.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 72,
+            "deletions": 41,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/workspace.load-extra-bootstrap-files.test.ts",
+            "additions": 41,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/workspace.test.ts",
+            "additions": 101,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/workspace.ts",
+            "additions": 121,
+            "deletions": 28,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/internal-hooks.test.ts",
+            "additions": 71,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/internal-hooks.ts",
+            "additions": 25,
             "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/channel-resolution.test.ts",
-            "additions": 66,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/channel-resolution.ts",
-            "additions": 33,
-            "deletions": 4,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89038",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89038.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89040",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89040.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
@@ -116,85 +140,38 @@
         "checks": {
           "total": 156,
           "counts": {
-            "FAILURE": 9,
-            "SUCCESS": 124,
-            "SKIPPED": 22,
+            "FAILURE": 2,
+            "SUCCESS": 130,
+            "SKIPPED": 23,
             "NEUTRAL": 1
           },
           "blockers": [
             "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-heartbeat-runner:FAILURE",
-            "checks-node-core-runtime-infra-outbound-actions:FAILURE",
-            "checks-node-core-runtime-infra-outbound-core:FAILURE",
-            "checks-node-core-runtime-cron-isolated-agent:FAILURE",
-            "checks-node-agentic-gateway-methods:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
+            "check-lint:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
             "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-heartbeat-runner:FAILURE",
-            "checks-node-core-runtime-infra-outbound-actions:FAILURE",
-            "checks-node-core-runtime-infra-outbound-core:FAILURE",
-            "checks-node-core-runtime-cron-isolated-agent:FAILURE",
-            "checks-node-agentic-gateway-methods:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
+            "check-lint:FAILURE"
           ]
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
       "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89038:4593723067:2026-06-01T14:50:12Z:re_review",
-      "comment_id": "4593723067",
-      "comment_version_key": "4593723067:2026-06-01T14:50:12Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89038#issuecomment-4593723067",
-      "repo": "openclaw/openclaw",
-      "issue_number": 89038,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-01T14:50:12Z",
-      "comment_updated_at": "2026-06-01T14:50:12Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3763,
+    "total_ms": 2050,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 259
+        "ms": 286
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2447
+        "ms": 1546
       },
       {
         "name": "classify_commands",
@@ -202,7 +179,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1028
+        "ms": 189
       },
       {
         "name": "append_ledger",
