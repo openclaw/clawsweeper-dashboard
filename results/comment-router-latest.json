@@ -1,15 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-01T16:47:52.004Z",
+  "generated_at": "2026-06-01T16:47:54.999Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-01T13:47:50.863Z",
+  "since": "2026-06-01T13:47:52.065Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    75767
+    85982
+  ],
+  "comment_ids": [
+    4594641505
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,17 +34,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:75767:4594591318:2026-06-01T16:39:38Z:re_review",
-      "comment_id": "4594591318",
-      "comment_version_key": "4594591318:2026-06-01T16:39:38Z",
-      "comment_url": "https://github.com/openclaw/openclaw/issues/75767#issuecomment-4594591318",
+      "idempotency_key": "comment-router:openclaw/openclaw:85982:4594641505:2026-06-01T16:46:31Z:re_review",
+      "comment_id": "4594641505",
+      "comment_version_key": "4594641505:2026-06-01T16:46:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85982#issuecomment-4594641505",
       "repo": "openclaw/openclaw",
-      "issue_number": 75767,
-      "author": "Enominera",
-      "author_id": 10228818,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-01T16:39:38Z",
-      "comment_updated_at": "2026-06-01T16:39:38Z",
+      "issue_number": 85982,
+      "author": "kiranmagic7",
+      "author_id": 262980978,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-01T16:46:31Z",
+      "comment_updated_at": "2026-06-01T16:46:31Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -63,24 +66,63 @@
       "actions": [],
       "author_repository_permission": "read",
       "target": {
-        "kind": "issue",
-        "state": "open",
-        "locked": false,
-        "title": "openclaw gateway restart hangs on macOS with SMB-mounted volumes (lsof stat() timeout)",
-        "body": "\n## Description\n\n### Environment\n- **OS**: macOS 15.x (Darwin 25.4.0, arm64)\n- **Node**: v25.8.2\n- **OpenClaw**: 2026.4.26 (be8c246)\n- **Network mounts**: Synology DS224plus via SMB, used for Time Machine backup\n  - Mount path: `/Volumes/.timemachine/DS224plus._smb._tcp.local./.../Mac_backup`\n\n### Symptoms\nRunning `openclaw gateway restart` or `openclaw gateway --force` causes the process to hang for extended periods (30s to minutes). During the hang, the following warning repeats many times:\n\n```\nlsof: WARNING: can't stat() smbfs file system /Volumes/.timemachine/DS224plus._smb._tcp.local./XXXX/Mac_backup\n      Output information may be incomplete.\n      assuming \"dev=3600007c\" from mount table\n```\n\nEventually it either times out or fails with:\n```\nForce: Error: lsof permission denied while inspecting gateway port: ...\n```\n\n### Root Cause Analysis\nOpenClaw's port-checking logic uses `lsof` in **4 separate call sites** across 3 files:\n\n| File | Function | Call Type |\n|------|----------|-----------|\n| `ports-bfXSW6vy.js` | `readUnixListeners` | async `runCommandWithTimeout` |\n| `ports-CUmvj7Fu.js` | `listPortListeners` | sync `execFileSync` (used by `--force`) |\n| `restart-stale-pids-*.js` | `findGatewayPidsOnPortSync` | sync `spawnSync` |\n| `restart-stale-pids-*.js` | `pollPortOnce` | sync `spawnSync` |\n\nThe command used is: `lsof -nP -iTCP:{port} -sTCP:LISTEN -FpFc[n]`\n\nOn macOS, `lsof` traverses **all mounted filesystems** to build its file descriptor table, **even when the `-i` flag limits results to a single network port**. When an SMB/NFS mount is unresponsive (e.g., NAS is busy with Time Machine backup, network congestion, disk sleep wake-up), `lsof` blocks for the SMB timeout (10-30s+) on each `stat()` call.\n\nThis affects every CLI operation that needs to inspect port 18789, causing the Gateway restart sequence to feel like it takes \"10+ minutes\" as it goes through multiple retry/timeout cycles.\n\n### Attempted workaround: `-b` flag\nThe `lsof -b` flag (which skips blocking kernel calls like `stat()`, `readlink()`) was tested but does **not** resolve the issue — macOS `lsof` still traverses SMB mounts at the VFS layer regardless of `-b`.\n\n### Proposed fix\nReplace `lsof`-based port checking with a pure Node.js approach:\n\n```js\n// Instead of calling lsof, probe directly:\nconst net = require('net');\nconst server = net.createServer();\nserver.listen(port, '127.0.0.1', () => {\n  server.close(); // port is free\n});\nserver.on('error', (err) => {\n  if (err.code === 'EADDRINUSE') /* port is busy */;\n});\n```\n\nThis would be immune to filesystem mount issues and also faster than spawning `lsof`.\n\nAlternatively, at minimum, the `readUnixListeners` async code path already has a `ss` (socket statistics) fallback — extending this to the sync paths or making the sync paths async could help.",
-        "author": "Enominera",
+        "kind": "pull_request",
+        "title": "fix(models): dedupe implicit CLI runtime aliases",
+        "body": "## Summary\n- Prune implicit CLI runtime alias provider rows from `/models` provider data when the canonical provider already owns the same model.\n- Derive CLI runtime alias ownership from the registered runtime and setup CLI backend bindings instead of a static bundled alias table.\n- Preserve explicit legacy CLI runtime refs, including configured exact refs and wildcard/provider-visible cases, so existing user configs do not disappear.\n- Preserve explicit full-catalog CLI runtime provider browsing: `/models claude-cli all` still lists `claude-cli/*` rows even when canonical `anthropic/*` rows exist.\n- Add regression coverage for bundled aliases, runtime-registered custom aliases, setup-registered custom aliases, explicit legacy preservation, canonical models routed through CLI runtime policy, and the explicit CLI provider `all` browse path.\n\nAI-assisted: yes. I reviewed the diff and understand the command/data path changed here.\n\n## Real behavior proof\nBehavior addressed: `/models` should not show implicit CLI runtime alias providers as duplicate provider rows when the canonical provider already owns the same model; explicit legacy CLI runtime refs and `/models <cli-provider> all` remain intentionally reachable.\n\nReal environment tested: local source checkout on macOS Darwin 25.3.0 arm64, Node `v25.6.1`, pnpm `11.2.2`, branch `fix-models-dedupe-runtime-aliases`, head `a9166136a5164b061ad194746f8db91c5d423a9f`.\n\nExact steps or command run after this patch: ran the affected `/models` command-handler test path on the current head with the exact duplicate provider fixtures and the new registry-backed cases:\n\n```text\nnode scripts/run-vitest.mjs run --config test/vitest/vitest.auto-reply.config.ts src/auto-reply/reply/commands-models.test.ts -t 'dedupes runtime-registered custom CLI aliases|dedupes setup-registered custom CLI aliases|dedupes implicit CLI runtime providers|preserves explicit CLI runtime provider full-catalog browse|preserves explicitly configured legacy CLI runtime provider refs' --reporter=verbose\n```\n\nEvidence after fix:\n\n```text\nPASS src/auto-reply/reply/commands-models.test.ts > handleModelsCommand > dedupes implicit CLI runtime providers when canonical providers already list the same models\nPASS src/auto-reply/reply/commands-models.test.ts > handleModelsCommand > preserves explicit CLI runtime provider full-catalog browse\nPASS src/auto-reply/reply/commands-models.test.ts > handleModelsCommand > dedupes runtime-registered custom CLI aliases\nPASS src/auto-reply/reply/commands-models.test.ts > handleModelsCommand > dedupes setup-registered custom CLI aliases\nPASS src/auto-reply/reply/commands-models.test.ts > handleModelsCommand > preserves explicitly configured legacy CLI runtime provider refs\n\nTest Files  1 passed (1)\nTests  5 passed | 30 skipped (35)\n```\n\nObserved result after fix: the command-handler path now prunes implicit duplicate CLI runtime provider rows for bundled, runtime-registered custom, and setup-registered custom aliases when the canonical provider already lists the model. The same proof also verifies that `/models claude-cli all` still shows the CLI catalog and that explicitly configured legacy `claude-cli/<model>` refs still keep the CLI provider visible.\n\nWhat was not tested: I did not capture native Telegram Desktop proof. The focused proof exercises the shared command-handler/provider-data path used by text and channel menu renderers; broader CI covers the rest of the command surface.\n\n## Verification\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.auto-reply.config.ts src/auto-reply/reply/commands-models.test.ts` passed: 1 file, 35 tests.\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.auto-reply.config.ts src/auto-reply/reply/commands-models.test.ts -t 'dedupes runtime-registered custom CLI aliases|dedupes setup-registered custom CLI aliases|dedupes implicit CLI runtime providers|preserves explicit CLI runtime provider full-catalog browse|preserves explicitly configured legacy CLI runtime provider refs' --reporter=verbose` passed: 5 targeted tests, 30 skipped.\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.agents-core.config.ts src/agents/model-runtime-aliases.test.ts src/agents/model-catalog-browse.test.ts src/agents/model-catalog.test.ts` passed: 3 files, 56 tests.\n- `pnpm check:test-types` passed.\n- `pnpm exec oxlint src/agents/cli-backends.ts src/agents/model-runtime-aliases.ts src/auto-reply/reply/commands-models.ts src/auto-reply/reply/commands-models.test.ts` passed.\n- `git diff --check` passed.\n\n## Compatibility / risk\n- Compatibility risk: default `/models` browse intentionally stops exposing implicit CLI runtime alias providers as separate provider rows when canonical provider rows cover the same models.\n- Preserved behavior: explicit legacy CLI runtime refs and explicit `/models <cli-provider> all` browse remain available.\n- Security/supply-chain risk: no dependencies, workflows, secrets handling, package scripts, or auth/token storage paths changed.\n\nFixes #83342\n\n",
+        "branch": "fix-models-dedupe-runtime-aliases",
+        "head_sha": "a9166136a5164b061ad194746f8db91c5d423a9f",
+        "author": "kiranmagic7",
         "labels": [
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
           "P2",
-          "clawsweeper:needs-live-repro",
-          "impact:crash-loop",
-          "issue-rating: 🐚 platinum hermit"
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider",
+          "status: 📣 needs proof"
         ],
+        "files": [
+          {
+            "path": "src/agents/model-runtime-aliases.ts",
+            "additions": 106,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/commands-models.test.ts",
+            "additions": 179,
+            "deletions": 28,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/commands-models.ts",
+            "additions": 134,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "open_prs": [],
-        "issue_implementation_cluster_id": "issue-openclaw-openclaw-75767",
-        "issue_implementation_job_path": "jobs/openclaw/inbox/issue-openclaw-openclaw-75767.md",
-        "mode": "autonomous"
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85982",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85982.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 156,
+          "counts": {
+            "SUCCESS": 132,
+            "SKIPPED": 23,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
@@ -89,15 +131,15 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 1475,
+    "total_ms": 3194,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 548
+        "ms": 672
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 393
+        "ms": 2246
       },
       {
         "name": "classify_commands",
@@ -105,7 +147,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 335
+        "ms": 260
       },
       {
         "name": "append_ledger",
