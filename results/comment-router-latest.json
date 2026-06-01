@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-01T22:11:26.373Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-01T22:11:55.437Z",
+  "repo": "steipete/CodexBar",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-01T19:11:23.930Z",
+  "since": "2026-06-01T19:11:53.917Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    89039
+    1259
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 1,
+  "scanned_comments": 7,
+  "commands_seen": 4,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,175 +31,322 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89039:4591504568:2026-06-01T22:11:20Z:clawsweeper_auto_repair",
-      "comment_id": "4591504568",
-      "comment_version_key": "4591504568:2026-06-01T22:11:20Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-4591504568",
-      "repo": "openclaw/openclaw",
-      "issue_number": 89039,
+      "idempotency_key": "clawsweeper-repair:steipete/CodexBar:1259:4589898025:2026-06-01T22:11:51Z:clawsweeper_needs_human",
+      "comment_id": "4589898025",
+      "comment_version_key": "4589898025:2026-06-01T22:11:51Z",
+      "comment_url": "https://github.com/steipete/CodexBar/pull/1259#issuecomment-4589898025",
+      "repo": "steipete/CodexBar",
+      "issue_number": 1259,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-01T09:57:55Z",
-      "comment_updated_at": "2026-06-01T22:11:20Z",
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-01T05:47:43Z",
+      "comment_updated_at": "2026-06-01T22:11:51Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=1e7989e4841e09dfde8accb659e612be37343d70)",
-      "review_summary": "The PR wraps embedded steering writes in owned transcript writes, adds session-takeover resend handling and phase diagnostics, and defaults OpenAI SDK request retries to zero across OpenAI transports with focused tests.\n\nPR surface: Source +36, Tests +164. Total +200 across 13 files.\n\nReproducibility: no. live high-confidence reproduction was run in this read-only review. Source inspection supports the current-main path: queued steering can write outside the owned transcript context while the session lock fence can detect takeover and abort fallback as local coordination failure.",
-      "review_followup": "- [P1] The PR needs contributor real behavior proof plus maintainer review or repair of the retry-default compatibility and preserved-prompt-error findings before merge.",
+      "repair_reason": "- No automated repair is needed; maintainer final review and normal merge checks are the remaining action.; Cleared: Cleared: the diff only reorders local WebView scrape-state handling and adds tests/logging; it does not change dependencies, scripts, secrets handling, or permissions. (sha=64f8282d0194e6a71e53825079c2e2147f147261)",
+      "review_summary": "The PR reorders OpenAI dashboard WebView scrape handling so login/Cloudflare states throw before route reloads, adds a reload predicate and blocking-state log, and adds focused XCTest coverage.\n\nReproducibility: yes. by source inspection: current main reloads non-usage hrefs before it throws login/Cloudflare blocking states in the relevant WebView paths. The PR body also includes an after-fix WKWebView terminal run showing the login-required exit.",
+      "review_followup": "- No automated repair is needed; maintainer final review and normal merge checks are the remaining action.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "1e7989e4841e09dfde8accb659e612be37343d70",
+      "expected_head_sha": "64f8282d0194e6a71e53825079c2e2147f147261",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix: prevent silent message loss from EmbeddedAttemptSessionTakeoverError",
-        "body": "## Summary\n\nWhen the OpenAI SDK retried an `ECONNRESET` internally (default `maxRetries=2`), the session write lock was released during the retry window. Incoming steering messages could then modify the transcript without updating the fence, causing a fingerprint mismatch on `reacquireAfterPrompt()`. The resulting `EmbeddedAttemptSessionTakeoverError` was caught by `model-fallback.ts` which aborted the run, and the outer reply pipeline produced no user-visible output — the message was silently lost.\n\n## Root Cause Chain\n\n```\nAPI ECONNRESET\n  → OpenAI SDK default maxRetries=2, internal retry\n  → session write lock released during retry window\n  → incoming message arrives via queueHandle.queueMessage\n  → activeSession.steer writes directly (bypassing withOwnedSessionTranscriptWrites)\n  → transcript changes without updating fence\n  → original attempt reacquireAfterPrompt() fingerprint mismatch\n  → EmbeddedAttemptSessionTakeoverError thrown\n  → model-fallback.ts aborts the run\n  → outer layer hits generic failure branch\n  → assistantTexts/payloads never enter buildReplyPayloads()\n  → message silently lost (user sees generic error or nothing)\n```\n\n## Fix\n\nFour coordinated changes that address the bug at multiple layers:\n\n### 1. Wrap steering in `withOwnedSessionTranscriptWrites` (`attempt.ts`)\nSteering writes that arrive during prompt lock release now go through `withOwnedSessionTranscriptWrites`, keeping fence tracking consistent and preventing the fingerprint mismatch that triggers the takeover error.\n\n### 2. Dedicated error handler for takeover (`agent-runner-execution.ts`, `failover-error.ts`)\nAdded `isEmbeddedAttemptSessionTakeoverError()` export and a dedicated catch block in `runAgentTurnWithFallback`. Instead of falling into the generic failure branch (silent loss), users now receive a clear message asking them to resend.\n\n### 3. Disable OpenAI SDK internal retries (`openai-completions.ts`, `openai-responses-shared.ts`, `openai-transport-stream.ts`)\nSet `maxRetries: 0` across all three OpenAI transport paths so retry logic is controlled at the higher model-fallback level, not inside the SDK where it can release and reacquire locks unexpectedly. The `options?.maxRetries` passthrough is preserved for callers that explicitly need SDK-level retries.\n\n### 4. Phase tracking in `EmbeddedAttemptSessionTakeoverError` (`attempt.session-lock.ts`)\nAdded a `phase` field (`prompt_reacquire`, `cleanup`, `write`, `fence_check`) for better diagnostics when this error does occur. Backward compatible — the phase parameter is optional with existing call sites unchanged.\n\n## Tests\n\nAll affected test suites pass (609 tests total):\n\n| Test File | Tests |\n|-----------|-------|\n| `attempt.session-lock.test.ts` | 45 |\n| `failover-error.test.ts` | 83 |\n| `agent-runner-execution.test.ts` | 153 |\n| `openai-completions.test.ts` | 17 |\n| `openai-responses-shared.test.ts` | 8 |\n| `model-fallback.test.ts` | 76 |\n| `openai-transport-stream.test.ts` | 227 |\n\nNew test coverage includes:\n- Backward compatibility for `assertSessionFileFence` without phase parameter\n- Takeover detection during owned steering writes\n- `isEmbeddedAttemptSessionTakeoverError` export validation\n- User-facing error message for session takeover scenario\n- SDK retries disabled by default across all transport paths\n- `buildOpenAISdkRequestOptions` always returns `maxRetries: 0`\n\n## Changed Files (13 files, +221/-20)\n\n- `src/agents/embedded-agent-runner/run/attempt.session-lock.ts`\n- `src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts`\n- `src/agents/embedded-agent-runner/run/attempt.ts`\n- `src/agents/failover-error.ts`\n- `src/agents/failover-error.test.ts`\n- `src/auto-reply/reply/agent-runner-execution.ts`\n- `src/auto-reply/reply/agent-runner-execution.test.ts`\n- `src/llm/providers/openai-completions.ts`\n- `src/llm/providers/openai-completions.test.ts`\n- `src/llm/providers/openai-responses-shared.ts`\n- `src/llm/providers/openai-responses-shared.test.ts`\n- `src/agents/openai-transport-stream.ts`\n- `src/agents/openai-transport-stream.test.ts`\n\nFixes #87180\n",
-        "branch": "fix/session-takeover-silent-message-loss-87180",
-        "head_sha": "1e7989e4841e09dfde8accb659e612be37343d70",
-        "author": "jerry-xin",
+        "title": "Fix OpenAI webview route reload loop",
+        "body": "## Summary\nFix the OpenAI dashboard route reload logic so blocking states are handled before wrong-route reload.\n\n## Context\nPart of the UI hang/lag cleanup set: this stops a WebView reload loop from continuing when the page is already in a login or Cloudflare blocking state.\n\n## Validation\n- `swift test --filter OpenAIDashboardFetcherCreditsWaitTests`\n- `make check`\n- `git diff --check`\n\n## Runtime Proof\nFocused route-state proof:\n\n```text\n$ swift test --filter OpenAIDashboardFetcherCreditsWaitTests\nTest \"usage route reload skips blocking states\" with 3 test cases passed:\n- href=https://chatgpt.com/#usage, loginRequired=true -> expected false\n- href=https://chatgpt.com/, cloudflareInterstitial=true -> expected false\n- href=https://chatgpt.com/, no blocking state -> expected true\nTest run with 29 tests in 1 suite passed\n```\n\nReal WebView proof at `64f8282d`, captured June 1, 2026 at 00:30 PDT with a throwaway SwiftPM runner outside the repo. It imports the local `CodexBarCore` product, creates a nonpersistent `WKWebView`, uses no browser cookies, and calls `OpenAIDashboardFetcher.loadLatestDashboard` directly:\n\n```text\n$ swift run --package-path /tmp/codexbar-pr1259-webview-runner.PJhUmF OpenAIWebProof\n[openai-web] [webview] href=https://chatgpt.com/#usage login=true workspace=false cloudflare=false\n[openai-web] [webview] blocking state before route reload route=other login=true cloudflare=false\nRESULT loginRequired elapsed=1.23s\n```\n\nThat proves the login blocking state exits before a route reload attempt. The proof output contains no account, token, cookie, or host data.\n\n`make check` and `git diff --check` both passed after the final patch.\n",
+        "branch": "codex/openai-webview-blocking-state-loop",
+        "head_sha": "64f8282d0194e6a71e53825079c2e2147f147261",
+        "author": "prospectore",
         "labels": [
-          "agents",
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "P2",
+          "proof: sufficient",
+          "rating: 🦞 diamond lobster",
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts",
-            "additions": 68,
-            "deletions": 0,
+            "path": "Sources/CodexBarCore/OpenAIWeb/OpenAIDashboardFetcher.swift",
+            "additions": 56,
+            "deletions": 15,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.ts",
-            "additions": 22,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 4,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/failover-error.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/failover-error.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openai-transport-stream.test.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openai-transport-stream.ts",
-            "additions": 2,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
-            "additions": 32,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.ts",
+            "path": "Tests/CodexBarTests/OpenAIDashboardFetcherCreditsWaitTests.swift",
             "additions": 19,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/openai-completions.test.ts",
-            "additions": 17,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/openai-completions.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/openai-responses-shared.test.ts",
-            "additions": 45,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/openai-responses-shared.ts",
-            "additions": 1,
-            "deletions": 1,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89039",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89039.md",
+        "automerge_cluster_id": "automerge-steipete-codexbar-1259",
+        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1259.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 158,
+          "total": 4,
           "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 133,
-            "SKIPPED": 23,
-            "NEUTRAL": 1
+            "IN_PROGRESS": 3,
+            "SUCCESS": 1
           },
           "blockers": [
-            "Real behavior proof:FAILURE"
+            "lint-build-test:IN_PROGRESS",
+            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
+            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
           ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
+          "pending": [
+            "lint-build-test:IN_PROGRESS",
+            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
+            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
+          ],
+          "terminalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:steipete/CodexBar:1259:4590838380:2026-06-01T08:26:59Z:re_review",
+      "comment_id": "4590838380",
+      "comment_version_key": "4590838380:2026-06-01T08:26:59Z",
+      "comment_url": "https://github.com/steipete/CodexBar/pull/1259#issuecomment-4590838380",
+      "repo": "steipete/CodexBar",
+      "issue_number": 1259,
+      "author": "ProspectOre",
+      "author_id": 54486432,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-01T08:26:59Z",
+      "comment_updated_at": "2026-06-01T08:26:59Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:steipete/CodexBar:1259:4590432261:2026-06-01T07:29:20Z:re_review",
+      "comment_id": "4590432261",
+      "comment_version_key": "4590432261:2026-06-01T07:29:20Z",
+      "comment_url": "https://github.com/steipete/CodexBar/pull/1259#issuecomment-4590432261",
+      "repo": "steipete/CodexBar",
+      "issue_number": 1259,
+      "author": "ProspectOre",
+      "author_id": 54486432,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-01T07:29:20Z",
+      "comment_updated_at": "2026-06-01T07:29:20Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "Fix OpenAI webview route reload loop",
+        "body": "## Summary\nFix the OpenAI dashboard route reload logic so blocking states are handled before wrong-route reload.\n\n## Context\nPart of the UI hang/lag cleanup set: this stops a WebView reload loop from continuing when the page is already in a login or Cloudflare blocking state.\n\n## Validation\n- `swift test --filter OpenAIDashboardFetcherCreditsWaitTests`\n- `make check`\n- `git diff --check`\n\n## Runtime Proof\nFocused route-state proof:\n\n```text\n$ swift test --filter OpenAIDashboardFetcherCreditsWaitTests\nTest \"usage route reload skips blocking states\" with 3 test cases passed:\n- href=https://chatgpt.com/#usage, loginRequired=true -> expected false\n- href=https://chatgpt.com/, cloudflareInterstitial=true -> expected false\n- href=https://chatgpt.com/, no blocking state -> expected true\nTest run with 29 tests in 1 suite passed\n```\n\nReal WebView proof at `64f8282d`, captured June 1, 2026 at 00:30 PDT with a throwaway SwiftPM runner outside the repo. It imports the local `CodexBarCore` product, creates a nonpersistent `WKWebView`, uses no browser cookies, and calls `OpenAIDashboardFetcher.loadLatestDashboard` directly:\n\n```text\n$ swift run --package-path /tmp/codexbar-pr1259-webview-runner.PJhUmF OpenAIWebProof\n[openai-web] [webview] href=https://chatgpt.com/#usage login=true workspace=false cloudflare=false\n[openai-web] [webview] blocking state before route reload route=other login=true cloudflare=false\nRESULT loginRequired elapsed=1.23s\n```\n\nThat proves the login blocking state exits before a route reload attempt. The proof output contains no account, token, cookie, or host data.\n\n`make check` and `git diff --check` both passed after the final patch.\n",
+        "branch": "codex/openai-webview-blocking-state-loop",
+        "head_sha": "64f8282d0194e6a71e53825079c2e2147f147261",
+        "author": "prospectore",
+        "labels": [
+          "P2",
+          "proof: sufficient",
+          "rating: 🦞 diamond lobster",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "Sources/CodexBarCore/OpenAIWeb/OpenAIDashboardFetcher.swift",
+            "additions": 56,
+            "deletions": 15,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Tests/CodexBarTests/OpenAIDashboardFetcherCreditsWaitTests.swift",
+            "additions": 19,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-steipete-codexbar-1259",
+        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1259.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 4,
+          "counts": {
+            "IN_PROGRESS": 3,
+            "SUCCESS": 1
+          },
+          "blockers": [
+            "lint-build-test:IN_PROGRESS",
+            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
+            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
+          ],
+          "pending": [
+            "lint-build-test:IN_PROGRESS",
+            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
+            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:steipete/CodexBar:1259:4590122744:2026-06-01T06:35:03Z:re_review",
+      "comment_id": "4590122744",
+      "comment_version_key": "4590122744:2026-06-01T06:35:03Z",
+      "comment_url": "https://github.com/steipete/CodexBar/pull/1259#issuecomment-4590122744",
+      "repo": "steipete/CodexBar",
+      "issue_number": 1259,
+      "author": "ProspectOre",
+      "author_id": 54486432,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-01T06:35:03Z",
+      "comment_updated_at": "2026-06-01T06:35:03Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "Fix OpenAI webview route reload loop",
+        "body": "## Summary\nFix the OpenAI dashboard route reload logic so blocking states are handled before wrong-route reload.\n\n## Context\nPart of the UI hang/lag cleanup set: this stops a WebView reload loop from continuing when the page is already in a login or Cloudflare blocking state.\n\n## Validation\n- `swift test --filter OpenAIDashboardFetcherCreditsWaitTests`\n- `make check`\n- `git diff --check`\n\n## Runtime Proof\nFocused route-state proof:\n\n```text\n$ swift test --filter OpenAIDashboardFetcherCreditsWaitTests\nTest \"usage route reload skips blocking states\" with 3 test cases passed:\n- href=https://chatgpt.com/#usage, loginRequired=true -> expected false\n- href=https://chatgpt.com/, cloudflareInterstitial=true -> expected false\n- href=https://chatgpt.com/, no blocking state -> expected true\nTest run with 29 tests in 1 suite passed\n```\n\nReal WebView proof at `64f8282d`, captured June 1, 2026 at 00:30 PDT with a throwaway SwiftPM runner outside the repo. It imports the local `CodexBarCore` product, creates a nonpersistent `WKWebView`, uses no browser cookies, and calls `OpenAIDashboardFetcher.loadLatestDashboard` directly:\n\n```text\n$ swift run --package-path /tmp/codexbar-pr1259-webview-runner.PJhUmF OpenAIWebProof\n[openai-web] [webview] href=https://chatgpt.com/#usage login=true workspace=false cloudflare=false\n[openai-web] [webview] blocking state before route reload route=other login=true cloudflare=false\nRESULT loginRequired elapsed=1.23s\n```\n\nThat proves the login blocking state exits before a route reload attempt. The proof output contains no account, token, cookie, or host data.\n\n`make check` and `git diff --check` both passed after the final patch.\n",
+        "branch": "codex/openai-webview-blocking-state-loop",
+        "head_sha": "64f8282d0194e6a71e53825079c2e2147f147261",
+        "author": "prospectore",
+        "labels": [
+          "P2",
+          "proof: sufficient",
+          "rating: 🦞 diamond lobster",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "Sources/CodexBarCore/OpenAIWeb/OpenAIDashboardFetcher.swift",
+            "additions": 56,
+            "deletions": 15,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Tests/CodexBarTests/OpenAIDashboardFetcherCreditsWaitTests.swift",
+            "additions": 19,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-steipete-codexbar-1259",
+        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1259.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 4,
+          "counts": {
+            "IN_PROGRESS": 3,
+            "SUCCESS": 1
+          },
+          "blockers": [
+            "lint-build-test:IN_PROGRESS",
+            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
+            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
+          ],
+          "pending": [
+            "lint-build-test:IN_PROGRESS",
+            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
+            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2778,
+    "total_ms": 3142,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 390
+        "ms": 384
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2035
+        "ms": 1116
       },
       {
         "name": "classify_commands",
@@ -207,11 +354,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 322
+        "ms": 1610
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
