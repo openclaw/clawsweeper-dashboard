@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-01T05:24:22.573Z",
+  "generated_at": "2026-06-01T05:24:42.276Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-01T02:24:22.203Z",
+  "since": "2026-06-01T02:24:39.395Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    79305
+    88923
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +29,111 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88923:4589706606:2026-06-01T05:24:17Z:clawsweeper_auto_repair",
+      "comment_id": "4589706606",
+      "comment_version_key": "4589706606:2026-06-01T05:24:17Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88923#issuecomment-4589706606",
+      "repo": "openclaw/openclaw",
+      "issue_number": 88923,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-01T05:05:37Z",
+      "comment_updated_at": "2026-06-01T05:24:17Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=a5dae6de85d990b9a82173d0c281fd34b78e42d6)",
+      "review_summary": "The PR adds an unhandled-rejection classifier for bundled dist module rotation and tests export-mismatch/module-not-found cases so the gateway exits with a clean restart reason after in-place package upgrades.\n\nPR surface: Source +49, Tests +51. Total +100 across 2 files.\n\nReproducibility: yes. for the introduced review finding: source inspection shows any `ERR_MODULE_NOT_FOUND` message containing `runtime.js` satisfies the new classifier. The original in-place upgrade race was not live-reproduced here; the PR relies on deterministic classifier cases.",
+      "review_followup": "- [P2] A narrow automated repair can tighten the classifier and add focused negative coverage without choosing a new product direction.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "a5dae6de85d990b9a82173d0c281fd34b78e42d6",
+      "finding_id": "review-feedback",
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): restart cleanly on bundled dist module rotation after in-place upgrade",
+        "body": "### Summary\n\n- **Problem**: Issue #88857 reports that the gateway crashes with an unhandled `SyntaxError` claiming `./provider-discovery.runtime.js` does not export `n` — even though the export is present in the bundled file — after an in-place package upgrade (`npm i -g openclaw@latest` via the updater) while the process keeps running. It surfaces as a mysterious crash and writes an `unhandled_rejection` stability bundle.\n- **Root Cause**: The lazy runtime boundaries are emitted on **stable filenames** (`*.runtime.js`, see `tsdown.config.ts`) but their minified **export names** vary per build. After an in-place upgrade, a content-hashed chunk already loaded in the running process lazily imports a stable-named `*.runtime.js` whose rebuilt copy on disk now exports a differently minified name, so Node raises `SyntaxError: ... does not provide an export named 'n'` (or `ERR_MODULE_NOT_FOUND` for a rotated chunk). The module graph is broken and the rejection falls through `installUnhandledRejectionHandler` to the default path, which logs it as an unhandled rejection and writes a crash stability bundle. A build-level \"stable export names\" change would only help *future* upgrades — where both the running and replacing builds already carry stable names — and only for the export-mismatch branch, not `ERR_MODULE_NOT_FOUND` and not the build already in memory expecting the old name. Because the importing chunk is already loaded, the only correct response to \"old process + replaced files\" is a clean restart onto the consistent new build, so a runtime safety net is needed regardless of any build-side hardening.\n- **Fix**: Recognize this dist module-graph rotation in the unhandled-rejection handler and restart cleanly instead of crashing.\n  - `isDistModuleRotationError(err)` classifies a `SyntaxError` with `does not provide an export named` (or an `ERR_MODULE_NOT_FOUND`) whose error message names a `*runtime.js` boundary, walking the cause chain via the existing `collectNestedUnhandledErrorCandidates`.\n  - The handler logs it as the expected in-place-upgrade event and exits via `exitWithTerminalRestore` with a distinct `dist_module_rotation` reason, so the supervisor restart reloads the new build and the stability bundle is no longer labelled a generic crash.\n  - The match reads the error **message** (which names the requested/missing module), never the stack, so a third-party `dist/` path in a stack frame can never trigger it.\n- **What changed**:\n  - `src/infra/unhandled-rejections.ts` — add the `isDistModuleRotationError` classifier and branch it ahead of the default unhandled-rejection exit.\n  - `src/infra/unhandled-rejections.test.ts` — classifier coverage (positive + scoping negatives).\n- **What did NOT change (scope boundary)**:\n  - The bundler/build config (`tsdown.config.ts`) is untouched — ruled out as ineffective for the already-running process and risky for bundle size/determinism.\n  - The existing classifiers, the fatal/config/transient branches, and the uncaught-exception path are unchanged.\n  - No config surface (no schema, defaults, doctor migrations, or `docs/reference/config`).\n  - No plugin surface (no plugin SDK, manifest, `extensions/*` api/runtime-api, registry/loader).\n  - Gateway protocol unchanged.\n  - The updater's own upgrade sequence is unchanged. This is the survive half (recover when a running process meets a rotated `dist/`). A complementary *prevention* — sequencing the in-place updater so the old process is stopped before `dist/` is replaced, removing the race window entirely — is left as a follow-up, since it is separate updater/service-sequencing work and this safety net is still needed for external upgrades and for the residual window.\n\n### Reproduction\n\n1. Run a long-lived gateway from a global install (`npm i -g openclaw`).\n2. Upgrade in place under the running process (`npm i -g openclaw@latest`, as the updater does), rotating `dist/` chunk hashes while the old chunks stay in memory.\n3. A path that lazily imports a `*.runtime.js` boundary runs after the upgrade.\n4. **Before this PR**: Node raises `SyntaxError: ... does not provide an export named 'n'`; it falls through to the default handler and is logged as `[openclaw] Unhandled promise rejection`, writing an `unhandled_rejection` stability bundle — looks like a mysterious crash.\n5. **After this PR**: the handler classifies it as a dist module rotation, logs `Bundled dist changed under the running gateway (in-place upgrade); restarting to load the new build`, and exits cleanly with reason `dist_module_rotation` so the supervisor restart loads the consistent new build.\n\n### Real behavior proof\n\n**Behavior addressed (#88857)**: the in-place-upgrade export-name mismatch is no longer a mysterious unhandled-rejection crash; it is classified and exits as an expected, clearly-logged restart that reloads the new build.\n\n**Real environment tested (Linux, Node 22 — Vitest against the production `isDistModuleRotationError` classifier)**: the classifier is exercised directly with the reporter's exact `SyntaxError`, with `ERR_MODULE_NOT_FOUND`, with a cause-chain wrapper, and with scoping negatives.\n\n**Exact steps or command run after this patch**: `pnpm test src/infra/unhandled-rejections.test.ts`; `pnpm test src/infra/unhandled-rejections.fatal-detection.test.ts`; `pnpm tsgo`; `pnpm exec oxfmt --check` and `node scripts/run-oxlint.mjs` on the changed files.\n\n**Evidence after fix (Vitest output for the touched test file)**:\n\n```text\n unhandled-rejections.test.ts   Tests  71 passed (71)\n```\n\nThe six new cases: match the export-name mismatch from a rotated dist runtime boundary (#88857), match `ERR_MODULE_NOT_FOUND` for a rotated dist chunk, match when wrapped in a cause chain, and three scoping negatives — a genuine source `SyntaxError`, an export-mismatch outside the bundled dist, and a third-party `ERR_MODULE_NOT_FOUND` — all of which stay on the normal fatal path.\n\n**Observed result after fix**: a dist runtime-boundary rotation error (export mismatch or rotated-chunk not-found) is classified true and routed to a clean `dist_module_rotation` restart; unrelated SyntaxErrors, non-runtime export mismatches, and third-party missing modules classify false and keep crashing/exiting as before.\n\n**What was not tested**: a live in-place `npm i -g` upgrade under a running launchd gateway on the reporter's macOS host. The classification and handler routing are covered deterministically against the production function; a full upgrade-under-load round-trip was not driven.\n\n**Repro confirmation**: each new case fails on a pristine tree (`isDistModuleRotationError is not a function`) and passes with the fix, so the tests cover the production change.\n\n### Risk / Mitigation\n\n- **Risk**: Misclassifying an unrelated error as a benign restart could mask a real crash. **Mitigation**: the match requires both a specific signature (export-name mismatch `SyntaxError` or `ERR_MODULE_NOT_FOUND`) and a `*runtime.js` boundary named in the message; negatives are covered by tests.\n- **Risk**: A genuine packaging regression — a release that truly ships a `*runtime.js` missing an export — hits the same signature and is reframed from a loud `unhandled_rejection` crash into a quieter \"in-place upgrade restart\", which can make a real build defect look benign. **Mitigation**: it does not introduce a new crash loop (the prior default path already exited and the supervisor already restarted into the same broken build); the restart reason is still logged distinctly (`dist_module_rotation`) so a repeating one is greppable. This is an accepted trade for the common in-place-upgrade case, called out here explicitly.\n- **Risk**: Reading only the message could miss a variant that names the module only in the stack. **Mitigation**: ESM export-mismatch and `ERR_MODULE_NOT_FOUND` both name the requested/missing module in the message; using the message avoids the false positives that stack frames (e.g. `node_modules/*/dist/*.js`) would introduce.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [x] CI/CD / infra\n\n### Linked Issue/PR\n\nFixes #88857\n",
+        "branch": "fix/88857-dist-module-rotation",
+        "head_sha": "a5dae6de85d990b9a82173d0c281fd34b78e42d6",
+        "author": "openperf",
+        "labels": [
+          "size: S",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/infra/unhandled-rejections.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/unhandled-rejections.ts",
+            "additions": 49,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-88923",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88923.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 130,
+            "SKIPPED": 31,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 806,
+    "total_ms": 3213,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 356
+        "ms": 435
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 2431
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 437
+        "ms": 321
       },
       {
         "name": "append_ledger",
