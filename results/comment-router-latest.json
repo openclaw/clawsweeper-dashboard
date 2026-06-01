@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-01T05:26:23.484Z",
+  "generated_at": "2026-06-01T05:27:28.876Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-01T02:26:23.027Z",
+  "since": "2026-06-01T02:27:26.444Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    79274
+    79894
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 2,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +29,128 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:79894:4413090405:2026-06-01T05:12:01Z:clawsweeper_needs_human",
+      "comment_id": "4413090405",
+      "comment_version_key": "4413090405:2026-06-01T05:12:01Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/79894#issuecomment-4413090405",
+      "repo": "openclaw/openclaw",
+      "issue_number": 79894,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-09T17:15:30Z",
+      "comment_updated_at": "2026-06-01T05:12:01Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=24b0dc76df2e7c87ed3d309b5142623baf3e24b9)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +35, Tests +58. Total +93 across 2 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "24b0dc76df2e7c87ed3d309b5142623baf3e24b9",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(github-copilot): expose thinking profile via bundled provider-policy-api",
+        "body": "## Problem\n\n`/think xhigh` works on Discord (`#general`, `#fitness`, etc.) for `github-copilot/claude-opus-4.7-1m-internal` and other xhigh-eligible Copilot models, but the dashboard:\n\n- Drops `xhigh` from the thinking-level dropdown for these models\n- Rejects `/think xhigh` from the dashboard slash command with: `Unsupported thinking level \"xhigh\" for this model. Valid levels: off, minimal, low, medium, high.`\n- Silently downgrades sessions previously set to `xhigh` back to `high` after a refresh\n\n## Root cause\n\nOther extensions (`anthropic`, `openai`, `deepseek`, `google`, `ollama`, `opencode`, `openrouter`, `deepinfra`) all ship a `provider-policy-api.ts` artifact at `extensions/<id>/provider-policy-api.ts` that gets bundled to `dist/extensions/<id>/provider-policy-api.js` and loaded synchronously by `resolveBundledProviderPolicySurface` whenever something needs to know a provider's thinking profile **without** going through the lazy plugin loader.\n\n`extensions/github-copilot` is the odd one out — no `provider-policy-api.ts` was ever shipped. As a result, callers like `getSessionDefaults` and `resolveSessionRowThinkingLevels` (used by `sessions.list` for the dashboard) hit `resolveProviderThinkingProfile` in `src/auto-reply/thinking.ts`, which:\n\n1. Tries the active plugin registry (`globalThis[Symbol.for(\"openclaw.pluginRegistryState\")].activeRegistry.providers`) — which has `providers: []` at gateway-startup time for these calls\n2. Falls back to `resolveBundledProviderPolicySurface(\"github-copilot\")` — which returns null because the artifact is missing\n3. Falls through to the generic base profile `[off, minimal, low, medium, high]` — dropping `xhigh` from the dashboard's thinking-level dropdown\n\nDiscord-side and main-agent calls work because they go through `resolveProviderRuntimePlugin` → `resolveProviderPluginsForHooks`, which lazily loads the plugin's runtime entry. That's a **different code path** and sees the in-process `resolveThinkingProfile` from `extensions/github-copilot/index.ts`.\n\n## Fix\n\nAdd `extensions/github-copilot/provider-policy-api.ts`, mirroring the pattern in `extensions/anthropic/provider-policy-api.ts` and `extensions/openai/provider-policy-api.ts`. Exports a `resolveThinkingProfile` that returns the same level list as the in-process one in `extensions/github-copilot/index.ts`, including `xhigh` for the xhigh-supporting model ids (`gpt-5.4`, `gpt-5.3-codex`, `gpt-5.2`, `gpt-5.2-codex`, `claude-opus-4.7-1m-internal`).\n\nThe `COPILOT_XHIGH_MODEL_IDS` list is intentionally duplicated rather than re-exported from `./index.ts` because that module pulls in the full plugin runtime, while `provider-policy-api.ts` is loaded synchronously by the bundled-policy-surface path and must stay lightweight. The new file flags the requirement to keep the two lists in sync.\n\n## Verification\n\n- `pnpm test -- --run extensions/github-copilot/provider-policy-api.test.ts` — **5/5 passing**, covering:\n  - Base level set for non-xhigh models (`claude-opus-4.6`)\n  - `xhigh` appended for `claude-opus-4.7-1m-internal`\n  - `xhigh` appended for each GPT-5.4 / 5.3-codex / 5.2 / 5.2-codex variant\n  - Case-insensitive normalization of the model id\n  - `null` for non-`github-copilot` providers\n- Manually verified live by deploying the patched build to my local install and reloading the dashboard. Before the fix: dashboard `/think xhigh` rejected with \"Unsupported thinking level\". After the fix: `xhigh` appears in the dropdown for `claude-opus-4.7-1m-internal` and `/think xhigh` accepts cleanly.\n\n## Scope\n\n- 1 commit, 2 files, +92/-0\n- New file only — no behaviour change for other providers\n- Mirrors the existing pattern; no API surface changes\n",
+        "branch": "fix/copilot-thinking-policy-api",
+        "head_sha": "24b0dc76df2e7c87ed3d309b5142623baf3e24b9",
+        "author": "jakepresent",
+        "labels": [
+          "stale",
+          "size: S",
+          "triage: needs-real-behavior-proof",
+          "extensions: github-copilot",
+          "rating: 🌊 off-meta tidepool"
+        ],
+        "files": [
+          {
+            "path": "extensions/github-copilot/provider-policy-api.test.ts",
+            "additions": 58,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/github-copilot/provider-policy-api.ts",
+            "additions": 35,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-79894",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-79894.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 113,
+          "counts": {
+            "FAILURE": 7,
+            "SUCCESS": 79,
+            "SKIPPED": 26,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "build-artifacts:FAILURE",
+            "checks-fast-contracts-plugins-d:FAILURE",
+            "build-smoke:FAILURE",
+            "checks-fast-contracts-plugins:FAILURE",
+            "check-additional:FAILURE",
+            "checks-node-core:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "build-artifacts:FAILURE",
+            "checks-fast-contracts-plugins-d:FAILURE",
+            "build-smoke:FAILURE",
+            "checks-fast-contracts-plugins:FAILURE",
+            "check-additional:FAILURE",
+            "checks-node-core:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 728,
+    "total_ms": 2753,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 445
+        "ms": 494
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1922
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 272
+        "ms": 306
       },
       {
         "name": "append_ledger",
