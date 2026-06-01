@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-01T17:48:01.055Z",
+  "generated_at": "2026-06-01T17:48:04.489Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-01T14:47:57.762Z",
+  "since": "2026-06-01T14:48:01.120Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    89155
+    89168
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 4,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,21 +31,120 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89155:4594782340:2026-06-01T17:47:53Z:clawsweeper_needs_human",
-      "comment_id": "4594782340",
-      "comment_version_key": "4594782340:2026-06-01T17:47:53Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89155#issuecomment-4594782340",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89168:4595030135:2026-06-01T17:47:57Z:clawsweeper_needs_human",
+      "comment_id": "4595030135",
+      "comment_version_key": "4595030135:2026-06-01T17:47:57Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89168#issuecomment-4595030135",
       "repo": "openclaw/openclaw",
-      "issue_number": 89155,
+      "issue_number": 89168,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-01T17:06:26Z",
-      "comment_updated_at": "2026-06-01T17:47:53Z",
+      "comment_created_at": "2026-06-01T17:39:58Z",
+      "comment_updated_at": "2026-06-01T17:47:57Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
       "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] No narrow automated repair is identified; the remaining action is maintainer review of process-ownership safety and optional installed-browser validation.; Cleared: No concrete production security or supply-chain regression was found; the diff uses fixed-path lsof/ps probes and process signaling without shell execution, new dependencies, workflow changes, or secret handlin... (sha=286ac915cb8187f548d5de9aca59c7962e0e84ea)",
+      "review_summary": "Adds a guarded managed-browser recovery path that identifies and terminates a stale owned Chrome-family process holding a loopback CDP port, plus regression tests for ownership and safety boundaries.\n\nPR surface: Source +489, Tests +1799. Total +2288 across 3 files.\n\nReproducibility: yes. from source inspection: current main checks port availability before launch recovery, so a stale process holding the CDP port blocks managed Chrome startup. I did not execute the live stale-process repro in this read-only review.",
+      "review_followup": "- [P2] No narrow automated repair is identified; the remaining action is maintainer review of process-ownership safety and optional installed-browser validation.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "286ac915cb8187f548d5de9aca59c7962e0e84ea",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(browser): recover stale managed Chrome CDP listener",
+        "body": "## Summary\n\nFixes #41750.\n\nThis adds a guarded recovery path for the managed local browser profile when its loopback CDP port is still held by an unresponsive Chrome-family process from the same OpenClaw-managed profile. Instead of immediately failing launch with a port-in-use or CDP-timeout error, OpenClaw now proves local ownership of the blocker, gives it the normal launch readiness window to become healthy, and only then terminates the stale process before relaunching.\n\nThe recovery is intentionally narrow:\n\n- only applies to loopback managed profiles\n- requires the local `SingletonLock` owner host to match this host\n- requires the lock PID to still be alive and keep the same process identity before signaling\n- requires `lsof` to show that same PID listening on the exact CDP port\n- requires the process command line to match the configured browser executable family and the managed launch args\n- revalidates ownership before `SIGTERM`, before `SIGKILL`, and before deleting singleton artifacts\n- leaves malformed or unowned singleton locks in place rather than guessing\n\n## Root cause and user impact\n\nIssue #41750 reports a failure mode where a prior OpenClaw-managed Chrome process can keep the configured CDP port bound while no useful CDP endpoint is available. The next browser launch sees the port as occupied or waits for CDP readiness until it times out, so browser tooling remains unavailable until the stale process/profile is cleaned up manually.\n\nThe previous launch path treated an occupied loopback port as a hard blocker. That is correct for arbitrary processes, but too strict for a process that can be proven to be the exact stale browser instance OpenClaw launched for the same managed profile.\n\n## Implementation notes\n\nThe fix adds a recovery branch inside the managed Chrome launch path. When the configured loopback CDP port is in use, OpenClaw attempts recovery only after proving all of these facts from current machine state:\n\n1. The profile has a parseable `SingletonLock` owner for this hostname.\n2. The owner PID exists and has a stable identity snapshot.\n3. The same PID is listening on the exact requested TCP port according to `lsof`.\n4. The process command line matches the configured Chromium-family executable.\n5. The process was launched with the adjacent managed args: `--remote-debugging-port`, `--user-data-dir`, and `--no-first-run`.\n6. The CDP endpoint does not become ready during the configured local launch timeout window.\n\nOnly after those checks pass does recovery send `SIGTERM`, wait for the loopback port to close, escalate to `SIGKILL` only if the same process identity is still present, and then clear singleton artifacts only if the same lock owner is still present and the old PID identity is gone.\n\nLinux browser-family matching covers the resolver-supported Chromium families where the wrapper path can differ from the live binary path: Chrome, Chromium, Brave, Edge, Vivaldi, Opera, and Yandex Browser. macOS keeps stricter executable proof by requiring the `lsof -d txt` executable path plus a raw `ps` command prefix match.\n\n## Real behavior proof\n\nBehavior addressed: a stale, OpenClaw-owned managed Chrome process can keep the loopback CDP port bound but fail CDP readiness, blocking later browser launches.\n\nReal environment tested: local macOS checkout with a controlled compiled fake browser binary launched as a real child process, real loopback TCP port binding, real process signaling, real profile singleton files, and the OpenClaw browser launch path.\n\nExact steps or command run after this patch: ran a local proof fixture that created a temporary OpenClaw browser profile, wrote a `SingletonLock` for a stale managed process, started that process on the profile CDP port returning HTTP 503 for `/json/version`, then called `launchOpenClawChrome` with the same profile and executable path.\n\nEvidence after fix:\n\n```json\n{\n  \"port\": 50648,\n  \"stalePid\": 68025,\n  \"beforeStatus\": 503,\n  \"staleAliveAfterLaunch\": false,\n  \"launchedPid\": 68107,\n  \"cdpVersionServed\": true,\n  \"singletonExists\": false\n}\n```\n\nObserved result after fix: OpenClaw logged that it stopped the unresponsive managed Chrome process for the profile, relaunched the browser on the same loopback CDP port, the stale PID was no longer alive, the relaunched process served CDP `/json/version`, and the stale singleton lock was gone.\n\nWhat was not tested: I did not run this proof against real installed Google Chrome, Brave, Edge, Vivaldi, Opera, or Yandex Browser binaries across every OS. The real-behavior proof used a controlled browser binary so the stale-port and CDP-failure state could be reproduced deterministically without depending on a specific local browser install.\n\n## Regression tests\n\nAdded focused coverage for the recovery and safety boundaries, including:\n\n- recovering an unresponsive owned managed profile and retrying launch\n- not signaling when the owned browser becomes CDP-ready during the recovery grace window\n- Linux wrapper/live-binary matching for Chrome-family browsers\n- rejecting cross-family Linux executable matches\n- not escalating when the listener changes before `SIGKILL`\n- not clearing singleton artifacts when a different owner appears\n- not clearing singleton artifacts when the stopped PID is reused before cleanup\n- rejecting non-adjacent managed launch args\n- not stopping unrelated listeners or non-loopback profiles\n- avoiding CDP probes before ownership is established in the occupied-port paths\n- preserving malformed singleton locks instead of deleting unknown ownership state\n\n## Verification\n\nCommands run on the rebased head:\n\n```bash\npnpm exec vitest run extensions/browser/src/browser/chrome.test.ts extensions/browser/src/browser/chrome.internal.test.ts extensions/browser/src/browser/server-context.ensure-browser-available.waits-for-cdp-ready.test.ts --reporter dot\npnpm tsgo:extensions\npnpm exec oxfmt --check extensions/browser/src/browser/chrome.ts extensions/browser/src/browser/chrome.internal.test.ts extensions/browser/src/browser/chrome.test.ts\nnode scripts/run-oxlint.mjs extensions/browser/src/browser/chrome.ts extensions/browser/src/browser/chrome.internal.test.ts extensions/browser/src/browser/chrome.test.ts\ngit diff --check\n```\n\nResults:\n\n- focused Vitest command passed: 3 files, 135 tests\n- extension typecheck passed\n- formatting check passed\n- oxlint check passed\n- diff whitespace check passed\n\n## Duplicate and overlap check\n\nBefore publishing, I checked open and all-state PRs for the issue and affected symbols/files. I did not find an open PR closing #41750 or implementing this owned stale-CDP recovery. The only direct all-state hit was closed PR #41758, which targeted the old `src/browser/chrome.ts` path and did not provide this guarded ownership shape.\n\nNearby open PRs touched broader browser or process areas, but did not close #41750 and did not implement recovery for a proven owned managed browser process holding the CDP port.\n\n## Risks\n\nThe main risk is process ownership safety. The fix is conservative: if any proof step is missing or ambiguous, it does not signal the process and falls back to the existing failure behavior. This can leave some stale real-world states unrecovered, but avoids terminating unrelated local processes.\n\nThe malformed-lock behavior changes from opportunistic cleanup to preservation. That is intentional: a malformed `SingletonLock` target does not prove local ownership, so this patch leaves it in place instead of deleting unknown profile ownership state.\n\nDead-PID stale singleton cleanup without a live port owner is still out of scope for this patch. This only handles the issue's blocking case where a live stale managed process owns the profile and is holding the CDP port.\n",
+        "branch": "fix-browser-stale-managed-cdp",
+        "head_sha": "286ac915cb8187f548d5de9aca59c7962e0e84ea",
+        "author": "rohitjavvadi",
+        "labels": [
+          "size: XL",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "extensions/browser/src/browser/chrome.internal.test.ts",
+            "additions": 1790,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/browser/src/browser/chrome.test.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/browser/src/browser/chrome.ts",
+            "additions": 499,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89168",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89168.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 158,
+          "counts": {
+            "FAILURE": 1,
+            "CANCELLED": 2,
+            "SUCCESS": 123,
+            "SKIPPED": 32
+          },
+          "blockers": [
+            "Scan changed paths (precise):FAILURE",
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Scan changed paths (precise):FAILURE",
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89168:4595028520:2026-06-01T17:39:45Z:re_review",
+      "comment_id": "4595028520",
+      "comment_version_key": "4595028520:2026-06-01T17:39:45Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89168#issuecomment-4595028520",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89168,
+      "author": "rohitjavvadi",
+      "author_id": 76606932,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-01T17:39:45Z",
+      "comment_updated_at": "2026-06-01T17:39:45Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -61,92 +160,20 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(openrouter): forward OpenClaw session id as session_id",
-        "body": "Optionally forward the active OpenClaw session id to OpenRouter as the chat-completion session_id body field. OpenRouter uses it as a sticky routing key (better prompt-cache hits) and for observability. Opt-in per the OpenRouter plugin config (forwardSessionId), off by default; the id is clamped to OpenRouter's 256-char cap and never overrides a caller-set value.\r\n\r\n## Summary\r\n\r\nWhat problem does this PR solve?\r\n*   OpenRouter accepts a `session_id` to route requests to the same upstream provider, which maximizes prompt-cache hits and improves observability[cite: 1].\r\n*   OpenClaw already generates a stable per-session ID, but it was not being forwarded to OpenRouter[cite: 1].\r\n\r\nWhy does this matter now?\r\n*   Forwarding the session ID allows OpenRouter to keep a multi-turn OpenClaw session on one upstream provider[cite: 1].\r\n*   This improves cache economics and traceability for users[cite: 1].\r\n\r\nWhat is the intended outcome?\r\n*   Optionally forward the active OpenClaw session ID to OpenRouter as the `session_id` request-body field on chat-completion calls[cite: 1].\r\n*   This feature is opt-in, configured per model provider (OpenRouter) via the OpenRouter plugin config, and is off by default[cite: 1].\r\n*   The ID is clamped to OpenRouter's 256-character limit[cite: 1].\r\n*   If a caller-set value already exists, it is never overridden[cite: 1].\r\n\r\nWhat is intentionally out of scope?\r\n*   Image, music, video, media-understanding, or speech OpenRouter providers (this is for chat/text inference only)[cite: 1].\r\n*   Generic provider session forwarding (this is an OpenRouter-specific field)[cite: 1].\r\n*   Changing core SDK context types or the shared transport turn-state hook[cite: 1].\r\n*   Sending the `x-session-id` header (the body field is sufficient and takes precedence)[cite: 1].\r\n\r\nWhat does success look like?\r\n*   When enabled, the `session_id` is injected into the OpenRouter chat-completion body[cite: 1].\r\n*   When disabled, there is no change to existing behavior (byte-identical payloads)[cite: 1].\r\n\r\nWhat should reviewers focus on?\r\n*   The implementation in `extensions/openrouter/stream.ts`, specifically the payload-patch wrapper[cite: 1].\r\n*   The addition of the boolean flag in the OpenRouter plugin's `configSchema` (`extensions/openrouter/openclaw.plugin.json`)[cite: 1].\r\n*   The edge case handling (flag off, caller-set value, over-long ID)[cite: 1].\r\n\r\n<details>\r\n<summary>Summary guidance</summary>\r\n\r\nThis PR description is the contributor's durable explanation of the change. Write it for human maintainers first; ClawSweeper and Barnacle use the same text to understand intent, proof, risk, and current review state.\r\n\r\nDescribe the intent and outcome in 2-5 bullets. Avoid restating the diff; reviewers and bots can read the changed files.\r\n\r\nIf this PR fixes a plugin beta-release blocker, title it `fix(<plugin-id>): beta blocker - <summary>` and link the matching `Beta blocker: <plugin-name> - <summary>` issue labeled `beta-blocker`. Contributors cannot label PRs, so the title is the PR-side signal for maintainers and automation.\r\n\r\n</details>\r\n\r\n## Linked context\r\n\r\nWhich issue does this close?\r\n\r\nCloses #\r\n\r\nWhich issues, PRs, or discussions are related?\r\n\r\nRelated #\r\n\r\nWas this requested by a maintainer or owner?\r\n\r\n<details>\r\n<summary>Linked context guidance</summary>\r\n\r\nLink the issue, PR, discussion, maintainer request, or owner request that explains why this PR should exist. Maintainer context helps reviewers and automation distinguish intended work from drive-by churn.\r\n\r\n</details>\r\n\r\n## Real behavior proof (required for external PRs)\r\n\r\n- Behavior or issue addressed: Forwarding OpenClaw session id to OpenRouter as `session_id`.\r\n- Real environment tested: Local macOS environment.\r\n- Exact steps or command run after this patch: Enabled `forwardSessionId` and the debug proxy in OpenClaw, then sent a chat request.\r\n- Evidence after fix: \r\n  1. Intercepted payload captured in data blob `f8acf6e6aa9c226d0a30bdf5`.\r\n  2. Extracted `session_id` (`cc8e2503-a840-4fbe-814f-58ff91702d84`) from the proxy blob.\r\n  3. OpenRouter dashboard confirming the matching Session ID.\r\n- Observed result after fix: The session ID was correctly injected into the payload and successfully recognized by OpenRouter.\r\n- What was not tested: Non-OpenRouter providers.\r\n- Proof limitations or environment constraints: None.\r\n\r\n<img width=\"850\" height=\"890\" alt=\"Screenshot 2026-06-01 at 19 16 50\" src=\"https://github.com/user-attachments/assets/b03f40d2-e445-4f49-b6eb-914e2ad14515\" />\r\n<img width=\"929\" height=\"503\" alt=\"Screenshot 2026-06-01 at 19 13 17\" src=\"https://github.com/user-attachments/assets/fba48a77-d034-43b2-90f8-cf15a2903e0f\" />\r\n<img width=\"1021\" height=\"340\" alt=\"Screenshot 2026-06-01 at 19 19 40\" src=\"https://github.com/user-attachments/assets/3505f1f2-35e1-493c-91d2-8f097b0fb49d\" />\r\n\r\n\r\n## Tests and validation\r\n\r\nWhich commands did you run?\r\n*   `pnpm test extensions/openrouter`[cite: 1]\r\n\r\nWhat regression coverage was added or updated?\r\n*   Unit tests in the extension for flag on/off, caller-set payload, and over-256 ID[cite: 1].\r\n*   Negative testing to ensure non-OpenRouter routes do not get `session_id`[cite: 1].\r\n\r\nWhat failed before this fix, if known?\r\n*   N/A (Additive feature)\r\n\r\nIf no test was added, why not?\r\n*   N/A\r\n\r\n<details>\r\n<summary>Testing guidance</summary>\r\n\r\nList focused commands, not every incidental check. CI is useful support, but external PRs still need real behavior proof above when behavior changes.\r\n\r\n</details>\r\n\r\n## Risk checklist\r\n\r\nDid user-visible behavior change? (`Yes/No`)\r\n*   No (Opt-in feature, default off)[cite: 1]\r\n\r\nDid config, environment, or migration behavior change? (`Yes/No`)\r\n*   Yes (New opt-in flag added to OpenRouter plugin configSchema)[cite: 1]\r\n\r\nDid security, auth, secrets, network, or tool execution behavior change? (`Yes/No`)\r\n*   No\r\n\r\nWhat is the highest-risk area?\r\n*   The payload-patch wrapper in `extensions/openrouter/stream.ts`[cite: 1].\r\n\r\nHow is that risk mitigated?\r\n*   The feature is additive and default-off[cite: 1]. Existing payloads remain unchanged when disabled[cite: 1].\r\n*   The wrapper includes checks to never override a caller-set value and clamps the ID to 256 characters[cite: 1].\r\n\r\n<details>\r\n<summary>Risk guidance</summary>\r\n\r\nUse this for author judgment that is not obvious from the diff. ClawSweeper can see touched files, but it cannot know which behavior you think is risky, why the risk is acceptable, or what mitigation reviewers should verify.\r\n\r\n</details>\r\n\r\n## Current review state\r\n\r\nWhat is the next action?\r\n*   Awaiting review[cite: 1].\r\n\r\nWhat is still waiting on author, maintainer, CI, or external proof?\r\n*   Maintainer decisions on opt-in location (plugin `configSchema.forwardSessionId` vs. `models.providers.openrouter.params`)[cite: 1].\r\n*   Maintainer decision on flag name[cite: 1].\r\n*   Confirmation on scope (chat/text inference only)[cite: 1].\r\n*   Confirmation on subagent session behavior[cite: 1].\r\n\r\nWhich bot or reviewer comments were addressed?\r\n\r\n<details>\r\n<summary>Review state guidance</summary>\r\n\r\nKeep this as the durable state for review progress. If useful information appears in comments, fold the current next action or blocker back here so maintainers and ClawSweeper do not need to reconstruct state from comment history.\r\n\r\n</details>",
-        "branch": "feature/session-forwarding",
-        "head_sha": "913750c2c6326dadfd1f222147e9ecdbb8a8c02a",
-        "author": "alex-vonallmen",
-        "labels": [
-          "docs",
-          "size: S",
-          "proof: sufficient",
-          "extensions: openrouter",
-          "P3",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 security-boundary",
-          "status: ⏳ waiting on author",
-          "proof: 📸 screenshot"
-        ],
-        "files": [
-          {
-            "path": "docs/providers/openrouter.md",
-            "additions": 25,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openrouter/openclaw.plugin.json",
-            "additions": 6,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openrouter/stream.test.ts",
-            "additions": 97,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/openrouter/stream.ts",
-            "additions": 35,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89155",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89155.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 155,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 30,
-            "SUCCESS": 123
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3630,
+    "total_ms": 5075,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 422
+        "ms": 457
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2855
+        "ms": 2897
       },
       {
         "name": "classify_commands",
@@ -154,7 +181,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 324
+        "ms": 1693
       },
       {
         "name": "append_ledger",
