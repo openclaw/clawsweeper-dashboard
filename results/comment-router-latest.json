@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-01T05:19:56.833Z",
+  "generated_at": "2026-06-01T05:22:15.278Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-01T02:19:56.501Z",
+  "since": "2026-06-01T02:22:13.094Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    80063
+    78639
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 0,
+  "scanned_comments": 3,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,18 +29,184 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:78639:4392433558:2026-06-01T05:07:41Z:clawsweeper_needs_human",
+      "comment_id": "4392433558",
+      "comment_version_key": "4392433558:2026-06-01T05:07:41Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/78639#issuecomment-4392433558",
+      "repo": "openclaw/openclaw",
+      "issue_number": 78639,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-06T21:47:55Z",
+      "comment_updated_at": "2026-06-01T05:07:41Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=bf19320e83a5ffcde9fd4e54ae27a1685b13ed01)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +744, Tests +6, Docs +2. Total +752 across 14 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "bf19320e83a5ffcde9fd4e54ae27a1685b13ed01",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "perf(plugins,gateway): async-ify channels.status + messages.send discovery (and split WhatsApp transport closes)",
+        "body": "Closes #78100. Companion to (not blocked by) #78101 — that PR coalesces repeated calls within a 2 s TTL as a near-term win; this PR is the deeper structural fix #78100 proposed as item 2.\n\n## Summary\n\nAsync-ify the persisted-read hot path inside `loadPluginRegistrySnapshotWithMetadata` and the auto-enable resolver inside `messages.send` so `channels.status`, `channels.start`, and inbound dispatch no longer block the Node event loop on `realpathSync` / `statSync` / `readFileSync` while verifying the persisted plugin index. Cold-path discovery yields once via `setImmediate` so other I/O can interleave with the still-sync walk.\n\nAdds:\n- `loadPluginRegistrySnapshotWithMetadataAsync`\n- `hasMissingPersistedPluginSourceAsync`\n- `hasStalePersistedPluginMetadataAsync`\n\nwith inflight-promise dedup so concurrent callers don't redo the syscalls.\n\nAlso includes (smaller, related):\n- WhatsApp auto-reply monitor: split transport-class WS handshake closes (408, 428, 5xx) from lifecycle-class closes (401 logged-out, 440 conflict). Transport closes now retry inside the running monitor's existing reconnect loop instead of throwing out and triggering a full plugin restart that re-runs discovery (and re-pays the sync cost above). Only logged-out / conflict still bubble up to relinking. Adds `event` / `closeClass` / `phase` structured log fields so transport recoveries are greppable separately from lifecycle restarts.\n\n## Why this approach\n\nThe repo's `src/plugins/CLAUDE.md` says *\"Do not add persistent metadata caches for discovery, manifest registries, installed-index reconstruction\"* — this PR doesn't. It keeps the freshness-first design intact and just removes the synchronous-blocking property of the read path, which is what burns event-loop time on slow filesystems. #78101's 2 s TTL is a deliberately short coalescing window; this PR addresses the underlying cost so even a single cold call is loop-friendly.\n\n## Real behavior proof\n\n- Behavior addressed: On Kubernetes / OKE with a PVC-backed `~/.openclaw`, an inbound WhatsApp message burst causes event-loop blocks of 1.0–20.8 s, dispatch latencies of 17–27 s per turn, and (eventually) 408 keepalive misses that cascade into channel restarts.\n- Environment tested: OKE cluster on a single `VM.Standard.A1.Flex` node (2 OCPU / 11.4 GiB / arm64). Pod limits `2 / 4Gi`, requests `500m / 1Gi`. PVC: `oci-bv` block-volume storage class, 5 GiB, mounted at `~/.openclaw`. Image base `node:24-bookworm-slim`. 8 plugins loaded. Agent model `openai/gpt-5.5`. WhatsApp Web personal pairing, `dmPolicy: \"allowlist\"`.\n- Steps run after the patch:\n  1. Build A (ablation): `vendor/openclaw` reset to commit `c874c0863a` (the base of this branch on `main` before the 4 commits). Verified the post-build `dist/` does NOT contain `loadPluginRegistrySnapshotWithMetadataAsync` or `isTransportClassConnectError` symbols.\n  2. Build B (this PR): `vendor/openclaw` at HEAD of this branch. Same Dockerfile, same `pnpm install` and `pnpm build` steps. Verified `dist/` DOES contain those symbols.\n  3. Helm upgrade rolled the same release between Build A and Build B with PVC preserved (no re-pairing needed). Identical resources and config.\n  4. Workload: 9 self-DM WhatsApp text messages within 10 s. All passed the dmPolicy allowlist gate.\n  5. Captured: gateway diagnostic stream (`liveness warning` events with `eventLoopDelayMaxMs`, `eventLoopUtilization`, `cpuCoreRatio`, queue depth, `phase`) and structured log entries for each `inbound message` and `auto-reply sent (text)` (with `durationMs`).\n- Evidence: redacted runtime logs from the gateway diagnostic stream and structured channel logs (Build A vs Build B, same Helm release).\n  - Build A liveness warning, sustained burst (queue depth 7): `eventLoopDelayMaxMs=2655 ms`, `phase=channels.whatsapp.start-account`, `recentPhases=...sidecars.model-prewarm:1021ms`.\n  - Build A liveness warning, worst-case 9-msg burst (queue depth 8): `eventLoopDelayMaxMs=20837.3 ms`, `eventLoopUtilization=0.751`, `cpuCoreRatio=0.822`.\n  - Build A liveness warning, idle/cold start: `eventLoopDelayMaxMs=1096 ms`.\n  - Build B equivalent burst: no liveness warnings exceeding `eventLoopDelayMaxMs=305 ms`. `cpuCoreRatio` returns to ~0.5 between bursts.\n  - Build A reply latencies (3 of 9 burst): `21:06:38 inbound → 21:07:05 reply = 27 s`, `21:06:44 inbound → 21:07:05 reply = 21 s`, `21:06:48 inbound → 21:07:05 reply = 17 s`.\n  - Build B reply latencies (warm): `durationMs:5–9` for delivery, full turn ~5–9 s bound by model latency, not gateway.\n- Observed result:\n  - eventLoopDelayMaxMs (worst-case burst): **20,837 ms → not observed** (~70× lower).\n  - eventLoopDelayMaxMs (sustained burst): **2655 ms → 305 ms** (~9× lower).\n  - User-visible reply latency (burst): **17–27 s → 5–9 s** (~3–5× lower).\n  - Transport-fix half: structurally verifiable in code (post-fix, transport-class close codes stay in the reconnect loop with `runId` preserved); a concrete 408 keepalive miss didn't fall inside the test window. The two readings together are consistent with the keepalive-miss correlation table in #78100 (`event-loop block 56–107 s → 408 disconnect`).\n- Not tested:\n  - Native Linux/macOS / NVMe SSD impact: should be a no-op cost (the underlying syscalls return in <1 ms there, so the async wrapper just adds a microtask). The fix matters where syscalls are 10–100× slower (PVC-backed K8s, WSL2 9P, NFS, container overlays).\n  - Telegram / Discord / other channels: the perf path covers all `channels.status` and `messages.send` callers, so other channels should also benefit, but the burst test only exercised WhatsApp.\n  - Long-window 408 cascade: requires sustained event-loop pressure that takes ≥3 minutes on Build A; not captured here.\n\n## Test plan\n\n- [x] `pnpm test src/plugins/plugin-registry-snapshot.test.ts` — 6/6 pass after rebase.\n- [x] `pnpm test extensions/whatsapp/src/auto-reply/monitor-state.test.ts extensions/whatsapp/src/auto-reply/web-auto-reply-monitor.test.ts` — 27/27 pass after rebase.\n- [x] `pnpm build` — green on rebased HEAD.\n- [x] Live K8s/OKE proof (above): A/B image swap, same Helm release, PVC preserved, 9-message WhatsApp burst.\n- [ ] Native Linux/macOS regression check (not run by the author; CI lanes will cover this).\n\n\n",
+        "branch": "refactor/plugin-registry-snapshot-async",
+        "head_sha": "bf19320e83a5ffcde9fd4e54ae27a1685b13ed01",
+        "author": "fede-kamel",
+        "labels": [
+          "channel: whatsapp-web",
+          "gateway",
+          "size: L",
+          "proof: supplied",
+          "rating: 🌊 off-meta tidepool"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/auto-reply/monitor.ts",
+            "additions": 145,
+            "deletions": 22,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/plugin-auto-enable.apply.ts",
+            "additions": 36,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/plugin-auto-enable.shared.ts",
+            "additions": 22,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/plugin-auto-enable.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/channels.start.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/channels.status.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/channels.ts",
+            "additions": 13,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/send.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/send.ts",
+            "additions": 7,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/installed-plugin-index-hash.ts",
+            "additions": 64,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/installed-plugin-index-record-reader.ts",
+            "additions": 81,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/plugin-metadata-snapshot.ts",
+            "additions": 118,
+            "deletions": 33,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/plugin-registry-snapshot.ts",
+            "additions": 330,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-78639",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-78639.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 113,
+          "counts": {
+            "SUCCESS": 86,
+            "SKIPPED": 23,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 520,
+    "total_ms": 2544,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 318
+        "ms": 444
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1726
       },
       {
         "name": "classify_commands",
@@ -48,7 +214,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 189
+        "ms": 348
       },
       {
         "name": "append_ledger",
