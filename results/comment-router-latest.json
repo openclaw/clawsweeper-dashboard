@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-01T16:40:15.867Z",
+  "generated_at": "2026-06-01T16:40:16.870Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-01T13:40:14.926Z",
+  "since": "2026-06-01T13:40:14.583Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    75767
+    77717
   ],
   "comment_ids": [
-    4594591318
+    4594591358
   ],
-  "status_comment_id": 4594591751,
+  "status_comment_id": 4594591666,
   "max_autoclose_targets": 8,
   "scanned_comments": 2,
   "commands_seen": 1,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:75767:4594591318:2026-06-01T16:39:38Z:re_review",
-      "comment_id": "4594591318",
-      "comment_version_key": "4594591318:2026-06-01T16:39:38Z",
-      "comment_url": "https://github.com/openclaw/openclaw/issues/75767#issuecomment-4594591318",
+      "idempotency_key": "comment-router:openclaw/openclaw:77717:4594591358:2026-06-01T16:39:39Z:re_review",
+      "comment_id": "4594591358",
+      "comment_version_key": "4594591358:2026-06-01T16:39:39Z",
+      "comment_url": "https://github.com/openclaw/openclaw/issues/77717#issuecomment-4594591358",
       "repo": "openclaw/openclaw",
-      "issue_number": 75767,
+      "issue_number": 77717,
       "author": "Enominera",
       "author_id": 10228818,
       "author_association": "NONE",
-      "comment_created_at": "2026-06-01T16:39:38Z",
-      "comment_updated_at": "2026-06-01T16:39:38Z",
-      "status_comment_id": 4594591751,
+      "comment_created_at": "2026-06-01T16:39:39Z",
+      "comment_updated_at": "2026-06-01T16:39:39Z",
+      "status_comment_id": 4594591666,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -67,16 +67,16 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-06-01T16:40:16.579Z",
+          "dispatched_at": "2026-06-01T16:40:17.550Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 75767
+          "item_number": 77717
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-06-01T16:40:17.851Z",
-          "response_comment_id": "4594591751",
+          "commented_at": "2026-06-01T16:40:18.779Z",
+          "response_comment_id": "4594591666",
           "response_comment_mode": "updated"
         }
       ],
@@ -85,15 +85,15 @@
         "kind": "issue",
         "state": "open",
         "locked": false,
-        "title": "openclaw gateway restart hangs on macOS with SMB-mounted volumes (lsof stat() timeout)",
-        "body": "\n## Description\n\n### Environment\n- **OS**: macOS 15.x (Darwin 25.4.0, arm64)\n- **Node**: v25.8.2\n- **OpenClaw**: 2026.4.26 (be8c246)\n- **Network mounts**: Synology DS224plus via SMB, used for Time Machine backup\n  - Mount path: `/Volumes/.timemachine/DS224plus._smb._tcp.local./.../Mac_backup`\n\n### Symptoms\nRunning `openclaw gateway restart` or `openclaw gateway --force` causes the process to hang for extended periods (30s to minutes). During the hang, the following warning repeats many times:\n\n```\nlsof: WARNING: can't stat() smbfs file system /Volumes/.timemachine/DS224plus._smb._tcp.local./XXXX/Mac_backup\n      Output information may be incomplete.\n      assuming \"dev=3600007c\" from mount table\n```\n\nEventually it either times out or fails with:\n```\nForce: Error: lsof permission denied while inspecting gateway port: ...\n```\n\n### Root Cause Analysis\nOpenClaw's port-checking logic uses `lsof` in **4 separate call sites** across 3 files:\n\n| File | Function | Call Type |\n|------|----------|-----------|\n| `ports-bfXSW6vy.js` | `readUnixListeners` | async `runCommandWithTimeout` |\n| `ports-CUmvj7Fu.js` | `listPortListeners` | sync `execFileSync` (used by `--force`) |\n| `restart-stale-pids-*.js` | `findGatewayPidsOnPortSync` | sync `spawnSync` |\n| `restart-stale-pids-*.js` | `pollPortOnce` | sync `spawnSync` |\n\nThe command used is: `lsof -nP -iTCP:{port} -sTCP:LISTEN -FpFc[n]`\n\nOn macOS, `lsof` traverses **all mounted filesystems** to build its file descriptor table, **even when the `-i` flag limits results to a single network port**. When an SMB/NFS mount is unresponsive (e.g., NAS is busy with Time Machine backup, network congestion, disk sleep wake-up), `lsof` blocks for the SMB timeout (10-30s+) on each `stat()` call.\n\nThis affects every CLI operation that needs to inspect port 18789, causing the Gateway restart sequence to feel like it takes \"10+ minutes\" as it goes through multiple retry/timeout cycles.\n\n### Attempted workaround: `-b` flag\nThe `lsof -b` flag (which skips blocking kernel calls like `stat()`, `readlink()`) was tested but does **not** resolve the issue — macOS `lsof` still traverses SMB mounts at the VFS layer regardless of `-b`.\n\n### Proposed fix\nReplace `lsof`-based port checking with a pure Node.js approach:\n\n```js\n// Instead of calling lsof, probe directly:\nconst net = require('net');\nconst server = net.createServer();\nserver.listen(port, '127.0.0.1', () => {\n  server.close(); // port is free\n});\nserver.on('error', (err) => {\n  if (err.code === 'EADDRINUSE') /* port is busy */;\n});\n```\n\nThis would be immune to filesystem mount issues and also faster than spawning `lsof`.\n\nAlternatively, at minimum, the `readUnixListeners` async code path already has a `ss` (socket statistics) fallback — extending this to the sync paths or making the sync paths async could help.",
+        "title": "Feishu channel: bot identity recovery race condition causes permanent disconnection",
+        "body": "## Feishu channel: bot identity recovery race condition causes permanent disconnection\n\n### Description\n\nWhen the Gateway reloads its configuration (e.g., during a config change or restart), Feishu WebSocket channels restart their identity probe. If the `abortSignal` is set before the identity probe completes, the condition that gates `startBotIdentityRecovery` evaluates to `false`, and the channel is left with `bot open_id = unknown` — with **no retry mechanism and no recovery path**.\n\n### Severity\n\nHigh — the Feishu channel becomes permanently unrecoverable without a full Gateway restart.\n\n### Steps to reproduce\n\n1. Have one or more Feishu accounts configured (WebSocket mode)\n2. Trigger a Gateway config reload (e.g., `openclaw gateway restart`, or a config hot-reload)\n3. Observe the timing window where `fetchBotIdentityForMonitor` is still pending when the abort signal is delivered to the channel\n\nThe race window is ~5–10 seconds in practice.\n\n### Root cause\n\nIn `extensions/feishu/src/monitor.account.ts`, `monitorSingleAccount` function (line ~4553):\n\n```typescript\nlog(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? \"unknown\"}`);\nif (!botOpenId && !abortSignal?.aborted) startBotIdentityRecovery({\n  account, accountId, runtime, abortSignal\n});\n```\n\nThe `startBotIdentityRecovery` call is gated by `!abortSignal?.aborted`. During a config reload, an abort signal is broadcast to all channels before the new channel initialization completes. If an account's identity probe finishes **after** the abort signal arrives (but before the new channel initialization finishes), the `abortSignal?.aborted` check returns `true`, the retry is never scheduled, and the channel is left in a broken state.\n\nThis is a classic TOCTOU (time-of-check-time-of-use) race condition.\n\n### Observed log\n\n```\n11:27:03  [health-monitor] [feishu:main] health-monitor: restarting (reason: stopped)\n11:27:04  [feishu] feishu[third]: bot open_id unknown; starting background retry (delays: 60s, 120s...)\n          ← third's probe happened to complete before abort arrived\n11:27:12  [feishu] feishu[third]: abort signal received, stopping\n11:27:12  [feishu] feishu[main]: bot open_id resolved: unknown\n          ← main's probe completed after abort arrived; no retry triggered\n11:27:12  [feishu] feishu[second]: bot open_id resolved: unknown\n          ← same; no retry triggered\n11:27:14  [gateway] loading configuration… (reload complete)\n          ← main and second are now permanently broken\n```\n\n### Impact\n\n- Feishu direct messages are silently dropped (the bot cannot receive any messages)\n- The health-monitor does **not** detect this as a \"stopped\" state because the WebSocket process is still running, just with an invalid identity\n- Only a full Gateway restart resolves it\n\n### Suggested fix\n\nOption A (defensive): When `abortSignal` is already aborted but `botOpenId` is unknown, **schedule recovery with a fresh abort signal** rather than skipping it entirely. The new channel initialization should use a new abort signal scoped to its own lifecycle.\n\nOption B (robust): Move the bot identity probe **before** the abort signal is registered, or separate the identity resolution from the channel lifecycle abort signal entirely (use a dedicated identity-probe abort signal).\n\nOption C (fail-safe): If `fetchBotIdentityForMonitor` fails or returns unknown after the initial probe, always schedule a retry with a **new independent abort signal** — don't gate it on the current channel's abort state.\n\n### Environment\n\n- OpenClaw 2026.4.26 (be8c246)\n- macOS\n- Feishu WebSocket mode, 3 accounts",
         "author": "Enominera",
         "labels": [],
         "cluster_id": null,
         "job_path": null,
         "open_prs": [],
-        "issue_implementation_cluster_id": "issue-openclaw-openclaw-75767",
-        "issue_implementation_job_path": "jobs/openclaw/inbox/issue-openclaw-openclaw-75767.md",
+        "issue_implementation_cluster_id": "issue-openclaw-openclaw-77717",
+        "issue_implementation_job_path": "jobs/openclaw/inbox/issue-openclaw-openclaw-77717.md",
         "mode": "autonomous"
       },
       "maintainer_authorized": false,
@@ -102,23 +102,23 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3402,
+    "total_ms": 4652,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 540
+        "ms": 1879
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 331
+        "ms": 322
       },
       {
         "name": "classify_commands",
-        "ms": 57
+        "ms": 72
       },
       {
         "name": "execute_commands",
-        "ms": 2450
+        "ms": 2351
       },
       {
         "name": "append_ledger",
