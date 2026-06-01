@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-01T00:58:58.590Z",
-  "repo": "openclaw/mcporter",
+  "generated_at": "2026-06-01T00:59:28.733Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-31T21:58:56.965Z",
+  "since": "2026-05-31T21:59:28.469Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    195
+    88843
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 8,
-  "commands_seen": 3,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,237 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/mcporter:195:4587711658:2026-06-01T00:58:53Z:clawsweeper_needs_human",
-      "comment_id": "4587711658",
-      "comment_version_key": "4587711658:2026-06-01T00:58:53Z",
-      "comment_url": "https://github.com/openclaw/mcporter/pull/195#issuecomment-4587711658",
-      "repo": "openclaw/mcporter",
-      "issue_number": 195,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "NONE",
-      "comment_created_at": "2026-05-31T18:53:08Z",
-      "comment_updated_at": "2026-06-01T00:58:53Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- No automated repair is needed; a maintainer should accept the singleton-start compatibility tradeoff and merge or request a small operator-facing note.; Cleared: The diff only changes daemon host logic and daemon tests, with no dependency, workflow, credential, release, or package-resolution changes found. (sha=6d67074ea4319a0a576a411dbdf1b6cd0c091a64)",
-      "review_summary": "The PR adds a daemon-host bind lock, status/pid/socket liveness probe, metadata-match check, and daemon host/integration coverage to prevent direct daemon starts from rebinding over a live owner.\n\nReproducibility: yes. Current main source shows foreground/child starts enter runDaemonHost directly and the host unconditionally prepares and binds the socket; the PR body also provides before/after macOS process-count proof for the race.",
-      "review_followup": "- No automated repair is needed; a maintainer should accept the singleton-start compatibility tradeoff and merge or request a small operator-facing note.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "6d67074ea4319a0a576a411dbdf1b6cd0c091a64",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: stop non-client daemon starts from orphaning a running daemon",
-        "body": "## Summary\n\nCompletes the fix for #191. Its client-side pieces (PID reconciliation and a\nspawn mutex in `DaemonClient`) landed, but the proposed host-side guard (\"on\ndaemon start, if a live daemon already owns the socket, do not start a second\none\") did not. Explicit and launchd-driven starts (`mcporter daemon start`,\n`daemon start --foreground`, detached children) bypass `DaemonClient` entirely\nand call `runDaemonHost` directly, so each one unlinks and rebinds the socket,\nleaving the previous daemon alive but unreachable. #191's own headline repro\n(racing `daemon start --foreground`) still reproduces on current `main`.\n\nThis adds the host-side guard.\n\n## What's Included\n\n- `src/daemon/host.ts`\n  - Before binding, probe whether a live daemon already owns the socket: it must\n    answer a `status` request, report this socket path, and have a live pid. A\n    bare connect is not enough, since a hung daemon still has its socket in\n    `listen(2)` and the kernel accepts the connection.\n  - Skip binding only when on-disk metadata already matches that live daemon's\n    pid and socket, which is the same readiness contract `DaemonClient` enforces,\n    so a skip can never strand a client. Otherwise rebind (replacing a hung,\n    dead, foreign, or metadata-orphaned owner and writing correct metadata),\n    which is what `main` does today. Corrupt or missing metadata is treated as\n    non-matching.\n  - Bind under a dedicated `${metadataPath}.bind` lock, separate from the\n    client's metadata lock, so a client awaiting readiness while holding that\n    lock cannot deadlock the bind.\n\n## Repro and results\n\nMinimal manual repro (any keep-alive config at ./mcporter.json):\n\n    mcporter --config ./mcporter.json daemon stop\n    mcporter --config ./mcporter.json daemon start --foreground &\n    mcporter --config ./mcporter.json daemon start --foreground &\n    sleep 3\n    ps -ax | grep -c \"[d]aemon start --foreground\"   # main: 2, this branch: 1\n\nReproduced on a second macOS machine against current `main`. Counts are surviving\ndaemon processes after the race settles.\n\n| Scenario | `main` | This branch |\n| --- | --- | --- |\n| #191 repro recipe (race 2x `daemon start --foreground`) | 2 | 1 |\n| `daemon start --foreground` x5, 5 trials | 2 every trial | 1 every trial |\n| detached `daemon start` x5, 3 trials | up to 3 | 1 every trial |\n| implicit cold-start (`mcporter list` x10), 3 trials | 1 | 1 |\n\nA frozen daemon (SIGSTOP, socket still listening) is reclaimed by a replacement\nin ~2s, and a live daemon whose metadata is missing is also rebound rather than\nstranding the caller, so the guard does not break stale or hung-socket recovery.\n\n## Tests\n\n- `tests/daemon-host.test.ts`: probe (live / hung / foreign-socket / dead-pid /\n  no-listener) and `metadataMatches` (match / mismatch / missing / corrupt).\n- `tests/daemon.integration.test.ts`: a 4-way `daemon start --foreground` race\n  asserting one survivor (fails on `main`), and a missing-metadata case asserting\n  the replacement rebinds and the client recovers.\n\nFull suite: 717 passed, 3 skipped (124 files). `pnpm check` clean.\n\n## Relation to #191\n\n#191 prevents redundant launch decisions from `DaemonClient` callers. This\nprevents redundant binds from any start path, including the direct `daemon start\n--foreground` in #191's own repro. `client.ts` is unchanged.\n",
-        "branch": "fix/daemon-singleton-bind-guard",
-        "head_sha": "6d67074ea4319a0a576a411dbdf1b6cd0c091a64",
-        "author": "zm2231",
-        "labels": [
-          "P1",
-          "proof: sufficient",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look",
-          "rating: 🦞 diamond lobster"
-        ],
-        "files": [
-          {
-            "path": "src/daemon/host.ts",
-            "additions": 108,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "tests/daemon-host.test.ts",
-            "additions": 108,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "tests/daemon.integration.test.ts",
-            "additions": 111,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-mcporter-195",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-mcporter-195.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 3,
-          "counts": {
-            "SUCCESS": 3
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/mcporter:195:4588790688:2026-06-01T00:53:43Z:re_review",
-      "comment_id": "4588790688",
-      "comment_version_key": "4588790688:2026-06-01T00:53:43Z",
-      "comment_url": "https://github.com/openclaw/mcporter/pull/195#issuecomment-4588790688",
-      "repo": "openclaw/mcporter",
-      "issue_number": 195,
-      "author": "zm2231",
-      "author_id": 25645999,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-01T00:53:43Z",
-      "comment_updated_at": "2026-06-01T00:53:43Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/mcporter:195:4587835193:2026-05-31T19:26:12Z:re_review",
-      "comment_id": "4587835193",
-      "comment_version_key": "4587835193:2026-05-31T19:26:12Z",
-      "comment_url": "https://github.com/openclaw/mcporter/pull/195#issuecomment-4587835193",
-      "repo": "openclaw/mcporter",
-      "issue_number": 195,
-      "author": "zm2231",
-      "author_id": 25645999,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-31T19:26:12Z",
-      "comment_updated_at": "2026-05-31T19:26:12Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: stop non-client daemon starts from orphaning a running daemon",
-        "body": "## Summary\n\nCompletes the fix for #191. Its client-side pieces (PID reconciliation and a\nspawn mutex in `DaemonClient`) landed, but the proposed host-side guard (\"on\ndaemon start, if a live daemon already owns the socket, do not start a second\none\") did not. Explicit and launchd-driven starts (`mcporter daemon start`,\n`daemon start --foreground`, detached children) bypass `DaemonClient` entirely\nand call `runDaemonHost` directly, so each one unlinks and rebinds the socket,\nleaving the previous daemon alive but unreachable. #191's own headline repro\n(racing `daemon start --foreground`) still reproduces on current `main`.\n\nThis adds the host-side guard.\n\n## What's Included\n\n- `src/daemon/host.ts`\n  - Before binding, probe whether a live daemon already owns the socket: it must\n    answer a `status` request, report this socket path, and have a live pid. A\n    bare connect is not enough, since a hung daemon still has its socket in\n    `listen(2)` and the kernel accepts the connection.\n  - Skip binding only when on-disk metadata already matches that live daemon's\n    pid and socket, which is the same readiness contract `DaemonClient` enforces,\n    so a skip can never strand a client. Otherwise rebind (replacing a hung,\n    dead, foreign, or metadata-orphaned owner and writing correct metadata),\n    which is what `main` does today. Corrupt or missing metadata is treated as\n    non-matching.\n  - Bind under a dedicated `${metadataPath}.bind` lock, separate from the\n    client's metadata lock, so a client awaiting readiness while holding that\n    lock cannot deadlock the bind.\n\n## Repro and results\n\nMinimal manual repro (any keep-alive config at ./mcporter.json):\n\n    mcporter --config ./mcporter.json daemon stop\n    mcporter --config ./mcporter.json daemon start --foreground &\n    mcporter --config ./mcporter.json daemon start --foreground &\n    sleep 3\n    ps -ax | grep -c \"[d]aemon start --foreground\"   # main: 2, this branch: 1\n\nReproduced on a second macOS machine against current `main`. Counts are surviving\ndaemon processes after the race settles.\n\n| Scenario | `main` | This branch |\n| --- | --- | --- |\n| #191 repro recipe (race 2x `daemon start --foreground`) | 2 | 1 |\n| `daemon start --foreground` x5, 5 trials | 2 every trial | 1 every trial |\n| detached `daemon start` x5, 3 trials | up to 3 | 1 every trial |\n| implicit cold-start (`mcporter list` x10), 3 trials | 1 | 1 |\n\nA frozen daemon (SIGSTOP, socket still listening) is reclaimed by a replacement\nin ~2s, and a live daemon whose metadata is missing is also rebound rather than\nstranding the caller, so the guard does not break stale or hung-socket recovery.\n\n## Tests\n\n- `tests/daemon-host.test.ts`: probe (live / hung / foreign-socket / dead-pid /\n  no-listener) and `metadataMatches` (match / mismatch / missing / corrupt).\n- `tests/daemon.integration.test.ts`: a 4-way `daemon start --foreground` race\n  asserting one survivor (fails on `main`), and a missing-metadata case asserting\n  the replacement rebinds and the client recovers.\n\nFull suite: 717 passed, 3 skipped (124 files). `pnpm check` clean.\n\n## Relation to #191\n\n#191 prevents redundant launch decisions from `DaemonClient` callers. This\nprevents redundant binds from any start path, including the direct `daemon start\n--foreground` in #191's own repro. `client.ts` is unchanged.\n",
-        "branch": "fix/daemon-singleton-bind-guard",
-        "head_sha": "6d67074ea4319a0a576a411dbdf1b6cd0c091a64",
-        "author": "zm2231",
-        "labels": [
-          "P1",
-          "proof: sufficient",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look",
-          "rating: 🦞 diamond lobster"
-        ],
-        "files": [
-          {
-            "path": "src/daemon/host.ts",
-            "additions": 108,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "tests/daemon-host.test.ts",
-            "additions": 108,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "tests/daemon.integration.test.ts",
-            "additions": 111,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-mcporter-195",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-mcporter-195.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 3,
-          "counts": {
-            "SUCCESS": 3
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3135,
+    "total_ms": 434,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 450
+        "ms": 251
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1158
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 1499
+        "ms": 170
       },
       {
         "name": "append_ledger",
