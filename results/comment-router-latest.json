@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-01T01:06:55.662Z",
+  "generated_at": "2026-06-01T01:07:03.748Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-05-31T22:06:53.416Z",
+  "since": "2026-05-31T22:07:03.231Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     77538
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4588830304
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 6,
@@ -36,16 +38,16 @@
       "comment_version_key": "4374622934:2026-06-01T01:06:50Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/77538#issuecomment-4374622934",
       "repo": "openclaw/openclaw",
-      "issue_number": 77538,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-04T21:30:16Z",
-      "comment_updated_at": "2026-06-01T01:06:50Z",
+      "issue_number": 88829,
+      "author": "RomneyDa",
+      "author_id": 6581799,
+      "author_association": "MEMBER",
+      "comment_created_at": "2026-06-01T01:05:48Z",
+      "comment_updated_at": "2026-06-01T01:05:48Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -61,176 +63,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): bound connect frame auth.* fields at the protocol schema",
-        "body": "Closes #77977\n\n## Summary\n\nThe connect-frame schema at `src/gateway/protocol/schema/frames.ts` accepted `auth.token`, `auth.bootstrapToken`, `auth.deviceToken`, and `auth.password` as unbounded `Type.String()`. The only effective cap was the 64KB pre-auth frame limit (`MAX_PREAUTH_PAYLOAD_BYTES`).\n\n`safeEqualSecret` (`src/security/secret-equal.ts`) pads both operands to `Math.max(provided, expected)` before `timingSafeEqual` and only post-checks lengths. So a remote client could submit a ~60KB `auth.bootstrapToken` and force every stored-pairing/bootstrap comparison on the pre-auth path to allocate and constant-time-scan the inflated payload. Combined with the mutex-serialized pairing-state walk in `device-bootstrap.ts`, oversized tokens amplify per-comparison work for legitimate node onboarding.\n\nThis PR rejects oversized values at schema validation, before any handshake or secret-compare work runs:\n\n- Add `HandshakeBootstrapTokenString` (256 chars) and `HandshakeSharedSecretString` (4096 chars) primitives. Real shared-secret/bootstrap/device tokens are 32-byte base64url (43 chars) or hex (64 chars), so 256 is well above any legitimate value while bounding the work an attacker can force on pre-auth code paths. The shared-secret cap is generous to preserve compatibility with arbitrarily-sized operator configs.\n- Apply the bounded primitives to the four `auth.*` fields in `ConnectParamsSchema`: `bootstrapToken`/`deviceToken` use the 256-char cap; `token`/`password` use the 4096-char cap.\n\n## Test plan\n\n- [x] `src/gateway/protocol/connect-auth-bounds.test.ts` (6 tests):\n  - Accepts `token`/`bootstrapToken`/`deviceToken`/`password` exactly at the documented caps.\n  - Rejects each one byte over the cap.\n  - Rejects a 60KB `bootstrapToken` (representative attacker payload).\n- [x] Regression suite: `pnpm test src/gateway/protocol/connect-auth-bounds.test.ts src/gateway/server/ws-connection/handshake-auth-helpers.test.ts src/gateway/server.auth.modes.test.ts src/gateway/server.auth.browser-hardening.test.ts` → 54/54 pass.\n- [x] `pnpm exec oxfmt --check` and `oxlint` pass on touched files.\n\n## Notes\n\n- Caps are well above the legitimate values (32-byte base64url = 43 chars, 64-byte hex signature = 86 chars), so no realistic client should hit them. Operators using `auth.password` for the legacy shared-secret path get 4096 chars of headroom.\n- This is additive at the schema layer — no behavior change for any in-spec request.\n\n## Real behavior proof\n\n- **Behavior addressed**: the connect-frame schema accepted `auth.token`, `auth.bootstrapToken`, `auth.deviceToken`, and `auth.password` as unbounded `Type.String()`. A remote client could submit a ~60KB value and propagate it to `safeEqualSecret`, which pads both operands to `Math.max(provided, expected)` before `timingSafeEqual` — amplifying per-comparison work on the mutex-serialised bootstrap-pairing walk. With this PR, the values are bounded at the schema layer (256 chars for bootstrap/device tokens, 4096 chars for shared secrets/passwords), and the ajv-compiled validator rejects oversized payloads before any handshake or secret-compare work runs.\n- **Real environment tested**: local Node v22.22.2 runtime against the real ajv-compiled `validateConnectParams` and the cap constants from this branch (`security/connect-schema-auth-bounds` HEAD `0b413080b8`). No vitest, no mocks. The reproducer imports `validateConnectParams` and `HANDSHAKE_BOOTSTRAP_TOKEN_MAX_LENGTH` / `HANDSHAKE_SHARED_SECRET_MAX_LENGTH` directly from the patched `protocol/index.ts` and `protocol/schema/primitives.ts`.\n- **Exact steps or command run after this patch**: a node runtime tsx reproducer at https://gist.github.com/fede-kamel/cbba5c994a190be7514997daf04a2d57 enumerates 12 cases — each `auth.*` field at-cap, one-over-cap, and at 60KB — and times schema validation. Run as `node --import tsx <local-copy>.mts` from a worktree on this branch.\n- **Evidence after fix**: live terminal output captured from the node runtime against the patched schema:\n\n```\nConnect-frame auth bounds proof (PR 77538)\nImports real ajv-compiled validateConnectParams + cap constants\nfrom security/connect-schema-auth-bounds worktree.\n\nHANDSHAKE_BOOTSTRAP_TOKEN_MAX_LENGTH = 256\nHANDSHAKE_SHARED_SECRET_MAX_LENGTH   = 4096\n\ncase                                              | result | took\n--------------------------------------------------|--------|------\nvalid: empty auth                                 | PASS   | 0.928ms\nvalid: bootstrapToken at cap (256 chars)          | PASS   | 0.038ms\nvalid: deviceToken at cap (256 chars)             | PASS   | 0.026ms\nvalid: token at cap (4096 chars)                  | PASS   | 0.318ms\nvalid: password at cap (4096 chars)               | PASS   | 0.323ms\nreject: bootstrapToken cap+1 (257 chars)          | REJECT | 0.062ms\nreject: deviceToken cap+1                         | REJECT | 0.352ms\nreject: token cap+1 (4097 chars)                  | REJECT | 0.210ms\nreject: password cap+1                            | REJECT | 0.029ms\nreject: 60KB bootstrapToken (representative attacker payload)| REJECT | 0.189ms\nreject: 60KB token                                | REJECT | 0.194ms\nreject: 60KB password                             | REJECT | 0.200ms\n\n=== Comparison: schema rejection vs full safeEqualSecret allocation ===\n\n60KB bootstrapToken rejected 591 times in 100.1ms\nper-rejection cost: 0.1693ms\n```\n\n- **Observed result after fix**: every legitimate at-cap value validated `PASS` and every cap+1 / 60KB attacker-shaped payload validated `REJECT`. No case produced an unexpected outcome. Sustained 60KB-rejection throughput was ~5,900 validations/sec (~0.17ms each), which is the upper bound on the cost an attacker can force at the schema layer — versus the pre-patch behavior where the 60KB payload would propagate to `safeEqualSecret` and run a `timingSafeEqual` against every stored pairing entry under the bootstrap-state mutex.\n- **What was not tested**: the actual upgrade from the `ws` server through the protocol decoder is not driven by this reproducer; it exercises only the ajv-compiled validator that sits between the decoded JSON and the handshake handler. The integration shape is covered by the existing `connect-auth-bounds.test.ts` unit suite and the broader gateway server auth tests.\n\n## Notes for reviewer\n\n- The latest commit on this branch (`fix(gateway): split connect-frame auth caps for shared vs bootstrap secrets`) splits the cap into 256 (bootstrap/device) and 4096 (shared-secret/password) — different from the original 256/1024 in this PR's earlier description. The reproducer reads the live constants so the captured numbers track whatever is on the branch at the time.\n- The cap on bootstrap/device tokens is the load-bearing one for the DoS-amplification surface; the shared-secret cap is generous on purpose because it matches a single operator-configured value and does not iterate.\n",
-        "branch": "security/connect-schema-auth-bounds",
-        "head_sha": "633181a7d853183ddc02df5b890f8a98ea135e4b",
-        "author": "fede-kamel",
-        "labels": [
-          "app: web-ui",
-          "gateway",
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/connect-auth-bounds.test.ts",
-            "additions": 82,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/schema/frames.ts",
-            "additions": 12,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/schema/primitives.ts",
-            "additions": 21,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-77538",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-77538.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 161,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 29,
-            "SUCCESS": 94,
-            "QUEUED": 35,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-core-runtime-cron-core:QUEUED",
-            "checks-node-core-runtime-cron-isolated-agent:QUEUED",
-            "checks-node-agentic-command-support:QUEUED",
-            "checks-node-agentic-commands-agent-channel:QUEUED",
-            "checks-node-agentic-commands-doctor:QUEUED",
-            "checks-node-agentic-commands-doctor-config-state:QUEUED",
-            "checks-node-agentic-commands-doctor-device:QUEUED",
-            "checks-node-agentic-commands-doctor-gateway:QUEUED",
-            "checks-node-agentic-commands-doctor-platform:QUEUED",
-            "checks-node-agentic-commands-doctor-plugins-tools:QUEUED",
-            "checks-node-agentic-commands-doctor-sessions-cron:QUEUED",
-            "checks-node-agentic-commands-doctor-shared:QUEUED",
-            "checks-node-agentic-commands-doctor-whatsapp:QUEUED",
-            "checks-node-agentic-commands-doctor-workspace:QUEUED",
-            "checks-node-agentic-commands-models:QUEUED",
-            "checks-node-agentic-commands-onboard-config:QUEUED",
-            "checks-node-agentic-commands-status-tools:QUEUED",
-            "checks-node-agentic-agents-core-auth:QUEUED",
-            "checks-node-agentic-agents-core-models:QUEUED",
-            "checks-node-agentic-agents-core-tools:QUEUED",
-            "checks-node-agentic-agents-core-subagents:QUEUED",
-            "checks-node-agentic-agents-core-runner:QUEUED",
-            "checks-node-agentic-agents-core-runtime:QUEUED",
-            "checks-node-agentic-agents-embedded:QUEUED",
-            "checks-node-agentic-agents-support:QUEUED",
-            "checks-node-agentic-agents-tools:QUEUED",
-            "checks-node-agentic-gateway-core:QUEUED",
-            "checks-node-agentic-gateway-methods:QUEUED",
-            "checks-node-agentic-plugin-sdk:QUEUED",
-            "checks-node-auto-reply-core-top-level:QUEUED",
-            "checks-node-auto-reply-reply-agent-runner:QUEUED",
-            "checks-node-auto-reply-reply-commands:QUEUED",
-            "checks-node-auto-reply-reply-dispatch:QUEUED",
-            "checks-node-auto-reply-reply-session:QUEUED",
-            "checks-node-auto-reply-reply-state-routing:QUEUED"
-          ],
-          "pending": [
-            "checks-node-core-runtime-cron-core:QUEUED",
-            "checks-node-core-runtime-cron-isolated-agent:QUEUED",
-            "checks-node-agentic-command-support:QUEUED",
-            "checks-node-agentic-commands-agent-channel:QUEUED",
-            "checks-node-agentic-commands-doctor:QUEUED",
-            "checks-node-agentic-commands-doctor-config-state:QUEUED",
-            "checks-node-agentic-commands-doctor-device:QUEUED",
-            "checks-node-agentic-commands-doctor-gateway:QUEUED",
-            "checks-node-agentic-commands-doctor-platform:QUEUED",
-            "checks-node-agentic-commands-doctor-plugins-tools:QUEUED",
-            "checks-node-agentic-commands-doctor-sessions-cron:QUEUED",
-            "checks-node-agentic-commands-doctor-shared:QUEUED",
-            "checks-node-agentic-commands-doctor-whatsapp:QUEUED",
-            "checks-node-agentic-commands-doctor-workspace:QUEUED",
-            "checks-node-agentic-commands-models:QUEUED",
-            "checks-node-agentic-commands-onboard-config:QUEUED",
-            "checks-node-agentic-commands-status-tools:QUEUED",
-            "checks-node-agentic-agents-core-auth:QUEUED",
-            "checks-node-agentic-agents-core-models:QUEUED",
-            "checks-node-agentic-agents-core-tools:QUEUED",
-            "checks-node-agentic-agents-core-subagents:QUEUED",
-            "checks-node-agentic-agents-core-runner:QUEUED",
-            "checks-node-agentic-agents-core-runtime:QUEUED",
-            "checks-node-agentic-agents-embedded:QUEUED",
-            "checks-node-agentic-agents-support:QUEUED",
-            "checks-node-agentic-agents-tools:QUEUED",
-            "checks-node-agentic-gateway-core:QUEUED",
-            "checks-node-agentic-gateway-methods:QUEUED",
-            "checks-node-agentic-plugin-sdk:QUEUED",
-            "checks-node-auto-reply-core-top-level:QUEUED",
-            "checks-node-auto-reply-reply-agent-runner:QUEUED",
-            "checks-node-auto-reply-reply-commands:QUEUED",
-            "checks-node-auto-reply-reply-dispatch:QUEUED",
-            "checks-node-auto-reply-reply-session:QUEUED",
-            "checks-node-auto-reply-reply-state-routing:QUEUED"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2536,
+    "total_ms": 2127,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 394
+        "ms": 504
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1837
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 277
+        "ms": 1610
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
