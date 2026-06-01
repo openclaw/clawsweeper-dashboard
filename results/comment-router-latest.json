@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-01T05:12:15.950Z",
+  "generated_at": "2026-06-01T05:11:29.750Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-01T02:12:15.642Z",
+  "since": "2026-06-01T02:11:27.903Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    78492
+    79370
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 0,
+  "scanned_comments": 3,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,18 +29,133 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:79370:4406114018:2026-06-01T05:10:53Z:clawsweeper_needs_human",
+      "comment_id": "4406114018",
+      "comment_version_key": "4406114018:2026-06-01T05:10:53Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/79370#issuecomment-4406114018",
+      "repo": "openclaw/openclaw",
+      "issue_number": 79370,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-08T11:39:29Z",
+      "comment_updated_at": "2026-06-01T05:10:53Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=4688f6777651065cd5105b35eb7b946c16cbae72)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +63, Tests +207. Total +270 across 7 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "4688f6777651065cd5105b35eb7b946c16cbae72",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cache): honour explicit cacheRetention for OpenRouter→Anthropic models",
+        "body": "## Problem\n\nWhen `cacheRetention: \"long\"` is explicitly configured for Anthropic models routed through OpenRouter, the resulting requests carry `cache_control: { type: \"ephemeral\" }` **without** `ttl: \"1h\"`. This means only 5-minute prompt cache lifetime instead of the expected 1 hour — a significant cost regression for heavy users. Additionally, `cacheRetention: \"none\"` was also silently ignored — the OpenRouter wrapper always injected ephemeral cache markers regardless.\n\nThe same `cacheRetention: \"long\"` config works correctly when using the direct Anthropic API.\n\n## Root Cause\n\nThree bugs in sequence:\n\n### 1. `resolveCacheRetention()` — early return ignores explicit config\n\n`src/agents/pi-embedded-runner/prompt-cache-retention.ts`\n\nThe function checked `resolveAnthropicCacheRetentionFamily()` first. For `provider: \"openrouter\"`, this returns `undefined` (not a recognized Anthropic/Google cache family). The subsequent early return:\n\n```ts\nif (!family && !googleEligible) {\n  return undefined;\n}\n```\n\nexited **before** ever checking `extraParams.cacheRetention`. Even with `cacheRetention: \"long\"` explicitly set in config, the function never reached that check.\n\n**Fix:** Move explicit-config checks (`cacheRetention` / legacy `cacheControlTtl`) **before** the family-based early return, so operator-specified retention always wins.\n\n### 2. `applyAnthropicEphemeralCacheControlMarkers()` — hardcoded no-TTL markers\n\n`src/agents/anthropic-payload-policy.ts`\n\nCalled by `createOpenRouterSystemCacheWrapper`, this function always wrote `{ type: \"ephemeral\" }` — even if the wrapper had resolved a `cacheControl` with `ttl: \"1h\"`, the TTL was discarded.\n\n**Fix:** Accept an optional `cacheControl: AnthropicEphemeralCacheControl` parameter (defaults to `{ type: \"ephemeral\" }` for backward compat). Also export `resolveAnthropicEphemeralCacheControl()` so the wrapper can build the proper marker with TTL.\n\n### 3. `cacheRetention: \"none\"` still injected markers\n\n`src/agents/pi-embedded-runner/proxy-stream-wrappers.ts`\n\nWhen `cacheRetention` is `\"none\"`, `resolveAnthropicEphemeralCacheControl` correctly returns `undefined`, but the wrapper's `cacheControl ?? { type: \"ephemeral\" }` fallback still injected a short-cache marker — contradicting the operator's explicit opt-out.\n\n**Fix:** Skip marker insertion entirely when `cacheRetention === \"none\"`.\n\n## Before / After\n\n**Before** (OpenRouter→Anthropic, `cacheRetention: \"long\"`):\n```json\n\"cache_control\": { \"type\": \"ephemeral\" }\n```\n\n**After** (same config):\n```json\n\"cache_control\": { \"type\": \"ephemeral\", \"ttl\": \"1h\" }\n```\n\n**After** (`cacheRetention: \"none\"`): no `cache_control` markers at all.\n\n## Review Fix: endpoint-class gate in resolveCacheRetention\n\nInitial patch checked `provider === \"openrouter\"` in `resolveCacheRetention()`, but this did not account for `baseUrl`. If a user repoints the OpenRouter provider at a custom OpenAI-compatible proxy, the system wrapper correctly skips markers via the endpoint-class gate, but `resolveCacheRetention()` would still pass `cacheRetention` through to pi-ai — leaking `cache_control` with TTL to that proxy path.\n\n**Fix:** `resolveCacheRetention()` now accepts an optional `baseUrl` parameter and uses `resolveProviderRequestPolicy` to determine `endpointClass`, mirroring the same gate as `createOpenRouterSystemCacheWrapper`. Both call sites in `extra-params.ts` pass `model.baseUrl` / `callModel.baseUrl`.\n\nRegression tests added:\n- OpenRouter provider + non-OpenRouter baseUrl → `undefined` (no leak)\n- OpenRouter provider + default (unset) baseUrl → honoured\n- OpenRouter provider + `openrouter.ai` baseUrl → honoured\n\n## Real Behavior Proof\n\n**Behavior or issue addressed:** `cacheRetention: \"long\"` config was silently ignored for OpenRouter→Anthropic models. Requests always got 5-minute ephemeral cache markers instead of 1-hour TTL. `cacheRetention: \"none\"` was also ignored — markers were always injected.\n\n**Real environment tested:** Self-hosted OpenClaw v2026.5.7 on VMware VM (Linux Mint), OpenRouter provider, model `openrouter/anthropic/claude-haiku-4.5` with `params.cacheRetention: \"long\"`. Outbound request payloads captured via HTTPS logging proxy.\n\n**Exact steps or command run after the patch:**\n1. Built patched dist from fork branch cherry-picked onto `v2026.5.7` tag\n2. Replaced `dist/` in production install and restarted gateway\n3. Sent test message to Haiku model via Telegram\n4. Captured outbound request payload through logging proxy\n\n**Evidence after fix:**\n```\n=== Captured request payload (after patch, v2026.5.7) ===\nmodel: anthropic/claude-haiku-4.5\nsystem message: cache_control: { \"type\": \"ephemeral\", \"ttl\": \"1h\" }\nlast user message: cache_control: { \"type\": \"ephemeral\", \"ttl\": \"1h\" }\nlast tool definition: cache_control: { \"type\": \"ephemeral\", \"ttl\": \"1h\" }\n```\n\n**Observed result after the fix:** All 3 `cache_control` markers in the Anthropic-format payload now include `\"ttl\": \"1h\"`. Before the patch (same config, unpatched v2026.5.7), all 3 markers had only `{ \"type\": \"ephemeral\" }` without ttl. The fix restores the expected 1-hour prompt cache lifetime on the Anthropic backend, matching the direct Anthropic API behavior. When `cacheRetention: \"none\"` is set, no cache markers are injected.\n\n**What was not tested:** Cache hit/miss ratio on the Anthropic backend side (only verified outbound `cache_control` markers). Did not test with `provider: \"anthropic\"` direct API (already working). Did not test `cacheRetention: \"none\"` end-to-end (unit test coverage only).\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `prompt-cache-retention.ts` | Reorder: explicit config checks before family early-return; add `baseUrl` param; use `resolveProviderRequestPolicy` for endpoint-class gate |\n| `anthropic-payload-policy.ts` | Export `resolveAnthropicEphemeralCacheControl`; add `cacheControl` param to marker function |\n| `proxy-stream-wrappers.ts` | Accept `extraParams`; resolve + pass `cacheControl` with TTL; skip markers when `\"none\"` |\n| `extra-params.ts` | Pass `effectiveExtraParams` to wrapper; pass `baseUrl` to `resolveCacheRetention` |\n\n## Tests\n\n| Test file | New cases |\n|-----------|-----------|\n| `prompt-cache-retention.test.ts` | explicit `long`/`short`/`none` for OpenRouter Anthropic; `undefined` without config; endpoint-class baseUrl gating (3 tests) |\n| `anthropic-cache-control-payload.test.ts` | preserves `ttl` in custom `cacheControl` |\n| `proxy-stream-wrappers.test.ts` | `ttl: \"1h\"` with `long`; no ttl with `short`/default; no markers with `\"none\"`; custom provider pointing to openrouter.ai |\n\n## Related\n\n- PR #42961 — addressed similar issue but targeted an older code architecture before the endpoint-class gating refactor\n- PR #60761 — gates cache markers by endpoint class (orthogonal to this fix which is about TTL preservation)",
+        "branch": "fix/openrouter-cache-ttl-pr",
+        "head_sha": "4688f6777651065cd5105b35eb7b946c16cbae72",
+        "author": "mene-crab",
+        "labels": [
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🌊 off-meta tidepool",
+          "merge-risk: 🚨 compatibility"
+        ],
+        "files": [
+          {
+            "path": "src/agents/anthropic-payload-policy.ts",
+            "additions": 15,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/anthropic-cache-control-payload.test.ts",
+            "additions": 25,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/extra-params.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/prompt-cache-retention.test.ts",
+            "additions": 99,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/prompt-cache-retention.ts",
+            "additions": 39,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/proxy-stream-wrappers.test.ts",
+            "additions": 85,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/proxy-stream-wrappers.ts",
+            "additions": 42,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-79370",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-79370.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 157,
+          "counts": {
+            "SUCCESS": 4,
+            "SKIPPED": 8
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 491,
+    "total_ms": 2055,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 296
+        "ms": 341
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1490
       },
       {
         "name": "classify_commands",
@@ -48,7 +163,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 183
+        "ms": 194
       },
       {
         "name": "append_ledger",
