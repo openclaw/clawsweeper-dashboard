@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-02T05:09:26.713Z",
+  "generated_at": "2026-06-02T05:08:28.859Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-02T02:09:26.440Z",
+  "since": "2026-06-02T02:08:27.632Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    80806
+    79548
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
+  "scanned_comments": 4,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -29,18 +29,141 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:79548:4410364585:2026-06-02T05:08:05Z:clawsweeper_needs_human",
+      "comment_id": "4410364585",
+      "comment_version_key": "4410364585:2026-06-02T05:08:05Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/79548#issuecomment-4410364585",
+      "repo": "openclaw/openclaw",
+      "issue_number": 79548,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-08T22:36:20Z",
+      "comment_updated_at": "2026-06-02T05:08:05Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=78dcde5582fa7333ef425aa05c44eba0431713ad)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +192, Tests +615, Docs +1. Total +808 across 8 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "78dcde5582fa7333ef425aa05c44eba0431713ad",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(acp): bind-aware persistent dispatcher for spawn-child outbound after parent ends",
+        "body": "## Summary\n\nSpawn-child ACP turns produced **zero** outbound channel deliveries until end-of-turn — the projector's deliver callback was tied to the parent run's dispatcher, which tore down ~10s in while the child kept running for minutes. Build a bind-aware fallback that consults the session binding service and routes directly to the bound conversation when the parent dispatcher's async transport starts failing. Closes catalog #1 + #15.\n\n## Bug detail\n\nIn a Telegram supergroup, the parent agent calls `sessions_spawn(placement: \"child\")`, ends its turn ~10s later, copilot child runs for 2-5 minutes producing events. WS clients see the events stream live; Telegram outbound channel sees nothing until end-of-turn, when one consolidated block arrives. The dispatcher's lifecycle was bound to the parent's run — once that ended, the underlying outbound transport failed asynchronously and subsequent payloads silently dropped.\n\n## How to reproduce\n\nLive repro before fix (in a Telegram supergroup with the bot):\n\n```\n@bot Spawn copilot via ACP for PR review of <PR-URL>\n```\n\nWatch:\n\n```bash\ndocker compose logs --follow --tail 0 | grep -E 'telegram|deliver|routeReply'\n# Before: zero outbound API calls until end-of-turn, one consolidated block at end\n# After:  intermediate tool/text deliveries arrive in real time\n```\n\nUnit-level:\n\n```bash\npnpm test src/auto-reply/reply/dispatch-acp.spawn-child-delivery.test.ts\n# 4/4 GREEN (3 original + 1 new fail-closed case)\n```\n\n## Root cause\n\n`delivery.deliver` callback closes over the parent's run dispatch context. When the parent's run completes, the parent's dispatcher's async transport fails. Subsequent calls (`sendToolResult`, `sendBlockReply`, ...) queue on the dispatcher but the `sendChain` `.catch()` handler increments `failedCounts`. There was no fallback that consulted the session binding service to route to the bound conversation.\n\n## Fix approach (rework — addressed 3 bot findings)\n\n### [P1] Real-failure trigger for bind-aware fallback\n\n**Previous (incorrect) trigger:** `!delivered` after `send*()` returning `false`. In production, `send*()` returns `false` only when the payload normalizes to empty — not when the parent run ends. Real parent-teardown failures are recorded *asynchronously* in `failedCounts` after the `sendChain` rejects.\n\n**New trigger:** Before each call to `send*()` in `dispatch-acp-delivery.ts:deliver()`, check `getFailedCounts()`. If the dispatcher's async transport has already failed (total `block + final + tool` failures > 0), route directly to the session binding instead of queuing more payloads on the failing dispatcher.\n\nThis matches the real production failure mode: the first payload after teardown is enqueued (returns true), the `sendChain` rejects, `failedCounts` increments; all subsequent payloads see the failure and go to bindings.\n\n### [P2] Preserve final-mode TTS for final-only output\n\n**Previous (regressive) behavior:** `acp-projector.ts` delivered `final_only` accumulated text as `\"block\"` kind. `maybeApplyAcpTts` skips non-`\"final\"` kinds when TTS mode is `\"final\"`, so users with final-only TTS lost synthesized audio for all ACP completion text.\n\n**Fix:** Restore `\"final\"` kind for the `final_only` flush in `acp-projector.ts`. The bind-aware fallback operates on all kinds, so the kind used for the flush does not affect whether the fallback fires. The result is a single `sendFinalReply` call rather than the previous `sendBlockReply` + fallback `sendFinalReply` pattern, which simplifies delivery for channels without a plugin visibility override (e.g., WhatsApp).\n\n### [P3] Fail closed on ambiguous bindings (requester-scoped routing)\n\n**Previous (insecure) behavior:** `bind-aware-dispatch.ts` looped over ALL active bindings for a session and sent the payload to each. A session with multiple active bindings would broadcast private child updates to unrelated bound chats.\n\n**Fix:** Use `createBoundDeliveryRouter` (already used by `outbound-send-service`) with `failClosed: true`. Pass `requesterConversation` (built from `ctx.Surface/Provider + ctx.To + ctx.AccountId`) so the router matches the single binding whose channel/account matches the requester. If resolution is ambiguous (multiple active bindings, no requester match), the payload is dropped and logged — never broadcast.\n\n## Tests\n\n- **Targeted test:** `src/auto-reply/reply/dispatch-acp.spawn-child-delivery.test.ts` — 4/4 GREEN\n  - Scenarios 1–2: live mode tool+text delivery, final_only buffered delivery (updated assertions: final_only now delivers as `\"final\"` kind)\n  - Scenario 3 (reworked): parent teardown simulated via `failedCounts.tool = 1` (real async-failure state) rather than `send*() → false` (empty-payload path). Verifies binding service is consulted and routeReply is called for the bound conversation.\n  - **New scenario 4:** multiple bindings + no requester context (`To: \"\"`). Asserts `routeReply` is NOT called for either binding — fail-closed behavior confirmed.\n- **Adjacent suite:** `src/auto-reply/reply/` — 1539/1539 pass, 0 fail, 115 files.\n\n## Updates — 3 bot findings addressed (commit `4792ab5501`)\n\n1. **[P1] Real-failure trigger:** Changed from `!delivered` (synchronous send returning false) to `getFailedCounts() > 0` check before each dispatch. Matches production async transport failure path.\n2. **[P2] TTS preservation:** Restored `\"final\"` kind for `final_only` accumulated text flush. Users with TTS mode `\"final\"` now receive synthesized audio for ACP completion text.\n3. **[P3] Requester-scoped routing / fail-closed:** Replaced loop-all-bindings with `createBoundDeliveryRouter(failClosed: true)` + requester context. Ambiguous cases drop + log rather than broadcast.\n\n## Catalog reference\n\nCatalog findings: #1, #15. Investigation lives in branch `edpiva/acp-native-session-investigation` (not yet upstream) at `docs/plans/2026-05-08-acp-findings-catalog.md`.\n\n## Verification commands\n\n```bash\npnpm test src/auto-reply/reply/dispatch-acp.spawn-child-delivery.test.ts   # 4/4 GREEN\npnpm test src/auto-reply/reply/                                            # 1539/0\n```\n\n## Notes for reviewers\n\n- The bind-aware fallback fires when `failedCounts` shows prior async transport failures, meaning the FIRST failed payload is still lost (it's the one that fails the transport and increments `failedCounts`). A persistent bound dispatcher created at session-bind time (option b from the bot findings) would catch all payloads including the first. This is a known gap — the current fix recovers everything after the first failure, which covers the dominant real-world scenario (child running for minutes, many events after teardown).\n- `createBoundDeliveryRouter` uses `normalizeConversationRef` for matching — whitespace and case-insensitive on channel/accountId — so the requester matching is robust to provider-specific formatting differences.\n- All test updates are mechanical: asserting `\"final\"` kind instead of `\"block\"` for `final_only` flush, and updating the teardown simulation to use `failedCounts` instead of return-false mocks.\n",
+        "branch": "edpiva/acp-bind-aware-dispatcher",
+        "head_sha": "78dcde5582fa7333ef425aa05c44eba0431713ad",
+        "author": "efpiva",
+        "labels": [
+          "size: L",
+          "triage: needs-real-behavior-proof",
+          "rating: 🌊 off-meta tidepool"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/acp-projector.test.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/acp-projector.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/bind-aware-dispatch.ts",
+            "additions": 119,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-acp-delivery.ts",
+            "additions": 56,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-acp.spawn-child-delivery.test.ts",
+            "additions": 595,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-acp.test.ts",
+            "additions": 21,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-acp.ts",
+            "additions": 18,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-79548",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-79548.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "CHANGES_REQUESTED",
+        "checks": {
+          "total": 12,
+          "counts": {
+            "FAILURE": 1,
+            "SUCCESS": 3,
+            "SKIPPED": 8
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 662,
+    "total_ms": 1424,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 261
+        "ms": 293
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 919
       },
       {
         "name": "classify_commands",
@@ -48,7 +171,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 389
+        "ms": 182
       },
       {
         "name": "append_ledger",
