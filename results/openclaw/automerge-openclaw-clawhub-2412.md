@@ -2,12 +2,12 @@
 repo: "openclaw/clawhub"
 cluster_id: "automerge-openclaw-clawhub-2412"
 mode: "autonomous"
-run_id: "26807603100"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26807603100"
-head_sha: "178cd1ccbf9f3f666a10519a434f1418ecd6c5be"
-workflow_conclusion: "failure"
+run_id: "26812522237"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26812522237"
+head_sha: "4386eaad42a3eb85d4de014df7021667f027a6a4"
+workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-06-02T08:26:24.369Z"
+published_at: "2026-06-02T10:18:21.952Z"
 canonical: "#2412"
 canonical_issue: null
 canonical_pr: "#2412"
@@ -16,7 +16,7 @@ fix_executed: 0
 fix_failed: 0
 fix_blocked: 0
 apply_executed: 0
-apply_blocked: 0
+apply_blocked: 1
 apply_skipped: 0
 needs_human_count: 0
 ---
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/clawhub
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/26807603100](https://github.com/openclaw/clawsweeper/actions/runs/26807603100)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/26812522237](https://github.com/openclaw/clawsweeper/actions/runs/26812522237)
 
-Workflow conclusion: failure
+Workflow conclusion: success
 
 Worker result: planned
 
@@ -46,7 +46,7 @@ Make PR #2412 merge-ready for ClawSweeper automerge. Rebase onto latest main, ad
 | Fix failed | 0 |
 | Fix blocked | 0 |
 | Applied executions | 0 |
-| Apply blocked | 0 |
+| Apply blocked | 1 |
 | Apply skipped | 0 |
 | Needs human | 0 |
 
@@ -54,13 +54,13 @@ Make PR #2412 merge-ready for ClawSweeper automerge. Rebase onto latest main, ad
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| repair_contributor_branch | pushed | https://github.com/openclaw/clawhub/pull/2412 |  |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| #2412 | merge_canonical | blocked | fix_pr | job does not allow merge |
 
 ## Worker Action Matrix
 
