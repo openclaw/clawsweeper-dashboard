@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-02T18:22:17.901Z",
+  "generated_at": "2026-06-02T18:23:08.630Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-02T15:22:17.563Z",
+  "since": "2026-06-02T15:23:05.771Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    89574
+    89576
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +29,110 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89576:4605742598:2026-06-02T18:23:01Z:clawsweeper_auto_repair",
+      "comment_id": "4605742598",
+      "comment_version_key": "4605742598:2026-06-02T18:23:01Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89576#issuecomment-4605742598",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89576,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-02T18:17:40Z",
+      "comment_updated_at": "2026-06-02T18:23:01Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=3e2acddd54c176fda249af4553dc68b093f7f52b)",
+      "review_summary": "The PR adds a `Page.bringToFront` call before browser screenshot capture so background tabs can produce compositor-backed screenshots promptly.\n\nPR surface: Source +9. Total +9 across 1 file.\n\nReproducibility: yes. as a source-backed and contributor-provided live recipe: create two headless CDP tabs, background the target tab, then time `Page.captureScreenshot` before and after `Page.bringToFront`. This review did not run that live browser repro locally.",
+      "review_followup": "- [P2] A narrow automated repair can update the CDP mock/test coverage without changing the product direction of the runtime fix.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "3e2acddd54c176fda249af4553dc68b093f7f52b",
+      "finding_id": "review-feedback",
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(browser): bring tab to foreground before screenshot capture",
+        "body": "## Summary\n\n**What problem does this PR solve?**\n`browser screenshot` (and the screenshot-backed snapshot path) hang until the CDP socket times out (~20s) whenever the target tab is **backgrounded**.\n\n**Why does this matter now?**\nOn a multi-tab or node-hosted browser session, any capture of a non-foreground tab blocks for the full timeout, making screenshots effectively unusable without manual tab juggling.\n\n**What is the intended outcome?**\nCaptures return promptly regardless of which tab is foregrounded.\n\n**What is intentionally out of scope?**\nThe pure-a11y snapshot path (`Accessibility.getFullAXTree`) — it needs no rendered frame and already works on backgrounded tabs, so it is left untouched.\n\n**What does success look like?**\nA capture of a backgrounded tab returns in ~100ms instead of timing out.\n\n**What should reviewers focus on?**\nThat issuing `Page.bringToFront` before capture is acceptable behavior (it activates the target tab). It is a no-op for a single-tab session and for an already-foregrounded tab, and its failure is swallowed so capture paths that already work cannot regress.\n\n### Root cause\n`Page.captureScreenshot {fromSurface:true}` waits for a compositor frame to commit. Under `--headless=new`, a **backgrounded tab never commits a new frame**, so the call blocks until timeout. `Accessibility.getFullAXTree` is unaffected (no rendered frame needed) — which is why text/a11y reads succeed while pixel capture hangs. The capture path issued no `Page.bringToFront`/`Target.activateTarget` before capturing.\n\n### The fix\nIn `extensions/browser/src/browser/cdp.ts` `captureScreenshot()`, issue `await send(\"Page.bringToFront\").catch(() => {})` immediately after `Page.enable` and before capture. Activating the tab forces a compositor frame to commit.\n\n## Linked context\n\nCloses #\n\nRelated # — none upstream; tracked downstream.\nWas this requested by a maintainer or owner? No — external contribution.\n\n## Real behavior proof (required for external PRs)\n\n- **Behavior or issue addressed:** `Page.captureScreenshot` hangs on backgrounded tabs under headless Chrome.\n- **Real environment tested:** OpenClaw browser node pod, Chromium `Chrome/148.0.7778.215` headless (`--headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage`), ARM64, driven via CDP on the live debugger port.\n- **Exact steps run:** Over the browser's CDP endpoint, created two tabs (data-URL pages), activated the second so the first is backgrounded, attached to the backgrounded tab, then timed `Page.captureScreenshot` **before** vs **after** `Page.bringToFront` on the same session. Repeated 3x.\n- **Evidence after fix (the mechanism this patch applies):**\n\n  | run | backgrounded, no bringToFront | after `Page.bringToFront` |\n  |-----|-------------------------------|---------------------------|\n  | 1   | 3367 ms                       | **109 ms** |\n  | 2   | 3222 ms                       | **84 ms**  |\n  | 3   | 3260 ms                       | **117 ms** |\n\n- **Observed result after fix:** Capture returns in ~100ms after `bringToFront`, vs multi-second (up to the full ~20s timeout on heavier real pages) without it.\n- **What was not tested:** I verified the exact CDP behavior the patch applies (bringToFront → capture) directly against a live headless browser; I did not additionally rebuild and run a full OpenClaw image end-to-end through the `browser` tool. The patch inserts precisely the call that was measured.\n- **Proof limitations:** A lightweight `data:` page degrades to ~3.3s rather than the full 20s a heavy page exhibits; the invariant (bringToFront → ~100ms) is identical in both, so before/after on the same tab is the load-bearing evidence.\n\n## Tests and validation\n\n- Targeted typecheck of the browser extension; the change is type-neutral (error-count delta vs the untouched base is 0 — the monorepo workspace deps are unbuilt in my checkout, so absolute-zero tsc isn't attainable there, but base == patched).\n- No new automated test added: the failure mode is a headless-Chrome compositor timing behavior that requires a real backgrounded tab to reproduce; covered by the real-behavior proof above.\n\n## Risk checklist\n\n- Did user-visible behavior change? **Yes** — capturing now foregrounds the target tab first.\n- Did config/env/migration behavior change? **No.**\n- Did security/auth/secrets/network/tool-execution behavior change? **No.**\n- Highest-risk area: `bringToFront` changes which tab is foreground in a multi-tab session.\n- Mitigation: no-op for single-tab/already-foregrounded sessions; `.catch(() => {})` tolerates failure so existing working captures cannot regress.\n\n## Current review state\n\n- Next action: maintainer review.\n- Waiting on: maintainer.\n- Bot/reviewer comments addressed: none yet (initial submission).\n",
+        "branch": "fix/browser-bringtofront-before-screenshot",
+        "head_sha": "3e2acddd54c176fda249af4553dc68b093f7f52b",
+        "author": "spencer2211",
+        "labels": [
+          "size: XS",
+          "triage: needs-real-behavior-proof",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "extensions/browser/src/browser/cdp.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89576",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89576.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 155,
+          "counts": {
+            "FAILURE": 1,
+            "SUCCESS": 123,
+            "SKIPPED": 31
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 555,
+    "total_ms": 3125,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 326
+        "ms": 403
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2440
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 217
+        "ms": 254
       },
       {
         "name": "append_ledger",
