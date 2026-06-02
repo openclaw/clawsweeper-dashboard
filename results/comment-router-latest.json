@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-02T05:09:06.158Z",
+  "generated_at": "2026-06-02T05:08:14.167Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-02T02:09:05.865Z",
+  "since": "2026-06-02T02:08:13.875Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    80432
+    81087
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 1,
+  "scanned_comments": 2,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,132 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:79540:4410217446:2026-06-02T05:08:57Z:clawsweeper_auto_repair",
-      "comment_id": "4410217446",
-      "comment_version_key": "4410217446:2026-06-02T05:08:57Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/79540#issuecomment-4410217446",
-      "repo": "openclaw/openclaw",
-      "issue_number": 79540,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-08T22:13:14Z",
-      "comment_updated_at": "2026-06-02T05:08:57Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=05b5aedaa500a4ff16b041f27b9346f2379b544f)",
-      "review_summary": "The PR adds an ACP projector token-usage callback, wires ACP dispatch to persist `usage_update` `used`/`size` values into session usage fields, adds projector regression tests, and adds a changelog entry.\n\nPR surface: Source +32, Tests +182, Docs +1. Total +215 across 4 files.\n\nReproducibility: Source-reproducible with high confidence: current main receives `usage_update` `used/size` fields but only uses them for display dedupe, and dispatch has no persistence callback. The contributor also provided before-state deployed-container output, but I did not rerun a live ACP turn here.",
-      "review_followup": "- [P1] This PR needs contributor after-fix real behavior proof, conflict resolution, and a small changelog cleanup before normal maintainer review; automation cannot supply the contributor's real ACP environment proof.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "05b5aedaa500a4ff16b041f27b9346f2379b544f",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(acp): capture and persist usage_update tokens for ACP sessions",
-        "body": "## Summary\n\nPlumb token usage from ACP `usage_update` events into the openclaw session record so `totalTokens` is no longer permanently `null` for ACP sessions. Closes catalog #21.\n\n## Bug detail\n\nEvery ACP session in the listing reported `totalTokens: null`, `totalTokensFresh: false`, regardless of how many turns it had run. The acpx session record carried `cumulative_token_usage: {}` and `request_token_usage: {}` (empty), confirming token usage was never being persisted from the copilot ACP runtime into the openclaw session entry. Token-cost tracking and budget guards were inoperative for any ACP session.\n\n## How to reproduce\n\nLive repro before fix:\n\n\\`\\`\\`bash\ndocker compose exec codeclaw-openclaw openclaw sessions --all-agents --json \\\n  | jq '.sessions[] | select(.key | contains(\"acp:\")) | {key, totalTokens, totalTokensFresh}'\n# Before: all ACP sessions show \"totalTokens\": null, \"totalTokensFresh\": false\n# After: ACP sessions that completed a turn show numeric totalTokens\n\\`\\`\\`\n\nUnit-level repro:\n\n\\`\\`\\`bash\ngit checkout 5e083f0510            # red-test cherry-pick\npnpm test src/auto-reply/reply/acp-projector.usage-update-tokens.test.ts\n# Before fix: 2 RED (callback never fires; persistence bucket stays unset)\n# After fix commit d292fa7199: all 3 GREEN\n\\`\\`\\`\n\n## Root cause\n\n`src/auto-reply/reply/acp-projector.ts:462-474` consumed `usage_update` events for **display only** (`emitSystemStatus(event.text, ...)`). Numeric `event.used` / `event.size` were extracted just for repeat-suppression hashing — never persisted. There was no callback or write path from the projector back to the session record. `resolveSessionTotalTokens` (`src/config/sessions/types.ts:506-514`) reads `entry?.totalTokens` which therefore stayed `null`.\n\n## Fix approach\n\nCatalog Option 1 — write entry-level `totalTokens` via the existing `persistSessionUsageUpdate` helper. No new schema fields:\n\n1. Added optional `onTokenUsage?: (usage: AcpTokenUsage) => void | Promise<void>` parameter to `createAcpReplyProjector`. Existing callers compile unchanged.\n2. The projector fires `onTokenUsage({ used, size, total: used })` BEFORE the display dedupe/visibility gate, so persistence always receives the latest values regardless of repeat-suppression. Guarded by `event.tag === \"usage_update\" && typeof event.used === \"number\" && typeof event.size === \"number\"` — text-only `usage_update` events do not trigger the callback.\n3. `dispatch-acp.ts` wires the callback to call `persistSessionUsageUpdate({ usage: { input: usage.used, output: 0 }, usageIsContextSnapshot: true, contextTokensUsed: usage.size })`. Because `usageIsContextSnapshot: true`, `deriveSessionTotalTokens` writes the captured value to `entry.totalTokens` — the exact field `resolveSessionTotalTokens` already reads.\n4. ACP `usage_update` events do not separate input from output, so all tokens are lumped into `input` (with `output: 0`). The `usageIsContextSnapshot` semantics treat this as a context snapshot rather than incremental usage.\n\n## Tests\n\n- **Red test (now GREEN):** `src/auto-reply/reply/acp-projector.usage-update-tokens.test.ts` — 3 cases: 2 formerly-red flip GREEN, 1 GREEN control stays GREEN.\n- **Adjacent suite:** `src/auto-reply/reply/` — 1538 pass / 0 fail / 115 files. No regressions.\n- **Cleanup commit (`1ba8b529a5`):** removed dead pre-fix shim from the test file and added a one-line WHY comment at the projector's `onTokenUsage` call site.\n\n## Catalog reference\n\nCatalog finding: #21. Investigation lives in branch `edpiva/acp-native-session-investigation` (not yet upstream) at `docs/plans/2026-05-08-acp-findings-catalog.md`.\n\n## Verification commands\n\n\\`\\`\\`bash\npnpm test src/auto-reply/reply/acp-projector.usage-update-tokens.test.ts   # 3/3 GREEN\npnpm test src/auto-reply/reply/                                            # 1538/0\n\\`\\`\\`\n\n## Notes for reviewers\n\n- ACP doesn't separate input/output token counts, so the persisted value lumps everything into `input` with `output: 0`. This matches what the catalog finding flagged as the trade-off for option 1; if you'd prefer extending `SessionAcpMeta` with explicit fields instead, I can switch (option 2 in the catalog).\n- The optional callback parameter is intentionally additive — no breaking change to existing projector callers.\n- `resolveSessionTotalTokens` was reached without modification: option 1 writes `entry.totalTokens` and the existing reader handles it.\n\n---\n\n## Live behavior repro (deployed container)\n\n**Container:** `codeclaw-openclaw:clean` running OpenClaw 2026.5.6 (`e9d4a0a`)\n\n### `totalTokens` permanently `null` for every ACP session\n\n```\n$ docker exec codeclaw-openclaw openclaw sessions --all-agents --json \\\n    | jq -c '.sessions[] | select(.key | startswith(\"agent:copilot:acp:\")) | {key, totalTokens, totalTokensFresh}'\n\n{\"key\":\"agent:copilot:acp:86b7b5af-…\",\"totalTokens\":null,\"totalTokensFresh\":false}\n{\"key\":\"agent:copilot:acp:d6fb7506-…\",\"totalTokens\":null,\"totalTokensFresh\":false}\n{\"key\":\"agent:copilot:acp:f5ab8dba-…\",\"totalTokens\":null,\"totalTokensFresh\":false}\n{\"key\":\"agent:copilot:acp:1f854fa2-…\",\"totalTokens\":null,\"totalTokensFresh\":false}\n{\"key\":\"agent:copilot:acp:930316f7-…\",\"totalTokens\":null,\"totalTokensFresh\":false}\n{\"key\":\"agent:copilot:acp:63867cf7-…\",\"totalTokens\":null,\"totalTokensFresh\":false}\n{\"key\":\"agent:copilot:acp:8fb42bab-…\",\"totalTokens\":null,\"totalTokensFresh\":false}\n```\n\n7/7 ACP sessions report `null` even after multiple turns. The acpx record carries `cumulative_token_usage: {}` and `request_token_usage: {}` (empty) — token usage was never plumbed from the copilot ACP runtime into the openclaw entry. Token-cost tracking and budget guards were inoperative for any ACP session.\n\nAfter this PR (fix commit `d292fa7199`), the projector fires `onTokenUsage` whenever a `usage_update` event lands with numeric `used`/`size`, which triggers `persistSessionUsageUpdate` → `entry.totalTokens` is populated and `resolveSessionTotalTokens` returns the correct value.\n",
-        "branch": "edpiva/acp-token-plumbing",
-        "head_sha": "05b5aedaa500a4ff16b041f27b9346f2379b544f",
-        "author": "efpiva",
-        "labels": [
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/acp-projector.ts",
-            "additions": 16,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/acp-projector.usage-update-tokens.test.ts",
-            "additions": 182,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-acp.ts",
-            "additions": 16,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-79540",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-79540.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 12,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 3,
-            "SKIPPED": 8
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 525,
+    "total_ms": 495,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 280
+        "ms": 278
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 884
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 232
+        "ms": 204
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
