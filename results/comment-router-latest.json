@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-02T23:34:14.529Z",
+  "generated_at": "2026-06-02T23:34:47.659Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-02T20:34:12.070Z",
+  "since": "2026-06-02T20:34:47.165Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4607824300
   ],
-  "status_comment_id": 4607824491,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-02T23:33:41Z",
       "comment_updated_at": "2026-06-02T23:33:41Z",
-      "status_comment_id": 4607824491,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,121 +61,30 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-02T23:34:15.199Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 84972
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-02T23:34:16.220Z",
-          "response_comment_id": "4607824491",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agent): treat Anthropic long-context usage errors as context overflow for compact+retry",
-        "body": "## Summary\n\nRe-opening as new PR after #52030 was auto-closed by barnaclebot for the 10-PR cap; reviewers and Greptile evaluated the fix positively at the time and the underlying bug still applies on current main.\n\nAnthropic returns HTTP 429 with body `\"Extra usage is required for long context requests.\"` when a request hits the long-context usage tier. Today the runtime classifies this through `isBillingErrorMessage` (which was extended in `failover-matches.ts` to match `/extra usage is required(?: for long context requests)?/i`), short-circuiting before any context-overflow handling. The right recovery is **compact + retry on the standard tier**, the session is too large for the standard usage tier, not a payment failure.\n\nThis PR adds `isAnthropicLongContextUsageError(message)` and inserts it into `isLikelyContextOverflowError` BEFORE the `isBillingErrorMessage` exclusion, so the long-context 429 routes to compact+retry rather than the billing fallback path.\n\n## Files\n\n- `src/agents/embedded-agent-helpers/errors.ts`: new classifier + early-return inserted before the billing exclusion\n- `src/agents/embedded-agent-helpers.ts`: re-export\n- `src/agents/embedded-agent-helpers.isbillingerrormessage.test.ts`: coverage for the new classifier and the overflow short-circuit\n- `docs/gateway/troubleshooting.md`, `docs/help/faq-first-run.md`: document the compact+retry recovery path\n\n## Real behavior proof\n\n- Behavior addressed: An Anthropic HTTP 429 with body `Extra usage is required for long context requests.` is currently classified as a billing error by `isBillingErrorMessage` via the regex added in `src/agents/embedded-agent-helpers/failover-matches.ts`. That short-circuits `isLikelyContextOverflowError` and routes the request into the billing/model-fallback chain instead of the compact+retry path. The reorder in this PR detects the long-context body before the billing exclusion runs, so the runtime drives `compactAndRetry` on the standard tier instead of failing over.\n- Real environment tested: live deployed openclaw gateway on rh-bot.lan, pid 71842, build SHA 23804e610c (upgrade-v2026.5.28 with this PR cherry-picked). macOS Darwin 25.5.0, Node v25.8.2, `/opt/homebrew/bin/openclaw`. The patched deployed bundle is the local production build of upgrade-v2026.5.28 with PR #84972 layered on top, staged under `/tmp/openclaw-pr-84972/dist/` on the same host as the running gateway; the deployed gateway dist at `/Users/alexm/.openclaw/openclaw/dist/` is the same source tree without this PR and is used as the pre-fix baseline.\n- Exact steps or command run after this patch:\n  ```\n  ssh alexm@rh-bot.lan\n  ls -la /Users/alexm/.openclaw/openclaw/dist/.buildstamp\n  # -> {\"builtAt\":...,\"head\":\"23804e610c998a0532e0c90441b130b38e5e8cc8\"}\n  ps -p 71842 -o pid,etime,command\n  grep -l \"isAnthropicLongContextUsageError\" /tmp/openclaw-pr-84972/dist/*.js\n  # -> /tmp/openclaw-pr-84972/dist/errors-Br4OcmFZ.js\n  node /tmp/proof-84972-amittell-baseline.mjs   # pre-patch baseline against live deployed bundle\n  node /tmp/proof-84972-amittell.mjs            # post-patch behavior against patched deployed bundle\n  ```\n- Evidence after fix: realistic Anthropic error payloads exercised against the patched deployed bundle on rh-bot.lan. Output of `node /tmp/proof-84972-amittell.mjs`:\n  ```\n  --- direct isAnthropicLongContextUsageError checks ---\n  PASS longContext.isAnthropicLongContextUsageError: true\n  PASS rateLimit.isAnthropicLongContextUsageError: false\n  PASS promptTooLong.isAnthropicLongContextUsageError: false\n  PASS unrelated.isAnthropicLongContextUsageError: false\n  --- isLikelyContextOverflowError routing ---\n  PASS longContext.isLikelyContextOverflowError: true\n  PASS rateLimit.isLikelyContextOverflowError: false\n  PASS promptTooLong.isLikelyContextOverflowError: true\n  PASS unrelated.isLikelyContextOverflowError: false\n\n  RESULT PASS (all checks)\n  ```\n  Output of `node /tmp/proof-84972-amittell-baseline.mjs` against the live deployed unpatched bundle on the same host:\n  ```\n  pre-patch isLikelyContextOverflowError(longContextMessage) = false\n  BASELINE CONFIRMED: pre-patch deployed bundle misclassifies Anthropic long-context 429\n  ```\n- Observed result after fix: `isLikelyContextOverflowError(\"Extra usage is required for long context requests.\")` returns `true` against the patched deployed bundle, where the same call against the live deployed unpatched bundle returns `false`. The canonical Anthropic context-overflow body `prompt is too long` continues to return `true`, the rate-limit body `Number of request tokens exceeds the rate limit` continues to return `false`, and unrelated server errors continue to return `false`, so the reorder only flips the long-context 429 case and leaves every neighboring classifier path untouched.\n- What was not tested: end-to-end observation of an Anthropic 429 with the long-context body actually arriving at the deployed gateway and driving `compactAndRetry` through to a successful retry. Reproducing the upstream 429 requires a real Anthropic account above the standard usage tier and a payload large enough to trip the long-context check, which is not reliably reproducible from the lab hosts. The classifier surface that decides the routing has been exercised directly against the patched deployed bundle, and the equivalent in-tree unit suites under `src/agents/embedded-agent-helpers/` pass locally.\n\n## Refs\n\n- Superseded close: #52030 (barnaclebot 10-PR cap auto-close, no merit rejection)\n- Original Greptile review on #52030 confirmed the misclassification path\n",
-        "branch": "fix/anthropic-long-context-compact",
-        "head_sha": "647ab5e902556623c70cc3b8f3d14fab84f9553a",
-        "author": "amittell",
-        "labels": [
-          "docs",
-          "gateway",
-          "agents",
-          "size: S",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "docs/gateway/troubleshooting.md",
-            "additions": 5,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/help/faq-first-run.md",
-            "additions": 6,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-helpers.isbillingerrormessage.test.ts",
-            "additions": 37,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-helpers.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-helpers/errors.ts",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84972",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84972.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "SUCCESS": 131,
-            "SKIPPED": 30,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4645,
+    "total_ms": 1810,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 484
+        "ms": 480
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1960
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 2173
+        "ms": 1316
       },
       {
         "name": "append_ledger",
