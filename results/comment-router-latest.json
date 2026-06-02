@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-02T03:24:15.472Z",
+  "generated_at": "2026-06-02T03:24:18.130Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-02T00:24:12.858Z",
+  "since": "2026-06-02T00:24:17.834Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    89109
+    89304
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,112 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89109:4593515676:2026-06-02T03:24:07Z:clawsweeper_auto_repair",
-      "comment_id": "4593515676",
-      "comment_version_key": "4593515676:2026-06-02T03:24:07Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89109#issuecomment-4593515676",
-      "repo": "openclaw/openclaw",
-      "issue_number": 89109,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-01T14:26:33Z",
-      "comment_updated_at": "2026-06-02T03:24:07Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=d2399da36e08ec1dfb710ff939f89c12e41bb804)",
-      "review_summary": "Adds volatile-id-stripped result hashing for send-like `message` outcomes and `sessions_send`, with regression tests for duplicate send loops, poll delivery, nested ids, and sticky tool-loop vetoes.\n\nPR surface: Source +88, Tests +291. Total +379 across 2 files.\n\nReproducibility: yes. Current main hashes full send results and critical loop paths require identical result hashes, so repeated identical sends with fresh `messageId` values are source-reproducible; the PR's added tests encode that failure path, though I did not run them in this read-only review.",
-      "review_followup": "- [P2] A narrow mechanical repair can preserve the PR's send-loop fix while restoring hashable outcomes for non-loop blocked tool results.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "d2399da36e08ec1dfb710ff939f89c12e41bb804",
-      "finding_id": "review-feedback",
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): block message-tool spam loops defeated by volatile message ids",
-        "body": "### Summary\n\n- **Problem**: Issue #89090 reports that `loopDetection` detects repeated `message.send` calls (`ping_pong`, warning level) but can never escalate to a **block**. A model stuck in a tool-call loop keeps sending duplicate messages — 30+ duplicates reported — until `runRetries.max` (default 160) is exhausted; the user only sees a flood of identical messages and the warning the model ignores.\n- **Root Cause**: In `tool-loop-detection.ts`, `hashToolOutcome` hashes the full result for the send tools. A successful send returns through `jsonResult(payload)`, so the per-call delivery ids land in **both** the result `details` (e.g. `messageId`, `receipt`, the gateway `runId`) **and** the result `text` (the stringified payload). The hash therefore differs on every call. All three critical-block paths — the global circuit breaker, `ping_pong` critical, and generic no-progress — require consecutive **identical** `resultHash` values (`getNoProgressStreak` / `noProgressEvidence`), which is structurally impossible for a tool whose result carries a unique id. Detection fires only at warning level because it also keys on `argsHash`, which is stable.\n- **Fix**: Hash a stable, id-stripped projection of the result, scoped to delivery results only — `sessions_send` and the outbound-message actions (`send`, `broadcast`, `reply`, `thread-reply`, `sendWithEffect`, `sendAttachment`, `upload-file`, `sticker`, `poll`) of the multi-action `message` tool.\n  - `isVolatileSendResult` gates the path on `params.action`: only the outbound-message actions above (and the send-only `sessions_send`) get the stripped hash. `message` also serves mutate/query actions (`read`, `search`, `edit`, `react`, `unsend`, `list-pins`, `thread-list`, …) whose ids/timestamps are real progress, so those keep full-result hashing.\n  - `stripVolatileSendIds` recursively removes `VOLATILE_SEND_RESULT_KEYS` (`messageId`, `message_id`, `messageIds`, `fileId`, `fileKey`, `pollId`, `receipt`, `runId`, `idempotencyKey`, `ts`, `timestamp`, `sentAt`, `deliveredAt`, `createdAt`) from `details` at any depth — so it also neutralizes the nested ids in a `broadcast` payload (`results[].result.messageId`).\n  - It also drops a message object's own bare `id` (detected via `isMessageDeliveryObject`: a string `id` + `text` plus `conversation`/`direction`/`senderId`/`accountId`) so plugin-shaped delivery results normalize too, while a stable nested route/`conversation.id` is preserved.\n  - The stringified `text` is **not** hashed for delivery results (it is the payload restated and carries the same volatile ids); the stable delivery facts (`ok` / status / channel / target) remain.\n  - Vetoed/blocked calls (the loop-block veto records a `buildBlockedToolResult`) get no result hash, so a critical block stays sticky instead of the block result resetting the no-progress streak.\n  - This runs at the shared `hashToolOutcome` layer, so it covers direct, gateway, and plugin-handled send results uniformly. Repeated identical-args sends now produce a stable `resultHash`, so the no-progress / critical paths fire and the loop is blocked.\n  - **Why this is safe (no false positives)**: no-progress requires BOTH `argsHash` and `resultHash` to repeat. The args hash already carries the message content and target, so two genuinely different messages have different `argsHash` and are never flagged — dropping the volatile ids only restores detection for true same-args resends.\n- **What changed**:\n  - `src/agents/tool-loop-detection.ts` — add `SEND_LIKE_MESSAGE_ACTIONS`, `VOLATILE_SEND_RESULT_KEYS`, `stripVolatileSendIds`, `isVolatileSendResult`, and `isBlockedToolResult`; branch delivery results to the id-stripped hash inside `hashToolOutcome` and give blocked/veto results no hash.\n  - `src/agents/tool-loop-detection.test.ts` — thirteen regression cases on the real `jsonResult` result shape (stable hash across ids in details+text, nested broadcast ids, escalation to critical for `message` `send`, sibling `reply` and `upload-file` (fresh file id) actions, and `sessions_send`, no false-positive on distinct messages, a non-send `message` `read` whose id/timestamp progress must stay distinct, a stable nested route id that must survive the strip, and a critical block that stays sticky after the veto result is recorded).\n- **What did NOT change (scope boundary)**:\n  - Generic / exec / process / poll detector semantics, non-send `message` action hashing, thresholds, and retry caps are untouched — nothing was loosened or raised; this restores the existing block behavior for delivery results only.\n  - No config surface (no schema, defaults, doctor migrations, or `docs/reference/config`).\n  - No plugin surface (no plugin SDK, manifest, `extensions/*` api/runtime-api, registry/loader).\n  - Gateway protocol unchanged.\n\n### Reproduction\n\n1. Configure an agent with a model prone to tool-call loops on a channel that returns a per-send message id (e.g. Feishu).\n2. The model loops on `message.send` with identical arguments.\n3. **Before this PR**: `ping_pong` fires at warning level but never reaches critical/block; the user receives 30+ duplicate messages until run-retries are exhausted.\n4. **After this PR**: the repeated identical send is recognized as no-progress and escalates to a critical block.\n\nDeterministic source reproduction (added as regression tests): record repeated sends with identical args but changing delivery ids in the result, then call `detectToolCallLoop` — before the fix it can never reach a critical branch.\n\n### Real behavior proof\n\n**Behavior addressed (#89090 — send loops can now be blocked, not just warned)**: repeated identical `message.send` (and `sessions_send`) escalates to a critical block instead of spamming until run-retry exhaustion.\n\n**Real environment tested (Linux, Node — Vitest against the production loop-detection module using the real `jsonResult` result shape; no live channel run)**: verified via `tool-loop-detection.test.ts`, plus core production type-check and a scoped test type-check over the two changed files, plus format check. A live multi-channel gateway loop was not run.\n\n**Exact steps or command run after this patch (repo-root)**: `node scripts/run-vitest.mjs src/agents/tool-loop-detection.test.ts`; `node scripts/run-tsgo.mjs -p tsconfig.core.json` (core types) and a scoped `tsgo` over the changed production + test files (test types); `oxfmt --check` on the changed files.\n\n**Evidence after fix (Vitest output for the touched test file)**:\n\n```text\n tool-loop-detection.test.ts   Tests  56 passed (56)\n```\n\nThirteen new cases pass, all built on the real `jsonResult` result shape (volatile id present in both `details` and the stringified `text`): a stable result hash across two sends whose ids differ; stable hash across `broadcast` results with per-call nested ids; escalation to `critical` for `message` `send`, `reply`, `upload-file`, and `sessions_send` despite every id differing; a plugin-shaped result whose message object carries a bare per-send `id`; no `stuck` result when the sends carry distinct content (different args); a non-send `message` `read` whose results differ only by id/timestamp staying distinct (full hashing preserved); a stable nested route id that survives the strip; a changing `conversation.id` that stays below critical; and a critical block that stays sticky after the veto result is recorded.\n\n**Observed result after fix (identical-args send loops reach critical/block)**: `detectToolCallLoop` reports `stuck` at `critical` for repeated identical sends, while distinct-content sends remain unflagged.\n\n**What was not tested (live channel/gateway runaway loop)**: a real Feishu/gateway loop session was not reproduced live; the proof is the deterministic module-level reproduction the issue itself describes.\n\n**Repro confirmation**: with the production delivery branch removed on an otherwise-identical tree, the four send behavior cases fail (stable-hash, nested-broadcast, and both escalation cases); and when the branch is instead broadened to every `message` action (dropping the `params.action` gate), the non-send `read` case fails — so both the fix and its action-scoping are covered by tests that fail on the shape the runtime actually produces rather than passing vacuously. All cases pass with the scoped fix.\n\n### Risk / Mitigation\n\n- **Risk**: over-stripping result fields could collide distinct outcomes. **Mitigation**: only a fixed set of volatile delivery-id keys is removed (recursively); stable facts (status, channel, target, action) and the `argsHash` gate remain, so distinct messages stay distinguishable (covered by the no-false-positive regression test).\n- **Risk**: behavior change could surface previously-hidden blocks. **Mitigation**: the change is scoped to the send family and merely lets the *existing* critical/no-progress thresholds apply as designed; no threshold, cap, or other detector/tool is altered.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Agents / tools\n\n### Linked Issue/PR\n\nFixes #89090\n",
-        "branch": "fix/89090-loopdetect-message-volatile-id",
-        "head_sha": "d2399da36e08ec1dfb710ff939f89c12e41bb804",
-        "author": "openperf",
-        "labels": [
-          "agents",
-          "size: M",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 message-delivery",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/agents/tool-loop-detection.test.ts",
-            "additions": 291,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tool-loop-detection.ts",
-            "additions": 88,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89109",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89109.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 156,
-          "counts": {
-            "SUCCESS": 131,
-            "SKIPPED": 24,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2974,
+    "total_ms": 497,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 474
+        "ms": 284
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2125
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 349
+        "ms": 201
       },
       {
         "name": "append_ledger",
