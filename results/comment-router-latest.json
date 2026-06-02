@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-02T02:13:00.214Z",
+  "generated_at": "2026-06-02T02:13:09.139Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-01T23:12:57.487Z",
+  "since": "2026-06-01T23:13:06.338Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     89039
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4598119142
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 5,
@@ -40,12 +42,12 @@
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-01T09:57:55Z",
-      "comment_updated_at": "2026-06-02T02:12:53Z",
+      "comment_created_at": "2026-06-02T02:11:48Z",
+      "comment_updated_at": "2026-06-02T02:11:48Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -61,153 +63,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: prevent silent message loss from EmbeddedAttemptSessionTakeoverError",
-        "body": "## Summary\n\nWhen the OpenAI SDK retried an `ECONNRESET` internally (default `maxRetries=2`), the session write lock was released during the retry window. Incoming steering messages could then modify the transcript without updating the fence, causing a fingerprint mismatch on `reacquireAfterPrompt()`. The resulting `EmbeddedAttemptSessionTakeoverError` was caught by `model-fallback.ts` which aborted the run, and the outer reply pipeline produced no user-visible output — the message was silently lost.\n\n## Root Cause Chain\n\n```\nAPI ECONNRESET\n  → OpenAI SDK default maxRetries=2, internal retry\n  → session write lock released during retry window\n  → incoming message arrives via queueHandle.queueMessage\n  → activeSession.steer writes directly (bypassing withOwnedSessionTranscriptWrites)\n  → transcript changes without updating fence\n  → original attempt reacquireAfterPrompt() fingerprint mismatch\n  → EmbeddedAttemptSessionTakeoverError thrown\n  → model-fallback.ts aborts the run\n  → outer layer hits generic failure branch\n  → assistantTexts/payloads never enter buildReplyPayloads()\n  → message silently lost (user sees generic error or nothing)\n```\n\n## Fix\n\nFour coordinated changes that address the bug at multiple layers:\n\n### 1. Wrap steering in `withOwnedSessionTranscriptWrites` (`attempt.ts`)\nSteering writes that arrive during prompt lock release now go through `withOwnedSessionTranscriptWrites`, keeping fence tracking consistent and preventing the fingerprint mismatch that triggers the takeover error.\n\n### 2. Dedicated error handler for takeover (`agent-runner-execution.ts`, `failover-error.ts`)\nAdded `isEmbeddedAttemptSessionTakeoverError()` export and a dedicated catch block in `runAgentTurnWithFallback`. Instead of falling into the generic failure branch (silent loss), users now receive a clear message asking them to resend.\n\n### 3. Disable OpenAI SDK internal retries (`openai-completions.ts`, `openai-responses-shared.ts`, `openai-transport-stream.ts`)\nSet `maxRetries: 0` across all three OpenAI transport paths so retry logic is controlled at the higher model-fallback level, not inside the SDK where it can release and reacquire locks unexpectedly. The `options?.maxRetries` passthrough is preserved for callers that explicitly need SDK-level retries.\n\n### 4. Phase tracking in `EmbeddedAttemptSessionTakeoverError` (`attempt.session-lock.ts`)\nAdded a `phase` field (`prompt_reacquire`, `cleanup`, `write`, `fence_check`) for better diagnostics when this error does occur. Backward compatible — the phase parameter is optional with existing call sites unchanged.\n\n## Tests\n\nAll affected test suites pass (609 tests total):\n\n| Test File | Tests |\n|-----------|-------|\n| `attempt.session-lock.test.ts` | 45 |\n| `failover-error.test.ts` | 83 |\n| `agent-runner-execution.test.ts` | 153 |\n| `openai-completions.test.ts` | 17 |\n| `openai-responses-shared.test.ts` | 8 |\n| `model-fallback.test.ts` | 76 |\n| `openai-transport-stream.test.ts` | 227 |\n\nNew test coverage includes:\n- Backward compatibility for `assertSessionFileFence` without phase parameter\n- Takeover detection during owned steering writes\n- `isEmbeddedAttemptSessionTakeoverError` export validation\n- User-facing error message for session takeover scenario\n- SDK retries disabled by default across all transport paths\n- `buildOpenAISdkRequestOptions` always returns `maxRetries: 0`\n\n## Changed Files (13 files, +221/-20)\n\n- `src/agents/embedded-agent-runner/run/attempt.session-lock.ts`\n- `src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts`\n- `src/agents/embedded-agent-runner/run/attempt.ts`\n- `src/agents/failover-error.ts`\n- `src/agents/failover-error.test.ts`\n- `src/auto-reply/reply/agent-runner-execution.ts`\n- `src/auto-reply/reply/agent-runner-execution.test.ts`\n- `src/llm/providers/openai-completions.ts`\n- `src/llm/providers/openai-completions.test.ts`\n- `src/llm/providers/openai-responses-shared.ts`\n- `src/llm/providers/openai-responses-shared.test.ts`\n- `src/agents/openai-transport-stream.ts`\n- `src/agents/openai-transport-stream.test.ts`\n\nFixes #87180\n",
-        "branch": "fix/session-takeover-silent-message-loss-87180",
-        "head_sha": "813557d727eaecbcd4642f4480f46a30bc711afa",
-        "author": "jerry-xin",
-        "labels": [
-          "agents",
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts",
-            "additions": 68,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.ts",
-            "additions": 22,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 4,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/failover-error.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/failover-error.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openai-transport-stream.test.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openai-transport-stream.ts",
-            "additions": 2,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
-            "additions": 32,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.ts",
-            "additions": 19,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/openai-completions.test.ts",
-            "additions": 17,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/openai-completions.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/openai-responses-shared.test.ts",
-            "additions": 45,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/openai-responses-shared.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89039",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89039.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 156,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 131,
-            "SKIPPED": 23,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3032,
+    "total_ms": 4559,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 573
+        "ms": 2786
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2139
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 293
+        "ms": 1758
       },
       {
         "name": "append_ledger",
