@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-02T06:14:17.921Z",
+  "generated_at": "2026-06-02T06:14:20.862Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-02T03:14:15.797Z",
+  "since": "2026-06-02T03:14:17.979Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    89045
+    89041
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,101 +31,82 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89045:4591639984:2026-06-02T06:14:12Z:clawsweeper_auto_repair",
-      "comment_id": "4591639984",
-      "comment_version_key": "4591639984:2026-06-02T06:14:12Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89045#issuecomment-4591639984",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89041:4591580901:2026-06-02T06:14:14Z:clawsweeper_needs_human",
+      "comment_id": "4591580901",
+      "comment_version_key": "4591580901:2026-06-02T06:14:14Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89041#issuecomment-4591580901",
       "repo": "openclaw/openclaw",
-      "issue_number": 89045,
+      "issue_number": 89041,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-01T10:15:21Z",
-      "comment_updated_at": "2026-06-02T06:14:12Z",
+      "comment_created_at": "2026-06-01T10:07:24Z",
+      "comment_updated_at": "2026-06-02T06:14:14Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=ac79b730a164521fa95d8bfc087f6957abd073c5)",
-      "review_summary": "The branch clears terminal session lifecycle fields on visible inbound turns, retries reply admission after clearing a stale active reply operation, mirrors recovery in the gateway agent API path, and adds a zero-count visible dispatch warning.\n\nPR surface: Source +129, Tests +182. Total +311 across 9 files.\n\nReproducibility: yes. source inspection gives a high-confidence path: two visible inbound dispatches can share a terminal persisted session snapshot, the second can hit the PR's terminal active-run clearing branch, and the busy path still returns a no-op result. I did not run tests because this review was read-only.",
-      "review_followup": "- [P1] The PR needs a code guard plus contributor or maintainer real-environment proof; automation should not be requested while the external proof gate remains unsatisfied.",
+      "repair_reason": "- [P1] Human review is needed because the remaining blockers are contributor real-behavior proof and maintainer acceptance of disabling ws retained-part limits, not a deterministic code repair.; Needs attention: The diff has no supply-chain changes, but it intentionally disables a ws resource-exhaustion guard for Discord gateway sockets and needs maintainer acceptance. (sha=cfc4bb31c2f29f75c6a83085540d49c123667ff7)",
+      "review_summary": "The PR sets `maxBufferedChunks` and `maxFragments` to `0` for both Discord gateway WebSocket construction paths and updates mocked constructor-option assertions.\n\nPR surface: Source +10, Tests +68. Total +78 across 5 files.\n\nReproducibility: no. high-confidence live reproduction was established. Source inspection confirms current main and `v2026.5.28` use ws 8.21.0 without the receiver-limit override on Discord gateway sockets, but the PR still lacks real Node 22 Discord gateway failure and after-fix READY proof.",
+      "review_followup": "- [P1] Human review is needed because the remaining blockers are contributor real-behavior proof and maintainer acceptance of disabling ws retained-part limits, not a deterministic code repair.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "ac79b730a164521fa95d8bfc087f6957abd073c5",
+      "expected_head_sha": "cfc4bb31c2f29f75c6a83085540d49c123667ff7",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix: recover terminal session status on visible inbound turns",
-        "body": "## Summary\n\nFixes #86827 — group chat sessions stuck in `failed` status silently drop all subsequent messages.\n\nWhen a group chat session enters a terminal status (`failed`, `timeout`, or `killed`), the reply dispatch path returns a successful no-op (`queuedFinal: false`, zero dispatch counts) without starting an AI turn or delivering any user-visible error. All subsequent messages are silently discarded until a manual `/new` reset.\n\n## Root Cause\n\nThree independent mechanisms conspire to create the silent drop:\n\n1. **Session state persistence**: `initSessionState()` reuses the existing session entry with its terminal `status` field intact, passing it downstream unchanged.\n2. **Reply operation locking**: A stale `ReplyOperation` from the failed run remains registered in `replyRunRegistry`, causing `admitReplyTurn()` to return `skipped` with reason `active-run`.\n3. **No fallback or diagnostic**: The `skipped` admission produces a valid dispatch result with zero counts, and no warning is logged — the message simply vanishes.\n\n## Changes\n\n### 1. Auto-recover terminal sessions (`session.ts`)\n\nWhen a **visible** (non-cron/heartbeat) inbound message hits a session with recoverable terminal status, automatically clear the stale lifecycle fields (`status`, `startedAt`, `endedAt`, `runtimeMs`, `abortedLastRun`) while **preserving the `sessionId` and transcript continuity** — no session rotation.\n\n### 2. Clear stale reply operations (`dispatch-from-config.ts`)\n\nWhen `admitReplyTurn()` returns `skipped` with reason `active-run` but the persisted session is in terminal status, force-clear the stale reply operation via `forceClearReplyRunBySessionId()` and retry admission **once**. This breaks the deadlock without risking infinite retry loops.\n\n### 3. Agent API path (`agent.ts`)\n\nMirror the same terminal recovery logic in the agent API dispatch path so agent API requests also clear terminal state for visible requests.\n\n### 4. Diagnostics (`kernel.ts`, `types.ts`)\n\nAdd a structured warning log when a visible channel turn dispatch completes with `queuedFinal: false` and zero tool/block/final counts — a sentinel for future silent message drops. Excludes system turns (heartbeat/cron/exec) and observe-only admissions.\n\n## Tests\n\n- **session.test.ts**: Verify failed group sessions recover without rotating the transcript\n- **dispatch-from-config.test.ts**: Verify stale active reply operations are cleared for terminal sessions and admission is retried\n- **agent.test.ts**: Verify terminal failed agent API sessions recover without session rotation; updated existing failed-session tests to verify terminal state clearing\n- **kernel.test.ts**: Verify zero-count visible dispatch warning is emitted\n\nAll focused tests pass across 3 Vitest shards (287 + 29 cases).",
-        "branch": "fix/86827-failed-session-silent-drop",
-        "head_sha": "ac79b730a164521fa95d8bfc087f6957abd073c5",
+        "title": "fix(discord): disable ws 8.21.0 receiver part limits for gateway sockets",
+        "body": "## Summary\n\nws 8.21.0 introduced `maxBufferedChunks` and `maxFragments` receiver limits (commit `[security] Limit retained message parts`) that can trigger `WS_ERR_TOO_MANY_BUFFERED_PARTS` and close connections with code 1008 under certain traffic patterns.\n\nThis PR explicitly sets both limits to `0` (disabled) for Discord gateway WebSocket connections, restoring the ws 8.20.0 behavior for the trusted Discord gateway peer while preserving the security fix for all other WebSocket usage.\n\n## Changes\n\n- **`extensions/discord/src/internal/gateway.ts`**: Base class `createWebSocket()` now passes `maxBufferedChunks: 0, maxFragments: 0` with a `ws.ClientOptions` cast (since `@types/ws` 8.18.1 does not yet expose these fields).\n- **`extensions/discord/src/monitor/gateway-plugin.ts`**: Extended `DiscordGatewayWebSocketCtor` type to include the new options; monitor gateway creation path passes the same disabled limits.\n- **`extensions/discord/src/internal/gateway.test.ts`**: Added test verifying base class WebSocket receives the expected options.\n- **`extensions/discord/src/monitor/gateway-plugin.test.ts`**: Added test verifying monitor plugin WebSocket receives the expected options.\n- **`extensions/discord/src/monitor/provider.proxy.test.ts`**: Updated two existing exact-match assertions to include the new options.\n\n## Why `0` instead of raising the limits\n\n- ws 8.21.0 treats `0` as disabled (`receiver.js:61`, `receiver.js:98`: `if (this._maxBufferedChunks > 0 && ...)`), matching the pre-8.21.0 behavior exactly.\n- Discord gateway is a trusted peer; the security limits are designed to protect against untrusted senders.\n- Choosing an arbitrary higher threshold would be fragile without real production traffic data to calibrate against.\n\n## Tests\n\n- `gateway.test.ts`: 25 passed\n- `gateway-plugin.test.ts`: 17 passed  \n- `provider.proxy.test.ts`: 21 passed\n- TypeScript check (tsgo): clean\n\nFixes #88330",
+        "branch": "fix/ws-8.21-discord-gateway-part-limits",
+        "head_sha": "cfc4bb31c2f29f75c6a83085540d49c123667ff7",
         "author": "jerry-xin",
         "labels": [
-          "gateway",
-          "size: M",
+          "channel: discord",
+          "size: S",
           "triage: needs-real-behavior-proof",
           "mantis: telegram-visible-proof",
           "P1",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 availability",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/auto-reply/reply/dispatch-from-config.test.ts",
-            "additions": 44,
+            "path": "extensions/discord/src/internal/gateway.test.ts",
+            "additions": 39,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/dispatch-from-config.ts",
-            "additions": 34,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session.test.ts",
-            "additions": 51,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session.ts",
-            "additions": 46,
-            "deletions": 18,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/turn/kernel.test.ts",
-            "additions": 34,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/turn/kernel.ts",
-            "additions": 59,
+            "path": "extensions/discord/src/internal/gateway.ts",
+            "additions": 4,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/channels/turn/types.ts",
-            "additions": 1,
+            "path": "extensions/discord/src/monitor/gateway-plugin.test.ts",
+            "additions": 25,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/discord/src/monitor/gateway-plugin.ts",
+            "additions": 8,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server-methods/agent.test.ts",
-            "additions": 57,
-            "deletions": 4,
+            "path": "extensions/discord/src/monitor/provider.proxy.test.ts",
+            "additions": 4,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
@@ -138,71 +119,57 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89045",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89045.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89041",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89041.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 158,
+          "total": 150,
           "counts": {
-            "FAILURE": 10,
-            "SUCCESS": 126,
-            "SKIPPED": 21,
+            "FAILURE": 3,
+            "SUCCESS": 123,
+            "SKIPPED": 23,
             "NEUTRAL": 1
           },
           "blockers": [
             "Real behavior proof:FAILURE",
             "build-artifacts:FAILURE",
-            "check-guards:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-dependencies:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-channels:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
+            "check-dependencies:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
             "Real behavior proof:FAILURE",
             "build-artifacts:FAILURE",
-            "check-guards:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-dependencies:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-channels:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
+            "check-dependencies:FAILURE"
           ]
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2335,
+    "total_ms": 3275,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 277
+        "ms": 395
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1832
+        "ms": 2472
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 199
+        "ms": 382
       },
       {
         "name": "append_ledger",
