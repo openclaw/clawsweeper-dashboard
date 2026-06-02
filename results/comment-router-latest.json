@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-02T09:36:13.907Z",
+  "generated_at": "2026-06-02T09:36:13.151Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-02T06:36:09.971Z",
+  "since": "2026-06-02T06:36:09.735Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    89369
+    89039
   ],
   "comment_ids": [
-    4601072428
+    4601071690
   ],
-  "status_comment_id": 4601072779,
+  "status_comment_id": 4601072090,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:89369:4601072428:2026-06-02T09:35:37Z:re_review",
-      "comment_id": "4601072428",
-      "comment_version_key": "4601072428:2026-06-02T09:35:37Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89369#issuecomment-4601072428",
+      "idempotency_key": "comment-router:openclaw/openclaw:89039:4601071690:2026-06-02T09:35:31Z:re_review",
+      "comment_id": "4601071690",
+      "comment_version_key": "4601071690:2026-06-02T09:35:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-4601071690",
       "repo": "openclaw/openclaw",
-      "issue_number": 89369,
-      "author": "yetval",
-      "author_id": 102706514,
+      "issue_number": 89039,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-02T09:35:37Z",
-      "comment_updated_at": "2026-06-02T09:35:37Z",
-      "status_comment_id": 4601072779,
+      "comment_created_at": "2026-06-02T09:35:31Z",
+      "comment_updated_at": "2026-06-02T09:35:31Z",
+      "status_comment_id": 4601072090,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -67,80 +67,153 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-06-02T09:36:14.565Z",
+          "dispatched_at": "2026-06-02T09:36:14.362Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 89369
+          "item_number": 89039
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-06-02T09:36:15.704Z",
-          "response_comment_id": "4601072779",
+          "commented_at": "2026-06-02T09:36:16.959Z",
+          "response_comment_id": "4601072090",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): persist forked transcript when parent branch has no assistant turn",
-        "body": "## Summary\n\nA subagent spawned with `context=\"fork\"` (and the realtime voice-consult fork and the reply-session fork) could silently start with an **empty** transcript, dropping the parent conversation it was meant to inherit, with no error surfaced. This happens whenever the parent's leaf branch is a persisted user turn with **no assistant message** in it (a real on-disk state: the gateway transcript writer `appendSessionTranscriptMessage` persists a user message immediately, before the assistant reply exists; `src/agents/command/attempt-execution.test.ts:311` already exercises this \"session file has only user message\" shape).\n\nThe fix spans the two surfaces that share the invariant *\"a returned fork file must exist and its inherited branch must survive into the child run\"*:\n\n**1. Fork writer (`src/auto-reply/reply/session-fork.runtime.ts`).** `forkSessionFromParentRuntime` (:285) uses `writeBranchedSession` when the parent has entries (`leafId` non-null) and `writeForkHeaderOnly` otherwise. `writeForkHeaderOnly` always writes the new file; `writeBranchedSession` wrote the file **only inside `if (hasAssistant)`** while returning `{ sessionId, sessionFile }` **unconditionally**. So a no-assistant parent branch produced a `sessionFile` path that was never created. Callers register the child with that path and `forkedFromParent: true` (`src/agents/subagent-spawn.ts:515`, `src/talk/agent-consult-runtime.ts:156`, `src/auto-reply/reply/session.ts:744`); the child then opens a non-existent file and starts blank (the result is non-null, so `subagent-spawn.ts:505`'s `if (!fork)` guard never trips). Fix: `writeBranchedSession` now writes unconditionally, matching `writeForkHeaderOnly`.\n\n**2. Child-run preparation (`src/agents/embedded-agent-runner/session-manager-init.ts`).** Writing the file alone is not enough. The child run opens the fork with `hadSessionFile=true` and `prepareSessionManagerForRun` reset *any* no-assistant file to a bare `[header]` (emptying the file and clearing `fileEntries`/`byId`/`leafId`), which dropped the inherited user turn again. That reset exists to avoid a duplicate header on the deferred first-assistant flush (`SessionManager.persist` re-writes all `fileEntries` when the first assistant arrives). A forked session is now detected by its header `parentSession` and keeps its inherited assistant-less branch **in memory** while still truncating the file, so the first assistant flush writes `header + inherited user + child turns + assistant` exactly once. Non-forked half-written sessions are unchanged.\n\nThis directly addresses ClawSweeper's `[P1] Preserve the fork through run preparation` finding: the earlier revision proved only that the intermediate fork file existed; this revision proves the inherited context survives a real child run.\n\n**Why this is not one-sided** (sibling surfaces): `writeForkHeaderOnly` (the `leafId === null` path) already writes unconditionally, so part 1 only aligns the divergent branch. In `prepareSessionManagerForRun`, the non-forked no-assistant reset and the has-assistant rewrite paths are unchanged; only the forked case is newly preserved, gated on `parentSession` which both fork writers set. All three fork callers consume the returned `sessionFile` identically. `pnpm tsgo:core` is clean across the change.\n\n## Diff size\n\n```\n src/auto-reply/reply/session-fork.runtime.ts            | 21 +++-----\n src/auto-reply/reply/session-fork.runtime.test.ts       | 55 +++++++++++++\n src/agents/embedded-agent-runner/session-manager-init.ts| 20 ++++---\n src/agents/embedded-agent-runner/session-manager-init.test.ts | 61 +++++++++++++++\n 4 files changed, 136 insertions(+), 21 deletions(-)\n```\n\n## Verification\n\nLocal (Node 22.19.0):\n\n- `node scripts/run-vitest.mjs src/auto-reply/reply/session-fork.runtime.test.ts` — pass (incl. new \"persists the forked transcript when the parent branch has no assistant turn\").\n- `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/session-manager-init.test.ts` — pass (incl. new \"preserves a forked no-assistant transcript's inherited branch through preparation\").\n- Caller suites green: `src/agents/subagent-spawn.context.test.ts`, `src/talk/agent-consult-runtime.test.ts`.\n- `pnpm tsgo:core` — exit 0. `oxfmt --check` and `scripts/run-oxlint.mjs` on all four files — clean.\n- Red-proof of part 2: with only the fork-writer fix (reverting `session-manager-init.ts`), the end-to-end check below shows the inherited turn is still dropped (`RETAINS_INHERITED=false`); with both parts it is retained.\n\n## Real behavior proof\n\n- **Behavior addressed:** a forked child session (subagent `context=\"fork\"`, voice consult, or reply-session fork) whose parent's leaf branch has no assistant turn now retains the inherited parent turn all the way through child-run preparation and the first assistant flush, instead of silently starting empty.\n- **Real environment tested:** the real production chain in this checkout end to end - `forkSessionFromParentRuntime` (fork writer) then `SessionManager.open` then `prepareSessionManagerForRun` (the real child-run boundary) then real `appendMessage` persistence - reading the actual on-disk transcript the child would run against. The fork is invoked internally (no separate CLI verb), so it is exercised through its real production functions.\n- **Exact steps or command run after this patch:** wrote a parent transcript `[session header, user \"INHERITED_PARENT_TURN\"]`, called `forkSessionFromParentRuntime(...)`, opened the returned file with `SessionManager.open`, ran `prepareSessionManagerForRun({ hadSessionFile:true, ... })`, appended a child user turn + an assistant turn, then read the resulting transcript bytes.\n- **Evidence after fix:** copied live console output, before the change (only the fork-writer fix applied, `session-manager-init.ts` at `origin/main`) and after the change (both parts):\n\n```\n# only fork-writer fix (child-run prep still resets no-assistant files)\n===RETAINS_INHERITED=== false\n===RETAINS_CHILD_TASK=== true\n===HEADER_COUNT=== 1\n\n# this branch (both parts)\n===RETAINS_INHERITED=== true\n===RETAINS_CHILD_TASK=== true\n===HEADER_COUNT=== 1\n```\n\n- **Observed result after fix:** the child's on-disk transcript contains the inherited `INHERITED_PARENT_TURN` and the new `CHILD_TASK` with a single session header (no duplicate); before part 2 the identical chain left `RETAINS_INHERITED=false`, i.e. the parent context was gone after run preparation.\n- **What was not tested:** a fully live gateway turn that spawns a `context=\"fork\"` subagent against an in-flight parent over a real model (requires a running Gateway plus model credentials, not available in this environment). The before/after above was exercised through the real production fork writer, the real `prepareSessionManagerForRun` child-run boundary, and the real persistence path.\n",
-        "branch": "fix/fork-no-assistant-context-loss",
-        "head_sha": "34d7d7583d72b6627cd89b939c6cefbfd2276663",
-        "author": "yetval",
+        "title": "fix: prevent silent message loss from EmbeddedAttemptSessionTakeoverError",
+        "body": "## Summary\n\nWhen the OpenAI SDK retried an `ECONNRESET` internally (default `maxRetries=2`), the session write lock was released during the retry window. Incoming steering messages could then modify the transcript without updating the fence, causing a fingerprint mismatch on `reacquireAfterPrompt()`. The resulting `EmbeddedAttemptSessionTakeoverError` was caught by `model-fallback.ts` which aborted the run, and the outer reply pipeline produced no user-visible output — the message was silently lost.\n\n## Root Cause Chain\n\n```\nAPI ECONNRESET\n  → OpenAI SDK default maxRetries=2, internal retry\n  → session write lock released during retry window\n  → incoming message arrives via queueHandle.queueMessage\n  → activeSession.steer writes directly (bypassing withOwnedSessionTranscriptWrites)\n  → transcript changes without updating fence\n  → original attempt reacquireAfterPrompt() fingerprint mismatch\n  → EmbeddedAttemptSessionTakeoverError thrown\n  → model-fallback.ts aborts the run\n  → outer layer hits generic failure branch\n  → assistantTexts/payloads never enter buildReplyPayloads()\n  → message silently lost (user sees generic error or nothing)\n```\n\n## Fix\n\nFour coordinated changes that address the bug at multiple layers:\n\n### 1. Wrap steering in `withOwnedSessionTranscriptWrites` (`attempt.ts`)\nSteering writes that arrive during prompt lock release now go through `withOwnedSessionTranscriptWrites`, keeping fence tracking consistent and preventing the fingerprint mismatch that triggers the takeover error.\n\n### 2. Dedicated error handler for takeover (`agent-runner-execution.ts`, `failover-error.ts`)\nAdded `isEmbeddedAttemptSessionTakeoverError()` export and a dedicated catch block in `runAgentTurnWithFallback`. Instead of falling into the generic failure branch (silent loss), users now receive a clear message asking them to resend. When a takeover wraps a preserved prompt error (billing, rate-limit, context-overflow), the original error is unwrapped and classified normally — only pure takeover errors return resend guidance.\n\n### 3. Scope SDK retry disable to embedded prompt lock path (`attempt.ts`)\nInject `maxRetries: 0` only inside the embedded prompt lock window via a streamFn wrapper, preventing SDK retries from racing with session takeover. Non-embedded callers retain the SDK default retry behavior (maxRetries=2), preserving availability for transient network/5xx failures. The `options?.maxRetries` passthrough is preserved for callers that explicitly need to override SDK-level retries.\n\n### 4. Phase tracking in `EmbeddedAttemptSessionTakeoverError` (`attempt.session-lock.ts`)\nAdded a `phase` field (`prompt_reacquire`, `cleanup`, `write`, `fence_check`) for better diagnostics when this error does occur. Backward compatible — the phase parameter is optional with existing call sites unchanged.\n\n## Real behavior proof\n\n- **Behavior addressed**: Silent message loss when SDK retries race with session takeover → visible resend guidance for pure takeover, correct error classification for wrapped prompt errors\n- **Real environment tested**: Local patched OpenClaw checkout at `42f2f7f9`, macOS arm64, Node.js `v24.10.0`\n- **Exact steps and commands run after this patch**:\n\n```bash\n# 1. Verify scoped retry: SDK retries NOT globally disabled\n$ node scripts/run-vitest.mjs src/llm/providers/openai-completions.test.ts 2>&1 | tail -8\n ✓ does not include maxRetries in request options by default\n ✓ forwards explicit maxRetries to request options\n Tests  18 passed (18)\n\n$ node scripts/run-vitest.mjs src/llm/providers/openai-responses-shared.test.ts 2>&1 | tail -6\n ✓ does not include maxRetries in request options by default\n Tests  9 passed (9)\n\n$ node scripts/run-vitest.mjs src/agents/openai-transport-stream.test.ts 2>&1 | tail -6\n Tests  227 passed (227)\n\n# 2. Verify embedded prompt lock path injects maxRetries:0\n$ node scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts 2>&1 | tail -6\n ✓ allows owned steering writes before the prompt stream lock is reacquired\n ✓ detects session takeover when prompt reacquire sees another owner advance\n Tests  47 passed (47)\n\n# 3. Verify takeover error handling with prompt error unwrapping\n$ node scripts/run-vitest.mjs src/auto-reply/reply/agent-runner-execution.test.ts 2>&1 | tail -8\n ✓ surfaces embedded session takeover with specific resend guidance\n ✓ unwraps preserved prompt error from cleanup takeover and classifies normally\n Tests  155 passed (155)\n\n# 4. Full regression across all affected suites\n$ node scripts/run-vitest.mjs src/agents/failover-error.test.ts 2>&1 | tail -4\n Tests  83 passed (83)\n```\n\n- **Evidence after fix**: All 539 tests pass across 7 affected test suites. Default SDK retry behavior is preserved for non-embedded callers (no `maxRetries` in default request options). Embedded prompt lock window correctly injects `maxRetries: 0`. Pure takeover errors produce visible resend guidance. Wrapped prompt errors (billing/rate-limit/context-overflow) are unwrapped and classified through normal error handling instead of being mislabeled as retry interruptions.\n- **What was not tested**: No live multi-user concurrent session test was run. The proof relies on unit tests that simulate the session-lock race, fingerprint mismatch, and error classification paths. Production verification would require an actual ECONNRESET during an embedded prompt with concurrent steering input.\n\n## Tests\n\nAll affected test suites pass:\n\n| Test File | Tests |\n|-----------|-------|\n| `attempt.session-lock.test.ts` | 47 |\n| `failover-error.test.ts` | 83 |\n| `agent-runner-execution.test.ts` | 155 |\n| `openai-completions.test.ts` | 18 |\n| `openai-responses-shared.test.ts` | 9 |\n| `model-fallback.test.ts` | 76 |\n| `openai-transport-stream.test.ts` | 227 |\n\nNew test coverage includes:\n- Backward compatibility for `assertSessionFileFence` without phase parameter\n- Takeover detection during owned steering writes\n- `isEmbeddedAttemptSessionTakeoverError` export validation\n- User-facing resend message for pure session takeover scenario\n- Preserved prompt error unwrapping from cleanup takeover (no false resend guidance)\n- SDK retries not included in default request options (scoped to embedded path)\n- Explicit `maxRetries` forwarding when callers set it\n\n## Changed Files\n\n- `src/agents/embedded-agent-runner/run/attempt.session-lock.ts`\n- `src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts`\n- `src/agents/embedded-agent-runner/run/attempt.ts`\n- `src/agents/failover-error.ts`\n- `src/agents/failover-error.test.ts`\n- `src/auto-reply/reply/agent-runner-execution.ts`\n- `src/auto-reply/reply/agent-runner-execution.test.ts`\n- `src/llm/providers/openai-completions.ts`\n- `src/llm/providers/openai-completions.test.ts`\n- `src/llm/providers/openai-responses-shared.ts`\n- `src/llm/providers/openai-responses-shared.test.ts`\n- `src/agents/openai-transport-stream.ts`\n- `src/agents/openai-transport-stream.test.ts`\n\nFixes #87180\n",
+        "branch": "fix/session-takeover-silent-message-loss-87180",
+        "head_sha": "42f2f7f9999d19a5ad64065cfacb89d1240c251e",
+        "author": "jerry-xin",
         "labels": [
           "agents",
-          "size: S",
-          "proof: supplied",
-          "P2",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P1",
           "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/embedded-agent-runner/session-manager-init.test.ts",
-            "additions": 61,
+            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts",
+            "additions": 68,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/session-manager-init.ts",
-            "additions": 14,
-            "deletions": 6,
+            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.ts",
+            "additions": 22,
+            "deletions": 8,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/session-fork.runtime.test.ts",
-            "additions": 55,
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 9,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/failover-error.test.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/failover-error.ts",
+            "additions": 4,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/session-fork.runtime.ts",
-            "additions": 6,
-            "deletions": 15,
+            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
+            "additions": 67,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.ts",
+            "additions": 29,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/llm/providers/openai-completions.test.ts",
+            "additions": 32,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/llm/providers/openai-responses-shared.test.ts",
+            "additions": 46,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89369",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89369.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89039",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89039.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 166,
+          "total": 159,
           "counts": {
-            "SUCCESS": 137,
-            "SKIPPED": 28,
+            "FAILURE": 1,
+            "SUCCESS": 118,
+            "SKIPPED": 22,
+            "IN_PROGRESS": 17,
             "NEUTRAL": 1
           },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "build-artifacts:IN_PROGRESS",
+            "checks-node-core-fast:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS",
+            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
+            "checks-node-agentic-agents-embedded:IN_PROGRESS",
+            "checks-node-agentic-agents-support:IN_PROGRESS",
+            "checks-node-agentic-gateway-core:IN_PROGRESS",
+            "checks-node-agentic-gateway-methods:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "checks-windows-node-test:IN_PROGRESS",
+            "android-test-play:IN_PROGRESS",
+            "android-build-play:IN_PROGRESS"
+          ],
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "checks-node-core-fast:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS",
+            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
+            "checks-node-agentic-agents-embedded:IN_PROGRESS",
+            "checks-node-agentic-agents-support:IN_PROGRESS",
+            "checks-node-agentic-gateway-core:IN_PROGRESS",
+            "checks-node-agentic-gateway-methods:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "checks-windows-node-test:IN_PROGRESS",
+            "android-test-play:IN_PROGRESS",
+            "android-build-play:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ]
         }
       },
       "maintainer_authorized": false,
@@ -149,15 +222,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 6231,
+    "total_ms": 8136,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2037
+        "ms": 644
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1884
+        "ms": 2758
       },
       {
         "name": "classify_commands",
@@ -165,7 +238,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2281
+        "ms": 4707
       },
       {
         "name": "append_ledger",
