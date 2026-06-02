@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-02T18:50:42.866Z",
+  "generated_at": "2026-06-02T18:52:52.453Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-02T15:50:40.048Z",
+  "since": "2026-06-02T15:52:48.583Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    89576
+    70990
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4606027298
+  ],
+  "status_comment_id": 4606027662,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,203 +33,246 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89576:4605742598:2026-06-02T18:50:36Z:clawsweeper_needs_human",
-      "comment_id": "4605742598",
-      "comment_version_key": "4605742598:2026-06-02T18:50:36Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89576#issuecomment-4605742598",
+      "idempotency_key": "comment-router:openclaw/openclaw:70990:4606027298:2026-06-02T18:52:08Z:re_review",
+      "comment_id": "4606027298",
+      "comment_version_key": "4606027298:2026-06-02T18:52:08Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/70990#issuecomment-4606027298",
       "repo": "openclaw/openclaw",
-      "issue_number": 89576,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-02T18:17:40Z",
-      "comment_updated_at": "2026-06-02T18:50:36Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] The remaining action is a maintainer compatibility decision on foreground tab behavior, not a safe automated repair.; Cleared: The diff only adds a CDP Page command and tests, with no dependency, workflow, secret, package, or supply-chain surface changes. (sha=d5f57d243db2079235a4dab4b5b684b4ae794a84)",
-      "review_summary": "The PR adds a CDP `Page.bringToFront` call before direct screenshot capture and updates CDP screenshot mocks/tests for activation ordering and activation failure.\n\nPR surface: Source +9, Tests +48. Total +57 across 2 files.\n\nReproducibility: yes. Current main's direct CDP screenshot path reaches `Page.captureScreenshot` without activation, and the PR body gives a concrete live-CDP before/after recipe for a backgrounded headless tab; I did not run a local browser E2E in this read-only review.",
-      "review_followup": "- [P2] The remaining action is a maintainer compatibility decision on foreground tab behavior, not a safe automated repair.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "d5f57d243db2079235a4dab4b5b684b4ae794a84",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(browser): bring tab to foreground before screenshot capture",
-        "body": "## Summary\n\n**What problem does this PR solve?**\n`browser screenshot` (and the screenshot-backed snapshot path) hang until the CDP socket times out (~20s) whenever the target tab is **backgrounded**.\n\n**Why does this matter now?**\nOn a multi-tab or node-hosted browser session, any capture of a non-foreground tab blocks for the full timeout, making screenshots effectively unusable without manual tab juggling.\n\n**What is the intended outcome?**\nCaptures return promptly regardless of which tab is foregrounded.\n\n**What is intentionally out of scope?**\nThe pure-a11y snapshot path (`Accessibility.getFullAXTree`) — it needs no rendered frame and already works on backgrounded tabs, so it is left untouched.\n\n**What does success look like?**\nA capture of a backgrounded tab returns in ~100ms instead of timing out.\n\n**What should reviewers focus on?**\nThat issuing `Page.bringToFront` before capture is acceptable behavior (it activates the target tab). It is a no-op for a single-tab session and for an already-foregrounded tab, and its failure is swallowed so capture paths that already work cannot regress.\n\n### Root cause\n`Page.captureScreenshot {fromSurface:true}` waits for a compositor frame to commit. Under `--headless=new`, a **backgrounded tab never commits a new frame**, so the call blocks until timeout. `Accessibility.getFullAXTree` is unaffected (no rendered frame needed) — which is why text/a11y reads succeed while pixel capture hangs. The capture path issued no `Page.bringToFront`/`Target.activateTarget` before capturing.\n\n### The fix\nIn `extensions/browser/src/browser/cdp.ts` `captureScreenshot()`, issue `await send(\"Page.bringToFront\").catch(() => {})` immediately after `Page.enable` and before capture. Activating the tab forces a compositor frame to commit.\n\n## Linked context\n\nCloses #\n\nRelated # — none upstream; tracked downstream.\nWas this requested by a maintainer or owner? No — external contribution.\n\n## Real behavior proof (required for external PRs)\n\n- **Behavior or issue addressed:** `Page.captureScreenshot` hangs on backgrounded tabs under headless Chrome.\n- **Real environment tested:** OpenClaw browser node pod, Chromium `Chrome/148.0.7778.215` headless (`--headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage`), ARM64, driven via CDP on the live debugger port.\n- **Exact steps run:** Over the browser's CDP endpoint, created two tabs (data-URL pages), activated the second so the first is backgrounded, attached to the backgrounded tab, then timed `Page.captureScreenshot` **before** vs **after** `Page.bringToFront` on the same session. Repeated 3x.\n- **Evidence after fix (the mechanism this patch applies):**\n\n  | run | backgrounded, no bringToFront | after `Page.bringToFront` |\n  |-----|-------------------------------|---------------------------|\n  | 1   | 3367 ms                       | **109 ms** |\n  | 2   | 3222 ms                       | **84 ms**  |\n  | 3   | 3260 ms                       | **117 ms** |\n\n- **Observed result after fix:** Capture returns in ~100ms after `bringToFront`, vs multi-second (up to the full ~20s timeout on heavier real pages) without it.\n- **What was not tested:** I verified the exact CDP behavior the patch applies (bringToFront → capture) directly against a live headless browser; I did not additionally rebuild and run a full OpenClaw image end-to-end through the `browser` tool. The patch inserts precisely the call that was measured.\n- **Proof limitations:** A lightweight `data:` page degrades to ~3.3s rather than the full 20s a heavy page exhibits; the invariant (bringToFront → ~100ms) is identical in both, so before/after on the same tab is the load-bearing evidence.\n\n## Tests and validation\n\n- Targeted typecheck of the browser extension; the change is type-neutral (error-count delta vs the untouched base is 0 — the monorepo workspace deps are unbuilt in my checkout, so absolute-zero tsc isn't attainable there, but base == patched).\n- No new automated test added: the failure mode is a headless-Chrome compositor timing behavior that requires a real backgrounded tab to reproduce; covered by the real-behavior proof above.\n\n## Risk checklist\n\n- Did user-visible behavior change? **Yes** — capturing now foregrounds the target tab first.\n- Did config/env/migration behavior change? **No.**\n- Did security/auth/secrets/network/tool-execution behavior change? **No.**\n- Highest-risk area: `bringToFront` changes which tab is foreground in a multi-tab session.\n- Mitigation: no-op for single-tab/already-foregrounded sessions; `.catch(() => {})` tolerates failure so existing working captures cannot regress.\n\n## Current review state\n\n- Next action: maintainer review.\n- Waiting on: maintainer.\n- Bot/reviewer comments addressed: none yet (initial submission).\n",
-        "branch": "fix/browser-bringtofront-before-screenshot",
-        "head_sha": "d5f57d243db2079235a4dab4b5b684b4ae794a84",
-        "author": "spencer2211",
-        "labels": [
-          "size: S",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "extensions/browser/src/browser/cdp.internal.test.ts",
-            "additions": 48,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/browser/src/browser/cdp.ts",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89576",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89576.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 155,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 31,
-            "SUCCESS": 122
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89576:4605954872:2026-06-02T18:42:40Z:re_review",
-      "comment_id": "4605954872",
-      "comment_version_key": "4605954872:2026-06-02T18:42:40Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89576#issuecomment-4605954872",
-      "repo": "openclaw/openclaw",
-      "issue_number": 89576,
-      "author": "spencer2211",
-      "author_id": 28957500,
+      "issue_number": 70990,
+      "author": "mantisai-bot",
+      "author_id": 259690819,
       "author_association": "NONE",
-      "comment_created_at": "2026-06-02T18:42:40Z",
-      "comment_updated_at": "2026-06-02T18:42:40Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "comment_created_at": "2026-06-02T18:52:08Z",
+      "comment_updated_at": "2026-06-02T18:52:08Z",
+      "status_comment_id": 4606027662,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=aec17108e52bc83fdb2c6d2f5d7df17dca42e0df)",
-      "review_summary": "The PR replaces JSON round-trip cloning with `structuredClone` in code-mode worker serialization and tool-search result normalization.\n\nPR surface: Source 0. Total 0 across 2 files.\n\nReproducibility: yes. for the PR-introduced bug: source inspection plus a Node VM check show `structuredClone` is unavailable in the tool-search child context, which makes the patched fallback stringify object/array bridge payloads. I did not run the full test suite because this review is read-only.",
-      "review_followup": "- [P1] Contributor repair and real behavior proof are needed; this should not be queued for automated repair while the external-PR proof gate is missing.",
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "aec17108e52bc83fdb2c6d2f5d7df17dca42e0df",
+      "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-02T18:52:53.484Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 70990
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-02T18:52:54.773Z",
+          "response_comment_id": "4606027662",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(browser): bring tab to foreground before screenshot capture",
-        "body": "## Summary\n\n**What problem does this PR solve?**\n`browser screenshot` (and the screenshot-backed snapshot path) hang until the CDP socket times out (~20s) whenever the target tab is **backgrounded**.\n\n**Why does this matter now?**\nOn a multi-tab or node-hosted browser session, any capture of a non-foreground tab blocks for the full timeout, making screenshots effectively unusable without manual tab juggling.\n\n**What is the intended outcome?**\nCaptures return promptly regardless of which tab is foregrounded.\n\n**What is intentionally out of scope?**\nThe pure-a11y snapshot path (`Accessibility.getFullAXTree`) — it needs no rendered frame and already works on backgrounded tabs, so it is left untouched.\n\n**What does success look like?**\nA capture of a backgrounded tab returns in ~100ms instead of timing out.\n\n**What should reviewers focus on?**\nThat issuing `Page.bringToFront` before capture is acceptable behavior (it activates the target tab). It is a no-op for a single-tab session and for an already-foregrounded tab, and its failure is swallowed so capture paths that already work cannot regress.\n\n### Root cause\n`Page.captureScreenshot {fromSurface:true}` waits for a compositor frame to commit. Under `--headless=new`, a **backgrounded tab never commits a new frame**, so the call blocks until timeout. `Accessibility.getFullAXTree` is unaffected (no rendered frame needed) — which is why text/a11y reads succeed while pixel capture hangs. The capture path issued no `Page.bringToFront`/`Target.activateTarget` before capturing.\n\n### The fix\nIn `extensions/browser/src/browser/cdp.ts` `captureScreenshot()`, issue `await send(\"Page.bringToFront\").catch(() => {})` immediately after `Page.enable` and before capture. Activating the tab forces a compositor frame to commit.\n\n## Linked context\n\nCloses #\n\nRelated # — none upstream; tracked downstream.\nWas this requested by a maintainer or owner? No — external contribution.\n\n## Real behavior proof (required for external PRs)\n\n- **Behavior or issue addressed:** `Page.captureScreenshot` hangs on backgrounded tabs under headless Chrome.\n- **Real environment tested:** OpenClaw browser node pod, Chromium `Chrome/148.0.7778.215` headless (`--headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage`), ARM64, driven via CDP on the live debugger port.\n- **Exact steps run:** Over the browser's CDP endpoint, created two tabs (data-URL pages), activated the second so the first is backgrounded, attached to the backgrounded tab, then timed `Page.captureScreenshot` **before** vs **after** `Page.bringToFront` on the same session. Repeated 3x.\n- **Evidence after fix (the mechanism this patch applies):**\n\n  | run | backgrounded, no bringToFront | after `Page.bringToFront` |\n  |-----|-------------------------------|---------------------------|\n  | 1   | 3367 ms                       | **109 ms** |\n  | 2   | 3222 ms                       | **84 ms**  |\n  | 3   | 3260 ms                       | **117 ms** |\n\n- **Observed result after fix:** Capture returns in ~100ms after `bringToFront`, vs multi-second (up to the full ~20s timeout on heavier real pages) without it.\n- **What was not tested:** I verified the exact CDP behavior the patch applies (bringToFront → capture) directly against a live headless browser; I did not additionally rebuild and run a full OpenClaw image end-to-end through the `browser` tool. The patch inserts precisely the call that was measured.\n- **Proof limitations:** A lightweight `data:` page degrades to ~3.3s rather than the full 20s a heavy page exhibits; the invariant (bringToFront → ~100ms) is identical in both, so before/after on the same tab is the load-bearing evidence.\n\n## Tests and validation\n\n- Targeted typecheck of the browser extension; the change is type-neutral (error-count delta vs the untouched base is 0 — the monorepo workspace deps are unbuilt in my checkout, so absolute-zero tsc isn't attainable there, but base == patched).\n- No new automated test added: the failure mode is a headless-Chrome compositor timing behavior that requires a real backgrounded tab to reproduce; covered by the real-behavior proof above.\n\n## Risk checklist\n\n- Did user-visible behavior change? **Yes** — capturing now foregrounds the target tab first.\n- Did config/env/migration behavior change? **No.**\n- Did security/auth/secrets/network/tool-execution behavior change? **No.**\n- Highest-risk area: `bringToFront` changes which tab is foreground in a multi-tab session.\n- Mitigation: no-op for single-tab/already-foregrounded sessions; `.catch(() => {})` tolerates failure so existing working captures cannot regress.\n\n## Current review state\n\n- Next action: maintainer review.\n- Waiting on: maintainer.\n- Bot/reviewer comments addressed: none yet (initial submission).\n",
-        "branch": "fix/browser-bringtofront-before-screenshot",
-        "head_sha": "d5f57d243db2079235a4dab4b5b684b4ae794a84",
-        "author": "spencer2211",
+        "title": "feat(plugins): add model failover and terminal failure hooks",
+        "body": "## Summary\n\nAdds two plugin observability hooks for model failure handling:\n\n- `model_failover`: fires from the embedded-runner failover decision path with failed source refs, selected target refs, stage, decision, reason metadata, recoverability, timeout/abort/status flags, and fallback availability.\n- `model_failure_terminal`: fires when a before-reply model run reaches terminal failure after all configured attempts are exhausted.\n\nThis PR does not change fallback policy, default user-facing failure copy, provider retry behavior, or context re-injection behavior.\n\n## Cleanup in this revision\n\n- Rebased the PR branch onto current `origin/main` as a single feature commit.\n- Resolved the `resolve_exec_env` hook conflict in `src/plugins/hooks.ts` by preserving both independent hook additions.\n- Regenerated `docs/.generated/config-baseline.sha256` on the rebased tree.\n- Fixed the ClawSweeper payload issue: `model_failure_terminal.finalMessage` now emits the resolved delivered failure reply, not the raw `formatErrorMessage(err)` fallback summary.\n- Added a regression in `src/auto-reply/reply/agent-runner-execution.test.ts` where the raw all-models-failed summary differs from delivered copy; the test asserts the terminal hook sees the delivered `billing` reply while `attempts` still preserve provider/model/reason details.\n\n## Security / compatibility\n\n- New capability: plugin observability hooks.\n- No new network calls.\n- No token/secret handling changes.\n- No command/tool execution surface changes.\n- `model_failure_terminal` remains conversation-access gated for non-bundled plugins because it can expose user-facing failure copy.\n- Attempt summaries expose provider/model/reason metadata, not raw provider error blobs.\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: `model_failure_terminal.finalMessage` should reflect the resolved delivered failure reply, while structured `attempts` retain provider/model/reason details for all-models-failed cases.\n- **Real environment tested**: Local OpenClaw source checkout on macOS Darwin 25.3.0 arm64, Node `v25.6.0`, pnpm `11.2.2`, PR head `e47ee6c91273a2ca7fec8c0b3a2c3d8414fe5197`.\n- **Exact steps or command run after this patch**: Ran the production hook runner from the patched source tree with a terminal-failure event whose delivered reply text is `billing` and whose attempts include mixed rate-limit/billing reasons.\n\n```bash\nnode --import tsx --input-type=module - <<'EOF'\nimport { createHookRunner } from './src/plugins/hooks.ts';\n\nconst deliveredText = 'billing';\nconst received = [];\nconst registry = {\n  typedHooks: [\n    {\n      pluginId: 'proof-plugin',\n      hookName: 'model_failure_terminal',\n      priority: 0,\n      source: 'proof',\n      handler: (event, ctx) => {\n        received.push({ event, ctx });\n      },\n    },\n  ],\n};\nconst runner = createHookRunner(registry);\nawait runner.runModelFailureTerminal(\n  {\n    runId: 'proof-run',\n    agentId: 'proof-agent',\n    sessionId: 'proof-session',\n    sessionKey: 'proof-main',\n    finalMessage: deliveredText,\n    kind: 'all_models_failed',\n    attempts: [\n      { provider: 'anthropic', model: 'claude', reason: 'rate_limit' },\n      { provider: 'openai', model: 'gpt-5.4', reason: 'billing' },\n    ],\n  },\n  { runId: 'proof-run', agentId: 'proof-agent', sessionId: 'proof-session', sessionKey: 'proof-main' },\n);\nif (received.length !== 1) throw new Error(`expected one hook event, got ${received.length}`);\nif (received[0].event.finalMessage !== deliveredText) throw new Error('finalMessage mismatch');\nconsole.log(JSON.stringify({ deliveredText, receivedEvent: received[0].event, finalMessageMatchesDeliveredText: true }, null, 2));\nEOF\n```\n\n- **Evidence after fix**: Terminal output from the patched source checkout:\n\n```json\n{\n  \"deliveredText\": \"billing\",\n  \"receivedEvent\": {\n    \"runId\": \"proof-run\",\n    \"agentId\": \"proof-agent\",\n    \"sessionId\": \"proof-session\",\n    \"sessionKey\": \"proof-main\",\n    \"finalMessage\": \"billing\",\n    \"kind\": \"all_models_failed\",\n    \"attempts\": [\n      {\n        \"provider\": \"anthropic\",\n        \"model\": \"claude\",\n        \"reason\": \"rate_limit\"\n      },\n      {\n        \"provider\": \"openai\",\n        \"model\": \"gpt-5.4\",\n        \"reason\": \"billing\"\n      }\n    ]\n  },\n  \"finalMessageMatchesDeliveredText\": true\n}\n```\n\n- **Observed result after fix**: The production hook runner delivered exactly one `model_failure_terminal` event. The event `finalMessage` matched the delivered reply text `billing`, and the event still included structured per-attempt provider/model/reason metadata.\n- **What was not tested**: I did not force a live external provider outage or run a networked end-to-end model-failover incident in this cleanup pass. The runner-level regression covers the full `runAgentTurnWithFallback` terminal branch; this copied live output is a local production-hook-runner proof for the terminal hook payload shape.\n\n## Validation\n\nEnvironment:\n\n- macOS Darwin 25.3.0 arm64\n- Node `v25.6.0`\n- pnpm `11.2.2`\n- Head `e47ee6c91273a2ca7fec8c0b3a2c3d8414fe5197`\n\nCommands run on the patched tree:\n\n```bash\nnode scripts/test-projects.mjs src/auto-reply/reply/agent-runner-execution.test.ts src/plugins/hooks.model-failover.test.ts src/agents/embedded-agent-runner/run/failover-observation.model-failover-hook.test.ts src/plugins/loader.test.ts\npnpm config:docs:check\npnpm exec oxfmt --check --threads=1 src/auto-reply/reply/agent-runner-execution.ts src/auto-reply/reply/agent-runner-execution.test.ts src/plugins/hooks.ts src/plugins/hook-types.ts src/plugins/hooks.model-failover.test.ts src/agents/embedded-agent-runner/run/failover-observation.model-failover-hook.test.ts\npnpm tsgo:test:src\npnpm lint --threads=8\ngit diff --check origin/main...HEAD\n```\n\nObserved results:\n\n- Focused Vitest command passed 4 shards:\n  - bundled: 152 tests passed\n  - auto-reply: 155 tests passed\n  - agents: 8 tests passed\n  - plugins: 12 tests passed\n- `pnpm config:docs:check`: `OK docs/.generated/config-baseline.sha256`\n- `oxfmt --check`: all matched files use the correct format\n- `pnpm tsgo:test:src`: passed\n- `pnpm lint --threads=8`: passed core, extensions, and scripts oxlint shards\n- `git diff --check origin/main...HEAD`: no whitespace/conflict-marker findings\n\n## Linked issue\n\nCloses #70976\nRelated #65824\n",
+        "branch": "feat/70976-model-failover-hooks",
+        "head_sha": "e47ee6c91273a2ca7fec8c0b3a2c3d8414fe5197",
+        "author": "mantisai-bot",
         "labels": [
-          "size: S",
-          "proof: sufficient",
+          "docs",
+          "gateway",
+          "agents",
+          "size: L",
+          "extensions: anthropic",
+          "proof: supplied",
           "P2",
-          "rating: 🐚 platinum hermit",
+          "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "extensions/browser/src/browser/cdp.internal.test.ts",
+            "path": "docs/.generated/config-baseline.sha256",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/plugins.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/configuration-reference.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/hooks.md",
+            "additions": 20,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/anthropic/config-defaults.ts",
+            "additions": 11,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-command.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/command/attempt-execution.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run.ts",
+            "additions": 27,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/assistant-failover.ts",
+            "additions": 16,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/failover-observation.model-failover-hook.test.ts",
+            "additions": 181,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/failover-observation.ts",
+            "additions": 72,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/params.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback.ts",
+            "additions": 13,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
+            "additions": 28,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.ts",
+            "additions": 35,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.help.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.plugins.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/hook-types.ts",
             "additions": 48,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/browser/src/browser/cdp.ts",
-            "additions": 9,
+            "path": "src/plugins/hooks.model-failover.test.ts",
+            "additions": 233,
             "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/plugins/hooks.ts",
+            "additions": 30,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/loader.test.ts",
+            "additions": 4,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89576",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89576.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-70990",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-70990.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 155,
+          "total": 164,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 31,
-            "SUCCESS": 122
+            "SUCCESS": 136,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
           },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
+          "terminalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3140,
+    "total_ms": 6821,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 452
+        "ms": 1707
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2349
+        "ms": 2149
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 311
+        "ms": 2937
       },
       {
         "name": "append_ledger",
