@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-02T16:22:43.186Z",
+  "generated_at": "2026-06-02T16:22:46.730Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-02T13:22:41.092Z",
+  "since": "2026-06-02T13:22:43.994Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    89505
+    88992
   ],
   "comment_ids": [
     4604433892
   ],
   "status_comment_id": 4604434249,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 15,
+  "commands_seen": 5,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,18 +33,338 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:89505:4604433892:2026-06-02T16:22:00Z:re_review",
-      "comment_id": "4604433892",
-      "comment_version_key": "4604433892:2026-06-02T16:22:00Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89505#issuecomment-4604433892",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88992:4590580563:2026-06-02T16:22:40Z:clawsweeper_needs_human",
+      "comment_id": "4590580563",
+      "comment_version_key": "4590580563:2026-06-02T16:22:40Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88992#issuecomment-4590580563",
       "repo": "openclaw/openclaw",
-      "issue_number": 89505,
-      "author": "100yenadmin",
-      "author_id": 239388517,
+      "issue_number": 88992,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-02T16:22:00Z",
-      "comment_updated_at": "2026-06-02T16:22:00Z",
-      "status_comment_id": 4604434249,
+      "comment_created_at": "2026-06-01T07:51:57Z",
+      "comment_updated_at": "2026-06-02T16:22:40Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] The remaining blocker is maintainer approval of the message_tool_only retry policy plus contributor or maintainer real channel proof, not a narrow automation repair.; Needs attention: No supply-chain changes were found, but the diff changes a privacy-sensitive message delivery boundary and needs maintainer acceptance.; Review finding: [P2] Update the message_tool_only contract for retry delivery — src/auto-re... (sha=4caba1ab142d37ab35593cfdbbea400da320c24c)",
+      "review_summary": "The PR changes runReplyAgent to enqueue a follow-up retry when a substantive message_tool_only final reply is detected without a successful message-tool send, and adds focused retry/gate tests.\n\nPR surface: Source +29, Tests +38. Total +67 across 2 files.\n\nReproducibility: yes. source inspection gives a high-confidence path: current main detects substantive message_tool_only finals via shouldWarnAboutPrivateMessageToolFinal and logs only, while suppressing automatic source delivery. I did not run a live channel reproduction in this read-only review.",
+      "review_followup": "- [P1] The remaining blocker is maintainer approval of the message_tool_only retry policy plus contributor or maintainer real channel proof, not a narrow automation repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "4caba1ab142d37ab35593cfdbbea400da320c24c",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: recover stranded replies in message_tool_only mode (#85714)",
+        "body": "## Summary\n\nWhen `messages.visibleReplies` is set to `message_tool`, the agent is expected to call the message tool to deliver replies. If the LLM forgets (a probabilistic event — the reporter saw it happen on the 8th turn after 7 correct deliveries), the reply was **silently discarded**: the substantive text sat in the JSONL transcript but was never delivered to the user.\n\nThe existing `shouldWarnAboutPrivateMessageToolFinal()` detection was already identifying these stranded replies and logging a warning, but took no recovery action.\n\n## Fix\n\nThis commit promotes the detection from log-only to **followup retry**, preserving the `message_tool_only` privacy contract:\n\n1. **Gate room events**: Skip stranded reply detection for ambient `room_event` turns where `message_tool_only` is automatically set by the system. Silence on room events is intentional by design — the agent chose not to respond.\n\n2. **Enqueue followup retry turn**: When a stranded reply is detected, enqueue a followup run whose prompt instructs the agent to deliver the captured text via `message(action=send)`. The agent itself calls the message tool, so delivery happens through the correct contract path — no suppression bypass, no privacy boundary crossing.\n\n3. **Clear transcript/persistence fields**: The retry run explicitly clears `transcriptPrompt`, `userTurnTranscriptRecorder`, and `currentInboundContext` from the original followup run to prevent the original user prompt from hiding the retry instruction. The followup runner resolves `transcriptPrompt ?? extracted.text`, so a retained `transcriptPrompt` would cause the agent to see the original user question instead of the retry delivery instruction.\n\n4. **No suppression bypass**: This does NOT mark payloads with `deliverDespiteSourceReplySuppression` or use `skipSuppressionCheck`. The `message_tool_only` privacy contract is fully preserved: delivery only happens when the agent explicitly calls `message(action=send)`.\n\nNormal (non-stranded) paths are unaffected: short replies, intentional `NO_REPLY`, and runs where the message tool already delivered are all excluded by the existing `shouldWarnAboutPrivateMessageToolFinal` guard.\n\n### Why followup retry instead of bypass delivery?\n\nThe `message_tool_only` contract says: \"no message tool call = private/silent\". Auto-publishing stranded text would break this documented behavior. Instead, we give the agent a second chance to follow the contract correctly — like returning an undelivered letter and asking the sender to mail it properly, rather than opening and publishing it ourselves.\n\n## Changed files\n\n- `src/auto-reply/reply/agent-runner.ts` — followup retry with cleaned transcript fields, room_event gate (+26/-3 net)\n- `src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts` — 5 new retry/gate tests replacing 6 bypass tests (-4 net)\n\n## Tests\n\n| Suite | Count | Status |\n|-------|-------|--------|\n| `agent-runner.misc.runreplyagent.test.ts` | 47 | ✅ All pass |\n| `private-message-tool-final.test.ts` | 8 | ✅ All pass |\n| `dispatch-from-config.test.ts` | 189 | ✅ All pass (unchanged, confirms no regressions) |\n| `followup-runner.test.ts` | 67 | ✅ All pass (confirms followup queue compatibility) |\n\nNew test cases:\n- `enqueues a followup retry for a stranded substantive reply (#85714)` — verifies `enqueueFollowupRun` is called with retry prompt containing the assistant text\n- `does not enqueue retry for short private final replies` — negative case\n- `does not enqueue retry when the message tool delivered this turn` — negative case\n- `does not enqueue retry for room_event turns (#85714)` — verifies room_event gate\n- `clears transcriptPrompt on retry to prevent original prompt from hiding retry instruction (#85714)` — regression test verifying `transcriptPrompt`, `userTurnTranscriptRecorder`, and `currentInboundContext` are all `undefined` on the retry run\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Agent's final message silently discarded when LLM forgets to call the message tool in `message_tool_only` mode. The fix enqueues a followup retry turn so the agent can deliver via `message(action=send)`, preserving the privacy contract.\n- **Real environment tested**: Local macOS arm64, Node.js v24.10.0, patched checkout at `9dc3c76dc3`.\n- **Privacy contract preserved**: The fix does NOT use `deliverDespiteSourceReplySuppression` or `skipSuppressionCheck`. No payload is auto-delivered. The agent is re-prompted to call `message(action=send)` itself.\n- **Transcript isolation**: The retry run clears `transcriptPrompt`, `userTurnTranscriptRecorder`, and `currentInboundContext` so the followup runner's `transcriptPrompt ?? extracted.text` resolution correctly uses the retry prompt, not the original user message.\n- **Room event safety**: Stranded reply detection is gated by `sessionCtx.InboundEventKind !== \"room_event\"`, so ambient room events (where silence is intentional) never trigger recovery. Covered by dedicated test case.\n- **Failing proof before fix**: On `upstream/main`, `warnPrivateMessageToolFinal` only logs — no retry is enqueued and the reply is silently lost.\n- **Evidence after fix**:\n  ```\n  ✓ auto-reply agent-runner.misc.runreplyagent.test.ts (47 tests) 1729ms\n  Test Files  1 passed (1)\n       Tests  47 passed (47)\n\n  ✓ unit-fast private-message-tool-final.test.ts (8 tests) 2ms\n  Test Files  1 passed (1)\n       Tests  8 passed (8)\n\n  ✓ auto-reply dispatch-from-config.test.ts (189 tests) 3770ms\n  Test Files  1 passed (1)\n       Tests  189 passed (189)\n\n  ✓ auto-reply followup-runner.test.ts (67 tests) 1710ms\n  Test Files  1 passed (1)\n       Tests  67 passed (67)\n  ```\n- **Observed result after fix**: When a stranded reply is detected, `enqueueFollowupRun` is called with a retry prompt containing the original assistant text and instructions to call `message(action=send)`. The retry run has `transcriptPrompt: undefined` so the followup runner correctly uses the retry instruction. Short replies, already-delivered replies, room events, and runs with existing transcript prompts are all verified by dedicated test cases.\n- **What was not tested**: Live end-to-end delivery through an actual channel — the test verifies that the correct followup run is enqueued with the expected prompt shape and cleaned fields. The followup queue machinery (`enqueueFollowupRun` → `scheduleFollowupDrain` → `runReplyAgent`) is a well-tested existing mechanism used for concurrent message queuing.\n\nCloses #85714\n",
+        "branch": "fix/stranded-reply-pending-delivery-85714",
+        "head_sha": "4caba1ab142d37ab35593cfdbbea400da320c24c",
+        "author": "jerry-xin",
+        "labels": [
+          "size: S",
+          "triage: needs-real-behavior-proof",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts",
+            "additions": 45,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner.ts",
+            "additions": 32,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-88992",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88992.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 156,
+          "counts": {
+            "FAILURE": 2,
+            "SUCCESS": 130,
+            "SKIPPED": 23,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:88992:4603620818:2026-06-02T14:50:11Z:re_review",
+      "comment_id": "4603620818",
+      "comment_version_key": "4603620818:2026-06-02T14:50:11Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88992#issuecomment-4603620818",
+      "repo": "openclaw/openclaw",
+      "issue_number": 88992,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-02T14:50:11Z",
+      "comment_updated_at": "2026-06-02T14:50:11Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:88992:4603073005:2026-06-02T13:52:25Z:re_review",
+      "comment_id": "4603073005",
+      "comment_version_key": "4603073005:2026-06-02T13:52:25Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88992#issuecomment-4603073005",
+      "repo": "openclaw/openclaw",
+      "issue_number": 88992,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-02T13:52:25Z",
+      "comment_updated_at": "2026-06-02T13:52:25Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: recover stranded replies in message_tool_only mode (#85714)",
+        "body": "## Summary\n\nWhen `messages.visibleReplies` is set to `message_tool`, the agent is expected to call the message tool to deliver replies. If the LLM forgets (a probabilistic event — the reporter saw it happen on the 8th turn after 7 correct deliveries), the reply was **silently discarded**: the substantive text sat in the JSONL transcript but was never delivered to the user.\n\nThe existing `shouldWarnAboutPrivateMessageToolFinal()` detection was already identifying these stranded replies and logging a warning, but took no recovery action.\n\n## Fix\n\nThis commit promotes the detection from log-only to **followup retry**, preserving the `message_tool_only` privacy contract:\n\n1. **Gate room events**: Skip stranded reply detection for ambient `room_event` turns where `message_tool_only` is automatically set by the system. Silence on room events is intentional by design — the agent chose not to respond.\n\n2. **Enqueue followup retry turn**: When a stranded reply is detected, enqueue a followup run whose prompt instructs the agent to deliver the captured text via `message(action=send)`. The agent itself calls the message tool, so delivery happens through the correct contract path — no suppression bypass, no privacy boundary crossing.\n\n3. **Clear transcript/persistence fields**: The retry run explicitly clears `transcriptPrompt`, `userTurnTranscriptRecorder`, and `currentInboundContext` from the original followup run to prevent the original user prompt from hiding the retry instruction. The followup runner resolves `transcriptPrompt ?? extracted.text`, so a retained `transcriptPrompt` would cause the agent to see the original user question instead of the retry delivery instruction.\n\n4. **No suppression bypass**: This does NOT mark payloads with `deliverDespiteSourceReplySuppression` or use `skipSuppressionCheck`. The `message_tool_only` privacy contract is fully preserved: delivery only happens when the agent explicitly calls `message(action=send)`.\n\nNormal (non-stranded) paths are unaffected: short replies, intentional `NO_REPLY`, and runs where the message tool already delivered are all excluded by the existing `shouldWarnAboutPrivateMessageToolFinal` guard.\n\n### Why followup retry instead of bypass delivery?\n\nThe `message_tool_only` contract says: \"no message tool call = private/silent\". Auto-publishing stranded text would break this documented behavior. Instead, we give the agent a second chance to follow the contract correctly — like returning an undelivered letter and asking the sender to mail it properly, rather than opening and publishing it ourselves.\n\n## Changed files\n\n- `src/auto-reply/reply/agent-runner.ts` — followup retry with cleaned transcript fields, room_event gate (+26/-3 net)\n- `src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts` — 5 new retry/gate tests replacing 6 bypass tests (-4 net)\n\n## Tests\n\n| Suite | Count | Status |\n|-------|-------|--------|\n| `agent-runner.misc.runreplyagent.test.ts` | 47 | ✅ All pass |\n| `private-message-tool-final.test.ts` | 8 | ✅ All pass |\n| `dispatch-from-config.test.ts` | 189 | ✅ All pass (unchanged, confirms no regressions) |\n| `followup-runner.test.ts` | 67 | ✅ All pass (confirms followup queue compatibility) |\n\nNew test cases:\n- `enqueues a followup retry for a stranded substantive reply (#85714)` — verifies `enqueueFollowupRun` is called with retry prompt containing the assistant text\n- `does not enqueue retry for short private final replies` — negative case\n- `does not enqueue retry when the message tool delivered this turn` — negative case\n- `does not enqueue retry for room_event turns (#85714)` — verifies room_event gate\n- `clears transcriptPrompt on retry to prevent original prompt from hiding retry instruction (#85714)` — regression test verifying `transcriptPrompt`, `userTurnTranscriptRecorder`, and `currentInboundContext` are all `undefined` on the retry run\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Agent's final message silently discarded when LLM forgets to call the message tool in `message_tool_only` mode. The fix enqueues a followup retry turn so the agent can deliver via `message(action=send)`, preserving the privacy contract.\n- **Real environment tested**: Local macOS arm64, Node.js v24.10.0, patched checkout at `9dc3c76dc3`.\n- **Privacy contract preserved**: The fix does NOT use `deliverDespiteSourceReplySuppression` or `skipSuppressionCheck`. No payload is auto-delivered. The agent is re-prompted to call `message(action=send)` itself.\n- **Transcript isolation**: The retry run clears `transcriptPrompt`, `userTurnTranscriptRecorder`, and `currentInboundContext` so the followup runner's `transcriptPrompt ?? extracted.text` resolution correctly uses the retry prompt, not the original user message.\n- **Room event safety**: Stranded reply detection is gated by `sessionCtx.InboundEventKind !== \"room_event\"`, so ambient room events (where silence is intentional) never trigger recovery. Covered by dedicated test case.\n- **Failing proof before fix**: On `upstream/main`, `warnPrivateMessageToolFinal` only logs — no retry is enqueued and the reply is silently lost.\n- **Evidence after fix**:\n  ```\n  ✓ auto-reply agent-runner.misc.runreplyagent.test.ts (47 tests) 1729ms\n  Test Files  1 passed (1)\n       Tests  47 passed (47)\n\n  ✓ unit-fast private-message-tool-final.test.ts (8 tests) 2ms\n  Test Files  1 passed (1)\n       Tests  8 passed (8)\n\n  ✓ auto-reply dispatch-from-config.test.ts (189 tests) 3770ms\n  Test Files  1 passed (1)\n       Tests  189 passed (189)\n\n  ✓ auto-reply followup-runner.test.ts (67 tests) 1710ms\n  Test Files  1 passed (1)\n       Tests  67 passed (67)\n  ```\n- **Observed result after fix**: When a stranded reply is detected, `enqueueFollowupRun` is called with a retry prompt containing the original assistant text and instructions to call `message(action=send)`. The retry run has `transcriptPrompt: undefined` so the followup runner correctly uses the retry instruction. Short replies, already-delivered replies, room events, and runs with existing transcript prompts are all verified by dedicated test cases.\n- **What was not tested**: Live end-to-end delivery through an actual channel — the test verifies that the correct followup run is enqueued with the expected prompt shape and cleaned fields. The followup queue machinery (`enqueueFollowupRun` → `scheduleFollowupDrain` → `runReplyAgent`) is a well-tested existing mechanism used for concurrent message queuing.\n\nCloses #85714\n",
+        "branch": "fix/stranded-reply-pending-delivery-85714",
+        "head_sha": "4caba1ab142d37ab35593cfdbbea400da320c24c",
+        "author": "jerry-xin",
+        "labels": [
+          "size: S",
+          "triage: needs-real-behavior-proof",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts",
+            "additions": 45,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner.ts",
+            "additions": 32,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-88992",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88992.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 156,
+          "counts": {
+            "FAILURE": 2,
+            "SUCCESS": 130,
+            "SKIPPED": 23,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:88992:4600852273:2026-06-02T09:11:41Z:re_review",
+      "comment_id": "4600852273",
+      "comment_version_key": "4600852273:2026-06-02T09:11:41Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88992#issuecomment-4600852273",
+      "repo": "openclaw/openclaw",
+      "issue_number": 88992,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-02T09:11:41Z",
+      "comment_updated_at": "2026-06-02T09:11:41Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: recover stranded replies in message_tool_only mode (#85714)",
+        "body": "## Summary\n\nWhen `messages.visibleReplies` is set to `message_tool`, the agent is expected to call the message tool to deliver replies. If the LLM forgets (a probabilistic event — the reporter saw it happen on the 8th turn after 7 correct deliveries), the reply was **silently discarded**: the substantive text sat in the JSONL transcript but was never delivered to the user.\n\nThe existing `shouldWarnAboutPrivateMessageToolFinal()` detection was already identifying these stranded replies and logging a warning, but took no recovery action.\n\n## Fix\n\nThis commit promotes the detection from log-only to **followup retry**, preserving the `message_tool_only` privacy contract:\n\n1. **Gate room events**: Skip stranded reply detection for ambient `room_event` turns where `message_tool_only` is automatically set by the system. Silence on room events is intentional by design — the agent chose not to respond.\n\n2. **Enqueue followup retry turn**: When a stranded reply is detected, enqueue a followup run whose prompt instructs the agent to deliver the captured text via `message(action=send)`. The agent itself calls the message tool, so delivery happens through the correct contract path — no suppression bypass, no privacy boundary crossing.\n\n3. **Clear transcript/persistence fields**: The retry run explicitly clears `transcriptPrompt`, `userTurnTranscriptRecorder`, and `currentInboundContext` from the original followup run to prevent the original user prompt from hiding the retry instruction. The followup runner resolves `transcriptPrompt ?? extracted.text`, so a retained `transcriptPrompt` would cause the agent to see the original user question instead of the retry delivery instruction.\n\n4. **No suppression bypass**: This does NOT mark payloads with `deliverDespiteSourceReplySuppression` or use `skipSuppressionCheck`. The `message_tool_only` privacy contract is fully preserved: delivery only happens when the agent explicitly calls `message(action=send)`.\n\nNormal (non-stranded) paths are unaffected: short replies, intentional `NO_REPLY`, and runs where the message tool already delivered are all excluded by the existing `shouldWarnAboutPrivateMessageToolFinal` guard.\n\n### Why followup retry instead of bypass delivery?\n\nThe `message_tool_only` contract says: \"no message tool call = private/silent\". Auto-publishing stranded text would break this documented behavior. Instead, we give the agent a second chance to follow the contract correctly — like returning an undelivered letter and asking the sender to mail it properly, rather than opening and publishing it ourselves.\n\n## Changed files\n\n- `src/auto-reply/reply/agent-runner.ts` — followup retry with cleaned transcript fields, room_event gate (+26/-3 net)\n- `src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts` — 5 new retry/gate tests replacing 6 bypass tests (-4 net)\n\n## Tests\n\n| Suite | Count | Status |\n|-------|-------|--------|\n| `agent-runner.misc.runreplyagent.test.ts` | 47 | ✅ All pass |\n| `private-message-tool-final.test.ts` | 8 | ✅ All pass |\n| `dispatch-from-config.test.ts` | 189 | ✅ All pass (unchanged, confirms no regressions) |\n| `followup-runner.test.ts` | 67 | ✅ All pass (confirms followup queue compatibility) |\n\nNew test cases:\n- `enqueues a followup retry for a stranded substantive reply (#85714)` — verifies `enqueueFollowupRun` is called with retry prompt containing the assistant text\n- `does not enqueue retry for short private final replies` — negative case\n- `does not enqueue retry when the message tool delivered this turn` — negative case\n- `does not enqueue retry for room_event turns (#85714)` — verifies room_event gate\n- `clears transcriptPrompt on retry to prevent original prompt from hiding retry instruction (#85714)` — regression test verifying `transcriptPrompt`, `userTurnTranscriptRecorder`, and `currentInboundContext` are all `undefined` on the retry run\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Agent's final message silently discarded when LLM forgets to call the message tool in `message_tool_only` mode. The fix enqueues a followup retry turn so the agent can deliver via `message(action=send)`, preserving the privacy contract.\n- **Real environment tested**: Local macOS arm64, Node.js v24.10.0, patched checkout at `9dc3c76dc3`.\n- **Privacy contract preserved**: The fix does NOT use `deliverDespiteSourceReplySuppression` or `skipSuppressionCheck`. No payload is auto-delivered. The agent is re-prompted to call `message(action=send)` itself.\n- **Transcript isolation**: The retry run clears `transcriptPrompt`, `userTurnTranscriptRecorder`, and `currentInboundContext` so the followup runner's `transcriptPrompt ?? extracted.text` resolution correctly uses the retry prompt, not the original user message.\n- **Room event safety**: Stranded reply detection is gated by `sessionCtx.InboundEventKind !== \"room_event\"`, so ambient room events (where silence is intentional) never trigger recovery. Covered by dedicated test case.\n- **Failing proof before fix**: On `upstream/main`, `warnPrivateMessageToolFinal` only logs — no retry is enqueued and the reply is silently lost.\n- **Evidence after fix**:\n  ```\n  ✓ auto-reply agent-runner.misc.runreplyagent.test.ts (47 tests) 1729ms\n  Test Files  1 passed (1)\n       Tests  47 passed (47)\n\n  ✓ unit-fast private-message-tool-final.test.ts (8 tests) 2ms\n  Test Files  1 passed (1)\n       Tests  8 passed (8)\n\n  ✓ auto-reply dispatch-from-config.test.ts (189 tests) 3770ms\n  Test Files  1 passed (1)\n       Tests  189 passed (189)\n\n  ✓ auto-reply followup-runner.test.ts (67 tests) 1710ms\n  Test Files  1 passed (1)\n       Tests  67 passed (67)\n  ```\n- **Observed result after fix**: When a stranded reply is detected, `enqueueFollowupRun` is called with a retry prompt containing the original assistant text and instructions to call `message(action=send)`. The retry run has `transcriptPrompt: undefined` so the followup runner correctly uses the retry instruction. Short replies, already-delivered replies, room events, and runs with existing transcript prompts are all verified by dedicated test cases.\n- **What was not tested**: Live end-to-end delivery through an actual channel — the test verifies that the correct followup run is enqueued with the expected prompt shape and cleaned fields. The followup queue machinery (`enqueueFollowupRun` → `scheduleFollowupDrain` → `runReplyAgent`) is a well-tested existing mechanism used for concurrent message queuing.\n\nCloses #85714\n",
+        "branch": "fix/stranded-reply-pending-delivery-85714",
+        "head_sha": "4caba1ab142d37ab35593cfdbbea400da320c24c",
+        "author": "jerry-xin",
+        "labels": [
+          "size: S",
+          "triage: needs-real-behavior-proof",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts",
+            "additions": 45,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner.ts",
+            "additions": 32,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-88992",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88992.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 156,
+          "counts": {
+            "FAILURE": 2,
+            "SUCCESS": 130,
+            "SKIPPED": 23,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:88992:4599811389:2026-06-02T07:33:24Z:re_review",
+      "comment_id": "4599811389",
+      "comment_version_key": "4599811389:2026-06-02T07:33:24Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/88992#issuecomment-4599811389",
+      "repo": "openclaw/openclaw",
+      "issue_number": 88992,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-02T07:33:24Z",
+      "comment_updated_at": "2026-06-02T07:33:24Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -255,23 +575,23 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4779,
+    "total_ms": 5302,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 608
+        "ms": 384
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1471
+        "ms": 2333
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 2672
+        "ms": 2551
       },
       {
         "name": "append_ledger",
