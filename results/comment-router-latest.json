@@ -1,20 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-02T21:49:32.175Z",
+  "generated_at": "2026-06-02T21:49:41.211Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-02T18:49:29.879Z",
+  "since": "2026-06-02T18:49:40.702Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     89590
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4359535639
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
+  "scanned_comments": 1,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -61,183 +63,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): forward turn-source for embedded plugin approvals (supersedes #84205)",
-        "body": "## Summary\n\nForwards turn-source routing fields through the embedded plugin `before_tool_call` approval chain so plugin approvals can be delivered back to the originating chat (Telegram, Discord, Slack, etc.). Without this, embedded-runner plugin approvals reach `requestPluginToolApproval` without a delivery route and resolve as `decision: null` (\"no approval route\"), blocking the tool while the model often hallucinates a fake `/approve` instruction and a success.\n\nSupersedes #84205 (stale since 2026-05-19, blocked from updates because the PR branch is on `jzakirov/openclaw-official`). This PR carries the same intent as #84205, applied to the current `agent-tools.*` file layout (the upstream renamed `pi-tools.*` -> `agent-tools.*` after #84205 was opened), and extends it with two additional changes that turned up while validating the fix on a production deployment fork.\n\n## Details\n\nThree commits, ordered by dependency:\n\n1. **`Allow skill workshop lifecycle without approval route`** -- when a plugin `before_tool_call` requireApproval (for example the `skill_workshop` apply/lifecycle action) reaches `requestPluginToolApproval` and the gateway returns `decision: null` because there is no live approval route for the channel, fall back to `ALLOW_ONCE` instead of blocking. Without this, embedded-mode runs with no inbound approval channel deadlock on first lifecycle attempt. Adds a regression test for the no-route case and the existing turnSource* round-trip assertion.\n\n2. **`thread turn-source through embedded plugin approval contexts`** -- propagates `messageProvider` / `currentChannelId` / `agentAccountId` / `currentThreadTs` onto the embedded plugin `before_tool_call` hook context as `turnSourceChannel` / `turnSourceTo` / `turnSourceAccountId` / `turnSourceThreadId` from every embedded entry point: codex app-server `dynamic-tools` and `run-attempt`, CLI runner, embedded-agent-runner `run` and `attempt`, openclaw-tools, and the gateway `tools-invoke-shared` chain plus its test. Same conceptual change as #84205's primary commit, applied across more call sites.\n\n3. **`thread turn-source through createOpenClawCodingTools factory`** -- the factory in `agent-tools.ts` (renamed from `pi-tools.ts` upstream) is the converging point where call-site turnSource* options become a HookContext that downstream plugin approval requests will read. Without this third commit the call-site threading from commit 2 has no effect: HookContext still drops the fields and `requestPluginToolApproval` resolves as `decision: null`. Mirrors the third file (`pi-tools.ts`) from #84205 with up-to-date file paths.\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: plugin `before_tool_call` requireApproval requests originating from embedded-runner turns (CLI, codex, embedded-agent) had no `turnSource*` routing fields, so the gateway resolved them as `decision: null` (no-approval-route) and blocked the tool. The same fields were already wired for bash/exec approvals, so plugin approvals were the asymmetric gap. Observed in production on the deployment fork as Telegram-originated `skill_workshop apply` actions that never reached a deliverable approval prompt.\n\n- **Real environment tested**: deployed `openclaw` gateway on `mac-mini.lan` (macOS, launchd-supervised) running `upgrade-v2026.6.2` deployment fork with all three commits in this PR cherry-picked on top, build SHA `3ef6591a4e` (gateway PID 76586 at time of capture). Same three commits also deployed to `rh-bot.lan` (PID 8470). The PR branch isolates the commits cleanly on top of `upstream/main`.\n\n- **Exact steps or command run after this patch**:\n  ```\n  ssh alexm@mac-mini.lan 'cd ~/.openclaw/openclaw && git log --oneline -4'\n  ssh alexm@mac-mini.lan 'launchctl print gui/$(id -u)/ai.openclaw.gateway | grep \"pid =\"'\n  node /Users/alex/git/openclaw/scripts/run-vitest.mjs src/agents/agent-tools.before-tool-call.embedded-mode.test.ts\n  ```\n\n- **Evidence after fix**: Captured live from the deployed `openclaw` runtime on `mac-mini.lan` via `ssh alexm@mac-mini.lan` and from the local Vitest harness against the same source tree:\n\n  ```\n  $ ssh alexm@mac-mini.lan 'cd ~/.openclaw/openclaw && git log --oneline -4'\n  3ef6591a4e wip(agents): thread turn-source through createOpenClawCodingTools factory\n  ae81ca9dfa wip(agents): thread turn-source through embedded plugin approval contexts\n  30ea28bc47 Allow skill workshop lifecycle without approval route\n  d6dcca4d7d fix(memory-lancedb): respect HOME for refresh-audit path\n\n  $ ssh alexm@mac-mini.lan 'launchctl print gui/$(id -u)/ai.openclaw.gateway | grep \"pid =\"'\n        pid = 76586\n\n  $ ssh alexm@mac-mini.lan 'grep -F \"turnSourceChannel\" ~/.openclaw/openclaw/dist/server-reload-handlers-Cuxdx8TQ.js | head -1'\n  turnSourceChannel: params.ctx?.turnSourceChannel,\n  ```\n\n  The first command shows the deployed gateway includes all three commits from this PR. The second confirms the live launchd-supervised gateway is running on that build (PID 76586). The third confirms the patched `turnSourceChannel` propagation is in the compiled `dist/` bundle so `requestPluginToolApproval` receives the field at runtime.\n\n- **Observed result after fix**: plugin `before_tool_call` requireApproval requests from embedded-runner turns now carry the originating channel/account/thread identifiers into `plugin.approval.request`. The gateway can use these to deliver the approval to the originating chat (mirrors the existing bash exec approval delivery path). The `skill_workshop apply` round-trip test that previously asserted only blocked-without-route behavior now also covers the round-trip with turnSource* fields present and the no-route fallback to `ALLOW_ONCE`. Behavior verified by 41 passing tests across `agent-tools.before-tool-call.embedded-mode.test.ts`, `agent-tools.safe-bins.test.ts`, `agent-tools-agent-config.test.ts`, and `tools-invoke-http.test.ts`.\n\n- **What was not tested**: no live Telegram round-trip of a `skill_workshop apply` approval was driven against the running mac-mini gateway as part of this proof so production traffic was not disrupted. The patched code path is covered by the regression tests and the deployed dist bundle confirms the runtime code matches the source.\n",
-        "branch": "fix/embedded-plugin-approval-turn-source-superset",
-        "head_sha": "ef5bb8d408ff713c16a09acb914212db979ab744",
-        "author": "amittell",
-        "labels": [
-          "gateway",
-          "agents",
-          "size: S",
-          "extensions: codex",
-          "proof: supplied",
-          "mantis: telegram-visible-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "merge-risk: 🚨 security-boundary",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/codex/src/app-server/dynamic-tools.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/run-attempt.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-tools.before-tool-call.embedded-mode.test.ts",
-            "additions": 46,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-tools.before-tool-call.ts",
-            "additions": 18,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-tools.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/cli-runner.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 20,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openclaw-tools.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/tools-invoke-http.test.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/tools-invoke-shared.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/hook-types.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/skills/workshop/policy.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89590",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89590.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 155,
-          "counts": {
-            "SUCCESS": 119,
-            "SKIPPED": 23,
-            "IN_PROGRESS": 12,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-core-runtime-infra-approval-exec:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-cron-service:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-auth:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS",
-            "checks-node-agentic-agents-core-models:IN_PROGRESS",
-            "checks-node-agentic-agents-core-tools:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS"
-          ],
-          "pending": [
-            "checks-node-core-runtime-infra-approval-exec:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-cron-service:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-auth:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS",
-            "checks-node-agentic-agents-core-models:IN_PROGRESS",
-            "checks-node-agentic-agents-core-tools:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS"
-          ],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2646,
+    "total_ms": 1026,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 464
+        "ms": 490
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1817
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 338
+        "ms": 518
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
