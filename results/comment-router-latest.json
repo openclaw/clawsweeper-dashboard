@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-02T20:13:57.694Z",
+  "generated_at": "2026-06-02T20:14:22.199Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-02T17:13:55.173Z",
+  "since": "2026-06-02T17:14:19.880Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    89045
+    89039
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 10,
-  "commands_seen": 2,
+  "scanned_comments": 13,
+  "commands_seen": 4,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89045:4591639984:2026-06-02T20:13:51Z:clawsweeper_needs_human",
-      "comment_id": "4591639984",
-      "comment_version_key": "4591639984:2026-06-02T20:13:51Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89045#issuecomment-4591639984",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89039:4591504568:2026-06-02T20:14:16Z:clawsweeper_needs_human",
+      "comment_id": "4591504568",
+      "comment_version_key": "4591504568:2026-06-02T20:14:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-4591504568",
       "repo": "openclaw/openclaw",
-      "issue_number": 89045,
+      "issue_number": 89039,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-01T10:15:21Z",
-      "comment_updated_at": "2026-06-02T20:13:51Z",
+      "comment_created_at": "2026-06-01T09:57:55Z",
+      "comment_updated_at": "2026-06-02T20:14:16Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -52,62 +52,156 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] Needs maintainer review of the recovery policy and redacted live behavior proof; there is no narrow automated repair to queue from this review.; Cleared: No concrete security or supply-chain concern was found; the diff stays in runtime session/dispatch/channel/gateway code and focused tests, with no dependency, workflow, secret, or packaging changes. (sha=93ffa4c877df159a850c025822b15cab4617d240)",
-      "review_summary": "The PR clears recoverable terminal session lifecycle state on visible inbound turns, retries stale active reply admission with a terminal-recovery guard, mirrors the agent API path, adds a zero-count dispatch warning, and updates focused tests.\n\nPR surface: Source +155, Tests +279. Total +434 across 12 files.\n\nReproducibility: yes. from source inspection and the linked report, but not from a live repro in this review. Current main reuses fresh failed session entries and can return a busy zero-count dispatch when an active reply operation remains registered.",
-      "review_followup": "- [P1] Needs maintainer review of the recovery policy and redacted live behavior proof; there is no narrow automated repair to queue from this review.",
+      "repair_reason": "- [P1] Needs maintainer review for the retry availability tradeoff and contributor live proof; no narrow automated code repair is currently identified.; Cleared: No concrete security or supply-chain regression was found; the diff changes runtime request options and tests without workflows, dependencies, secrets, or package resolution changes. (sha=74bb590084102cdff4dae68811813c5cda95a922)",
+      "review_summary": "The PR wraps embedded steering transcript writes, adds takeover-specific reply handling, scopes embedded prompt-lock OpenAI SDK retries to `maxRetries: 0` by default, forwards `maxRetries` through native OpenAI transport request options, and adds regression coverage.\n\nPR surface: Source +76, Tests +317. Total +393 across 11 files.\n\nReproducibility: no. high-confidence live reproduction was run. The race is source-reproducible from current main's direct steering write path plus the OpenAI SDK retry default, and the PR adds focused simulated regression coverage.",
+      "review_followup": "- [P1] Needs maintainer review for the retry availability tradeoff and contributor live proof; no narrow automated code repair is currently identified.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "93ffa4c877df159a850c025822b15cab4617d240",
+      "expected_head_sha": "74bb590084102cdff4dae68811813c5cda95a922",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: prevent silent message loss from EmbeddedAttemptSessionTakeoverError",
+        "body": "## Summary\n\nWhen the OpenAI SDK retried an `ECONNRESET` internally (default `maxRetries=2`), the session write lock was released during the retry window. Incoming steering messages could then modify the transcript without updating the fence, causing a fingerprint mismatch on `reacquireAfterPrompt()`. The resulting `EmbeddedAttemptSessionTakeoverError` was caught by `model-fallback.ts` which aborted the run, and the outer reply pipeline produced no user-visible output — the message was silently lost.\n\n## Root Cause Chain\n\n```\nAPI ECONNRESET\n  → OpenAI SDK default maxRetries=2, internal retry\n  → session write lock released during retry window\n  → incoming message arrives via queueHandle.queueMessage\n  → activeSession.steer writes directly (bypassing withOwnedSessionTranscriptWrites)\n  → transcript changes without updating fence\n  → original attempt reacquireAfterPrompt() fingerprint mismatch\n  → EmbeddedAttemptSessionTakeoverError thrown\n  → model-fallback.ts aborts the run\n  → outer layer hits generic failure branch\n  → assistantTexts/payloads never enter buildReplyPayloads()\n  → message silently lost (user sees generic error or nothing)\n```\n\n## Fix\n\nFive coordinated changes that address the bug at multiple layers:\n\n### 1. Wrap steering in `withOwnedSessionTranscriptWrites` (`attempt.ts`)\nSteering writes that arrive during prompt lock release now go through `withOwnedSessionTranscriptWrites`, keeping fence tracking consistent and preventing the fingerprint mismatch that triggers the takeover error.\n\n### 2. Dedicated error handler for takeover (`agent-runner-execution.ts`, `failover-error.ts`)\nAdded `isEmbeddedAttemptSessionTakeoverError()` export and a dedicated catch block in `runAgentTurnWithFallback`. Instead of falling into the generic failure branch (silent loss), users now receive a clear message asking them to resend. When a takeover wraps a preserved prompt error (billing, rate-limit, context-overflow), the original error is unwrapped and classified normally — only pure takeover errors return resend guidance.\n\n### 3. Scope SDK retry disable to embedded prompt lock path (`attempt.ts`, `attempt.session-lock.ts`)\nExtracted `installEmbeddedPromptRetryDefault` helper that wraps the session's `streamFn` with `{ maxRetries: 0, ...options }` — the `0` is a **default** that goes before the caller options spread, so `settings.retry.provider.maxRetries` (surfaced via `options.maxRetries` per the chain in `sdk.ts:360`) takes precedence when explicitly configured. Non-embedded callers retain the SDK default retry behavior (maxRetries=2).\n\n### 4. Forward maxRetries through native OpenAI transport (`openai-transport-stream.ts`)\n`buildOpenAISdkRequestOptions` previously accepted only `model` and `signal`, dropping the `maxRetries` injected by `installEmbeddedPromptRetryDefault`. Added `maxRetries` parameter and forwarded it through all three native transport call sites (Responses, Azure Responses, Completions). When `maxRetries` is the only option present, the function now returns an object instead of `undefined` so the SDK receives the override.\n\n### 5. Phase tracking in `EmbeddedAttemptSessionTakeoverError` (`attempt.session-lock.ts`)\nAdded a `phase` field (`prompt_reacquire`, `cleanup`, `write`, `fence_check`) for better diagnostics when this error does occur. Backward compatible — the phase parameter is optional with existing call sites unchanged.\n\n## Real behavior proof\n\n- **Behavior addressed**: Silent message loss when SDK retries race with session takeover → visible resend guidance for pure takeover, correct error classification for wrapped prompt errors, provider retry settings respected, maxRetries forwarded through native OpenAI transport\n- **Real environment tested**: Docker container (`node:24-bookworm`, Node.js `v24.16.0`, Debian GNU/Linux 12 bookworm, aarch64) running patched checkout at commit `aa77669d`\n- **Failing proof before fix**: On upstream/main, `buildOpenAISdkRequestOptions` only accepts `model` and `signal` — it drops `maxRetries`. Embedded prompt lock window injects `maxRetries: 0` but the native OpenAI transport never forwards it to the SDK, so SDK retries (default `maxRetries=2`) still occur during the released lock window, widening the race. Additionally, `queueMessage` steering writes bypass `withOwnedSessionTranscriptWrites`, causing fingerprint mismatch → `EmbeddedAttemptSessionTakeoverError` → generic failure branch → silent message loss.\n- **Exact steps and commands run after this patch**:\n\n```\n$ docker run --rm -e CI=true -v \"$(pwd):/app\" -w /app node:24-bookworm bash -c \"...\"\n=== PR #89039 Real Behavior Proof (v4) ===\nEnvironment: Docker container, v24.16.0, aarch64, \"Debian GNU/Linux 12 (bookworm)\"\nCommit: aa77669d\n\n--- Test 1: Native OpenAI transport forwards maxRetries ---\n Test Files  1 passed (1)\n Tests  234 passed (234)\n\n--- Test 2: Embedded prompt lock defaults + override ---\n ✓ attempt.session-lock.test.ts (47 tests)\n Test Files  1 passed (1)\n Tests  47 passed (47)\n\n--- Test 3: Takeover error handling + unwrapping ---\n Test Files  1 passed (1)\n Tests  157 passed (157)\n\n--- Test 4: SDK transport paths (no global maxRetries) ---\n Test Files  2 passed (2)\n Tests  26 passed (26)\n\n--- Test 5: Full regression (all affected suites) ---\n Test Files  1 passed (1)    Tests  83 passed (83)\n Test Files  2 passed (2)    Tests  26 passed (26)\n Test Files  1 passed (1)    Tests  157 passed (157)\n Test Files  2 passed (2)    Tests  281 passed (281)\n passed 4 Vitest shards in 19.16s\n\n--- Test 6: End-to-end transport retry suppression proof ---\nLoopback test: mock server returns retryable 500, maxRetries:0 forwarded\nthrough full completions transport → exactly 1 request (no SDK retry)\n\n--- Test 7: Code path verification ---\nbuildOpenAISdkRequestOptions now accepts+forwards maxRetries:\n1836:  maxRetries?: number,\n1837:): { signal?: AbortSignal; timeout?: number; maxRetries?: number } | undefined {\n\nAll 3 call sites forward options?.maxRetries:\n1933:  options?.maxRetries,\n2373:  options?.maxRetries,\n2603:  buildOpenAISdkRequestOptions(model, options?.signal, options?.maxRetries),\n\nEmbedded retry default (maxRetries:0 BEFORE options spread):\n1075:  innerStreamFn(model, context, { maxRetries: 0, ...options });\n```\n\n- **Evidence after fix**: All 547 tests pass across 6 affected test suites (4 Vitest shards) in a clean Docker environment.\n  - **Transport retry suppression proven end-to-end**: Loopback regression test starts a mock server returning retryable HTTP 500 errors, passes `maxRetries: 0` through the full `createOpenAICompletionsTransportStreamFn()` path, and asserts exactly 1 request is received — confirming the SDK does not retry when `maxRetries: 0` is forwarded through the native transport.\n  - Default SDK retry behavior preserved for non-embedded callers (no `maxRetries` in default request options).\n  - Embedded prompt lock window correctly injects `maxRetries: 0` as a default that configured `settings.retry.provider.maxRetries` can override.\n  - Native OpenAI transport (`buildOpenAISdkRequestOptions`) correctly forwards `maxRetries` to all 3 SDK call sites.\n  - Pure takeover errors produce visible resend guidance. Wrapped prompt errors are unwrapped and classified normally.\n- **What was not tested**: No live multi-user concurrent session test with an actual ECONNRESET during an embedded prompt with concurrent steering input was run. The proof relies on unit tests (including an end-to-end loopback transport test with a real HTTP server) that simulate the session-lock race, fingerprint mismatch, transport retry suppression, and error classification paths in a real Docker container environment.\n\n## Tests\n\nAll affected test suites pass (Docker `node:24-bookworm`, aarch64):\n\n| Test File | Tests |\n|-----------|-------|\n| `openai-transport-stream.test.ts` | 234 |\n| `attempt.session-lock.test.ts` | 47 |\n| `agent-runner-execution.test.ts` | 157 |\n| `openai-completions.test.ts` | 18 |\n| `openai-responses-shared.test.ts` | 9 |\n| `failover-error.test.ts` | 83 |\n\nNew test coverage includes:\n- `buildOpenAISdkRequestOptions` forwards `maxRetries` when provided, omits when undefined\n- `maxRetries`-only call returns an object (not `undefined`)\n- Loopback end-to-end test: mock 500 server + `maxRetries: 0` → exactly 1 request (no SDK retry)\n- `installEmbeddedPromptRetryDefault` default behavior (no caller options → maxRetries:0)\n- Explicit `maxRetries` override preserved over embedded default\n- Takeover detection during owned steering writes\n- User-facing resend message for pure session takeover\n- Preserved prompt error unwrapping from cleanup takeover\n- Backward compatibility for `assertSessionFileFence` without phase parameter\n\n## Changed Files\n\n- `src/agents/embedded-agent-runner/run/attempt.session-lock.ts`\n- `src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts`\n- `src/agents/embedded-agent-runner/run/attempt.ts`\n- `src/agents/failover-error.ts`\n- `src/agents/failover-error.test.ts`\n- `src/agents/openai-transport-stream.ts`\n- `src/agents/openai-transport-stream.test.ts`\n- `src/auto-reply/reply/agent-runner-execution.ts`\n- `src/auto-reply/reply/agent-runner-execution.test.ts`\n- `src/llm/providers/openai-completions.ts`\n- `src/llm/providers/openai-completions.test.ts`\n- `src/llm/providers/openai-responses-shared.ts`\n- `src/llm/providers/openai-responses-shared.test.ts`\n\nFixes #87180\n",
+        "branch": "fix/session-takeover-silent-message-loss-87180",
+        "head_sha": "74bb590084102cdff4dae68811813c5cda95a922",
+        "author": "jerry-xin",
+        "labels": [
+          "agents",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts",
+            "additions": 92,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.ts",
+            "additions": 36,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 8,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/failover-error.test.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/failover-error.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-transport-stream.test.ts",
+            "additions": 79,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openai-transport-stream.ts",
+            "additions": 15,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
+            "additions": 67,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.ts",
+            "additions": 29,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/llm/providers/openai-completions.test.ts",
+            "additions": 32,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/llm/providers/openai-responses-shared.test.ts",
+            "additions": 46,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89039",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89039.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 156,
+          "counts": {
+            "FAILURE": 8,
+            "SUCCESS": 124,
+            "SKIPPED": 23,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "check-guards:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "check-guards:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     },
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89599:4606472995:2026-06-02T20:09:07Z:clawsweeper_needs_human",
-      "comment_id": "4606472995",
-      "comment_version_key": "4606472995:2026-06-02T20:09:07Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89599#issuecomment-4606472995",
+      "idempotency_key": "comment-router:openclaw/openclaw:89039:4601902843:2026-06-02T11:25:13Z:re_review",
+      "comment_id": "4601902843",
+      "comment_version_key": "4601902843:2026-06-02T11:25:13Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-4601902843",
       "repo": "openclaw/openclaw",
-      "issue_number": 89599,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 89039,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-02T19:50:31Z",
-      "comment_updated_at": "2026-06-02T20:09:07Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] The remaining action is maintainer acceptance of the compatibility/security tradeoff; there is no narrow mechanical repair to queue.; Cleared: No supply-chain or permission changes were found; the diff reduces cross-origin custom-header replay by applying the existing redirect scrubber to SSE. (sha=fc27b6f55be7f515f7bdcdadbd9917ab87e84eb1)",
-      "review_summary": "The PR reuses the existing redirect-safe MCP HTTP fetch wrapper for SSE request and EventSource fetch paths and adds SSE redirect regression tests.\n\nPR surface: Source 0, Tests +148. Total +148 across 2 files.\n\nReproducibility: yes. Current main shows SSE send and EventSource fetch bypass the existing manual redirect wrapper, while the PR body gives a concrete two-origin MCP SSE proof script and after-fix output.",
-      "review_followup": "- [P2] The remaining action is maintainer acceptance of the compatibility/security tradeoff; there is no narrow mechanical repair to queue.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "fc27b6f55be7f515f7bdcdadbd9917ab87e84eb1",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:88906:4606565344:2026-06-02T20:03:44Z:re_review",
-      "comment_id": "4606565344",
-      "comment_version_key": "4606565344:2026-06-02T20:03:44Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/88906#issuecomment-4606565344",
-      "repo": "openclaw/openclaw",
-      "issue_number": 88906,
-      "author": "keshavbotagent",
-      "author_id": 267154163,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-02T20:03:44Z",
-      "comment_updated_at": "2026-06-02T20:03:44Z",
+      "comment_created_at": "2026-06-02T11:25:13Z",
+      "comment_updated_at": "2026-06-02T11:25:13Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -130,373 +224,50 @@
       "reason": "comment version already processed in ledger"
     },
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89601:4606487310:2026-06-02T20:03:28Z:clawsweeper_needs_human",
-      "comment_id": "4606487310",
-      "comment_version_key": "4606487310:2026-06-02T20:03:28Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89601#issuecomment-4606487310",
+      "idempotency_key": "comment-router:openclaw/openclaw:89039:4601546681:2026-06-02T10:36:48Z:re_review",
+      "comment_id": "4601546681",
+      "comment_version_key": "4601546681:2026-06-02T10:36:48Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-4601546681",
       "repo": "openclaw/openclaw",
-      "issue_number": 89601,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 89039,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-02T19:52:32Z",
-      "comment_updated_at": "2026-06-02T20:03:28Z",
+      "comment_created_at": "2026-06-02T10:36:48Z",
+      "comment_updated_at": "2026-06-02T10:36:48Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] Manual review or Mantis/maintainer transport validation is needed because the remaining blocker is proof, not a mechanical code defect.; Cleared: The diff only changes TypeScript validation logic and colocated tests; it does not touch dependencies, CI, secrets, packaging, or code-execution surfaces. (sha=0fd95756cd4a67cdbc28453a0a51c38616b9b699)",
-      "review_summary": "The PR narrows shared poll-intent detection to `pollQuestion` and `pollOption` and adds unit plus outbound send-validation coverage for schema-padded sends.\n\nPR surface: Source -2, Tests +40. Total +38 across 3 files.\n\nReproducibility: yes. Source inspection shows the all-actions message schema exposes `pollDurationHours` and `pollMulti`, current main treats `pollDurationHours: 1` as poll intent, and `runMessageAction` rejects `send` before delivery.",
-      "review_followup": "- [P1] Manual review or Mantis/maintainer transport validation is needed because the remaining blocker is proof, not a mechanical code defect.",
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "0fd95756cd4a67cdbc28453a0a51c38616b9b699",
+      "expected_head_sha": null,
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "reason": "comment version already processed in ledger"
     },
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89585:4606134735:2026-06-02T20:02:16Z:clawsweeper_needs_human",
-      "comment_id": "4606134735",
-      "comment_version_key": "4606134735:2026-06-02T20:02:16Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89585#issuecomment-4606134735",
+      "idempotency_key": "comment-router:openclaw/openclaw:89039:4601071690:2026-06-02T09:35:31Z:re_review",
+      "comment_id": "4601071690",
+      "comment_version_key": "4601071690:2026-06-02T09:35:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-4601071690",
       "repo": "openclaw/openclaw",
-      "issue_number": 89585,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-02T19:06:45Z",
-      "comment_updated_at": "2026-06-02T20:02:16Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] No repair lane is needed; the remaining action is ordinary maintainer/CI review of an open comment-only PR.; Cleared: The diff only changes TypeScript comments and does not alter workflows, dependencies, package metadata, secrets handling, network behavior, or code execution paths. (sha=11c8fe6ed29dc3ce27f54c35ec8b0aed947a7314)",
-      "review_summary": "The branch adds TypeScript JSDoc and inline contract comments across embedded-agent runner helper files for replay, compaction, sandbox, tool, usage, delivery, and failover behavior.\n\nPR surface: Source +249. Total +249 across 34 files.\n\nReproducibility: not applicable. this is a source-comment documentation PR, not a behavioral bug report. The relevant check is whether the comments match current helper behavior, which is supported by source and adjacent tests.",
-      "review_followup": "- [P2] No repair lane is needed; the remaining action is ordinary maintainer/CI review of an open comment-only PR.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "11c8fe6ed29dc3ce27f54c35ec8b0aed947a7314",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: recover terminal session status on visible inbound turns",
-        "body": "## Summary\n\nFixes #86827 — group chat sessions stuck in `failed` status silently drop all subsequent messages.\n\nWhen a group chat session enters a terminal status (`failed`, `timeout`, or `killed`), the reply dispatch path returns a successful no-op (`queuedFinal: false`, zero dispatch counts) without starting an AI turn or delivering any user-visible error. All subsequent messages are silently discarded until a manual `/new` reset.\n\n## Root Cause\n\nThree independent mechanisms conspire to create the silent drop:\n\n1. **Session state persistence**: `initSessionState()` reuses the existing session entry with its terminal `status` field intact, passing it downstream unchanged.\n2. **Reply operation locking**: A stale `ReplyOperation` from the failed run remains registered in `replyRunRegistry`, causing `admitReplyTurn()` to return `skipped` with reason `active-run`.\n3. **No fallback or diagnostic**: The `skipped` admission produces a valid dispatch result with zero counts, and no warning is logged — the message simply vanishes.\n\n## Changes\n\n### 1. Auto-recover terminal sessions (`session.ts`)\n\nWhen a **visible** (non-cron/heartbeat) inbound message hits a session with recoverable terminal status, automatically clear the stale lifecycle fields (`status`, `startedAt`, `endedAt`, `runtimeMs`, `abortedLastRun`) while **preserving the `sessionId` and transcript continuity** — no session rotation.\n\n### 2. Clear stale reply operations with race guard (`dispatch-from-config.ts`)\n\nWhen `admitReplyTurn()` returns `skipped` with reason `active-run` but the persisted session is in terminal status, force-clear the stale reply operation via `forceClearReplyRunBySessionId()` and retry admission **once**. This breaks the deadlock without risking infinite retry loops.\n\n**Concurrent recovery guard**: After a recovery turn clears the proven stale leftover and admits its own fresh operation, it is marked with a `terminalRecovery` flag. If a second visible message arrives against the same terminal snapshot before the first recovery clears the store state, the force-clear branch now skips operations marked as in-flight terminal recoveries. This prevents a sibling recovery turn from killing a fresh recovery that is already in flight, letting concurrent turns fall through to normal busy/wait handling instead.\n\n### 3. Agent API path (`agent.ts`)\n\nMirror the same terminal recovery logic in the agent API dispatch path so agent API requests also clear terminal state for visible requests.\n\n### 4. Diagnostics (`kernel.ts`, `types.ts`)\n\nAdd a structured warning log when a visible channel turn dispatch completes with `queuedFinal: false` and zero tool/block/final counts — a sentinel for future silent message drops. Excludes system turns (heartbeat/cron/exec) and observe-only admissions.\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Two visible group-chat messages arriving against the same terminal (`failed`) session snapshot could race: the second turn force-clears the first turn's freshly admitted recovery operation, dropping the first message — the exact silent-loss path this PR fixes.\n- **Real environment tested**: Local patched OpenClaw checkout at `b2b7996945`, macOS arm64, Node.js `v24.10.0`.\n- **Failing proof before fix**: The two-turn race regression test (`does not kill a sibling recovery turn when a second visible turn races the same terminal snapshot`) was authored as part of this PR and does not exist on upstream/main. When run against the original commit (`ac79b730a1`) without the guard fix, the second turn force-fails the first recovery operation (the `terminalRecovery` guard did not exist).\n- **Exact steps or command run after this patch**:\n  ```\n  node scripts/run-vitest.mjs \\\n    src/auto-reply/reply/dispatch-from-config.test.ts \\\n    src/auto-reply/reply/session.test.ts \\\n    src/channels/turn/kernel.test.ts \\\n    src/auto-reply/reply/agent-runner-execution.test.ts \\\n    src/auto-reply/reply/agent-runner-memory.test.ts\n  ```\n- **Evidence after fix**:\n  ```\n  [test] starting test/vitest/vitest.auto-reply.config.ts\n   ✓ auto-reply src/auto-reply/reply/agent-runner-execution.test.ts (155 tests) 582ms\n   ✓ auto-reply src/auto-reply/reply/session.test.ts (97 tests) 288ms\n   ✓ auto-reply src/auto-reply/reply/agent-runner-memory.test.ts (40 tests) 217ms\n   ✓ auto-reply src/auto-reply/reply/dispatch-from-config.test.ts (191 tests) 6650ms\n   Test Files  4 passed (4)\n        Tests  483 passed (483)\n\n  [test] starting test/vitest/vitest.channels.config.ts\n   ✓ channels src/channels/turn/kernel.test.ts (29 tests) 16ms\n   Test Files  1 passed (1)\n        Tests  29 passed (29)\n\n  [test] passed 2 Vitest shards in 15.52s\n  ```\n- **Observed result after fix**: All 512 tests pass across 2 Vitest shards, including the new two-turn concurrent recovery race regression test. The `terminalRecovery` flag prevents the second visible turn from force-clearing the first turn's in-flight recovery operation; both turns produce replies without message loss.\n- **What was not tested**: No live channel (Telegram/Octo/Discord) end-to-end test was performed. The race condition is validated through focused Vitest integration tests that simulate concurrent visible inbound dispatches against shared terminal session state. The fix is channel-generic and does not depend on any channel-specific behavior.\n\n## Tests\n\n- **session.test.ts**: Verify failed group sessions recover without rotating the transcript\n- **dispatch-from-config.test.ts**: Verify stale active reply operations are cleared for terminal sessions and admission is retried; verify two concurrent visible turns against the same terminal snapshot do not kill each other's recovery operations\n- **agent.test.ts**: Verify terminal failed agent API sessions recover without session rotation; updated existing failed-session tests to verify terminal state clearing\n- **kernel.test.ts**: Verify zero-count visible dispatch warning is emitted\n- **agent-runner-execution.test.ts / agent-runner-memory.test.ts**: Updated mock `ReplyOperation` stubs with new `terminalRecovery` field and `markTerminalRecovery` method\n\nAll focused tests pass across 2 Vitest shards (512 cases).\n",
-        "branch": "fix/86827-failed-session-silent-drop",
-        "head_sha": "93ffa4c877df159a850c025822b15cab4617d240",
-        "author": "jerry-xin",
-        "labels": [
-          "gateway",
-          "size: M",
-          "triage: mock-only-proof",
-          "mantis: telegram-visible-proof",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-memory.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-from-config.test.ts",
-            "additions": 137,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-from-config.ts",
-            "additions": 43,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-run-registry.ts",
-            "additions": 16,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session.test.ts",
-            "additions": 51,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session.ts",
-            "additions": 46,
-            "deletions": 18,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/turn/kernel.test.ts",
-            "additions": 34,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/turn/kernel.ts",
-            "additions": 60,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/turn/types.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/agent.test.ts",
-            "additions": 57,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/agent.ts",
-            "additions": 17,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89045",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89045.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "FAILURE": 2,
-            "SUCCESS": 132,
-            "SKIPPED": 21,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:88906:4589547112:2026-06-02T20:01:23Z:clawsweeper_needs_human",
-      "comment_id": "4589547112",
-      "comment_version_key": "4589547112:2026-06-02T20:01:23Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/88906#issuecomment-4589547112",
-      "repo": "openclaw/openclaw",
-      "issue_number": 88906,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-01T04:24:01Z",
-      "comment_updated_at": "2026-06-02T20:01:23Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] A narrow automated repair can gate the Spark retry on explicit Codex harness/OAuth intent and add the missing auth-precedence regression test.; Needs attention: The diff has a concrete auth-routing concern: an explicit API-key OpenAI config can still be bypassed by fallback OAuth profile selection for Spark.; Review finding: [P1] Honor explicit API-key config before retrying Spark through Codex — src/agents/e... (sha=96361d10dce12f1f35abc9de38f7b64135e6a94f)",
-      "review_summary": "The PR conditionally allows `openai/gpt-5.3-codex-spark` through the OpenAI Codex harness, keeps direct OpenAI API suppression, adds Spark fallback catalog metadata, and updates focused docs/tests.\n\nPR surface: Source +180, Tests +434, Docs +1. Total +615 across 15 files.\n\nReproducibility: yes. source-reproducible: with `models.providers.openai.auth: \"api-key\"` and an ordered OAuth profile, the PR's suppressed Spark retry calls dynamic resolution, and current OpenAI routing checks `authProfileMode` before `providerConfig.auth`. I did not run a mutating test in this read-only review.",
-      "review_followup": "- [P2] A narrow automated repair can gate the Spark retry on explicit Codex harness/OAuth intent and add the missing auth-precedence regression test.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "96361d10dce12f1f35abc9de38f7b64135e6a94f",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(openai): allow Codex Spark via harness",
-        "body": "## Summary\n- allow `openai/gpt-5.3-codex-spark` when the OpenAI provider is using the Codex harness transport\n- keep Spark suppressed for direct OpenAI API / Responses routes where the API catalog rejects it\n- add Spark to the Codex fallback catalog and update docs/tests\n\n## Real behavior proof\n- **Behavior or issue addressed**: `openai/gpt-5.3-codex-spark` was blocked globally as “not exposed by Catalog” even when the account’s Codex harness catalog exposes it.\n- **Real environment tested**: Local OpenClaw checkout on Linux under `/home/clawuser/openclaw`, using the real signed-in agent dir `/home/clawuser/.openclaw/agents/main/agent` for `openai:keshav0001@gmail.com`.\n- **Exact steps or command run after this patch**: Queried the live Codex app-server catalog, then evaluated the current source manifest suppression behavior with the repo `extensions` directory as bundled plugin metadata.\n- **Evidence after fix**:\n\n```console\n$ HOME=/home/clawuser node_modules/.bin/tsx -e '...listAllCodexAppServerModels({ agentDir: \"/home/clawuser/.openclaw/agents/main/agent\" })...'\nConfig warnings:\n- plugins.entries.lossless-claw: plugin disabled (disabled in config) but config is present\n{\n  \"found\": true,\n  \"model\": {\n    \"id\": \"gpt-5.3-codex-spark\",\n    \"hidden\": false,\n    \"inputModalities\": [\"text\"],\n    \"supportedReasoningEfforts\": [\"low\", \"medium\", \"high\", \"xhigh\"],\n    \"defaultReasoningEffort\": \"high\"\n  }\n}\n\n$ HOME=/home/clawuser OPENCLAW_BUNDLED_PLUGINS_DIR=/home/clawuser/openclaw/extensions OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR=1 node_modules/.bin/tsx -e '...resolveManifestBuiltInModelSuppression(...)...'\n{\n  \"codexHarness\": null,\n  \"directResponses\": {\n    \"suppress\": true,\n    \"errorMessage\": \"Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is not exposed by the OpenAI API catalog. Use the Codex harness route when your signed-in account exposes it.\"\n  },\n  \"directApiHost\": {\n    \"suppress\": true,\n    \"errorMessage\": \"Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is not exposed by the OpenAI API catalog. Use the Codex harness route when your signed-in account exposes it.\"\n  }\n}\n```\n\n- **Observed result after fix**: The live Codex harness catalog reports Spark as available and non-hidden for the real account; OpenClaw’s current source suppression rules no longer suppress the Codex harness route (`codexHarness: null`) while direct Responses/API-host routes still suppress Spark.\n- **What was not tested**: Did not restart the production gateway or run a full end-to-end assistant turn on Spark from the installed built CLI.\n\n## Verification\n- `node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo`\n- `git diff --check`\n- `node scripts/run-vitest.mjs run extensions/codex/provider.test.ts extensions/openai/openai-provider.test.ts src/config/config.model-ref-validation.test.ts src/agents/embedded-agent-runner/model.forward-compat.errors-and-overrides.test.ts src/plugins/manifest-model-suppression.test.ts src/model-catalog/manifest-planner.test.ts`\n\nNote: full `tsc --noEmit` OOMed at 2GB and 4GB; an 8GB run stayed CPU-active for ~16 minutes with no output and was stopped. A direct `pnpm tsgo:prod` attempt later got stuck in pnpm dependency status/install retrying optional package fetches, so I ran the underlying core tsgo command directly.\n",
-        "branch": "fix/codex-spark-harness-catalog",
-        "head_sha": "afea6a57f17c70771652f22a7ad2d020593e7b5b",
-        "author": "keshavbotagent",
-        "labels": [
-          "docs",
-          "agents",
-          "size: L",
-          "extensions: openai",
-          "extensions: codex",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "docs/concepts/model-providers.md",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/plugins/codex-harness-reference.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/provider-catalog.ts",
-            "additions": 15,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/provider.test.ts",
-            "additions": 13,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openai/openai-chatgpt-provider.test.ts",
-            "additions": 59,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openai/openai-chatgpt-provider.ts",
-            "additions": 13,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openai/openai-provider.test.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openai/openai-provider.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openai/openclaw.plugin.json",
-            "additions": 13,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/model.forward-compat.errors-and-overrides.test.ts",
-            "additions": 52,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/model.ts",
-            "additions": 120,
-            "deletions": 14,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/config.model-ref-validation.test.ts",
-            "additions": 230,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/validation.ts",
-            "additions": 13,
-            "deletions": 19,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/manifest-model-suppression.test.ts",
-            "additions": 103,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/manifest-model-suppression.ts",
-            "additions": 58,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88906",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88906.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "SUCCESS": 141,
-            "SKIPPED": 20,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89045:4603040991:2026-06-02T13:49:01Z:re_review",
-      "comment_id": "4603040991",
-      "comment_version_key": "4603040991:2026-06-02T13:49:01Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89045#issuecomment-4603040991",
-      "repo": "openclaw/openclaw",
-      "issue_number": 89045,
+      "issue_number": 89039,
       "author": "Jerry-Xin",
       "author_id": 3401616,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-02T13:49:01Z",
-      "comment_updated_at": "2026-06-02T13:49:01Z",
+      "comment_created_at": "2026-06-02T09:35:31Z",
+      "comment_updated_at": "2026-06-02T09:35:31Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -521,23 +292,23 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3948,
+    "total_ms": 6333,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 283
+        "ms": 360
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2221
+        "ms": 1943
       },
       {
         "name": "classify_commands",
-        "ms": 95
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 1413
+        "ms": 4000
       },
       {
         "name": "append_ledger",
