@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-02T08:44:20.784Z",
+  "generated_at": "2026-06-02T08:44:45.683Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-02T05:44:14.041Z",
+  "since": "2026-06-02T05:44:43.803Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    88682
+    82534
   ],
   "comment_ids": [
-    4600445936
+    4600454212
   ],
-  "status_comment_id": 4600454763,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,17 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:88682:4600445936:2026-06-02T08:42:50Z:re_review",
-      "comment_id": "4600445936",
-      "comment_version_key": "4600445936:2026-06-02T08:42:50Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/88682#issuecomment-4600445936",
+      "idempotency_key": "comment-router:openclaw/openclaw:82534:4600454212:2026-06-02T08:43:31Z:re_review",
+      "comment_id": "4600454212",
+      "comment_version_key": "4600454212:2026-06-02T08:43:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82534#issuecomment-4600454212",
       "repo": "openclaw/openclaw",
-      "issue_number": 88682,
-      "author": "alexzhu0",
-      "author_id": 178769291,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-02T08:42:50Z",
-      "comment_updated_at": "2026-06-02T08:42:50Z",
+      "issue_number": 82534,
+      "author": "qiaokuan1992",
+      "author_id": 49229465,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-02T08:43:31Z",
+      "comment_updated_at": "2026-06-02T08:43:31Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -66,99 +66,86 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "Preserve Telegram streamed text blocks between tool calls",
-        "body": "Fixes https://github.com/openclaw/openclaw/issues/87326.\n\n## Summary\n\n- Preserve Telegram streamed answer blocks across tool-call / assistant-message boundaries instead of letting later blocks edit the same draft preview.\n- Keep same-assistant chunks on one Telegram draft, and rotate only when the next answer block belongs to a different assistant message or after tool-progress-only drafts.\n- Preserve reply-payload assistant-message metadata through `beforeDeliver`, TTS cleanup, reply-payload-sending hooks, and message-sending hooks so Telegram can still match queued blocks after payload rewrites.\n- Materialize a stale queued answer-block preview through normal non-durable delivery before resetting the draft lane, so a failed/stale preview is not lost during rotation.\n\n## User-facing bug\n\nWhen Telegram block streaming was enabled, answer text emitted between tool calls could be visible briefly and then disappear. A later assistant block or final answer could edit the same Telegram draft preview, so users lost intermediate findings such as \"Site A shows X\" after the agent checked another tool.\n\n## Exact repro\n\nThe focused repro shape is:\n\n1. Stream a partial answer for assistant message 0.\n2. Queue the final block for assistant message 0.\n3. Cross an assistant-message/tool boundary.\n4. Deliver assistant message 0's block.\n5. Stream assistant message 1.\n\nBefore the fix, the message-1 partial could overwrite the message-0 draft. After the fix, the message-0 block is delivered first, then Telegram rotates to a fresh answer draft for message 1.\n\nThe stale-preview path from review feedback is:\n\n1. Deliver assistant message 0's block into the answer draft.\n2. Observe Telegram draft state has stale visible text before the next queued block arrives.\n3. Queue assistant message 1's block.\n4. Verify the stale message-0 block is cleared and delivered normally before `forceNewMessage()`.\n5. Verify message 1 writes to the fresh answer draft.\n\n## Fix summary\n\nTelegram dispatch now tracks queued answer blocks by assistant-message index. The queue is filled from `onBlockReplyQueued`, matched after final `beforeDeliver` / TTS / message-sending rewrites, and drained when a queued block is cancelled, skipped, or no longer contains answer text. Assistant-message-start no longer rotates immediately when there are queued prior blocks; it delays rotation until those blocks settle so the old message is finalized before the next assistant message writes to a fresh draft.\n\nFor stale previews, queued-block rotation now first materializes the previous answer block using the existing clear + normal-send fallback path. That materialization is explicitly non-durable: it does not use durable final delivery and does not mirror the intermediate block as the final answer transcript. Media fallback for this intermediate path also stays non-durable.\n\nTo make matching reliable, reply-payload metadata is preserved across the auto-reply delivery hooks that may replace payload objects. The public plugin SDK exposes only a narrow `getReplyPayloadAssistantMessageIndex()` helper, not the full internal metadata bag.\n\n## Real behavior proof\n\nBehavior addressed: Telegram answer text emitted between tool calls remains visible after the next assistant block starts. If the previous answer draft is stale before rotation, the previous block is delivered normally before the lane reset, then the next assistant message writes to a fresh draft.\n\nReal environment tested: local OpenClaw source checkout on Node v24.4.1, branch `fix/telegram-preserve-stream-blocks`, commit `4fee66326d7845e26b1a544472eb02ef44faa3b0`, rebased on `origin/main` commit `cd3887c28a`. The run executed the real `dispatchTelegramMessage` entrypoint, channel inbound lifecycle, queued block matching, draft lane rotation, and lane delivery code with a local transport capture so the runtime could log send/edit/rotate order.\n\nExact steps or command run after this patch: from `/Users/alex/PR/projects/openclaw__openclaw/worktrees/88682`, ran:\n\n```bash\nnode --import tsx .artifacts/pr-88682-runtime-log.mjs\n```\n\nEvidence after fix: copied redacted runtime log from `.artifacts/pr-88682-runtime-log.txt`:\n\n```text\nOpenClaw Telegram dispatch runtime proof\nstarted_at=2026-06-02T08:39:44.736Z\ncommit=4fee66326d7845e26b1a544472eb02ef44faa3b0\nchannel=telegram account=default chat=[redacted-chat] message=[redacted-message]\n\n01 session.recordInboundSession sessionKey=\"agent:proof:telegram:direct:redacted\"\n02 runtime.dispatch.start channel=\"telegram\" account=\"default\" chatId=\"[redacted-chat]\" sessionKey=\"agent:proof:telegram:direct:redacted\"\n03 runtime.block.queued assistantMessageIndex=0 text=\"Site A shows X.\"\n04 draft.update lane=\"answer\" messageId=2001 previewRevision=1 text=\"Site A shows X.\"\n05 draft.flush lane=\"answer\" messageId=2001\n06 runtime.observed_stale_draft lane=\"answer\" messageId=2001 lastDeliveredText=\"stale draft still visible\"\n07 runtime.block.queued assistantMessageIndex=1 text=\"Site B shows Y.\"\n08 draft.update lane=\"answer\" messageId=2001 previewRevision=2 text=\"Site A shows X.\"\n09 draft.stop lane=\"answer\" messageId=2001 lastDeliveredText=\"stale draft still visible\"\n10 draft.clear lane=\"answer\" messageId=2001 lastDeliveredText=\"stale draft still visible\"\n11 telegram.deliverReplies chatId=\"[redacted-chat]\" text=\"Site A shows X.\" transcriptMirror=\"absent\" silent=false\n12 draft.stop lane=\"answer\" messageId=2001 lastDeliveredText=\"stale draft still visible\"\n13 draft.forceNewMessage lane=\"answer\" previousMessageId=2001\n14 draft.update lane=\"answer\" messageId=2002 previewRevision=1 text=\"Site B shows Y.\"\n15 draft.flush lane=\"answer\" messageId=2002\n16 runtime.dispatch.complete queuedFinal=true visibleReplySent=true\n17 draft.clear lane=\"answer\" messageId=2002 lastDeliveredText=\"Site B shows Y.\"\n18 runtime.proof.complete result=\"stale first block was sent through normal delivery before forceNewMessage, then second block updated fresh draft\"\n\nresult=PASS\nproof_statement=stale queued answer block used normal delivery before lane rotation; next answer block used fresh draft\n```\n\nObserved result after fix: the stale first answer block is sent through `telegram.deliverReplies` at event 11 before `draft.forceNewMessage` at event 13. That delivery has `transcriptMirror=\"absent\"`, so the intermediate block is not treated as the durable final transcript. The next assistant block updates message 2002 after rotation, proving it uses a fresh answer draft instead of overwriting message 2001.\n\nWhat was not tested: native Telegram Desktop recording and live Telegram Bot API credentials were not available in this workspace. The runtime proof above covers the OpenClaw dispatch/send/rotate order but is not a native Telegram client video.\n\n## Supplemental validation\n\nCommands run after the fix:\n\n```bash\nOPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-vitest.mjs extensions/telegram/src/bot-message-dispatch.test.ts extensions/telegram/src/lane-delivery.test.ts\n```\n\n```bash\nOPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-vitest.mjs extensions/telegram/src/lane-delivery.test.ts extensions/telegram/src/bot-message-dispatch.test.ts src/auto-reply/reply/before-deliver.test.ts src/auto-reply/reply/dispatch-from-config.test.ts src/auto-reply/dispatch.test.ts src/plugins/wired-hooks-reply-payload-sending.test.ts\n```\n\n```bash\ngit diff --check origin/main...HEAD\n```\n\n```bash\nnode_modules/.bin/oxlint --tsconfig config/tsconfig/oxlint.extensions.json extensions/telegram/src/bot-message-dispatch.ts extensions/telegram/src/bot-message-dispatch.test.ts extensions/telegram/src/lane-delivery-text-deliverer.ts extensions/telegram/src/lane-delivery.test.ts\n```\n\n```bash\nOPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.extensions.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/extensions-test.tsbuildinfo\n```\n\nResults:\n\n- Telegram focused Vitest: 2 files passed, 150 tests passed.\n- PR-diff related Vitest set: 4 shards passed, 6 files passed, 368 tests passed.\n- `git diff --check origin/main...HEAD`: passed.\n- Changed Telegram oxlint command: passed.\n- The broad extensions test tsgo command currently fails on unrelated Discord voice type errors already outside this Telegram diff:\n  - `extensions/discord/src/voice/receive-recovery.test.ts(1,21): \"libopus-wasm\" has no exported member named \"OpusErrorCode\"`\n  - `extensions/discord/src/voice/receive-recovery.ts(1,10): \"libopus-wasm\" has no exported member named \"OpusErrorCode\"`\n  - `extensions/discord/src/voice/receive-recovery.ts(1,25): \"libopus-wasm\" has no exported member named \"isOpusError\"`\n  - `extensions/discord/src/voice/receive-recovery.ts(88,5)`, `(89,6)`, and `(89,36)`: `err` is of type `unknown`\n- `codex review --base origin/main` was attempted twice. The first review run led to the accepted media-fallback durability fix; the second run exposed an unrelated generated checksum drift, which was removed from the PR diff. Both review runs were terminated after entering repeated local command loops rather than producing a final clean verdict.\n\n## AI-assisted disclosure\n\nThis change was implemented with AI assistance.\n",
-        "branch": "fix/telegram-preserve-stream-blocks",
-        "head_sha": "4fee66326d7845e26b1a544472eb02ef44faa3b0",
-        "author": "alexzhu0",
+        "title": "feat(memory-wiki): page groups configurability — custom index dirs + recursive scanning",
+        "body": "None\n\n### 7. Round-2 fix commit (45ce5b74) -- Addressing June 2 ClawSweeper findings\n\n**P1-1: Preserve multiple page groups per kind**\nmergePageGroups no longer dedup by kind for user/vault entries. Multiple synthesis directories are all kept.\n\n**P1-2: fs-safe vault init restored**\nwriteFileIfMissing uses fsRoot(rootDir).create(relativePath, content) instead of raw fs.\n\n**P2-1: tsconfig package boundary restored**\nRe-added extends: ../tsconfig.package-boundary.base.json with test exclusions.\n\n**P2-2: listWikiMarkdownFiles recursive**\nUses walkDir() to discover nested .md files, matching compile.ts behavior.\n\n**P2-3: status.ts passes pageGroups**\nEnsures custom source directories get correct source-type counts.\n\n### 7. Round-2 fix commit (45ce5b74) -- Addressing June 2 ClawSweeper findings\n\n**P1-1: Preserve multiple page groups per kind**\nmergePageGroups no longer dedup by kind for user/vault entries. Multiple synthesis directories are all kept.\n\n**P1-2: fs-safe vault init restored**\nwriteFileIfMissing uses fsRoot(rootDir).create(relativePath, content) instead of raw fs.\n\n**P2-1: tsconfig package boundary restored**\nRe-added extends: to ../tsconfig.package-boundary.base.json with test exclusions.\n\n**P2-2: listWikiMarkdownFiles recursive**\nUses walkDir() to discover nested md files, matching compile.ts behavior.\n\n**P2-3: status.ts passes pageGroups**\nEnsures custom source directories get correct source-type counts.\n",
+        "branch": "feature/page-groups-configurable",
+        "head_sha": "45ce5b74da4aba2e0201f3e4f425102681874910",
+        "author": "qiaokuan1992",
         "labels": [
-          "channel: telegram",
           "size: XL",
-          "proof: supplied",
-          "mantis: telegram-visible-proof",
-          "P1",
+          "extensions: memory-wiki",
+          "triage: needs-real-behavior-proof",
+          "P2",
           "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "extensions/telegram/src/bot-message-dispatch.test.ts",
-            "additions": 678,
+            "path": "extensions/memory-wiki/README.md",
+            "additions": 33,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/telegram/src/bot-message-dispatch.ts",
-            "additions": 238,
-            "deletions": 8,
-            "changeType": "MODIFIED"
+            "path": "extensions/memory-wiki/UPGRADE.md",
+            "additions": 77,
+            "deletions": 0,
+            "changeType": "ADDED"
           },
           {
-            "path": "extensions/telegram/src/draft-stream.test-helpers.ts",
-            "additions": 9,
+            "path": "extensions/memory-wiki/openclaw.plugin.json",
+            "additions": 21,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/telegram/src/lane-delivery-text-deliverer.ts",
-            "additions": 44,
-            "deletions": 10,
+            "path": "extensions/memory-wiki/src/apply.ts",
+            "additions": 10,
+            "deletions": 5,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/telegram/src/lane-delivery.test.ts",
-            "additions": 122,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/dispatch.test.ts",
-            "additions": 24,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/dispatch.ts",
-            "additions": 4,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/before-deliver.test.ts",
-            "additions": 25,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-from-config.test.ts",
+            "path": "extensions/memory-wiki/src/bridge.ts",
             "additions": 8,
-            "deletions": 0,
+            "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/dispatch-from-config.ts",
-            "additions": 4,
-            "deletions": 1,
+            "path": "extensions/memory-wiki/src/chatgpt-import.ts",
+            "additions": 12,
+            "deletions": 5,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/reply-dispatcher.ts",
-            "additions": 16,
-            "deletions": 1,
+            "path": "extensions/memory-wiki/src/compile.ts",
+            "additions": 74,
+            "deletions": 52,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/reply-payload-sending-hook.ts",
+            "path": "extensions/memory-wiki/src/config.test.ts",
+            "additions": 287,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/config.ts",
+            "additions": 179,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-wiki/src/import-insights.ts",
             "additions": 3,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/plugin-sdk/reply-payload.ts",
-            "additions": 8,
-            "deletions": 1,
+            "path": "extensions/memory-wiki/src/ingest.ts",
+            "additions": 10,
+            "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
@@ -225,22 +212,30 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88682",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88682.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82534",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82534.md",
         "mode": "autonomous",
         "mergeable": "CONFLICTING",
         "merge_state_status": "DIRTY",
         "review_decision": "",
         "checks": {
-          "total": 162,
+          "total": 9,
           "counts": {
-            "SUCCESS": 135,
-            "SKIPPED": 26,
-            "NEUTRAL": 1
+            "FAILURE": 3,
+            "SUCCESS": 3,
+            "SKIPPED": 3
           },
-          "blockers": [],
+          "blockers": [
+            "dependency-guard-detect:FAILURE",
+            "Real behavior proof:FAILURE",
+            "dependency-guard:FAILURE"
+          ],
           "pending": [],
-          "terminalBlockers": []
+          "terminalBlockers": [
+            "dependency-guard-detect:FAILURE",
+            "Real behavior proof:FAILURE",
+            "dependency-guard:FAILURE"
+          ]
         }
       },
       "maintainer_authorized": false,
@@ -250,23 +245,23 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 7091,
+    "total_ms": 2144,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 3137
+        "ms": 677
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 3591
+        "ms": 1188
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 349
+        "ms": 264
       },
       {
         "name": "append_ledger",
