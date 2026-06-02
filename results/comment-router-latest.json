@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-02T08:42:43.469Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-02T08:42:49.424Z",
+  "repo": "openclaw/clawsweeper",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-02T05:42:43.201Z",
+  "since": "2026-06-02T05:42:47.586Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    89389
+    242
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,114 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/clawsweeper:242:4600338644:2026-06-02T08:42:44Z:clawsweeper_auto_repair",
+      "comment_id": "4600338644",
+      "comment_version_key": "4600338644:2026-06-02T08:42:44Z",
+      "comment_url": "https://github.com/openclaw/clawsweeper/pull/242#issuecomment-4600338644",
+      "repo": "openclaw/clawsweeper",
+      "issue_number": 242,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-02T08:33:53Z",
+      "comment_updated_at": "2026-06-02T08:42:44Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=a29fcb160d527b327cb54d13f8a9bf470f2b3149)",
+      "review_summary": "The branch adds a Bun-specific environment sanitizer in target validation and a regression test that asserts pnpm-injected npm/PNPM variables do not reach fake Bun child processes.\n\nReproducibility: yes. via source inspection: current main copies `process.env` into `validationEnv` and passes it to the Bun install path, so pnpm's user-agent from the repair runner can reach target preinstall hooks. I did not run a live ClawHub job.",
+      "review_followup": "- [P1] Needs a contributor or maintainer update plus real behavior proof; ClawSweeper should not auto-repair because the remaining proof must come from a real target setup.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "a29fcb160d527b327cb54d13f8a9bf470f2b3149",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": " fix(repair/target-validation): scrub pnpm env injection before `bun install`",
+        "body": "# fix(repair/target-validation): scrub pnpm env injection before `bun install`\r\n\r\n## Summary\r\n\r\n`prepareBunToolchain` was leaking pnpm's child-process env injection into `bun install`, which made target repos with a `bunx only-allow bun` preinstall hook (notably **openclaw/clawhub**) fail every automerge run during the `preparing target toolchain` step:\r\n\r\n```\r\n[clawsweeper repair] preparing target toolchain {\"source_head\":\"3da5618…\"}\r\n$ bunx only-allow bun\r\nerror: preinstall script from \"clawhub\" exited with 1\r\n\r\nbun install v1.3.10\r\n╔═════════════════════════════════════════════════════════════╗\r\n║ Use \"bun install\" for installation in this project.         ║\r\n╚═════════════════════════════════════════════════════════════╝\r\n```\r\n\r\nThis is the last remaining symptom of the broader issue tracked in #239 (\"Target validation hard-codes pnpm + check:changed\"). The config-driven `packageManager` / `validationCommands` / `changedGate` work (covering `prepareTargetToolchain`, `requiredValidationCommands`, `preflightTargetValidationPlan`, `validationFallbackCommands`, `shouldRetryValidationCommand`, plus the clawhub config entry) already landed in earlier commits. After that work clawhub correctly reaches `prepareBunToolchain` — only to be killed by the env leak fixed here.\r\n\r\n## Root cause\r\n\r\nClawSweeper is invoked via `pnpm run repair:execute-fix`. pnpm injects the standard npm-cli child-process variables into `process.env`:\r\n\r\n- `npm_config_user_agent=pnpm/<ver> npm/? node/<ver> <os> <arch>`\r\n- `npm_execpath`, `npm_lifecycle_event`, `npm_package_*`\r\n- `PNPM_HOME`, `PNPM_SCRIPT_SRC_DIR`, `PNPM_PACKAGE_NAME`\r\n\r\n`prepareBunToolchain` forwarded `validationEnv` (a thin wrapper over `process.env`) verbatim to `bun --version` and `bun install`. bun then forwarded the same env to the target's `preinstall` hook. `only-allow` reads `npm_config_user_agent`, sees `pnpm/...`, and refuses to run because the project (clawhub) declares bun as its only allowed package manager.\r\n\r\n## Fix\r\n\r\nIntroduce `sanitizeEnvForBun(env)` and route every bun child process through it:\r\n\r\n- Strip every `npm_*` env variable (the critical one is `npm_config_user_agent`; siblings like `npm_execpath`, `npm_lifecycle_event`, `npm_package_*` carry parent-tool semantics that can confuse target preinstalls too).\r\n- Strip `PNPM_HOME`, `PNPM_SCRIPT_SRC_DIR`, `PNPM_PACKAGE_NAME`.\r\n- Set `npm_config_user_agent` to `bun/unknown npm/? node/<v> <platform> <arch>` so any preinstall guard (`only-allow bun`, custom version checks, etc.) sees a bun caller.\r\n\r\nThe sanitized env is applied to all three bun invocations:\r\n\r\n- `bun --version` (setup probe)\r\n- `bun install --frozen-lockfile`\r\n- `bun install --no-frozen-lockfile` (lockfile-drift fallback)\r\n\r\nThe pnpm and npm branches are untouched.\r\n\r\n## Tests\r\n\r\n`test/repair/target-validation.test.ts`:\r\n\r\n- New regression test **`bun-based target toolchain hides pnpm-injected npm_config_user_agent from preinstall hooks`**:\r\n  - Pre-populates `process.env` with `npm_config_user_agent=pnpm/...`, `npm_execpath`, `npm_lifecycle_event`, `PNPM_HOME` to simulate the real worker environment.\r\n  - Adds an `envLoggingBunFixture` that records each child's `process.env` as JSON alongside the existing argv log.\r\n  - Asserts that for both the `--version` probe and the `install` call: `npm_config_user_agent` starts with `bun/`, and `npm_execpath` / `npm_lifecycle_event` / `PNPM_HOME` are absent.\r\n  - Restores prior env on teardown via a small `restoreEnv` helper.\r\n\r\n- Existing tests stay green:\r\n  - `bun-based target toolchain installs deps and runs configured validation` (canonical bun flow)\r\n  - `bun-based target repos do not get pnpm check:changed injected`\r\n  - `bun-based target repos drop stale pnpm check:changed and pass on their real validation command`\r\n  - `bun-based target repos still report unrelated missing scripts as blocked`\r\n  - `resolveTargetRepoToolchain reads openclaw/clawhub from the real config without overrides`\r\n\r\n## Verification\r\n\r\n- `pnpm run build:repair` — clean.\r\n- Lint — clean (`read_lints` on both touched files returned no diagnostics).\r\n- Local Node 20 cannot run the project's native `.ts` tests (the repo pins Node 24); CI on Node 24 will exercise the new test. As a sanity check the compiled `sanitizeEnvForBun` was eval-ed against a pnpm-poisoned env and produced the expected output (`bun/...` user-agent, `npm_execpath` / `PNPM_HOME` removed).\r\n\r\n## Impact\r\n\r\n- **openclaw/clawhub** automerge/autofix can now get past `preparing target toolchain` and proceed to `bun install --frozen-lockfile` → `bun run check`. No more `preinstall script from \"clawhub\" exited with 1` no-ops.\r\n- No behavioral change for pnpm or npm targets — the sanitization is gated on the bun branch only.\r\n- No env mutation on the parent process; sanitization happens on a copy passed to each bun child.\r\n\r\n## Risk\r\n\r\nLow. The bun branch already required CI to provision pinned bun; we are only narrowing what env it sees. Any future bun-target repo benefits automatically. The pnpm/npm code paths are byte-identical to before.\r\n\r\n## Suggested labels\r\n\r\n`area: repair`, `area: target-validation`, `bug`, `multi-repo`\r\n",
+        "branch": "feature/fix_clawhub_script",
+        "head_sha": "a29fcb160d527b327cb54d13f8a9bf470f2b3149",
+        "author": "momothemage",
+        "labels": [
+          "status: 📣 needs proof",
+          "merge-risk: 🚨 automation",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility"
+        ],
+        "files": [
+          {
+            "path": "src/repair/target-validation.ts",
+            "additions": 32,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/repair/target-validation.test.ts",
+            "additions": 83,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-clawsweeper-242",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-clawsweeper-242.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 5,
+          "counts": {
+            "CANCELLED": 1,
+            "SUCCESS": 4
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 488,
+    "total_ms": 2212,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 254
+        "ms": 459
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1366
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 221
+        "ms": 361
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
