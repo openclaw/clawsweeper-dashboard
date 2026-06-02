@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-02T13:49:53.697Z",
+  "generated_at": "2026-06-02T13:50:21.882Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-02T10:49:50.171Z",
+  "since": "2026-06-02T10:50:18.488Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    89045
+    89142
   ],
   "comment_ids": [
-    4603040991
+    4603040916
   ],
-  "status_comment_id": 4603041627,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:89045:4603040991:2026-06-02T13:49:01Z:re_review",
-      "comment_id": "4603040991",
-      "comment_version_key": "4603040991:2026-06-02T13:49:01Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89045#issuecomment-4603040991",
+      "idempotency_key": "comment-router:openclaw/openclaw:89142:4603040916:2026-06-02T13:49:01Z:re_review",
+      "comment_id": "4603040916",
+      "comment_version_key": "4603040916:2026-06-02T13:49:01Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89142#issuecomment-4603040916",
       "repo": "openclaw/openclaw",
-      "issue_number": 89045,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
+      "issue_number": 89142,
+      "author": "1052326311",
+      "author_id": 65798732,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-02T13:49:01Z",
       "comment_updated_at": "2026-06-02T13:49:01Z",
-      "status_comment_id": 4603041627,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,159 +61,220 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-02T13:49:54.909Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 89045
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-02T13:49:56.428Z",
-          "response_comment_id": "4603041627",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix: recover terminal session status on visible inbound turns",
-        "body": "## Summary\n\nFixes #86827 — group chat sessions stuck in `failed` status silently drop all subsequent messages.\n\nWhen a group chat session enters a terminal status (`failed`, `timeout`, or `killed`), the reply dispatch path returns a successful no-op (`queuedFinal: false`, zero dispatch counts) without starting an AI turn or delivering any user-visible error. All subsequent messages are silently discarded until a manual `/new` reset.\n\n## Root Cause\n\nThree independent mechanisms conspire to create the silent drop:\n\n1. **Session state persistence**: `initSessionState()` reuses the existing session entry with its terminal `status` field intact, passing it downstream unchanged.\n2. **Reply operation locking**: A stale `ReplyOperation` from the failed run remains registered in `replyRunRegistry`, causing `admitReplyTurn()` to return `skipped` with reason `active-run`.\n3. **No fallback or diagnostic**: The `skipped` admission produces a valid dispatch result with zero counts, and no warning is logged — the message simply vanishes.\n\n## Changes\n\n### 1. Auto-recover terminal sessions (`session.ts`)\n\nWhen a **visible** (non-cron/heartbeat) inbound message hits a session with recoverable terminal status, automatically clear the stale lifecycle fields (`status`, `startedAt`, `endedAt`, `runtimeMs`, `abortedLastRun`) while **preserving the `sessionId` and transcript continuity** — no session rotation.\n\n### 2. Clear stale reply operations with race guard (`dispatch-from-config.ts`)\n\nWhen `admitReplyTurn()` returns `skipped` with reason `active-run` but the persisted session is in terminal status, force-clear the stale reply operation via `forceClearReplyRunBySessionId()` and retry admission **once**. This breaks the deadlock without risking infinite retry loops.\n\n**Concurrent recovery guard**: After a recovery turn clears the proven stale leftover and admits its own fresh operation, it is marked with a `terminalRecovery` flag. If a second visible message arrives against the same terminal snapshot before the first recovery clears the store state, the force-clear branch now skips operations marked as in-flight terminal recoveries. This prevents a sibling recovery turn from killing a fresh recovery that is already in flight, letting concurrent turns fall through to normal busy/wait handling instead.\n\n### 3. Agent API path (`agent.ts`)\n\nMirror the same terminal recovery logic in the agent API dispatch path so agent API requests also clear terminal state for visible requests.\n\n### 4. Diagnostics (`kernel.ts`, `types.ts`)\n\nAdd a structured warning log when a visible channel turn dispatch completes with `queuedFinal: false` and zero tool/block/final counts — a sentinel for future silent message drops. Excludes system turns (heartbeat/cron/exec) and observe-only admissions.\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Two visible group-chat messages arriving against the same terminal (`failed`) session snapshot could race: the second turn force-clears the first turn's freshly admitted recovery operation, dropping the first message — the exact silent-loss path this PR fixes.\n- **Real environment tested**: Local patched OpenClaw checkout at `b2b7996945`, macOS arm64, Node.js `v24.10.0`.\n- **Failing proof before fix**: The two-turn race regression test (`does not kill a sibling recovery turn when a second visible turn races the same terminal snapshot`) was authored as part of this PR and does not exist on upstream/main. When run against the original commit (`ac79b730a1`) without the guard fix, the second turn force-fails the first recovery operation (the `terminalRecovery` guard did not exist).\n- **Exact steps or command run after this patch**:\n  ```\n  node scripts/run-vitest.mjs \\\n    src/auto-reply/reply/dispatch-from-config.test.ts \\\n    src/auto-reply/reply/session.test.ts \\\n    src/channels/turn/kernel.test.ts \\\n    src/auto-reply/reply/agent-runner-execution.test.ts \\\n    src/auto-reply/reply/agent-runner-memory.test.ts\n  ```\n- **Evidence after fix**:\n  ```\n  [test] starting test/vitest/vitest.auto-reply.config.ts\n   ✓ auto-reply src/auto-reply/reply/agent-runner-execution.test.ts (155 tests) 582ms\n   ✓ auto-reply src/auto-reply/reply/session.test.ts (97 tests) 288ms\n   ✓ auto-reply src/auto-reply/reply/agent-runner-memory.test.ts (40 tests) 217ms\n   ✓ auto-reply src/auto-reply/reply/dispatch-from-config.test.ts (191 tests) 6650ms\n   Test Files  4 passed (4)\n        Tests  483 passed (483)\n\n  [test] starting test/vitest/vitest.channels.config.ts\n   ✓ channels src/channels/turn/kernel.test.ts (29 tests) 16ms\n   Test Files  1 passed (1)\n        Tests  29 passed (29)\n\n  [test] passed 2 Vitest shards in 15.52s\n  ```\n- **Observed result after fix**: All 512 tests pass across 2 Vitest shards, including the new two-turn concurrent recovery race regression test. The `terminalRecovery` flag prevents the second visible turn from force-clearing the first turn's in-flight recovery operation; both turns produce replies without message loss.\n- **What was not tested**: No live channel (Telegram/Octo/Discord) end-to-end test was performed. The race condition is validated through focused Vitest integration tests that simulate concurrent visible inbound dispatches against shared terminal session state. The fix is channel-generic and does not depend on any channel-specific behavior.\n\n## Tests\n\n- **session.test.ts**: Verify failed group sessions recover without rotating the transcript\n- **dispatch-from-config.test.ts**: Verify stale active reply operations are cleared for terminal sessions and admission is retried; verify two concurrent visible turns against the same terminal snapshot do not kill each other's recovery operations\n- **agent.test.ts**: Verify terminal failed agent API sessions recover without session rotation; updated existing failed-session tests to verify terminal state clearing\n- **kernel.test.ts**: Verify zero-count visible dispatch warning is emitted\n- **agent-runner-execution.test.ts / agent-runner-memory.test.ts**: Updated mock `ReplyOperation` stubs with new `terminalRecovery` field and `markTerminalRecovery` method\n\nAll focused tests pass across 2 Vitest shards (512 cases).\n",
-        "branch": "fix/86827-failed-session-silent-drop",
-        "head_sha": "c858722589d567a6e4657857dea1b650ba7ce2cf",
-        "author": "jerry-xin",
+        "title": "fix(secrets): generate secretref reference docs from the credential matrix",
+        "body": "## Summary\n\nFixes #85969 (replaces the original PR). Adds a shared SecretRef credential-surface Markdown formatter, extends the matrix generator with write/check modes for JSON plus Markdown marker blocks, wires package/preflight scripts, updates generated reference docs, and adds formatter/drift tests.\n\n## Changes from original PR\n\n- **Removed CHANGELOG.md change** — release-owned file\n- **Cross-platform scripts** — wrapped `check:secretref-docs` and `gen:secretref-docs` with `node scripts/run-with-env.mjs` instead of POSIX env assignment\n- **Rebased onto latest main** — clean cherry-pick\n\n**Behavior or issue addressed**: SecretRef credential matrix and credential-surface docs regenerate cleanly on macOS without POSIX env syntax.\n\n**Real environment tested**: macOS 26.6 (Darwin arm64), Node v22.22.0, OpenClaw source checkout at `8c6e99e82`\n\n**Exact steps or command run after this patch**:\n```bash\n# Generate JSON matrix + Markdown docs\npnpm gen:secretref-docs\n\n# Verify docs are in sync (--check mode)\npnpm check:secretref-docs\n```\n\n**Evidence after fix**:\n\n`gen:secretref-docs` produces a 677-line JSON matrix with 92 credential entries and a 161-line Markdown credential-surface doc:\n\n```\nWrote docs/reference/secretref-user-supplied-credentials-matrix.json\ndocs/reference/secretref-credential-surface.md already in sync\n```\n\n`check:secretref-docs --check` confirms no drift:\n\n```\nsecretref reference docs are in sync.\n```\n\nMatrix integrity — 92 entries across providers/channels/plugins:\n\n| File | Lines | Contents |\n|---|---|---|\n| `secretref-user-supplied-credentials-matrix.json` | 677 | 92 entries covering `agents.*`, `models.providers.*`, `channels.*`, `plugins.*` |\n| `secretref-credential-surface.md` | 161 | Marker-block formatted credential surface reference |\n\nTest suite all pass:\n\n```\n✓ matrix JSON matches generator output\n✓ credential-surface marker blocks match generator output\n✓ matrix and credential-surface marker blocks describe the same registry shape\n\nTest Files  2 passed (2)\n     Tests  13 passed (13)\n```\n\n**Observed result after fix**: Both generation and verification work cross-platform (tested on macOS). No POSIX env assignment required.\n\n**What was not tested**: Windows and Linux behavior (CI covers these).\n\n@clawsweeper re-review\n",
+        "branch": "fix/secretref-docs-generate-markdown-v2",
+        "head_sha": "c9fb0b1abedeffd67b70fef0f1eec033a879325a",
+        "author": "1052326311",
         "labels": [
-          "gateway",
+          "docs",
+          "scripts",
           "size: M",
-          "triage: mock-only-proof",
-          "P1",
-          "rating: 🌊 off-meta tidepool",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery"
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 automation",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
+            "path": "config/knip.config.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/reference/secretref-credential-surface.md",
+            "additions": 66,
+            "deletions": 66,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "package.json",
             "additions": 2,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/agent-runner-memory.test.ts",
-            "additions": 2,
+            "path": "scripts/check.mjs",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/dispatch-from-config.test.ts",
-            "additions": 137,
+            "path": "scripts/generate-secretref-credential-matrix.ts",
+            "additions": 62,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/secrets/credential-matrix-docs.test.ts",
+            "additions": 190,
             "deletions": 0,
-            "changeType": "MODIFIED"
+            "changeType": "ADDED"
           },
           {
-            "path": "src/auto-reply/reply/dispatch-from-config.ts",
-            "additions": 43,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-run-registry.ts",
-            "additions": 16,
+            "path": "src/secrets/credential-matrix-docs.ts",
+            "additions": 124,
             "deletions": 0,
-            "changeType": "MODIFIED"
+            "changeType": "ADDED"
           },
           {
-            "path": "src/auto-reply/reply/session.test.ts",
-            "additions": 51,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session.ts",
-            "additions": 46,
-            "deletions": 18,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/turn/kernel.test.ts",
-            "additions": 34,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/turn/kernel.ts",
-            "additions": 60,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/turn/types.ts",
+            "path": "src/secrets/credential-matrix.ts",
             "additions": 1,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server-methods/agent.test.ts",
-            "additions": 57,
-            "deletions": 4,
+            "path": "src/secrets/target-registry.docs.test.ts",
+            "additions": 54,
+            "deletions": 43,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/server-methods/agent.ts",
-            "additions": 17,
-            "deletions": 6,
+            "path": "test/package-scripts.test.ts",
+            "additions": 12,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89045",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89045.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89142",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89142.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 162,
+          "total": 166,
           "counts": {
             "FAILURE": 2,
-            "SUCCESS": 131,
-            "SKIPPED": 28,
+            "SUCCESS": 93,
+            "SKIPPED": 27,
+            "IN_PROGRESS": 43,
             "NEUTRAL": 1
           },
           "blockers": [
+            "Scan changed paths (precise):FAILURE",
             "Real behavior proof:FAILURE",
-            "check-lint:FAILURE"
+            "pnpm-store-warmup:IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-core-fast:IN_PROGRESS",
+            "checks-node-core-runtime-infra-heartbeat-runner:IN_PROGRESS",
+            "checks-node-core-runtime-infra-storage-state:IN_PROGRESS",
+            "checks-node-core-runtime-infra-system-runtime:IN_PROGRESS",
+            "checks-node-core-runtime-infra-process:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
+            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
+            "checks-node-agentic-agents-core-auth:IN_PROGRESS",
+            "checks-node-agentic-agents-core-models:IN_PROGRESS",
+            "checks-node-agentic-agents-core-tools:IN_PROGRESS",
+            "checks-node-agentic-agents-core-subagents:IN_PROGRESS",
+            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
+            "checks-node-agentic-agents-core-runtime:IN_PROGRESS",
+            "checks-node-agentic-agents-embedded:IN_PROGRESS",
+            "checks-node-agentic-agents-support:IN_PROGRESS",
+            "checks-node-agentic-agents-tools:IN_PROGRESS",
+            "checks-node-agentic-gateway-core:IN_PROGRESS",
+            "checks-node-agentic-gateway-methods:IN_PROGRESS",
+            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
+            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-docs:IN_PROGRESS",
+            "checks-windows-node-test:IN_PROGRESS",
+            "macos-node:IN_PROGRESS",
+            "macos-swift:IN_PROGRESS",
+            "android-test-play:IN_PROGRESS",
+            "android-test-third-party:IN_PROGRESS",
+            "android-build-play:IN_PROGRESS"
           ],
-          "pending": [],
+          "pending": [
+            "pnpm-store-warmup:IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-core-fast:IN_PROGRESS",
+            "checks-node-core-runtime-infra-heartbeat-runner:IN_PROGRESS",
+            "checks-node-core-runtime-infra-storage-state:IN_PROGRESS",
+            "checks-node-core-runtime-infra-system-runtime:IN_PROGRESS",
+            "checks-node-core-runtime-infra-process:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
+            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
+            "checks-node-agentic-agents-core-auth:IN_PROGRESS",
+            "checks-node-agentic-agents-core-models:IN_PROGRESS",
+            "checks-node-agentic-agents-core-tools:IN_PROGRESS",
+            "checks-node-agentic-agents-core-subagents:IN_PROGRESS",
+            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
+            "checks-node-agentic-agents-core-runtime:IN_PROGRESS",
+            "checks-node-agentic-agents-embedded:IN_PROGRESS",
+            "checks-node-agentic-agents-support:IN_PROGRESS",
+            "checks-node-agentic-agents-tools:IN_PROGRESS",
+            "checks-node-agentic-gateway-core:IN_PROGRESS",
+            "checks-node-agentic-gateway-methods:IN_PROGRESS",
+            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
+            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-docs:IN_PROGRESS",
+            "checks-windows-node-test:IN_PROGRESS",
+            "macos-node:IN_PROGRESS",
+            "macos-swift:IN_PROGRESS",
+            "android-test-play:IN_PROGRESS",
+            "android-test-third-party:IN_PROGRESS",
+            "android-build-play:IN_PROGRESS"
+          ],
           "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "check-lint:FAILURE"
+            "Scan changed paths (precise):FAILURE",
+            "Real behavior proof:FAILURE"
           ]
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 7111,
+    "total_ms": 3588,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 793
+        "ms": 832
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2714
+        "ms": 2548
       },
       {
         "name": "classify_commands",
@@ -221,11 +282,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3574
+        "ms": 195
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
