@@ -1,6 +1,6 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-06-02T04:53:54.013Z
+Generated: 2026-06-02T07:26:43.831Z
 
 ## Summary
 
@@ -30,4 +30,4 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#89075](https://github.com/openclaw/openclaw/pull/89075) | fix(memory-core): keep startup cron retries quiet | automerge-openclaw-openclaw-88965 | MERGEABLE | UNSTABLE | CANCELLED:1 SKIPPED:34 SUCCESS:124 FAILURE:1; blockers:1 | needs_merge_state:UNSTABLE, needs_checks:CI / checks-node-core-runtime-infra-file-safety:FAILURE, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
+| [#89075](https://github.com/openclaw/openclaw/pull/89075) | fix(memory-core): keep startup cron retries quiet | automerge-openclaw-openclaw-88965 | MERGEABLE | CLEAN | CANCELLED:4 SKIPPED:42 SUCCESS:127 NEUTRAL:1; blockers:2 | needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
