@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-03T00:24:29.060Z",
+  "generated_at": "2026-06-03T00:25:05.221Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-02T21:24:25.896Z",
+  "since": "2026-06-02T21:25:04.678Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4608047613
   ],
-  "status_comment_id": 4608047755,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-03T00:23:54Z",
       "comment_updated_at": "2026-06-03T00:23:54Z",
-      "status_comment_id": 4608047755,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "automerge",
       "intent": "automerge",
@@ -61,122 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "ensure_automerge_job",
-          "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89601.md",
-          "status": "executed",
-          "mode": "autonomous",
-          "cluster_id": "automerge-openclaw-openclaw-89601",
-          "status_detail": "written"
-        },
-        {
-          "action": "label",
-          "label": "clawsweeper:automerge",
-          "status": "executed"
-        },
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-03T00:24:31.847Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 89601
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-03T00:24:32.993Z",
-          "response_comment_id": "4608047755",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "write",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(outbound): stop schema-padded poll modifiers from blocking send",
-        "body": "## Summary\n\n`hasPollCreationParams` previously treated **any** of the shared poll params (`pollQuestion`, `pollOption`, `pollDurationHours`, `pollMulti`) as poll intent if present with a non-zero / non-default value.\n\nThe shared `message` tool schema exposes those last two for both `send` and `poll` actions, and agent models routinely echo the schema's implied defaults (`1` for the `minimum: 1` integer, `false` for the boolean) on every plain `send` call alongside the rest of the schema-padded slots. The validator interpreted `pollDurationHours: 1` on its own as \"the agent meant to create a poll\", so `runMessageAction` threw:\n\n> Poll fields require action \"poll\"; use action \"poll\" instead of \"send\".\n\n…on routine sends, blocking agent replies from any channel whose outbound goes through `runMessageAction` (i.e. all of them). I first observed this on the Slack channel — Slack is where the regression surfaced for our deployment — but the bug is in shared/core code (`src/poll-params.ts`, used by `src/agents/tools/message-tool.ts` and `src/infra/outbound/message-action-runner.ts`), so the same tool-call shape would hit Telegram, Discord, or any other channel a `message`-tool agent talks to.\n\nThis PR narrows the shared-param branch to the content-bearing fields (`pollQuestion`, `pollOption`). Channel-extra `poll*` params (`pollDurationSeconds`, `pollPublic`, `pollAnonymous`, …) remain strict because they aren't part of the shared tool-schema surface, so an explicit value still signals deliberate intent.\n\n## What changed\n\n- `src/poll-params.ts` — split shared-param handling: only `pollQuestion` / `pollOption` count as standalone intent. Channel-extra detection is unchanged.\n- `src/poll-params.test.ts` — updated two existing assertions and added a new test for the schema-pad shape.\n- `src/infra/outbound/message-action-runner.send-validation.test.ts` — added an integration case asserting `runMessageAction` accepts a `send` with schema-padded `pollDurationHours: 1` / `pollMulti: false`.\n\n## Behavior change for existing assertions\n\nTwo unit-level assertions changed semantics, both intentionally:\n\n| Input | Old | New | Why |\n|---|---|---|---|\n| `{ pollMulti: true }` alone | poll intent | not intent | A boolean modifier with no question or options is not a valid poll; in practice this combination only appears from schema-padding. |\n| `{ pollDurationHours: -1 }` alone | poll intent | not intent | Same rationale. The shared-schema modifier alone is no longer enough. |\n\nChannel-extra equivalents (`pollAnonymous: true`, `pollPublic: true`, `pollDurationSeconds: -5`) are unchanged and still count as intent, because they are not part of the schema-padded surface that agents echo on every send.\n\n## Alternative considered\n\nA more invasive fix would be to make the shared `message` tool schema action-aware: drop `pollDurationHours` / `pollMulti` from the `send` action's parameter surface entirely so agents never see them when calling `send`. That addresses the root cause (\"LLMs echo schema-implied defaults on every call\") instead of catching it at the validator. It's a bigger schema-side change touching `buildMessageToolPollProps` and the action-to-schema mapping. Happy to take that direction if maintainers prefer it; this PR is the minimal locality-of-change fix at the validator gate.\n\n## Real behavior proof\n\n**Behavior or issue addressed**: `hasPollCreationParams` returned `true` for `{ pollDurationHours: 1 }` alone — the value LLMs schema-pad onto every `send` tool call (the schema is `Type.Optional(Type.Integer({ minimum: 1 }))`). `runMessageAction` then threw `Poll fields require action \"poll\"; use action \"poll\" instead of \"send\"`, blocking the send. First surfaced as an agent that could no longer reply in any Slack thread it was @mentioned in; the same tool-call shape would affect every channel that routes through `runMessageAction`.\n\n**Real environment tested**: OpenClaw `2026.5.28` (npm `openclaw@2026.5.28`), running in a production container `openclaw-…` on a Coolify host. Agent model `openrouter/openrouter/auto` (thinking=high). Slack channel via socket mode. Same bundled validator code path as upstream `main`: `dist/message-action-runner-*.js` calling `hasPollCreationParams` from the bundled `poll-params` module.\n\n**Exact steps or command run after this patch**: I applied the equivalent semantic narrowing in the running container's bundled `dist/message-action-runner-*.js` via a small `node` patch script (guard the throw on `pollQuestion` non-empty OR `pollOption` non-empty), `docker restart`-ed the container, then @mentioned the agent in a Slack thread to elicit the same tool-call shape that previously failed.\n\n**Evidence after fix**: redacted runtime logs and copied live output from the patched container. Failing tool-call shape captured from the pre-patch agent session transcript (10 occurrences in a single failed session, one shown, sensitive IDs redacted to `…`):\n\n```json\n{\n  \"action\": \"send\",\n  \"channel\": \"slack\",\n  \"target\": \"channel:C…\",\n  \"message\": \"<@U…> hi\",\n  \"threadId\": \"…\",\n  \"pollQuestion\": \"\",\n  \"pollOption\": [],\n  \"pollDurationHours\": 1,\n  \"pollMulti\": false\n}\n```\n\nBefore patch: every such call threw `Poll fields require action \"poll\"…` and no reply was delivered. After patch + `docker restart`, the gateway's runtime log showed clean startup and the message went out without the validator error:\n\n```\n[gateway] http server listening (10 plugins: …, slack, …; 3.7s)\n[slack] [default] starting provider\n[slack] channels resolved: … (+21)\n[slack] socket mode connected\n[gateway] ready\n```\n\nThe same tool-call shape (with `pollDurationHours: 1, pollMulti: false`) then went through `runMessageAction` and produced a delivered Slack message — no `Poll fields require action \"poll\"` thrown, no rejection in the outbound path.\n\n**Observed result after fix**: agent replied in-thread in Slack with the user-facing text. Outbound delivery completed with the workspace plugin returning a Slack message id. The validator no longer blocks schema-padded `send` calls.\n\n**What was not tested**: I did not write a full end-to-end test against a real Slack workspace inside this PR's CI — the regression observed in the live container is the proof. I also did not exercise channels other than Slack (Telegram, Discord, …) for the same shape, though the failing code path is channel-agnostic and the integration test in `message-action-runner.send-validation.test.ts` uses the channel-agnostic `runDrySend` helper.\n\n## Local test results on this PR\n\nVitest 4.1.7, node 22.18.0, pnpm 11.2.2:\n\nChanged-files lanes (`node scripts/test-projects.mjs --changed origin/main`):\n- `vitest.unit-fast.config.ts`: 1/1 file, 11/11 tests pass\n- `vitest.infra.config.ts`: 1/1 file, 24/24 tests pass (includes the new integration assertion)\n\nShared-surface lanes (`pnpm test:contracts`):\n- `vitest.contracts-channel-registry.config.ts`: 11/11 files, 29/29 tests pass\n- `vitest.contracts-channel-session.config.ts`: 11/11 files, 34/34 tests pass\n\nThe plugin-contracts portion of `pnpm test:contracts` (`vitest.contracts-plugin.config.ts`) stalled with no output on my machine and was killed by the runner's watchdog; the touched files are not referenced by that lane, but flagging it for CI to confirm.\n\n## AI assistance disclosure\n\n- [x] AI-assisted (Claude / Claude Code). I read the failing transcript, the validator, the tool-schema callsite, and the existing tests; chose the narrowing scope; wrote the fix and tests; ran the targeted Vitest shards and the channels-contracts lane.\n- [x] Real-behavior proof above is from my own OpenClaw deployment, not from AI-generated mocks.\n- [x] I understand what the code does — the change is a strict subset of the previous logic for content-bearing inputs: any input that returned `true` before still returns `true`, *except* shared-modifier-only inputs that match the schema-pad shape.\n",
-        "branch": "fix/poll-params-schema-padded-defaults",
-        "head_sha": "0fd95756cd4a67cdbc28453a0a51c38616b9b699",
-        "author": "codezz",
-        "labels": [
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/infra/outbound/message-action-runner.send-validation.test.ts",
-            "additions": 23,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/poll-params.test.ts",
-            "additions": 25,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/poll-params.ts",
-            "additions": 23,
-            "deletions": 25,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": "automerge-openclaw-openclaw-89601",
-        "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89601.md",
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89601",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89601.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "SUCCESS": 131,
-            "SKIPPED": 30,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": true,
-      "author_readonly_authorized": false
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 7796,
+    "total_ms": 1747,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 493
+        "ms": 531
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2652
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 5
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 4619
+        "ms": 1204
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
