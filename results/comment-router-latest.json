@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-03T09:39:19.153Z",
+  "generated_at": "2026-06-03T09:39:20.906Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T06:39:15.870Z",
+  "since": "2026-06-03T06:39:20.252Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     89770
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4323855144
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -61,86 +63,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): fall back to direct channel send when ACP subagent announce loses gateway scope",
-        "body": "### Summary\n\n- **Problem**: Issue #89718 (Bug 2) reports that ACP subagent runs whose requester main session is fast (5–15s) but whose own runtime is slow (1–2 min) end with the user seeing no reply. Gateway log shows `[warn] Subagent completion direct announce failed for run <id>: In-process gateway dispatch requires a gateway request scope (method: agent). No scope set and no fallback context available.` repeated three times, followed by `Subagent announce give up (retry-limit)`. 100% delivery failure when the main LLM is fast enough to return before the ACP subagent finishes.\n- **Root Cause**: `startSubagentAnnounceCleanupFlow` in `subagent-registry-lifecycle.ts` fires `void params.runSubagentAnnounceFlow(...)` from a module-level lifecycle controller, triggered by the subagent's completion event — which lives outside the original requester's gateway request lifetime. The announce path then calls `runAnnounceAgentCall` → `dispatchGatewayMethodInProcess`. When the AsyncLocalStorage plugin runtime scope is gone (requester request ended) AND the fallback gateway context resolver yields nothing (gateway mid-shutdown, startup race, sibling resolver disabled), `dispatchGatewayMethodInProcessRaw` throws the No-Scope error. `runAnnounceDeliveryWithRetry` exhausts three retries on this error, then the catch block at the direct-announce path only falls through to `deliverTextCompletionDirect` when the error matches `isIncompleteAnnounceAgentResultError`. The No-Scope error is matched by neither `TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS` nor `PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS` nor `isIncompleteAnnounceAgentResultError`, so the catch reaches its terminal `throw err` and the user never receives the subagent result.\n- **Fix**: Add a narrow `isGatewayScopeUnavailableError` matcher recognizing the exact thrown text from `dispatchGatewayMethodInProcessRaw`. OR it into the existing direct-announce catch branch so the same `deliverTextCompletionDirect` fallback that handles `isIncompleteAnnounceAgentResultError` also handles the No-Scope case. `deliverTextCompletionDirect` calls `sendMessage` directly without re-entering `dispatchGatewayMethodInProcess`, so the fallback cannot recurse into the same scope failure. Retry classification is preserved: the No-Scope error remains in neither transient nor permanent pattern lists, so the existing three-retry-then-catch behavior runs unchanged, and the catch now has a graceful exit when dispatch was definitively unrecoverable.\n- **What changed**:\n  - `src/agents/subagent-announce-delivery.ts` — add `isGatewayScopeUnavailableError` matcher next to the existing classifier helpers; OR it into the catch-block fallback condition alongside `isIncompleteAnnounceAgentResultError`. The inline comment names the failure modes (mid-shutdown / startup race / resolver disabled) so the non-obvious \"why\" survives in source.\n  - `src/agents/subagent-announce-delivery.test.ts` — add a regression case mirroring the existing incomplete-result Discord DM fixture but throwing the exact No-Scope error text the production catch sees. The test fails on `main` (`delivered: false`) and passes after this change.\n- **What did NOT change (scope boundary)**:\n  - Does NOT modify Bug 1 from the same issue (the `acp-spawn-parent-stream` streamTo silent-stall in `noOutputWatcherTimer`). That is a separate timing concern where the `prompt_submitted` ACP event does not reach the relay in streamTo mode; it warrants its own diagnosis and PR.\n  - No retry classification change: the No-Scope error stays out of both transient and permanent lists, so `runAnnounceDeliveryWithRetry` still runs three retries before the catch fires.\n  - No config surface (no schema, defaults, doctor migrations, or `docs/reference/config`).\n  - No plugin surface (no plugin SDK, manifest, `extensions/*` api/runtime-api, registry/loader).\n  - No gateway protocol changes.\n  - No dependency, lockfile, or shrinkwrap changes.\n\n### Reproduction\n\n1. Spawn an ACP subagent from a channel session where the main LLM returns quickly (typical 5–15s turn).\n2. The ACP subagent runs 1–2 minutes.\n3. When the subagent completes, gateway log shows three retries of `Subagent completion direct announce failed for run <id>: In-process gateway dispatch requires a gateway request scope (method: agent). No scope set and no fallback context available.` followed by `Subagent announce give up (retry-limit)`.\n4. **Before this PR**: the user sees no reply; the subagent result is silently lost.\n5. **After this PR**: the catch block recognizes the No-Scope error class and routes the completion via `deliverTextCompletionDirect` — the user receives the subagent result through the same channel/account/threadId the requester used.\n\nDeterministic source reproduction (added as a regression test): inject a `callGateway` mock that throws the production No-Scope error string; the test harness auto-synthesizes the matching `dispatchGatewayMethodInProcess` proxy, so the error reaches the real catch block. Before the fix the test asserts `delivered: false`; after the fix it asserts `delivered: true / path: \"direct\"` with `sendMessage` invoked on the resolved delivery target.\n\n### Real behavior proof\n\n**Behavior addressed (#89718 Bug 2 — ACP subagent completion silent message loss when gateway scope is unavailable)**: the announce direct-call catch now routes No-Scope dispatch failures through `deliverTextCompletionDirect` instead of throwing through to the give-up branch, so the user sees the subagent result.\n\n**Real environment tested (Linux Codex worktree, Node 22, Vitest against the synthesized `dispatchGatewayMethodInProcess` proxy)**: unit-level repro of the production catch path. The mock harness in `testing.setDepsForTest` proxies the throwing `callGateway` into the same `dispatchGatewayMethodInProcess` invocation that runs in production, so the test path is structurally identical to the runtime path that hits the No-Scope throw site in `server-plugins.ts`. A live ACP subagent run against a real gateway shutdown race was not exercised in this PR.\n\n**Exact steps or command run after this patch (repo-root)**: `node scripts/run-vitest.mjs src/agents/subagent-announce-delivery.test.ts src/agents/subagent-announce.capture-completion-reply.test.ts src/agents/subagent-announce-dispatch.test.ts` (108/108 passed across the three closest sibling suites); `node scripts/run-tsgo.mjs -p tsconfig.core.json` (clean); `node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json` (clean); `node scripts/run-oxlint.mjs src/agents/subagent-announce-delivery.ts src/agents/subagent-announce-delivery.test.ts` (clean); `oxfmt --check` (clean); OpenClaw `$autoreview --mode branch --base origin/main` (reported `autoreview clean: no accepted/actionable findings reported / overall: patch is correct (0.84)`).\n\n**Evidence after fix (Vitest output for the touched suite)**:\n\n```text\n Test Files  3 passed (3)\n      Tests  108 passed (108)\n```\n\nThe new regression case `directly delivers direct-message subagent text when in-process gateway dispatch has no scope` asserts `{ delivered: true, path: \"direct\" }` and that `sendMessage` was invoked with the Discord DM target — both fail before the fix and pass after.\n\n**Observed result after fix (catch block behavior)**: when `runAnnounceAgentCall` throws the No-Scope error and the existing gate conditions for the incomplete-result fallback hold (`expectsCompletionMessage`, `isSubagentCompletion`, and `shouldDeliverAgentFinal` or `subagentDirectMessageCompletionRequiresMessageTool`), `deliverTextCompletionDirect` runs and returns `{ delivered: true, path: \"direct\" }`. The user receives the subagent completion through the alternate delivery channel instead of the silent give-up the original code produced.\n\n**What was not tested (live ACP runtime + real gateway shutdown race)**: this PR does not include a live ACP subagent run against a real gateway in shutdown. The regex was verified against the production-thrown string at the `dispatchGatewayMethodInProcessRaw` throw site in `src/gateway/server-plugins.ts`, but the failure-trigger timing (which exact race or shutdown path causes the fallback resolver to return undefined on `2026.5.28`) was not directly reproduced. The fix is defensive: if the resolver returns a usable context the dispatch succeeds before the catch is reached and the new fallback stays dormant.\n\n### Risk / Mitigation\n\n- **Risk**: the new matcher could overmatch and swallow unrelated errors. **Mitigation**: the regex `/In-process gateway dispatch requires a gateway request scope/i` matches only the line at the No-Scope throw site in `server-plugins.ts`. The two adjacent error strings thrown a few lines below (`requires an authenticated plugin request scope`, `requires a scoped client`) intentionally do not match this classifier and remain in the rethrow path. Autoreview independently verified this.\n- **Risk**: the fallback may mask a real underlying scope-resolver issue. **Mitigation**: `runAnnounceDeliveryWithRetry` still emits its retry warnings on every attempt before the catch runs, and the existing log line `Subagent completion direct announce failed for run <id>: <error>` still fires when the direct path's `delivery.path === \"direct\"` reports an error — so the diagnostic trail leading to \"No scope set and no fallback context available\" remains visible even when the fallback succeeds at delivery.\n- **Risk**: Bug 1 still unresolved. **Mitigation**: marked `Refs #89718` (not `Closes`) to keep the issue open for Bug 1; the streamTo silent-stall will be tracked in a separate PR after its own diagnosis.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Agents / tools\n\n### Linked Issue/PR\n\nRefs #89718 (Bug 2 only; Bug 1 streamTo silent-stall remains open for a separate PR)\n",
-        "branch": "fix/89718-acp-subagent-announce",
-        "head_sha": "4e89a9b3714533fdf7547503fbb47ea6aa961c8a",
-        "author": "openperf",
-        "labels": [
-          "agents",
-          "size: S",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 message-delivery",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/agents/subagent-announce-delivery.test.ts",
-            "additions": 47,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/subagent-announce-delivery.ts",
-            "additions": 12,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89770",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89770.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 161,
-          "counts": {
-            "FAILURE": 1,
-            "CANCELLED": 1,
-            "SUCCESS": 127,
-            "SKIPPED": 31,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Scan changed paths (precise):FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Scan changed paths (precise):FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3613,
+    "total_ms": 1431,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 384
+        "ms": 643
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2886
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 319
+        "ms": 776
       },
       {
         "name": "append_ledger",
