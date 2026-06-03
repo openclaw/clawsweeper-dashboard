@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-03T05:55:53.367Z",
+  "generated_at": "2026-06-03T05:56:24.632Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T02:55:51.234Z",
+  "since": "2026-06-03T02:56:22.684Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    89678
+    89716
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89678:4608768727:2026-06-03T05:55:48Z:clawsweeper_needs_human",
-      "comment_id": "4608768727",
-      "comment_version_key": "4608768727:2026-06-03T05:55:48Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89678#issuecomment-4608768727",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89716:4609478675:2026-06-03T05:56:19Z:clawsweeper_needs_human",
+      "comment_id": "4609478675",
+      "comment_version_key": "4609478675:2026-06-03T05:56:19Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89716#issuecomment-4609478675",
       "repo": "openclaw/openclaw",
-      "issue_number": 89678,
+      "issue_number": 89716,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-03T03:15:45Z",
-      "comment_updated_at": "2026-06-03T05:55:48Z",
+      "comment_created_at": "2026-06-03T05:46:29Z",
+      "comment_updated_at": "2026-06-03T05:56:19Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -52,95 +52,102 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] Manual review is needed because this maintainer-authored macOS service availability fix mainly needs live LaunchAgent proof or explicit maintainer risk acceptance, not a narrow code repair.; Cleared: The diff does not add dependencies, workflow execution, secret access, or broader permissions; the restart-intent file contains bounded local process metadata and uses the existing writer. (sha=9f4edff3738495f465a32cc15b9b99ebaa97ae5f)",
-      "review_summary": "The PR threads an optional restartIntent through daemon service control and writes a gateway restart-intent file inside macOS restartLaunchAgent before launchctl bootout/kickstart, with focused tests.\n\nPR surface: Source +49, Tests +120. Total +169 across 7 files.\n\nReproducibility: yes. Source inspection shows direct service.restart callers on current main can reach restartLaunchAgent without a function-local intent write, while the SIGTERM handler stops when no intent payload is consumed.",
-      "review_followup": "- [P2] Manual review is needed because this maintainer-authored macOS service availability fix mainly needs live LaunchAgent proof or explicit maintainer risk acceptance, not a narrow code repair.",
+      "repair_reason": "- [P1] No automated repair is needed; the remaining blocker is contributor or maintainer action on complete real behavior proof before merge.; Cleared: The diff only changes provider request-string construction and colocated tests; it does not touch dependencies, workflows, secrets, auth, install scripts, or other supply-chain surfaces. (sha=c01d4a911da2998d86e70b3274389fd37bbfa877)",
+      "review_summary": "The branch strips the internal system prompt cache-boundary marker from Google, Mistral, OpenAI Responses, and ChatGPT/Codex Responses outbound system prompt payloads and adds regression tests.\n\nPR surface: Source +7, Tests +103. Total +110 across 8 files.\n\nReproducibility: yes. from source: current main forwards `context.systemPrompt` directly in the four provider payload builders, and a marker-bearing prompt would therefore include `OPENCLAW_CACHE_BOUNDARY`. I did not run tests because this review was read-only.",
+      "review_followup": "- [P1] No automated repair is needed; the remaining blocker is contributor or maintainer action on complete real behavior proof before merge.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "9f4edff3738495f465a32cc15b9b99ebaa97ae5f",
+      "expected_head_sha": "c01d4a911da2998d86e70b3274389fd37bbfa877",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(daemon): write restart intent before launchd kickstart so SIGTERM routes to restart",
-        "body": "## Summary\n\n### Problem\n\nOn macOS with the gateway installed as a LaunchAgent (`KeepAlive=true`), any CLI-initiated restart can leave the service shut down instead of restarting. The run-loop SIGTERM handler routes to `restart` only when a gateway-restart intent file is present on disk; otherwise it falls through to a full stop. Once the old process exits cleanly, launchd may take hours to re-bootstrap the LaunchAgent, leaving channels dead and ports stale.\n\nReporter (#88309) showed the failure for `gateway` tool restart. A follow-up case in the issue thread reported the same shape on `2026.5.28` from an in-band channel turn (`Gateway restart failed: gateway port 18789 is still busy before LaunchAgent restart`) — same root cause, different entry point.\n\n### Root cause\n\n`writeGatewayRestartIntentSync` was only called from `lifecycle-core` (the `openclaw gateway restart` CLI path). Every other restart entry point that flows through `service.restart()` on darwin — configure prompt, `doctor --fix`, `update-command` retry, wizard, and the in-band `service.restart` retry after stale-pid cleanup — invoked `restartLaunchAgent` without first stamping intent. `restartLaunchAgent` then issued `launchctl kickstart -k` (or `bootout` + `bootstrap`) which delivered SIGTERM to the running gateway. The gateway's `onSigterm` handler consumed a `null` intent payload and routed to `request(\"stop\", \"SIGTERM\")`, starting graceful shutdown rather than the bounded drain-and-relaunch restart path.\n\n### Fix\n\nMove intent-write into `restartLaunchAgent` so every SIGTERM-emitting branch stamps the file first:\n\n- **Detached-handoff branch** (caller IS the gateway): write intent with `process.pid`, then schedule the helper.\n- **CLI branch** (caller is a separate process): resolve the live gateway pid via `readLaunchAgentRuntime` (`launchctl print`), then write intent before any `enable` / `kickstart` / `bootout` / `bootstrap`.\n\nAdd `restartIntent?: GatewayRestartIntent` to `GatewayServiceControlArgs` so callers with richer payloads (notably the existing `lifecycle-core` path) can pipe `reason`, `force`, and `waitMs` through. Default `reason` stays `\"gateway.restart\"`. When `readLaunchAgentRuntime` returns no pid (service unloaded), intent write is skipped — there is no live gateway to inform, and launchd's bootstrap path is unaffected.\n\n### What changed\n\n- `src/daemon/launchd.ts` — `restartLaunchAgent` now resolves gateway pid and stamps restart intent before any SIGTERM-emitting launchctl call. New import of `writeGatewayRestartIntentSync`.\n- `src/daemon/service-types.ts` — `GatewayServiceControlArgs` gains optional `restartIntent` field; new type import.\n- `src/daemon/launchd.test.ts` — new behavior test pinning the contract (writes a real intent file under a temp `OPENCLAW_STATE_DIR`, asserts payload). Four pre-existing test fixtures updated to include the new `launchctl print` runtime probe in their expected call sequences; the `#52208` re-bootstrap test now expects two `not-loaded` probes (the runtime lookup we added, plus the recovery probe).\n\n### What did NOT change\n\n- No new config keys, env vars, CLI flags, or doctor migrations.\n- No plugin SDK, channel, or extensions surface touched.\n- No gateway-protocol changes.\n- No dependency, lockfile, or shrinkwrap changes.\n- `lifecycle-core.ts`'s explicit `writeGatewayRestartIntentSync` is preserved — atomic replace converges with the in-`restartLaunchAgent` write to the same payload, no behavior change for `openclaw gateway restart`.\n- `triggerOpenClawRestart` (used by `auto-reply` `/restart` fallback and Windows supervised respawn) is left as-is. The auto-reply path only fires when no SIGUSR1 listener is installed, which does not happen while the gateway run-loop is active; the Windows path is `schtasks`-only and unrelated to launchd. Flagged as a follow-up for completeness, but no current macOS reporter touches it.\n\n## Reproduction\n\nThe failure is reachable from any darwin entry point that calls `service.restart()` without first writing intent. Concretely:\n\n1. Install OpenClaw as a managed LaunchAgent (`openclaw gateway install`, `KeepAlive=true` in the generated plist).\n2. From a separate CLI process, run anything that ends in `service.restart()` without going through `lifecycle-core` — e.g. `openclaw configure` and select \"Restart\" when the prompt offers it, or `openclaw doctor --fix` with a gateway-impacting repair, or a failed `openclaw update` that triggers `maybeRestartServiceAfterFailedPackageUpdate`.\n3. Observe the gateway log: `signal SIGTERM received` followed by `received SIGTERM; shutting down`, then a `Gateway stop failed: gateway port 18789 is still busy after LaunchAgent stop` message and a long delay before launchd re-bootstraps.\n\nThe included unit-level reproducer (`launchd.test.ts` -> `restartLaunchAgent restart-intent contract (#88309)`) drives the kickstart branch with a real temp `OPENCLAW_STATE_DIR` and asserts the intent file exists with the resolved gateway pid after `restartLaunchAgent` returns. It fails on `main` (intent file absent) and passes after this change.\n\n## Real behavior proof\n\n**Behavior addressed (#88309)**: CLI-initiated LaunchAgent restart leaves the gateway shut down because the run-loop SIGTERM handler reads a missing intent and routes to stop.\n\n**Real environment tested (Linux Codex worktree, Node 22, Vitest 4.1 against mocked `execLaunchctl`)**: Yes, unit-level repro of the contract (intent file persisted under a real temp `OPENCLAW_STATE_DIR` with the resolved gateway pid). Live macOS LaunchAgent was not exercised in this PR.\n\n**Exact steps or command run after this patch (`node scripts/run-vitest.mjs src/daemon/launchd.test.ts`)**: Single-file vitest run with the wt-88309 worktree (72 passed, 14 skipped, 0 failed). `node scripts/run-tsgo.mjs -p tsconfig.core.json` and `-p test/tsconfig/tsconfig.core.test.json` both clean. `node scripts/run-oxlint.mjs src/daemon/launchd.ts src/daemon/launchd.test.ts src/daemon/service-types.ts` clean. `oxfmt --check` clean.\n\n**Evidence after fix (`launchd.test.ts` reproducer + updated existing call-sequence fixtures)**: Reproducer test now passes: the intent file at `${OPENCLAW_STATE_DIR}/gateway-restart-intent.json` contains `{ \"kind\": \"gateway-restart\", \"pid\": <gateway pid>, \"reason\": \"gateway.restart\", ... }` after `restartLaunchAgent` returns. The four updated call-sequence tests confirm the new `launchctl print` runtime probe is the first call and that the rest of the restart sequence is unchanged.\n\n**Observed result after fix (kickstart-branch behavior, contract-level)**: Every `service.restart()` caller on darwin now leaves a parseable intent file targeting the live gateway pid before SIGTERM is sent. The run-loop SIGTERM handler will consume it and route to `request(\"restart\", \"SIGTERM\")`, preserving graceful drain semantics rather than full shutdown.\n\n**What was not tested (live macOS launchd KeepAlive race, real port-release timing)**: This PR does not include macOS device proof. The remaining risk surfaces — `launchctl kickstart -k` versus port 18789 release timing, KeepAlive throttle thresholds, and the bootout/bootstrap path under a held port — are platform-specific and need a Mac harness run before merge if the maintainer wants device-level confirmation.\n\n## Risk / Mitigation\n\n- **New `launchctl print` call on every darwin `restartLaunchAgent` invocation.** Cost is one synchronous spawn, bounded by `execLaunchctl`'s existing timeout. Failure is caught (`readLaunchAgentRuntime(...).catch(() => null)`); intent write is then skipped and the restart proceeds as before, so the worst case is the pre-fix behavior, not a regression.\n- **Intent file is now written even when the caller did not request one.** Payload uses `targetPid: gateway pid` so a CLI process restarting the gateway cannot accidentally consume its own intent; `consumeGatewayRestartIntentPayloadSync` already gates on `payload.pid === process.pid` plus the existing TTL. Same `replaceFileAtomicSync` writer used by `lifecycle-core`, so concurrent writes converge.\n- **`GatewayServiceControlArgs` now carries an optional `restartIntent`.** Existing implementations (`restartSystemdService`, `restartScheduledTask`) ignore unknown fields; pure-additive, no runtime contract change.\n\n## Change Type\n\n`fix(daemon)` — runtime bug fix in the launchd restart path; no public API addition or removal.\n\n## Scope\n\n- Surfaces touched: `src/daemon/launchd.ts`, `src/daemon/launchd.test.ts`, `src/daemon/service-types.ts`\n- Diff size: prod +29 / test +54 / -3 (delete only stale expectations)\n- Config surface unchanged\n- Plugin surface unchanged\n- Protocol surface unchanged\n- Dependency / lockfile unchanged\n\n## Linked Issue\n\nCloses #88309\n",
-        "branch": "fix/88309-launchd-restart-intent",
-        "head_sha": "9f4edff3738495f465a32cc15b9b99ebaa97ae5f",
-        "author": "openperf",
+        "title": "fix(providers): strip cache-boundary marker from non-Anthropic prompts",
+        "body": "## Summary\n\n- The internal `SYSTEM_PROMPT_CACHE_BOUNDARY` marker (`\\n<!-- OPENCLAW_CACHE_BOUNDARY -->\\n`) is meant to stay private to OpenClaw's Anthropic prompt-cache split. It currently leaks verbatim into the system prompt sent to several **non-Anthropic** providers, so the model literally sees an `<!-- OPENCLAW_CACHE_BOUNDARY -->` HTML comment.\n- This is a direct follow-up to #89386, which stripped the marker for `anthropic.ts` and `openai-completions.ts` but left the remaining non-Anthropic prompt paths untouched. Same root cause, the rest of the surface.\n- Fix: apply the existing `stripSystemPromptCacheBoundary()` helper at the four remaining provider payload-build sites:\n  - `google-shared.ts` — `systemInstruction` (covers `google` + `google-vertex`)\n  - `mistral.ts` — system role message\n  - `openai-responses-shared.ts` — system/developer message (covers `openai-responses` + `azure-openai-responses`)\n  - `openai-chatgpt-responses.ts` — `instructions`\n- **Intentionally out of scope:** `anthropic.ts` and `openai-completions.ts` (already handled by #89386, and the latter must *preserve* the marker on its Anthropic-family cache-control route). No token/cache performance claims — this is a correctness fix, not a perf change.\n- **Success:** no non-Anthropic provider receives the marker; existing behavior (including the ChatGPT default-instructions fallback) is unchanged.\n\n## Linked context\n\nRelated #89386 (preserve provider prompt cache boundaries — first half of this same root issue; this PR covers the remaining non-Anthropic provider prompt paths).\n\n## Real behavior proof (required for external PRs)\n\n- **Behavior or issue addressed:** internal cache-boundary marker leaking into the system prompt sent to non-Anthropic providers (Google, Mistral, OpenAI Responses, OpenAI ChatGPT/Codex Responses).\n- **Real environment tested:** exercised the actual exported provider payload builders (the code path that constructs the request body handed to each provider SDK) with a system prompt containing the marker, via `tsx` and via the provider stream entrypoints.\n- **Exact steps or command run after this patch:**\n  - Tests: `node scripts/run-vitest.mjs src/llm/providers/google-shared.test.ts src/llm/providers/mistral.test.ts src/llm/providers/openai-responses-shared.test.ts src/llm/providers/openai-chatgpt-responses.test.ts`\n  - Payload dump (feeds a marker-bearing system prompt through the real exported builders and prints the outbound payload):\n\n    ```bash\n    cat > /tmp/marker-leak-proof.mts <<'EOF'\n    import { SYSTEM_PROMPT_CACHE_BOUNDARY } from \"./src/agents/system-prompt-cache-boundary.ts\";\n    import { buildGoogleGenerateContentParams } from \"./src/llm/providers/google-shared.ts\";\n    import { convertResponsesMessages } from \"./src/llm/providers/openai-responses-shared.ts\";\n    const systemPrompt = `You are a helpful assistant.${SYSTEM_PROMPT_CACHE_BOUNDARY}Current task: summarize the thread.`;\n    const ctx = { systemPrompt, messages: [{ role: \"user\", content: \"hi\", timestamp: 0 }] };\n    console.log(\"RAW (== pre-fix payload):\", JSON.stringify(systemPrompt), \"\\nhas marker:\", systemPrompt.includes(\"OPENCLAW_CACHE_BOUNDARY\"));\n    const g = buildGoogleGenerateContentParams({ id: \"gemini\", api: \"google-generative-ai\", provider: \"google\", reasoning: true, input: [\"text\"] } as any, ctx as any);\n    console.log(\"Google systemInstruction:\", JSON.stringify(g.config?.systemInstruction), \"\\nhas marker:\", JSON.stringify(g).includes(\"OPENCLAW_CACHE_BOUNDARY\"));\n    const r = convertResponsesMessages({ id: \"gpt-5.5\", api: \"openai-responses\", provider: \"openai\", reasoning: true, input: [\"text\"] } as any, ctx as any, new Set([\"openai\"])) as any[];\n    const sys = r.find((m) => m.role === \"developer\" || m.role === \"system\");\n    console.log(\"OpenAI Responses content:\", JSON.stringify(sys?.content), \"\\nhas marker:\", JSON.stringify(r).includes(\"OPENCLAW_CACHE_BOUNDARY\"));\n    EOF\n    cp /tmp/marker-leak-proof.mts ./.marker-leak-proof.mts && ./node_modules/.bin/tsx ./.marker-leak-proof.mts; rm -f ./.marker-leak-proof.mts\n    ```\n- **Evidence after fix (payload dump):**\n\n  ```\n  === RAW system prompt (== pre-fix payload; builders forwarded it verbatim) ===\n  \"You are a helpful assistant.\\n<!-- OPENCLAW_CACHE_BOUNDARY -->\\nCurrent task: summarize the thread.\"\n  contains OPENCLAW_CACHE_BOUNDARY: true\n\n  === Google systemInstruction (AFTER fix) ===\n  \"You are a helpful assistant.\\nCurrent task: summarize the thread.\"\n  payload contains OPENCLAW_CACHE_BOUNDARY: false\n\n  === OpenAI Responses system message content (AFTER fix) ===\n  \"You are a helpful assistant.\\nCurrent task: summarize the thread.\"\n  payload contains OPENCLAW_CACHE_BOUNDARY: false\n  ```\n\n  ```\n  Test Files  4 passed (4)\n       Tests  27 passed (27)\n  ```\n\n- **Observed result after fix:** the marker is removed from every non-Anthropic provider payload; the boundary collapses to a single newline (`Stable\\nDynamic`), matching the already-shipped `anthropic.ts` / `openai-completions.ts` behavior.\n- **What was not tested:** live network round-trips to Google / Mistral / OpenAI (no live credentials in this environment); proof is taken at the request-payload construction boundary, which is the exact string handed to each provider SDK.\n- **Proof limitations or environment constraints:** marker absence is asserted on the serialized outbound payload, not captured from the provider's server-side receipt.\n- **Before evidence:** pre-fix, each of the four sites forwarded `context.systemPrompt` verbatim, so the \"RAW system prompt\" line above (with `contains OPENCLAW_CACHE_BOUNDARY: true`) is exactly what these providers received before this change.\n\n## Tests and validation\n\n- `node scripts/run-vitest.mjs` on the four provider test files → **27 passed**.\n- `oxfmt --check`, `oxlint`, `tsgo:core`, and `tsgo:test:src` all clean.\n- Added per-provider regression tests that pass `Stable + <cache boundary> + Dynamic` and assert the **sent** payload (`JSON.stringify(payload)`) does **not** contain `OPENCLAW_CACHE_BOUNDARY` and equals `Stable\\nDynamic`. The ChatGPT path also gets a regression test for the no-system-prompt default-instructions fallback.\n- What failed before: the marker survived into the outbound system prompt for all four providers (the four new assertions would fail on `main`).\n\n## Risk checklist\n\n- **Did user-visible behavior change?** Yes (intended): non-Anthropic models no longer see the internal `<!-- OPENCLAW_CACHE_BOUNDARY -->` comment in their system prompt.\n- **Did config, environment, or migration behavior change?** No.\n- **Did security, auth, secrets, network, or tool execution behavior change?** No.\n- **Highest-risk area:** the ChatGPT `instructions` field, which is unconditional (unlike the other three sites guarded by `if (context.systemPrompt)`). `context.systemPrompt` can be `undefined` there.\n- **How is that risk mitigated:** `stripSystemPromptCacheBoundary(context.systemPrompt ?? \"\") || \"You are a helpful assistant.\"` preserves the original `context.systemPrompt || \"...\"` fallback exactly, plus a dedicated regression test covers the no-system-prompt path.\n\n## Current review state\n\n- **Next action:** maintainer review.\n- **Waiting on:** nothing from the author; CI.\n- **Bot/reviewer comments addressed:** none yet (initial submission).\n",
+        "branch": "fix/provider-marker-leak",
+        "head_sha": "c01d4a911da2998d86e70b3274389fd37bbfa877",
+        "author": "masatohoshino",
         "labels": [
-          "gateway",
-          "cli",
           "size: S",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 👀 ready for maintainer look"
+          "triage: mock-only-proof",
+          "rating: 🦐 gold shrimp",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/cli/daemon-cli/lifecycle-core.ts",
-            "additions": 5,
+            "path": "src/llm/providers/google-shared.test.ts",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/llm/providers/google-shared.ts",
+            "additions": 4,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cli/daemon-cli/lifecycle.ts",
-            "additions": 6,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/launchd.test.ts",
-            "additions": 123,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/launchd.ts",
-            "additions": 36,
+            "path": "src/llm/providers/mistral.test.ts",
+            "additions": 21,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/daemon/service-types.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/restart.ts",
+            "path": "src/llm/providers/mistral.ts",
             "additions": 2,
-            "deletions": 8,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/infra/restart.types.ts",
-            "additions": 6,
+            "path": "src/llm/providers/openai-chatgpt-responses.test.ts",
+            "additions": 55,
             "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/llm/providers/openai-chatgpt-responses.ts",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/llm/providers/openai-responses-shared.test.ts",
+            "additions": 16,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/llm/providers/openai-responses-shared.ts",
+            "additions": 2,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89678",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89678.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89716",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89716.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 156,
+          "total": 162,
           "counts": {
-            "SUCCESS": 131,
-            "SKIPPED": 24,
+            "FAILURE": 1,
+            "SUCCESS": 129,
+            "SKIPPED": 31,
             "NEUTRAL": 1
           },
-          "blockers": [],
+          "blockers": [
+            "Real behavior proof:FAILURE"
+          ],
           "pending": [],
-          "terminalBlockers": []
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ]
         }
       },
       "maintainer_authorized": false,
@@ -150,23 +157,23 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2377,
+    "total_ms": 2176,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 313
+        "ms": 239
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1804
+        "ms": 1694
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 233
+        "ms": 216
       },
       {
         "name": "append_ledger",
