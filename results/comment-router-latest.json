@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-03T02:27:39.023Z",
+  "generated_at": "2026-06-03T02:28:32.634Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-02T23:27:38.793Z",
+  "since": "2026-06-02T23:28:30.996Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    89660
+    89663
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +29,112 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89663:4608555513:2026-06-03T02:28:27Z:clawsweeper_auto_repair",
+      "comment_id": "4608555513",
+      "comment_version_key": "4608555513:2026-06-03T02:28:27Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89663#issuecomment-4608555513",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89663,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-03T02:22:09Z",
+      "comment_updated_at": "2026-06-03T02:28:27Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=5212a6245731b31d2584becb51b0f2c9590c1e40)",
+      "review_summary": "This PR changes the Slack outbound adapter so adapter-routed sends never forward `OutboundIdentity` into `sendMessageSlack` as per-message `username`, `icon_url`, or `icon_emoji`.\n\nPR surface: Source -5. Total -5 across 1 file.\n\nReproducibility: yes. from source, but not with a live Slack workspace: current main maps outbound agent identity into Slack `username`/icon fields and sends those to `chat.postMessage`. The visual multi-bot symptom is source-backed and consistent with the PR report, but I did not reproduce it against real Slack.",
+      "review_followup": "- [P1] Maintainer review is needed because the right Slack authorship default and any new config surface are product/compatibility decisions, not a safe mechanical repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "5212a6245731b31d2584becb51b0f2c9590c1e40",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(slack): drop per-message username/icon override in chat.postMessage path",
+        "body": "# fix(slack): stop forwarding parent agent identity to `chat.postMessage`\n\n## Summary\n\n`resolveSlackSendIdentity` in `extensions/slack/src/outbound-adapter.ts` forwards every `OutboundIdentity` it receives to Slack's `chat.postMessage` as `username` / `icon_url` / `icon_emoji`.\n\nIn multi-bot Slack workspaces — one Slack bot user per agent, each with its own `real_name` and avatar uploaded — the `OutboundIdentity` arriving here is the **originating agent's** identity (e.g. a coordinator agent's name/avatar), **not the bot user's**. Forwarding it overrides the actual bot user's profile on the message, so sub-agent posts render under the parent agent's name and avatar. Attribution in shared channels breaks: every agent looks like the same agent.\n\nThis PR makes `resolveSlackSendIdentity` return `undefined` unconditionally. Slack then falls back to each bot user's configured profile, which is the correct multi-bot behavior.\n\n## Why default-off (not gated)\n\nThe existing default (\"forward whatever identity the upstream caller hands us\") is only correct in single-bot deployments where the bot has no real profile and relies on per-message overlay. That's the historical \"Slack app sending as `username=Bot`\" pattern.\n\nFor any deployment that runs more than one Slack bot user (i.e. anyone using the multi-agent runtime against more than one Slack app), the current default is silently wrong: the bot has a profile, but the per-message override hides it.\n\nPer-message identity overlay still has uses (persona switching inside a single bot, etc.) but it should be **opt-in via cfg**, not the default applied to every send. Callers that need overlay still pass `identity` explicitly into `sendMessageSlack` — that path is unchanged and tested by `send.identity-fallback.test.ts`.\n\n## What changes\n\n- `resolveSlackSendIdentity` body replaced with `return undefined` + rationale comment.\n- Unused `normalizeOptionalString` import removed.\n- No public API change. `OutboundIdentity` still accepted at the adapter boundary; it's just no longer plumbed through to Slack.\n\n## What does not change\n\n- `sendMessageSlack`'s `identity` parameter still works — callers that pass it directly still get the customize-scope behavior + fallback.\n- `chat:write.customize` is no longer required for default sends from the adapter (a small ops win for new installs).\n- `outbound-adapter` payload tests, identity-fallback tests, and the 1239-test `extensions/slack` suite all pass unchanged.\n\n## Verification\n\nLocal (this PR):\n\n- `pnpm vitest run extensions/slack` → 99 files / 1239 tests green.\n- `pnpm tsc -p tsconfig.extensions.json` → clean.\n- `pnpm lint:extensions` → clean.\n\nProduction (downstream hot-patch with identical body, ~6 hours in flight at filing time):\n\n- Sub-agent posts in shared channels now render under each bot user's own `real_name` and avatar instead of the coordinator's.\n- DMs from each bot consistent with bot profile.\n- No regressions on `customize-scope` fallback (covered by existing tests anyway).\n\n## Background\n\nFiled by Ki Marketing's multi-bot Slack deployment, where five distinct Slack bot users (one per agent) were all rendering as the coordinator agent because of this identity passthrough. We've been running this exact patch as a `dist/`-level hot-patch since the issue surfaced; landing it upstream lets us retire the hot-patch and matching post-update guard.\n\n## Backwards compat note\n\nExisting single-bot deployments that intentionally relied on the parent-agent overlay will lose it. Migration path: pass `identity` explicitly via `sendMessageSlack` (the path that's already there and tested), or configure each Slack bot user's profile in Slack and let it surface naturally. We do not believe the implicit overlay is load-bearing for any deployment that has uploaded bot profiles.\n\n## Checklist\n\n- [x] tests green locally\n- [x] typecheck clean\n- [x] lint clean\n- [x] no public-API break\n- [x] commit message describes the \"why\"\n",
+        "branch": "fix/slack-outbound-identity-multi-bot",
+        "head_sha": "5212a6245731b31d2584becb51b0f2c9590c1e40",
+        "author": "kimarketing-jarvis",
+        "labels": [
+          "channel: slack",
+          "size: XS",
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/slack/src/outbound-adapter.ts",
+            "additions": 8,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89663",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89663.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 15,
+          "counts": {
+            "FAILURE": 1,
+            "CANCELLED": 1,
+            "SKIPPED": 10,
+            "SUCCESS": 3
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 439,
+    "total_ms": 1970,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 219
+        "ms": 395
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 1228
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 208
+        "ms": 320
       },
       {
         "name": "append_ledger",
