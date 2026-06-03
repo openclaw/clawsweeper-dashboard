@@ -1,19 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-03T05:16:28.570Z",
+  "generated_at": "2026-06-03T05:17:02.375Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T02:16:28.237Z",
+  "since": "2026-06-03T02:17:02.092Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    67990
+    77136
   ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
+  "scanned_comments": 6,
   "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
@@ -28,283 +29,14 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89584:4609296857:2026-06-03T05:15:27Z:re_review",
-      "comment_id": "4609296857",
-      "comment_version_key": "4609296857:2026-06-03T05:15:27Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89584#issuecomment-4609296857",
-      "repo": "openclaw/openclaw",
-      "issue_number": 89584,
-      "author": "ubehera",
-      "author_id": 3691059,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-03T05:15:27Z",
-      "comment_updated_at": "2026-06-03T05:15:27Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(memory-core): optional cross-encoder rerank stage for memory search",
-        "body": "## Summary\n\nOpenClaw's builtin (sqlite-vec) memory search does first-stage hybrid retrieval (dense `vec0` ∥ FTS5 BM25, fused) → temporal decay → MMR diversity, but has **no second-stage relevance reranker**. MMR reuses the frozen first-stage score and measures only lexical (Jaccard) redundancy — it cannot re-judge query↔document relevance, so a genuinely-best passage that first-stage scoring underranks is dropped before the model sees it.\n\nThis adds an **optional, vendor-neutral cross-encoder rerank stage** to the builtin backend, as a plugin-SDK capability:\n\n- New `MemoryRerankProvider` seam: `rerank({ query, candidates, signal }) → { ref, score }[]`. Candidates are passed by **core-assigned `ref`** and the provider returns scored refs (not full results), so it cannot drop/duplicate/fabricate rows; scores are normalized `[0,1]` written to a separate `rerankScore` field (the fusion `score` stays intact for `minScore`/telemetry).\n- Registered via `api.registerMemoryRerankProvider`, gated by a `memoryRerankProviders` manifest contract (mirrors the embedding-provider contract). **Single exclusive slot** — a second registering plugin is rejected.\n- `MemoryManager.search` runs the reranker on the **wide pre-MMR pool**, then MMR diversifies, then `minScore`/trim. **Fail-open**: an aborting deadline wraps the call; on timeout/error it returns the pre-rerank order.\n- **Observable, not fail-silent:** `status().custom.rerank` / the search `debug.rerank` field reports `disabled` (no reranker) / `active` (scores applied) / `degraded` (registered but returned no scores — failing, timed-out, or plugin-disabled), with a latched warn on the active→degraded transition.\n\n**No new core config** — opt-in is registration-based. Core ships **no concrete reranker**; a TEI/`bge-reranker` implementation is a separate plugin.\n\nIntentionally out of scope: the concrete reranker plugin; the **qmd** backend (it delegates ranking to its own server-side reranker — noted inline at the insertion point and in docs).\n\nReviewers should focus on: the fail-open path in `MemoryManager.search` (must never throw), the `MemoryRerankProvider` refs→scores contract, the `memoryRerankProviders` gate, and the `disabled/active/degraded` observability.\n\n## Linked context\n\nRelated #89477 (the RFC; the seam-surface decision lives there — a maintainer closes it on decision).\nRelated #82985 (a complementary, independent optimization — keep open; see below).\n\n**Relationship to #82985 (`engineCandidates` passthrough) — complementary, not superseded.** The two are easily conflated as competing rerankers, but they solve different problems and can land independently:\n- **This PR** adds a *reranking stage* on the **wide pre-MMR pool** (`candidateMultiplier`-expanded, up to ~4× `maxResults`) — so it can promote a passage that first-stage scoring underranked *before* the trim, and MMR then diversifies on the cross-encoder's relevance.\n- **#82985** forwards `manager.search()`'s **already-trimmed** output to the existing `MemoryCorpusSupplement.search` so a supplement skips a redundant `manager.search()` roundtrip (#82984). Running *after* the pipeline, it can reorder the surviving top-N but cannot rescue a dropped passage.\n\nSo the supplement contract is the wrong *stage* for true reranking, but a fine fit for #82985's roundtrip goal. This seam gives reranking a first-class home (a plugin no longer *needs* the supplement-reranker pattern), yet it does **not** deliver #82985's roundtrip-efficiency benefit for other supplement types — so **#82985 stays open on its own merits**. The two currently overlap textually on `src/plugin-sdk/memory-core-host-runtime-core.ts` and `src/plugins/memory-state.ts`; a rebase resolves that.\n\nWas this requested by a maintainer or owner? — Proposed RFC-first via #89477. Implementation is complete, expert-reviewed, rebased on latest `main`, and fully green, so this is marked **ready for review**; the one open item is the maintainer surface decision in #89477 (the new public SDK API + `memoryRerankProviders` contract).\n\n## Real behavior proof (required for external PRs)\n\n- **Behavior or issue addressed:** memory search gains an optional cross-encoder rerank stage before MMR; with no reranker registered, results and logs are unchanged. Observability honestly distinguishes active/degraded/disabled.\n- **Real environment tested:** OpenClaw built from this branch, run in an **isolated** home (`OPENCLAW_HOME=/tmp` throwaway — production gateway untouched; verified `~/.openclaw/openclaw.json` mtime unchanged before/after). A companion plugin implementing `MemoryRerankProvider` registered against a live TEI **bge-reranker-v2-m3** cross-encoder (HTTP `/rerank`); **bge-m3** for base embeddings; a local OpenAI-compatible **Qwen3.6-27B** drove the `agent --local` turn. All endpoints self-hosted on a tailnet; no cloud services.\n- **Exact steps or command run after this patch:** indexed a 4-doc corpus, then `openclaw agent --local --json` invoking `memory_search` (corpus=all) with the reranker active, then again with the plugin's kill-switch on.\n- **Evidence after fix:**\n  - Plugin registered in-process: `memory-reranker-tei: register at … url=…:8884 …; warmup OK`.\n  - **ACTIVE** — query *\"how to disable reranking without restarting the service\"*; the cross-encoder elevated the correct note to #0:\n    ```\n    debug: {\"backend\":\"builtin\",\"rerank\":\"active\",\"searchMs\":327,\"hits\":4}\n    #0 memory/killswitch.md  rerankScore=0.18952  score=0.43797   ← reranker's top pick\n    #1 memory/pipeline.md    rerankScore=0.00069  score=0.31210\n    #2 memory/infra.md       rerankScore=0.00059  score=0.32281\n    #3 memory/embeddings.md  rerankScore=0.00002  score=0.21677\n    ```\n  - **DEGRADED** (kill-switch on) — same query:\n    ```\n    debug: {\"backend\":\"builtin\",\"rerank\":\"degraded\",\"searchMs\":156,\"hits\":4}\n    warn: \"rerank degraded — reranker returned no scores. Falling back to pre-rerank order. Further duplicate warnings suppressed.\"\n    (no rerankScore on any result; pre-rerank order: killswitch, infra, pipeline, embeddings)\n    ```\n- **Observed result after fix:** an active reranker measurably reorders toward relevance (and sets `rerankScore`); a registered-but-not-working reranker is honestly surfaced as `\"degraded\"` with fail-open pre-rerank order — not a false `\"active\"`. With no reranker registered, behavior is unchanged. `searchMs` 327 (TEI round-trip) vs 156 (no rerank traffic).\n- **What was not tested:** the qmd backend (out of scope — it has its own server-side reranker).\n- **Proof limitations or environment constraints:** run via an isolated dev home + local tailnet model, not the production gateway.\n\n## Tests and validation\n\nWhich commands did you run?\n- `pnpm tsgo:all` → exit 0 (whole monorepo; note `tsgo:core` excludes `extensions/`)\n- `node scripts/run-vitest.mjs extensions/memory-core` → 844 passed\n- `pnpm test:contracts:plugins` → 935 passed\n- `pnpm check:docs` → clean\n\nWhat regression coverage was added or updated?\n- `manager.rerank.test.ts`: rerank reorder, fail-open-on-throw, deadline→abort, invalid-ref reject, empty-return→degraded, no-reranker→disabled.\n- `memory-rerank-provider.contract.test.ts` + `loader.runtime-registry.test.ts`: contract reject (undeclared) / allow (declared) / exclusive-slot conflict.\n- `memory-state.test.ts`: exclusive-slot register/clear + snapshot round-trip (warm-restart guard).\n- `mmr.test.ts` (relevanceScore drives ranking), `hybrid.test.ts` (merge no longer applies MMR), `tools.test.ts` (`debug.rerank` passthrough).\n\nWhat failed before this fix, if known? N/A (new capability). Unit/contract tests are supplemental to the live proof above.\n\n## Risk checklist\n\nDid user-visible behavior change? **Yes** — a new opt-in stage; no change when no reranker is registered.\nDid config, environment, or migration behavior change? **No** — opt-in is registration-based; no new core config; no migration.\nDid security, auth, secrets, network, or tool execution behavior change? **No in core** — core makes no network calls; the (separate) reranker plugin owns its endpoint/auth.\nWhat is the highest-risk area? The fail-open path in `MemoryManager.search` and the new public SDK surface (`MemoryRerankProvider` on `memory-core-host-runtime-core` + the `memoryRerankProviders` manifest contract).\nHow is that risk mitigated? Aborting deadline + total catch → pre-rerank order on any failure; honest `disabled/active/degraded` state on `status().custom.rerank` + latched warn so a failing reranker is observable, not silent; the ref-based contract makes dropped/duplicated/fabricated results unrepresentable. Branch rebased on latest `main`; `tsgo:all` + memory-core + plugin-contract lanes + `check:docs` all green.\n\n## Current review state\n\nWhat is the next action? Maintainer review — the implementation is complete, reviewed, rebased on latest `main`, and CI-ready. The remaining open item is the product decision on the new public SDK surface (tracked in #89477).\nWhat is still waiting? Maintainer buy-in on the new public plugin-SDK surface + manifest contract (the direction decision tracked in #89477); the concrete reranker plugin remains a separate deliverable. (#82985 is a complementary, independent optimization — not a competing reranker.)\nWhich bot or reviewer comments were addressed? ClawSweeper review findings addressed across rounds — the gate-bypass via the public barrel export (removed), the degraded-reason ordering, and the test-API noop, plus the earlier score-contract completeness and `memoryRerankProviders` manifest-gate docs. Re-review requested on the rebased HEAD.\n\n\n",
-        "branch": "feat/memory-rerank",
-        "head_sha": "d10f08b7acd2f38d79d51c6a263b6a59810e8b62",
-        "author": "ubehera",
-        "labels": [
-          "docs",
-          "extensions: memory-core",
-          "size: L",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "docs/.i18n/glossary.zh-CN.json",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/docs.json",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/plugins/manifest.md",
-            "additions": 21,
-            "deletions": 19,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/plugins/memory-reranker.md",
-            "additions": 170,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "docs/plugins/sdk-subpaths.md",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/hybrid.test.ts",
-            "additions": 34,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/hybrid.ts",
-            "additions": 3,
-            "deletions": 14,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager-vector-warning.ts",
-            "additions": 17,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager.rerank.test.ts",
-            "additions": 421,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager.ts",
-            "additions": 154,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/mmr.test.ts",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/mmr.ts",
-            "additions": 21,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/temporal-decay.test.ts",
-            "additions": 0,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/tools.test.ts",
-            "additions": 28,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/tools.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/memory-host-sdk/src/host/types.ts",
-            "additions": 28,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/memory-core-host-engine-storage.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/memory-core-host-runtime-core.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/plugin-test-api.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/api-builder.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/contracts/memory-rerank-provider.contract.test.ts",
-            "additions": 86,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/plugins/installed-plugin-index-scope-lookup.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/loader.runtime-registry.test.ts",
-            "additions": 46,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/loader.ts",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/manifest-registry.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/manifest.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/memory-state.test.ts",
-            "additions": 32,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/memory-state.ts",
-            "additions": 26,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/registry.ts",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/types.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/scripts/test-projects.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89584",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89584.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "SUCCESS": 134,
-            "SKIPPED": 26,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "check-dependencies:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "check-dependencies:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
+  "commands": [],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 584,
+    "total_ms": 476,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 316
+        "ms": 271
       },
       {
         "name": "prehydrate_command_lookups",
@@ -312,11 +44,11 @@
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 251
+        "ms": 193
       },
       {
         "name": "append_ledger",
