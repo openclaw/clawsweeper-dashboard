@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-03T11:34:16.924Z",
+  "generated_at": "2026-06-03T11:35:03.585Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T08:34:13.932Z",
+  "since": "2026-06-03T08:35:03.044Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4611874731
   ],
-  "status_comment_id": 4611875123,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-03T11:33:28Z",
       "comment_updated_at": "2026-06-03T11:33:28Z",
-      "status_comment_id": 4611875123,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "automerge",
       "intent": "automerge",
@@ -54,123 +54,41 @@
       "trusted_bot": false,
       "trusted_bot_author": null,
       "automation_source": null,
-      "repair_reason": "automerge enabled; current checks are failing: Real behavior proof:FAILURE, check-dependencies:FAILURE",
+      "repair_reason": null,
       "review_summary": null,
       "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "label",
-          "label": "clawsweeper:automerge",
-          "status": "executed"
-        },
-        {
-          "action": "dispatch_repair",
-          "workflow": "repair-cluster-worker.yml",
-          "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89649.md",
-          "mode": "autonomous",
-          "status": "executed",
-          "dispatched_at": "2026-06-03T11:34:29.059Z",
-          "run_url": "https://github.com/openclaw/clawsweeper/actions/runs/26882058280"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-03T11:34:30.296Z",
-          "response_comment_id": "4611875123",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "write",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): release session write lock if fence read throws on prompt release",
-        "body": "## Problem\n\nOn a long-running gateway, a single agent attempt can orphan the per-session write lock on the **live** process, wedging a channel for the full `maxHoldMs` lease (~17 min). Every interactive turn during that window fails with `SessionWriteLockTimeoutError`.\n\nObserved in production: a Discord channel produced no replies from 00:08 until ~00:27, when the lock's lease expired and the watchdog reclaimed it. The lock payload's `pid`/`starttime` matched the live gateway process, so the stale-lock breaker correctly refused to reclaim it (it's a live holder, not a crash orphan) — only the lease TTL freed it.\n\n## Root cause\n\n`releaseHeldLockWithFence` (the embedded-attempt session-lock controller's release-for-prompt path, `src/agents/embedded-agent-runner/run/attempt.session-lock.ts`) does:\n\n```ts\nconst lock = heldLock;\nheldLock = undefined;                                       // controller forgets it holds the lock\nconst fingerprint = await readSessionFileFingerprint(...);  // fs I/O — can throw\n...\nfenceSnapshot = await readSessionFileFenceSnapshot(...);    // fs I/O — can throw\nfenceActive = true;\nawait lock.release();                                       // only reached if no throw above\n```\n\n`release()` is **not** in a `finally`. If either fence read rejects with a transient non-ENOENT error (e.g. `EIO`/`EMFILE` under load) after `heldLock` is cleared but before `lock.release()`, the function exits with the in-memory reference nulled and the underlying file lock never released.\n\n`releaseForPrompt()` runs on every prompt submission (to free the lock for model I/O), so this is on a hot path. Because the controller thinks it no longer holds the lock, `dispose()` at attempt teardown sees `heldLock === undefined` and does nothing — yet the teardown still releases the in-process session-file **owner mutex**. The next attempt sails past the mutex and blocks on the orphaned **file lock**, failing every turn until the watchdog reclaims it at `maxHoldMs`.\n\n## Fix\n\nWrap the fence bookkeeping in `try/finally` so the file lock is always released once `heldLock` is cleared, even if the fence reads throw. The original error still propagates — only the lock-release invariant is made exception-safe.\n\n## Testing\n\n- New regression test: a fence-read failure (`fs.stat` rejecting with `EIO`) during `releaseForPrompt` must still release the underlying lock. Fails before the fix (release called 0 times), passes after.\n- `attempt.session-lock.test.ts`: 43 pass.\n- `session-write-lock.test.ts`: 53 pass.\n- Full `agents-embedded-agent` suite: 1301 pass (79 files), no regressions.\n- `oxlint` + `oxfmt` clean on changed files.\n\n\n## Real behavior proof\n\nBeyond the unit test, I exercised the **real lock stack end-to-end** — the real `acquireSessionWriteLock`, the real `@openclaw/fs-safe` file-lock manager, and a real on-disk `.jsonl.lock` — with an end-to-end harness that:\n\n1. starts an attempt (controller eagerly acquires the real session write lock),\n2. injects a single transient non-ENOENT `fs.stat` failure (`EIO`) into the fence read during `releaseForPrompt` — the production failure mode under fd/I/O pressure,\n3. then has the **next interactive turn** attempt to acquire the same session lock.\n\nLock options mirror production (`maxHoldMs: 1_020_000` — the ~17 min lease derived from the agent timeout; `timeoutMs: 2_000` for the acquire).\n\n**Before the fix** (current `main`) — the lock is orphaned on the live process and the next turn wedges:\n```\n[proof] after acquire: lock file on disk = true\n[proof] releaseForPrompt threw (expected): EIO\n[proof] after release: lock file on disk = true          ← lock leaked\n[proof] next interactive acquire: FAILED after 2002ms: SessionWriteLockTimeoutError\n```\n\n**After the fix** — the lock is released even though the fence read threw, and the next turn proceeds immediately:\n```\n[proof] after acquire: lock file on disk = true\n[proof] releaseForPrompt threw (expected): EIO\n[proof] after release: lock file on disk = false         ← lock released\n[proof] next interactive acquire: SUCCEEDED in 1ms\n```\n\nThis reproduces the exact `SessionWriteLockTimeoutError` wedge on `main` and demonstrates the fix eliminates it — the same symptom seen in production (a Discord channel dead until the `maxHoldMs` lease expired). The harness was throwaway scaffolding (kept out of the diff to preserve its narrowness); the committed regression test covers the same release-invariant at unit scope.\n\n> Note: the `fs.stat` EIO is deliberate fault injection — the bug is a transient-error race that doesn't reproduce on demand in a healthy environment, so the proof induces the documented failure condition against the real lock stack rather than waiting for organic I/O pressure.\n",
-        "branch": "fix/session-write-lock-release-on-fence-error",
-        "head_sha": "1d91f1acb8109c14dc0020686f4e2a7b8b843f6d",
-        "author": "spencer2211",
-        "labels": [
-          "agents",
-          "size: S",
-          "clawsweeper:automerge",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦞 diamond lobster",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts",
-            "additions": 25,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.ts",
-            "additions": 21,
-            "deletions": 11,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": "automerge-openclaw-openclaw-89649",
-        "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89649.md",
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89649",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89649.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "FAILURE": 2,
-            "SUCCESS": 129,
-            "SKIPPED": 30,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "check-dependencies:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "check-dependencies:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": true,
-      "author_readonly_authorized": false
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 17037,
+    "total_ms": 2104,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 508
+        "ms": 529
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2466
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 5
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 14031
+        "ms": 1563
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
