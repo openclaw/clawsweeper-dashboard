@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-03T18:10:31.196Z",
+  "generated_at": "2026-06-03T18:11:08.455Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T15:10:27.374Z",
+  "since": "2026-06-03T15:11:07.844Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     89943
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4614940083
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -61,92 +63,28 @@
       "finding_id": "review-feedback",
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(slack): emit message_sent hook on outbound delivery (mirror Telegram)",
-        "body": "## What\n\nAdds the missing `message_sent` plugin hook emission to `@openclaw/slack`\noutbound deliveries. Mirrors the Telegram adapter pattern\n(`extensions/telegram/src/bot/delivery.replies.ts` →\n`emitTelegramMessageSentHooks`).\n\nFixes #89942.\n\n## Why\n\n`docs/plugins/hooks.md` documents `message_sent` as observation-only for all\nsuccessful outbound deliveries. Telegram fires it; Slack silently doesn't.\nPlugins observing the hook get a complete blind spot for Slack while\nTelegram works out of the box.\n\n## Change\n\n| File | Change |\n|---|---|\n| `extensions/slack/src/message-sent-hook.ts` | **New file.** `buildSlackSentHookContext`, `emitSlackMessageSentHooks`, internal hook helper. Mirror of Telegram's pattern. |\n| `extensions/slack/src/outbound-adapter.ts` | Wrap `sendSlackOutboundMessage` send call in try/catch. On success (excluding suppressed `NO_REPLY` sends), emit `message_sent` with the delivered ts. On error, emit with `success=false`. |\n| `extensions/slack/src/outbound-delivery.test.ts` | +3 tests in a new `\"slack adapter emits message_sent\"` describe block. The tests call `slackOutbound.sendText` directly with a real `initializeGlobalHookRunner` registry and a real plugin hook handler so only the underlying Slack transport is stubbed. |\n\nNet: `+281 / -15` across 3 files.\n\n## Real behavior proof\n\n### Behavior addressed\n\nWhen `@openclaw/slack` delivers a Slack message via the agent reply path,\nthe `message_sent` plugin hook does not fire — the same lifecycle in\nTelegram does fire it. A plugin (`mst-probe`) observing the full outbound\nhook chain receives `message_received`, `before_dispatch`, `agent_end`,\n`reply_payload_sending`, and `message_sending`, but never `message_sent`,\neven though the message lands in Slack successfully. Full reproduction\nwalkthrough and root-cause analysis in issue #89942.\n\n### Real setup tested\n\n- Host: macOS, Node v25.4.0 (also reproduced earlier today on a Debian\n  GCE VM running `openclaw@2026.4.23`).\n- Runtime: stock `openclaw@2026.5.28` + `@openclaw/slack@2026.5.28`\n  installed via `openclaw plugins install @openclaw/slack` into\n  `~/.openclaw/npm/projects/openclaw-slack-…/node_modules/@openclaw/slack`.\n- Channel: real Slack workspace, real bot in a real channel\n  (`#pluto`, `C0APL029CEN`), Socket Mode, `xoxb`+`xapp` tokens\n  pulled from `~/.openclaw/openclaw.json`.\n- Plugin: `mst-probe` (local plugin at `~/openclaw-test-plugin/`)\n  registered via `openclaw plugins install --link`, granted\n  `plugins.entries.mst-probe.hooks.allowConversationAccess = true`,\n  listening on `message_received`, `before_dispatch`, `agent_end`,\n  `reply_payload_sending`, `message_sending`, and `message_sent`.\n\n### Exact steps or command run after this patch\n\n```\n# Apply the equivalent of this PR's logic as an inline runtime edit on the\n# installed @openclaw/slack package (so the running gateway exercises the\n# same code path the PR introduces in extensions/slack/src/).\npython3 patch-outbound-adapter.py\nnode --check $TARGET   # SYNTAX OK\n\n# Restart so the gateway loads the patched outbound-adapter.\nopenclaw gateway restart\n\n# Trigger a real Slack agent reply by @mentioning the bot.\ncurl -X POST https://slack.com/api/chat.postMessage ...\n\n# Watch the gateway log for the hook firings.\ntail -f ~/Library/Logs/openclaw/gateway.log | grep mst-probe\n```\n\n### Evidence after fix\n\nReal runtime log capture from the local OpenClaw gateway, with the\npatched `outbound-adapter` loaded (same logic as the PR's TypeScript\nsource), `mst-probe` registered, agent reply triggered by an @mention.\nEarlier the same plugin running on **unpatched** stock 2026.5.28 fired\nfive of the six message-lifecycle hooks but never `message_sent` — see\nissue #89942 for the unpatched terminal output and the matching\ngateway-log evidence. With the patched runtime in place the\n`outbound-adapter` calls the new `_pi_emit` helper after each successful\n`chat.postMessage` and after each failure, which routes through\n`runMessageSent` so the registered listener now fires.\n\nAdditional ci coverage from `pnpm test:extension slack` exercises the\nexact code path: `1242 passed (1242)` including three new tests\n(`fires message_sent once with the delivered messageId on a successful send`,\n`fires message_sent with success=false when the Slack send throws`,\n`does NOT fire message_sent when the Slack send is suppressed (NO_REPLY)`).\nThe tests use a real `initializeGlobalHookRunner` registry with a real\nplugin hook handler — only the outermost `sendMessageSlack` transport\nis stubbed.\n\n```\npnpm test:extension slack\n  Test Files  99 passed (99)\n  Tests       1242 passed (1242)\n\npnpm test:contracts:channels\n  Test Files  11 passed (11)\n  Tests       34 passed (34)\n\npnpm check\n  ok: changelog attributions, guarded extension wildcard re-exports,\n      plugin-sdk wildcard re-exports, deprecated channel access seams,\n      media download helper guard, runtime sidecar loader guard,\n      tool display, host env policy, opengrep rule metadata,\n      duplicate scan target coverage, npm shrinkwrap guard,\n      package patch guard, typecheck prod, lint\n```\n\n### Observed result after fix\n\nWith the inline runtime patch applied (same logic as the PR's\nTypeScript change), `sendSlackOutboundMessage` invokes\n`runMessageSent` on every successful `chat.postMessage` and on\ndelivery failures. The plugin's registered `message_sent` listener\nreceives an event with `to`, `content`, `success=true`,\n`messageId=<Slack ts>` for successes, and `success=false` +\n`error` for failures, exactly mirroring how the Telegram adapter\nbehaves today. Suppressed `NO_REPLY` sends correctly skip emission\nbecause `sendMessageSlack` short-circuits without hitting Slack's API.\n\n### What was not tested\n\n- A full end-to-end capture of the patched gateway processing a\n  real Slack inbound event through the agent loop and emitting\n  `message_sent` to a `mst-probe`-style listener in the same\n  recording session. My local Slack app's Socket Mode connection\n  went idle partway through the reproduction session and stopped\n  delivering inbound events to the gateway (zero gateway log\n  lines for ~50 minutes after the last successful agent reply,\n  unrelated to this patch). The unit tests cover the patched\n  adapter dispatch with a real hook runner; only the outermost\n  Slack transport is stubbed. Happy to follow up with a fresh\n  live capture if maintainers want it, once a reliable Slack\n  workspace session is available.\n- The internal `message:sent` hook is wired conditionally on a\n  caller-provided `sessionKeyForInternalHooks`, but the current\n  Slack outbound path doesn't yet plumb a session key through\n  `sendSlackOutboundMessage`. I scoped that out of this PR to\n  keep the change minimal — the bug being fixed here is the\n  plugin-hook side, which doesn't need session key. Happy to\n  raise the internal-hook plumbing as a follow-up.\n\n## Notes\n\n- AI-assisted (Claude). Real-behavior reproduction and root-cause\n  analysis were done with a custom `mst-probe` plugin on a clean\n  local install.\n- `CHANGELOG.md` not modified, per CONTRIBUTING.md.\n- American English in all new code and comments.\n- Allow edits by maintainers enabled on the fork branch.\n",
-        "branch": "fix/slack-message-sent-hook",
-        "head_sha": "9b33fa70d845d144d047b3283f147947a93a101a",
-        "author": "rishitamrakar",
-        "labels": [
-          "channel: slack",
-          "size: M",
-          "proof: sufficient",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "extensions/slack/src/message-sent-hook.ts",
-            "additions": 111,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/slack/src/outbound-adapter.ts",
-            "additions": 43,
-            "deletions": 15,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/outbound-delivery.test.ts",
-            "additions": 127,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89943",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89943.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 156,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 30,
-            "SUCCESS": 123,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4117,
+    "total_ms": 1179,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 421
+        "ms": 598
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 3387
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 283
+        "ms": 567
       },
       {
         "name": "append_ledger",
