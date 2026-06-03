@@ -1,19 +1,17 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-03T13:07:01.254Z",
+  "generated_at": "2026-06-03T13:07:22.779Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T10:06:57.659Z",
+  "since": "2026-06-03T10:07:21.004Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    89039
+    89833
   ],
-  "comment_ids": [
-    4591504568
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -33,185 +31,108 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89039:4591504568:2026-06-03T13:06:12Z:clawsweeper_needs_human",
-      "comment_id": "4591504568",
-      "comment_version_key": "4591504568:2026-06-03T13:06:12Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-4591504568",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89833:4612504793:2026-06-03T13:07:17Z:clawsweeper_auto_repair",
+      "comment_id": "4612504793",
+      "comment_version_key": "4612504793:2026-06-03T13:07:17Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89833#issuecomment-4612504793",
       "repo": "openclaw/openclaw",
-      "issue_number": 89039,
+      "issue_number": 89833,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-01T09:57:55Z",
-      "comment_updated_at": "2026-06-03T13:06:12Z",
+      "comment_created_at": "2026-06-03T12:53:27Z",
+      "comment_updated_at": "2026-06-03T13:07:17Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] Human review is needed for real behavior proof and for the maintainer decision on changing embedded provider retry defaults; there is no narrow automated repair lane yet.; Cleared: The diff does not change dependencies, workflows, permissions, secrets handling, downloaded artifacts, or other concrete supply-chain/security-sensitive surfaces. (sha=5fa82849c72c68fec7ca1ecfd4e7149e7b3672b2)",
-      "review_summary": "The PR wraps embedded steering writes in owned transcript fencing, forwards/defaults OpenAI SDK retry options for embedded prompt-lock calls, and surfaces embedded session takeover errors as resend guidance with regression coverage.\n\nPR surface: Source +76, Tests +317. Total +393 across 11 files.\n\nReproducibility: no. high-confidence live reproduction was established in this review. The current-main source path is clear and the PR includes simulated/loopback tests, but no actual concurrent embedded chat run with a retryable provider failure was proven.",
-      "review_followup": "- [P1] Human review is needed for real behavior proof and for the maintainer decision on changing embedded provider retry defaults; there is no narrow automated repair lane yet.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=0cbd80c625f7fb472c6885834fa92398c576d630)",
+      "review_summary": "The PR guards active agent tool result middleware registration reads and adds a regression test for skipping unreadable active-registry metadata while preserving a healthy Codex middleware.\n\nPR surface: Source +16, Tests +38. Total +54 across 2 files.\n\nReproducibility: yes. from source inspection: current main and the PR head both leave the lazy-loaded registry path with a direct entry.runtimes read. I did not run tests in this read-only review.",
+      "review_followup": "- [P2] Protected maintainer draft PR has one narrow blocking sibling-path finding; the author or a maintainer should update it or explicitly opt into repair.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "5fa82849c72c68fec7ca1ecfd4e7149e7b3672b2",
+      "expected_head_sha": "0cbd80c625f7fb472c6885834fa92398c576d630",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix: prevent silent message loss from EmbeddedAttemptSessionTakeoverError",
-        "body": "## Summary\n\nWhen the OpenAI SDK retried an `ECONNRESET` internally (default `maxRetries=2`), the session write lock was released during the retry window. Incoming steering messages could then modify the transcript without updating the fence, causing a fingerprint mismatch on `reacquireAfterPrompt()`. The resulting `EmbeddedAttemptSessionTakeoverError` was caught by `model-fallback.ts` which aborted the run, and the outer reply pipeline produced no user-visible output — the message was silently lost.\n\n## Root Cause Chain\n\n```\nAPI ECONNRESET\n  → OpenAI SDK default maxRetries=2, internal retry\n  → session write lock released during retry window\n  → incoming message arrives via queueHandle.queueMessage\n  → activeSession.steer writes directly (bypassing withOwnedSessionTranscriptWrites)\n  → transcript changes without updating fence\n  → original attempt reacquireAfterPrompt() fingerprint mismatch\n  → EmbeddedAttemptSessionTakeoverError thrown\n  → model-fallback.ts aborts the run\n  → outer layer hits generic failure branch\n  → assistantTexts/payloads never enter buildReplyPayloads()\n  → message silently lost (user sees generic error or nothing)\n```\n\n## Fix\n\nFive coordinated changes that address the bug at multiple layers:\n\n### 1. Wrap steering in `withOwnedSessionTranscriptWrites` (`attempt.ts`)\nSteering writes that arrive during prompt lock release now go through `withOwnedSessionTranscriptWrites`, keeping fence tracking consistent and preventing the fingerprint mismatch that triggers the takeover error.\n\n### 2. Dedicated error handler for takeover (`agent-runner-execution.ts`, `failover-error.ts`)\nAdded `isEmbeddedAttemptSessionTakeoverError()` export and a dedicated catch block in `runAgentTurnWithFallback`. Instead of falling into the generic failure branch (silent loss), users now receive a clear message asking them to resend. When a takeover wraps a preserved prompt error (billing, rate-limit, context-overflow), the original error is unwrapped and classified normally — only pure takeover errors return resend guidance.\n\n### 3. Scope SDK retry disable to embedded prompt lock path (`attempt.ts`, `attempt.session-lock.ts`)\nExtracted `installEmbeddedPromptRetryDefault` helper that wraps the session's `streamFn` with `{ maxRetries: 0, ...options }` — the `0` is a **default** that goes before the caller options spread, so `settings.retry.provider.maxRetries` (surfaced via `options.maxRetries` per the chain in `sdk.ts:360`) takes precedence when explicitly configured. Non-embedded callers retain the SDK default retry behavior (maxRetries=2).\n\n### 4. Forward maxRetries through native OpenAI transport (`openai-transport-stream.ts`)\n`buildOpenAISdkRequestOptions` previously accepted only `model` and `signal`, dropping the `maxRetries` injected by `installEmbeddedPromptRetryDefault`. Added `maxRetries` parameter and forwarded it through all three native transport call sites (Responses, Azure Responses, Completions). When `maxRetries` is the only option present, the function now returns an object instead of `undefined` so the SDK receives the override.\n\n### 5. Phase tracking in `EmbeddedAttemptSessionTakeoverError` (`attempt.session-lock.ts`)\nAdded a `phase` field (`prompt_reacquire`, `cleanup`, `write`, `fence_check`) for better diagnostics when this error does occur. Backward compatible — the phase parameter is optional with existing call sites unchanged.\n\n## Real behavior proof\n\n- **Behavior addressed**: Silent message loss when SDK retries race with session takeover → visible resend guidance for pure takeover, correct error classification for wrapped prompt errors, provider retry settings respected, maxRetries forwarded through native OpenAI transport\n- **Real environment tested**: Docker container (`node:24-bookworm`, Node.js `v24.16.0`, Debian GNU/Linux 12 bookworm, aarch64) running patched checkout at commit `aa77669d`\n- **Failing proof before fix**: On upstream/main, `buildOpenAISdkRequestOptions` only accepts `model` and `signal` — it drops `maxRetries`. Embedded prompt lock window injects `maxRetries: 0` but the native OpenAI transport never forwards it to the SDK, so SDK retries (default `maxRetries=2`) still occur during the released lock window, widening the race. Additionally, `queueMessage` steering writes bypass `withOwnedSessionTranscriptWrites`, causing fingerprint mismatch → `EmbeddedAttemptSessionTakeoverError` → generic failure branch → silent message loss.\n- **Exact steps and commands run after this patch**:\n\n```\n$ docker run --rm -e CI=true -v \"$(pwd):/app\" -w /app node:24-bookworm bash -c \"...\"\n=== PR #89039 Real Behavior Proof (v4) ===\nEnvironment: Docker container, v24.16.0, aarch64, \"Debian GNU/Linux 12 (bookworm)\"\nCommit: aa77669d\n\n--- Test 1: Native OpenAI transport forwards maxRetries ---\n Test Files  1 passed (1)\n Tests  234 passed (234)\n\n--- Test 2: Embedded prompt lock defaults + override ---\n ✓ attempt.session-lock.test.ts (47 tests)\n Test Files  1 passed (1)\n Tests  47 passed (47)\n\n--- Test 3: Takeover error handling + unwrapping ---\n Test Files  1 passed (1)\n Tests  157 passed (157)\n\n--- Test 4: SDK transport paths (no global maxRetries) ---\n Test Files  2 passed (2)\n Tests  26 passed (26)\n\n--- Test 5: Full regression (all affected suites) ---\n Test Files  1 passed (1)    Tests  83 passed (83)\n Test Files  2 passed (2)    Tests  26 passed (26)\n Test Files  1 passed (1)    Tests  157 passed (157)\n Test Files  2 passed (2)    Tests  281 passed (281)\n passed 4 Vitest shards in 19.16s\n\n--- Test 6: End-to-end transport retry suppression proof ---\nLoopback test: mock server returns retryable 500, maxRetries:0 forwarded\nthrough full completions transport → exactly 1 request (no SDK retry)\n\n--- Test 7: Code path verification ---\nbuildOpenAISdkRequestOptions now accepts+forwards maxRetries:\n1836:  maxRetries?: number,\n1837:): { signal?: AbortSignal; timeout?: number; maxRetries?: number } | undefined {\n\nAll 3 call sites forward options?.maxRetries:\n1933:  options?.maxRetries,\n2373:  options?.maxRetries,\n2603:  buildOpenAISdkRequestOptions(model, options?.signal, options?.maxRetries),\n\nEmbedded retry default (maxRetries:0 BEFORE options spread):\n1075:  innerStreamFn(model, context, { maxRetries: 0, ...options });\n```\n\n- **Evidence after fix**: All 547 tests pass across 6 affected test suites (4 Vitest shards) in a clean Docker environment.\n  - **Transport retry suppression proven end-to-end**: Loopback regression test starts a mock server returning retryable HTTP 500 errors, passes `maxRetries: 0` through the full `createOpenAICompletionsTransportStreamFn()` path, and asserts exactly 1 request is received — confirming the SDK does not retry when `maxRetries: 0` is forwarded through the native transport.\n  - Default SDK retry behavior preserved for non-embedded callers (no `maxRetries` in default request options).\n  - Embedded prompt lock window correctly injects `maxRetries: 0` as a default that configured `settings.retry.provider.maxRetries` can override.\n  - Native OpenAI transport (`buildOpenAISdkRequestOptions`) correctly forwards `maxRetries` to all 3 SDK call sites.\n  - Pure takeover errors produce visible resend guidance. Wrapped prompt errors are unwrapped and classified normally.\n- **What was not tested**: No live multi-user concurrent session test with an actual ECONNRESET during an embedded prompt with concurrent steering input was run. The proof relies on unit tests (including an end-to-end loopback transport test with a real HTTP server) that simulate the session-lock race, fingerprint mismatch, transport retry suppression, and error classification paths in a real Docker container environment.\n\n## Tests\n\nAll affected test suites pass (Docker `node:24-bookworm`, aarch64):\n\n| Test File | Tests |\n|-----------|-------|\n| `openai-transport-stream.test.ts` | 234 |\n| `attempt.session-lock.test.ts` | 47 |\n| `agent-runner-execution.test.ts` | 157 |\n| `openai-completions.test.ts` | 18 |\n| `openai-responses-shared.test.ts` | 9 |\n| `failover-error.test.ts` | 83 |\n\nNew test coverage includes:\n- `buildOpenAISdkRequestOptions` forwards `maxRetries` when provided, omits when undefined\n- `maxRetries`-only call returns an object (not `undefined`)\n- Loopback end-to-end test: mock 500 server + `maxRetries: 0` → exactly 1 request (no SDK retry)\n- `installEmbeddedPromptRetryDefault` default behavior (no caller options → maxRetries:0)\n- Explicit `maxRetries` override preserved over embedded default\n- Takeover detection during owned steering writes\n- User-facing resend message for pure session takeover\n- Preserved prompt error unwrapping from cleanup takeover\n- Backward compatibility for `assertSessionFileFence` without phase parameter\n\n## Changed Files\n\n- `src/agents/embedded-agent-runner/run/attempt.session-lock.ts`\n- `src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts`\n- `src/agents/embedded-agent-runner/run/attempt.ts`\n- `src/agents/failover-error.ts`\n- `src/agents/failover-error.test.ts`\n- `src/agents/openai-transport-stream.ts`\n- `src/agents/openai-transport-stream.test.ts`\n- `src/auto-reply/reply/agent-runner-execution.ts`\n- `src/auto-reply/reply/agent-runner-execution.test.ts`\n- `src/llm/providers/openai-completions.ts`\n- `src/llm/providers/openai-completions.test.ts`\n- `src/llm/providers/openai-responses-shared.ts`\n- `src/llm/providers/openai-responses-shared.test.ts`\n\nFixes #87180\n",
-        "branch": "fix/session-takeover-silent-message-loss-87180",
-        "head_sha": "5fa82849c72c68fec7ca1ecfd4e7149e7b3672b2",
-        "author": "jerry-xin",
+        "title": "fix(plugins): guard tool result middleware metadata",
+        "body": "## Summary\n- Guard active agent tool result middleware registration reads so one stale plugin row cannot abort middleware listing.\n- Keep healthy middlewares available for the requested runtime after unreadable `runtimes` or `handler` metadata is skipped.\n- Add a regression covering a poisoned middleware row before a healthy Codex middleware.\n\n## Verification\n- Red repro: `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/tmp/openclaw-vitest-next100-red node_modules/.bin/vitest run src/plugins/agent-tool-result-middleware.test.ts -t \"keeps healthy middlewares after unreadable middleware metadata\" --pool=forks --maxWorkers=1 --maxConcurrency=1 --reporter=verbose` failed before the fix with `agent tool result middleware runtimes getter exploded`.\n- `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/tmp/openclaw-vitest-next100-focused node_modules/.bin/vitest run src/plugins/agent-tool-result-middleware.test.ts -t \"keeps healthy middlewares after unreadable middleware metadata\" --pool=forks --maxWorkers=1 --maxConcurrency=1 --reporter=verbose`\n- `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/tmp/openclaw-vitest-next100-full2 node_modules/.bin/vitest run src/plugins/agent-tool-result-middleware.test.ts --pool=forks --maxWorkers=1 --maxConcurrency=1 --reporter=verbose` passed 5 tests.\n- `node_modules/.bin/oxfmt --check src/plugins/agent-tool-result-middleware.ts src/plugins/agent-tool-result-middleware.test.ts`\n- `node_modules/.bin/oxlint src/plugins/agent-tool-result-middleware.ts src/plugins/agent-tool-result-middleware.test.ts`\n- `git diff --check origin/main..HEAD`\n- `.agents/skills/autoreview/scripts/autoreview --mode local` clean, overall 0.86.\n- `.agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main` clean, overall 0.83.\n- Broad gate gap: `blacksmith testbox list --all` is blocked by missing Blacksmith auth; AWS Crabbox fallback `nodenv exec node scripts/crabbox-wrapper.mjs run --provider aws --shell -- \"env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 corepack pnpm check:changed\"` is blocked by coordinator 401 before lease.\n\nBehavior addressed: malformed or stale agent tool result middleware registrations can no longer crash active middleware listing before healthy middlewares are returned.\nReal environment tested: local sparse Codex worktree using linked repo install; plugins Vitest project.\nExact steps or command run after this patch: focused repro, full touched test file, oxfmt check, oxlint, git diff check, local and branch autoreview.\nEvidence after fix: focused repro passes; full touched test file passes 5 tests.\nObserved result after fix: unreadable middleware metadata rows are skipped and the healthy Codex middleware is still listed.\nWhat was not tested: `pnpm check:changed`; Testbox auth is missing and AWS Crabbox coordinator returned 401 before lease.\n",
+        "branch": "fuzz-tool-schema-next100-20260603",
+        "head_sha": "0cbd80c625f7fb472c6885834fa92398c576d630",
+        "author": "vincentkoc",
         "labels": [
-          "agents",
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "maintainer",
+          "size: S",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts",
-            "additions": 92,
-            "deletions": 0,
+            "path": "src/plugins/agent-tool-result-middleware.test.ts",
+            "additions": 41,
+            "deletions": 3,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.ts",
-            "additions": 36,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 8,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/failover-error.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/failover-error.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openai-transport-stream.test.ts",
-            "additions": 79,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openai-transport-stream.ts",
-            "additions": 15,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
-            "additions": 67,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.ts",
-            "additions": 29,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/openai-completions.test.ts",
-            "additions": 32,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/openai-responses-shared.test.ts",
-            "additions": 46,
-            "deletions": 1,
+            "path": "src/plugins/agent-tool-result-middleware.ts",
+            "additions": 19,
+            "deletions": 3,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89039",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89039.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89833",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89833.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 162,
+          "total": 50,
           "counts": {
-            "FAILURE": 8,
-            "SUCCESS": 123,
-            "SKIPPED": 30,
-            "NEUTRAL": 1
+            "SUCCESS": 7,
+            "SKIPPED": 43
           },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "check-guards:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-channels:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "check-guards:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-channels:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
-          ]
+          "terminalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3888,
+    "total_ms": 2051,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 584
+        "ms": 410
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2996
+        "ms": 1349
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 280
+        "ms": 265
       },
       {
         "name": "append_ledger",
