@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-03T11:35:03.585Z",
+  "generated_at": "2026-06-03T11:35:08.044Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T08:35:03.044Z",
+  "since": "2026-06-03T08:35:04.760Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    89649
+    89640
   ],
   "comment_ids": [
-    4611874731
+    4611882042
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4611882321,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:89649:4611874731:2026-06-03T11:33:28Z:automerge",
-      "comment_id": "4611874731",
-      "comment_version_key": "4611874731:2026-06-03T11:33:28Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89649#issuecomment-4611874731",
+      "idempotency_key": "comment-router:openclaw/openclaw:89640:4611882042:2026-06-03T11:34:32Z:automerge",
+      "comment_id": "4611882042",
+      "comment_version_key": "4611882042:2026-06-03T11:34:32Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89640#issuecomment-4611882042",
       "repo": "openclaw/openclaw",
-      "issue_number": 89649,
+      "issue_number": 89640,
       "author": "Takhoffman",
       "author_id": 781889,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-03T11:33:28Z",
-      "comment_updated_at": "2026-06-03T11:33:28Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-06-03T11:34:32Z",
+      "comment_updated_at": "2026-06-03T11:34:32Z",
+      "status_comment_id": 4611882321,
       "trigger": "mention",
       "command": "automerge",
       "intent": "automerge",
@@ -54,37 +54,121 @@
       "trusted_bot": false,
       "trusted_bot_author": null,
       "automation_source": null,
-      "repair_reason": null,
+      "repair_reason": "automerge enabled; current checks are failing: check-dependencies:FAILURE",
       "review_summary": null,
       "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "waiting",
+      "actions": [
+        {
+          "action": "ensure_automerge_job",
+          "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89640.md",
+          "status": "executed",
+          "mode": "autonomous",
+          "cluster_id": "automerge-openclaw-openclaw-89640",
+          "status_detail": "written"
+        },
+        {
+          "action": "label",
+          "label": "clawsweeper:automerge",
+          "status": "executed"
+        },
+        {
+          "action": "dispatch_repair",
+          "workflow": "repair-cluster-worker.yml",
+          "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89640.md",
+          "mode": "autonomous",
+          "status": "waiting",
+          "reason": "adopted job must be committed before worker dispatch"
+        },
+        {
+          "action": "comment",
+          "status": "pending"
+        }
+      ],
+      "author_repository_permission": "write",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(outbound): keep channel send durable when transcript mirror fails (#89626)",
+        "body": "## Summary\n\nFixes #89626. The post-delivery transcript **mirror** in `deliverOutboundPayloads`\nruns *after* the channel payloads are already sent. Its append was unguarded, so a\ntransient session-lock failure (`session file changed while embedded prompt lock was\nreleased`) propagated out of the send. The whole send was then reported as `failed`\n— discarding the fact that the channel message had already been delivered — and the\nsub-agent announce layer retried, re-delivering the message up to **3 times** before\ngiving up.\n\nThe mirror is best-effort local bookkeeping. This change catches both thrown errors\nand `{ ok: false }` results, logs a warning, and lets the already-successful channel\ndelivery stand. This matches the existing cron delivery path\n(`mirrorDirectDeliveryIntoTranscript` in `src/cron/isolated-agent/delivery-dispatch.ts`),\nso it is consistent with the sibling surface rather than a one-sided patch. The append\nstill carries its idempotency key, so any later reconciliation stays deduplicated.\n\n## Real behavior proof\n\nBehavior addressed: duplicate sub-agent completion announcement (delivered up to 3x) when the post-send transcript mirror fails on the session lock.\n\nReal environment tested: built OpenClaw source on macOS (Node 22.22.3), exercising the real `deliverOutboundPayloads` runtime path with a real channel outbound adapter and the real subsystem logger. The documented `session file changed while embedded prompt lock was released` lock contention was injected at the transcript-mirror append (env `OPENCLAW_FAULT_MIRROR_THROW=1`) so the race reproduces deterministically; everything downstream is the unmodified production delivery pipeline.\n\nExact steps or command run after this patch: drove the production `deliverOutboundPayloads({ channel, payloads, mirror })` once with the mirror append forced to fail, observing the channel adapter call count and the runtime log. Ran the same path against the pre-fix (unguarded) and post-fix code.\n\nEvidence after fix (copied runtime/terminal output):\n\n```text\n# pre-fix (unguarded mirror append) + injected lock failure\n[channel] matrix delivered to !session:main: \"Sub-agent run b8efbcc9 complete: task finished.\"\n[repro] deliverOutboundPayloads THREW: session file changed while embedded prompt lock was released\n[repro] channel send count = 1 (message already on the wire)\n\n# post-fix (this patch) + injected lock failure\n[channel] matrix delivered to !session:main: \"Sub-agent run b8efbcc9 complete: task finished.\"\n[outbound/deliver] failed to mirror outbound delivery into session transcript; channel send already succeeded: session file changed while embedded prompt lock was released\n[repro] deliverOutboundPayloads returned 1 result(s); did NOT throw.\n[repro] channel send count = 1\n```\n\nObserved result after fix: with the lock failure injected, the channel adapter is invoked exactly once and `deliverOutboundPayloads` returns the delivered result instead of throwing; the mirror failure is downgraded to a single `[outbound/deliver]` warning. Pre-fix, the same condition throws after the message is already on the wire, which is what drives the sub-agent announce retry to re-deliver duplicates.\n\nWhat was not tested: an end-to-end live Telegram + Raspberry Pi sub-agent run (no such hardware/model here). The session-lock race was injected deterministically at the mirror-append boundary rather than reproduced via natural timing.\n\n## Supplemental checks (not a substitute for the proof above)\n\n- `pnpm test src/infra/outbound/deliver.test.ts` — 95/95 pass, including 2 new regression tests that fail without this patch.\n- `pnpm test` on siblings (`message`, `outbound-send-service`, `subagent-announce-delivery`) — 126/126 pass.\n- `pnpm tsgo:core` + `pnpm tsgo:test:src` — exit 0; `oxfmt --check` + oxlint clean.\n\n## Files\n- `src/infra/outbound/deliver.ts` — guard the post-delivery transcript mirror append\n- `src/infra/outbound/deliver.test.ts` — 2 regression tests + tighten the transcript mock type\n",
+        "branch": "fix/subagent-announce-duplicate-on-mirror-failure",
+        "head_sha": "690f3b7ea2b7ecb03e97ba47293ca5d597ea826b",
+        "author": "harjothkhara",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look",
+          "clawsweeper:automerge"
+        ],
+        "files": [
+          {
+            "path": "src/infra/outbound/deliver.test.ts",
+            "additions": 66,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/deliver.ts",
+            "additions": 30,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": "automerge-openclaw-openclaw-89640",
+        "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89640.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89640",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89640.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 130,
+            "SKIPPED": 30,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "check-dependencies:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "check-dependencies:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2104,
+    "total_ms": 5971,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 529
+        "ms": 512
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 2754
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 4
       },
       {
         "name": "execute_commands",
-        "ms": 1563
+        "ms": 2687
       },
       {
         "name": "append_ledger",
