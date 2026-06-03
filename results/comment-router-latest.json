@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-03T21:02:36.887Z",
+  "generated_at": "2026-06-03T21:02:45.274Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T18:02:36.555Z",
+  "since": "2026-06-03T18:02:43.204Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    90009
+    87799
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 7,
+  "commands_seen": 4,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,339 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:87799:4568880366:2026-06-03T21:02:39Z:clawsweeper_auto_repair",
+      "comment_id": "4568880366",
+      "comment_version_key": "4568880366:2026-06-03T21:02:39Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/87799#issuecomment-4568880366",
+      "repo": "openclaw/openclaw",
+      "issue_number": 87799,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-28T22:34:08Z",
+      "comment_updated_at": "2026-06-03T21:02:39Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=5918b58bcbb531f4d1c1574d576303edfcb841f3)",
+      "review_summary": "The PR redirects installer subprocess stdin away from the piped script stream in gum, fallback, npm, dashboard, plugin-update, daemon-restart, and onboarding paths, with matching installer test assertions.\n\nPR surface: Tests +2, Other +21. Total +23 across 2 files.\n\nReproducibility: yes. source-reproducible: the documented curl-to-bash path feeds `install.sh` through stdin, current main routes subprocesses through gum/fallback wrappers, and gum v0.17.0 passes `os.Stdin` to the wrapped command. I did not run a live full installer reproduction in this read-only review.",
+      "review_followup": "- [P1] Human review remains because the external contributor proof is insufficient and the stdin predicate compatibility fix needs confirmation before merge.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "5918b58bcbb531f4d1c1574d576303edfcb841f3",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(install): harden stdin consumers to prevent pipe corruption in curl | bash",
+        "body": "Fixes #90008\n\n## Problem\n\nWhen the OpenClaw installer is piped via `curl | bash`, child processes spawned\nunder `gum spin` can inherit the script stream as stdin. Gum v0.17.0 sets the\nwrapped command's stdin to `os.Stdin`, allowing npm or other subprocesses to\nconsume bytes from the installer, corrupting execution.\n\nAdditionally, fallback paths (when gum raw mode fails or gum is unavailable)\nredirected stdin unconditionally from `/dev/null`, breaking interactive commands\nlike Homebrew installation prompts when the script is run directly.\n\n## Fix\n\n**P1: Redirect gum-wrapped command stdin.** The normal `gum spin` path now\nredirects stdin from `/dev/null`, isolating child commands from the piped\nscript stream:\n\n```bash\n\"$GUM\" spin --spinner dot --title \"$title\" -- \"$@\" < /dev/null >\"$gum_out\" 2>\"$gum_err\"\n```\n\n**P2: Conditional stdin redirect for fallback paths.** All fallback paths\n(gum raw-mode fallback, non-gum fallback, `run_quiet_step` shell-function\npath) now check `is_non_interactive_shell` before redirecting stdin:\n\n```bash\nif is_non_interactive_shell; then\n    \"$@\" < /dev/null\nelse\n    \"$@\"\nfi\n```\n\nThis preserves terminal stdin for interactive commands (e.g., Homebrew prompts)\nwhen running `bash install.sh` directly, while protecting against pipe\nconsumption when piped.\n\n**P2: Labeler changes removed.** The size-label best-effort handling has been\nremoved from this PR to keep it focused on installer stdin safety. It belongs\nin a separate PR.\n\n## Behavior proof\n\n**Environment:** macOS arm64, gum v0.17.0 (the version that passes os.Stdin to child commands)\n\n### P1: gum spin stdin redirect verified\n\n```\nBefore (upstream):\n  \"$GUM\" spin --spinner dot --title \"$title\" -- \"$@\" >\"$gum_out\" 2>\"$gum_err\"\n\nAfter (this PR, line 453):\n  if \"$GUM\" spin --spinner dot --title \"$title\" -- \"$@\" < /dev/null >\"$gum_out\" 2>\"$gum_err\"\n```\n\n### Functional: piped mode stdin redirect\n\nSimulating `curl | bash` scenario (stdin is a pipe):\n\n```\n$ echo \"pipe_content\" | bash -c '...'\nis_non_interactive_shell: true (stdin is a pipe)\nOK: stdin was empty (redirected from /dev/null)\nResult: 0\n```\n\n### Functional: gum spin child command isolation\n\n```\n$ echo \"pipe_content\" | gum spin --spinner dot --title \"Testing\" -- cat /dev/stdin < /dev/null\nOK: child command got empty stdin (pipe content was not consumed)\n```\n\n### P2: interactive mode stdin preservation\n\nWhen running directly (not piped), `is_non_interactive_shell` returns false,\nso commands get terminal stdin for interactive prompts (e.g., Homebrew):\n\n```\n$ bash install.sh  # stdin is a terminal\nis_non_interactive_shell: false (stdin preserved for interactive commands)\n```\n\n### Test results\n\n```\n44 passed, 1 failed (pre-existing upstream issue unrelated to stdin handling)\n```\n\nThe failing test (`does not emit before args when npmrc min-release-age computes\na before cutoff`) is an upstream test that also fails on main.\n\n## Files changed\n\n- `scripts/install.sh`: stdin redirect fixes\n- `test/scripts/install-sh.test.ts`: updated test assertions\n- `.github/workflows/labeler.yml`: reverted to upstream (changes removed from this PR)\n",
+        "branch": "fix/install-stdin-tty-safety",
+        "head_sha": "5918b58bcbb531f4d1c1574d576303edfcb841f3",
+        "author": "sebtardif",
+        "labels": [
+          "scripts",
+          "size: S",
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/install.sh",
+            "additions": 34,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/install-sh.test.ts",
+            "additions": 4,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-87799",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87799.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 144,
+          "counts": {
+            "SUCCESS": 127,
+            "FAILURE": 1,
+            "SKIPPED": 16
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:87799:4616554232:2026-06-03T20:44:49Z:re_review",
+      "comment_id": "4616554232",
+      "comment_version_key": "4616554232:2026-06-03T20:44:49Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/87799#issuecomment-4616554232",
+      "repo": "openclaw/openclaw",
+      "issue_number": 87799,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-03T20:44:49Z",
+      "comment_updated_at": "2026-06-03T20:44:49Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:87799:4607235941:2026-06-02T21:40:52Z:re_review",
+      "comment_id": "4607235941",
+      "comment_version_key": "4607235941:2026-06-02T21:40:52Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/87799#issuecomment-4607235941",
+      "repo": "openclaw/openclaw",
+      "issue_number": 87799,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-02T21:40:52Z",
+      "comment_updated_at": "2026-06-02T21:40:52Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(install): harden stdin consumers to prevent pipe corruption in curl | bash",
+        "body": "Fixes #90008\n\n## Problem\n\nWhen the OpenClaw installer is piped via `curl | bash`, child processes spawned\nunder `gum spin` can inherit the script stream as stdin. Gum v0.17.0 sets the\nwrapped command's stdin to `os.Stdin`, allowing npm or other subprocesses to\nconsume bytes from the installer, corrupting execution.\n\nAdditionally, fallback paths (when gum raw mode fails or gum is unavailable)\nredirected stdin unconditionally from `/dev/null`, breaking interactive commands\nlike Homebrew installation prompts when the script is run directly.\n\n## Fix\n\n**P1: Redirect gum-wrapped command stdin.** The normal `gum spin` path now\nredirects stdin from `/dev/null`, isolating child commands from the piped\nscript stream:\n\n```bash\n\"$GUM\" spin --spinner dot --title \"$title\" -- \"$@\" < /dev/null >\"$gum_out\" 2>\"$gum_err\"\n```\n\n**P2: Conditional stdin redirect for fallback paths.** All fallback paths\n(gum raw-mode fallback, non-gum fallback, `run_quiet_step` shell-function\npath) now check `is_non_interactive_shell` before redirecting stdin:\n\n```bash\nif is_non_interactive_shell; then\n    \"$@\" < /dev/null\nelse\n    \"$@\"\nfi\n```\n\nThis preserves terminal stdin for interactive commands (e.g., Homebrew prompts)\nwhen running `bash install.sh` directly, while protecting against pipe\nconsumption when piped.\n\n**P2: Labeler changes removed.** The size-label best-effort handling has been\nremoved from this PR to keep it focused on installer stdin safety. It belongs\nin a separate PR.\n\n## Behavior proof\n\n**Environment:** macOS arm64, gum v0.17.0 (the version that passes os.Stdin to child commands)\n\n### P1: gum spin stdin redirect verified\n\n```\nBefore (upstream):\n  \"$GUM\" spin --spinner dot --title \"$title\" -- \"$@\" >\"$gum_out\" 2>\"$gum_err\"\n\nAfter (this PR, line 453):\n  if \"$GUM\" spin --spinner dot --title \"$title\" -- \"$@\" < /dev/null >\"$gum_out\" 2>\"$gum_err\"\n```\n\n### Functional: piped mode stdin redirect\n\nSimulating `curl | bash` scenario (stdin is a pipe):\n\n```\n$ echo \"pipe_content\" | bash -c '...'\nis_non_interactive_shell: true (stdin is a pipe)\nOK: stdin was empty (redirected from /dev/null)\nResult: 0\n```\n\n### Functional: gum spin child command isolation\n\n```\n$ echo \"pipe_content\" | gum spin --spinner dot --title \"Testing\" -- cat /dev/stdin < /dev/null\nOK: child command got empty stdin (pipe content was not consumed)\n```\n\n### P2: interactive mode stdin preservation\n\nWhen running directly (not piped), `is_non_interactive_shell` returns false,\nso commands get terminal stdin for interactive prompts (e.g., Homebrew):\n\n```\n$ bash install.sh  # stdin is a terminal\nis_non_interactive_shell: false (stdin preserved for interactive commands)\n```\n\n### Test results\n\n```\n44 passed, 1 failed (pre-existing upstream issue unrelated to stdin handling)\n```\n\nThe failing test (`does not emit before args when npmrc min-release-age computes\na before cutoff`) is an upstream test that also fails on main.\n\n## Files changed\n\n- `scripts/install.sh`: stdin redirect fixes\n- `test/scripts/install-sh.test.ts`: updated test assertions\n- `.github/workflows/labeler.yml`: reverted to upstream (changes removed from this PR)\n",
+        "branch": "fix/install-stdin-tty-safety",
+        "head_sha": "5918b58bcbb531f4d1c1574d576303edfcb841f3",
+        "author": "sebtardif",
+        "labels": [
+          "scripts",
+          "size: S",
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/install.sh",
+            "additions": 34,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/install-sh.test.ts",
+            "additions": 4,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-87799",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87799.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 144,
+          "counts": {
+            "SUCCESS": 127,
+            "FAILURE": 1,
+            "SKIPPED": 16
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:87799:4587349697:2026-05-31T16:37:27Z:re_review",
+      "comment_id": "4587349697",
+      "comment_version_key": "4587349697:2026-05-31T16:37:27Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/87799#issuecomment-4587349697",
+      "repo": "openclaw/openclaw",
+      "issue_number": 87799,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-31T16:37:27Z",
+      "comment_updated_at": "2026-05-31T16:37:27Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(install): harden stdin consumers to prevent pipe corruption in curl | bash",
+        "body": "Fixes #90008\n\n## Problem\n\nWhen the OpenClaw installer is piped via `curl | bash`, child processes spawned\nunder `gum spin` can inherit the script stream as stdin. Gum v0.17.0 sets the\nwrapped command's stdin to `os.Stdin`, allowing npm or other subprocesses to\nconsume bytes from the installer, corrupting execution.\n\nAdditionally, fallback paths (when gum raw mode fails or gum is unavailable)\nredirected stdin unconditionally from `/dev/null`, breaking interactive commands\nlike Homebrew installation prompts when the script is run directly.\n\n## Fix\n\n**P1: Redirect gum-wrapped command stdin.** The normal `gum spin` path now\nredirects stdin from `/dev/null`, isolating child commands from the piped\nscript stream:\n\n```bash\n\"$GUM\" spin --spinner dot --title \"$title\" -- \"$@\" < /dev/null >\"$gum_out\" 2>\"$gum_err\"\n```\n\n**P2: Conditional stdin redirect for fallback paths.** All fallback paths\n(gum raw-mode fallback, non-gum fallback, `run_quiet_step` shell-function\npath) now check `is_non_interactive_shell` before redirecting stdin:\n\n```bash\nif is_non_interactive_shell; then\n    \"$@\" < /dev/null\nelse\n    \"$@\"\nfi\n```\n\nThis preserves terminal stdin for interactive commands (e.g., Homebrew prompts)\nwhen running `bash install.sh` directly, while protecting against pipe\nconsumption when piped.\n\n**P2: Labeler changes removed.** The size-label best-effort handling has been\nremoved from this PR to keep it focused on installer stdin safety. It belongs\nin a separate PR.\n\n## Behavior proof\n\n**Environment:** macOS arm64, gum v0.17.0 (the version that passes os.Stdin to child commands)\n\n### P1: gum spin stdin redirect verified\n\n```\nBefore (upstream):\n  \"$GUM\" spin --spinner dot --title \"$title\" -- \"$@\" >\"$gum_out\" 2>\"$gum_err\"\n\nAfter (this PR, line 453):\n  if \"$GUM\" spin --spinner dot --title \"$title\" -- \"$@\" < /dev/null >\"$gum_out\" 2>\"$gum_err\"\n```\n\n### Functional: piped mode stdin redirect\n\nSimulating `curl | bash` scenario (stdin is a pipe):\n\n```\n$ echo \"pipe_content\" | bash -c '...'\nis_non_interactive_shell: true (stdin is a pipe)\nOK: stdin was empty (redirected from /dev/null)\nResult: 0\n```\n\n### Functional: gum spin child command isolation\n\n```\n$ echo \"pipe_content\" | gum spin --spinner dot --title \"Testing\" -- cat /dev/stdin < /dev/null\nOK: child command got empty stdin (pipe content was not consumed)\n```\n\n### P2: interactive mode stdin preservation\n\nWhen running directly (not piped), `is_non_interactive_shell` returns false,\nso commands get terminal stdin for interactive prompts (e.g., Homebrew):\n\n```\n$ bash install.sh  # stdin is a terminal\nis_non_interactive_shell: false (stdin preserved for interactive commands)\n```\n\n### Test results\n\n```\n44 passed, 1 failed (pre-existing upstream issue unrelated to stdin handling)\n```\n\nThe failing test (`does not emit before args when npmrc min-release-age computes\na before cutoff`) is an upstream test that also fails on main.\n\n## Files changed\n\n- `scripts/install.sh`: stdin redirect fixes\n- `test/scripts/install-sh.test.ts`: updated test assertions\n- `.github/workflows/labeler.yml`: reverted to upstream (changes removed from this PR)\n",
+        "branch": "fix/install-stdin-tty-safety",
+        "head_sha": "5918b58bcbb531f4d1c1574d576303edfcb841f3",
+        "author": "sebtardif",
+        "labels": [
+          "scripts",
+          "size: S",
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/install.sh",
+            "additions": 34,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/scripts/install-sh.test.ts",
+            "additions": 4,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-87799",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-87799.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 144,
+          "counts": {
+            "SUCCESS": 127,
+            "FAILURE": 1,
+            "SKIPPED": 16
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 588,
+    "total_ms": 3217,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 316
+        "ms": 301
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 4
+        "ms": 1750
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 4
       },
       {
         "name": "execute_commands",
-        "ms": 256
+        "ms": 1135
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
