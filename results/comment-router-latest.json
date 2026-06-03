@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-03T10:50:33.465Z",
+  "generated_at": "2026-06-03T10:51:11.021Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T07:50:30.612Z",
+  "since": "2026-06-03T07:51:10.279Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     89623
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4607518942
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
-  "commands_seen": 3,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -61,177 +63,32 @@
       "finding_id": "review-feedback",
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): accept --port on gateway health and probe (#79100)",
-        "body": "## Summary\n\n`gateway run --port 18789` accepts `--port`, but the adjacent query subcommands rejected the same flag:\n\n- `openclaw gateway health --port 18789` -> `error: unknown option '--port'`\n- `openclaw gateway probe --port 18789` -> `error: unknown option '--port'`\n\nSo scripts that start a gateway on a controlled local port could not target it through `health`/`probe` with the same visible flag shape as `run`, and the `--url` workaround disables config credential fallback (forcing explicit `--token`/`--password`).\n\n### Fix\n\nAccept `--port` on the gateway query commands in both spellings: before the subcommand (`gateway --port 18789 health`, inherited from the parent) and after it (`gateway health --port 18789`, the exact spelling the issue reports). The port is patched onto `config.gateway.port` rather than turned into a synthetic `ws://` URL, so configured local auth and TLS scheme selection are preserved.\n\n- `gatewayCallOpts` accepts `--port`, so `health`, `call`, `usage-cost`, and `stability` accept the flag after the subcommand.\n- `resolveGatewayRpcOptions` still inherits the parent `--port` for the before-subcommand spelling.\n- `callGatewayCli` loads the real config and overrides only `gateway.port`.\n- `gateway probe` passes a numeric `port` to `gatewayStatusCommand`, which patches `config.gateway.port` before `resolveTargets` derives the scheme.\n\nFixes #79100\n\n## Real behavior proof\n\n**Behavior addressed**: `openclaw gateway health --port <N>` and `openclaw gateway probe --port <N>` should accept the subcommand-position port flag and connect to a real gateway on that non-default local port by patching `config.gateway.port`, while preserving configured auth/TLS instead of requiring a synthetic `--url`.\n\n**Real environment tested**: Local Linux source checkout on commit `39fc9902f1`, using an isolated temporary OpenClaw home/config under `/media/vdc/0668001470/workSpace/claw-campaign/.proof-89623/live-port-19323`, a real `openclaw gateway run` process listening on loopback port `19323`, and the built `node openclaw.mjs` CLI entry for the client commands. The temporary config was `gateway.mode=local`, `gateway.bind=loopback`, and `gateway.auth.mode=none`; `OPENCLAW_SKIP_CHANNELS=1`/`OPENCLAW_SKIP_PROVIDERS=1` only skipped external channel sidecars.\n\n**Exact steps or command run after this patch**:\n\n```sh\nPROOF_ROOT=/media/vdc/0668001470/workSpace/claw-campaign/.proof-89623/live-port-19323\nexport HOME=\"$PROOF_ROOT/home\"\nexport OPENCLAW_HOME=\"$PROOF_ROOT/home\"\nexport OPENCLAW_STATE_DIR=\"$PROOF_ROOT/home/.openclaw\"\nexport OPENCLAW_CONFIG_PATH=\"$OPENCLAW_STATE_DIR/openclaw.json\"\nexport OPENCLAW_SKIP_CHANNELS=1\nexport OPENCLAW_SKIP_PROVIDERS=1\nexport OPENCLAW_TEST_FAST=1\n\nnode scripts/run-node.mjs gateway run --dev --reset --port 19323 --bind loopback --auth none --allow-unconfigured --ws-log compact\n# After the gateway logged `http server listening` and `ready`, set gateway.auth.mode=none in the isolated config so the CLI preserves matching local auth config.\nnode openclaw.mjs gateway health --port 19323 --json --timeout 15000\nnode openclaw.mjs gateway probe --port 19323 --json --timeout 8000\nnode scripts/run-vitest.mjs src/cli/gateway-cli.coverage.test.ts\n```\n\n**Evidence after fix**:\n\nGateway startup reached the real listener on port `19323`:\n\n```text\n[gateway] starting HTTP server...\n[gateway] http server listening (8 plugins: acpx, browser, canvas, device-pair, file-transfer, memory-core, phone-control, talk-voice; 1.7s)\n[gateway] ready\n```\n\nThe subcommand-position health command returned a real gateway health payload:\n\n```text\n$ node openclaw.mjs gateway health --port 19323 --json --timeout 15000 | node -e ...\n{\n  \"ok\": true,\n  \"defaultAgentId\": \"dev\",\n  \"agents\": [\n    {\n      \"agentId\": \"dev\",\n      \"isDefault\": true\n    }\n  ]\n}\n```\n\nThe subcommand-position probe command reached the same non-default local port and completed the read probe:\n\n```text\n$ node openclaw.mjs gateway probe --port 19323 --json --timeout 8000 | node -e ...\n{\n  \"ok\": true,\n  \"degraded\": false,\n  \"primaryTargetId\": \"localLoopback\",\n  \"localLoopbackUrl\": \"ws://127.0.0.1:19323\",\n  \"target\": {\n    \"id\": \"localLoopback\",\n    \"url\": \"ws://127.0.0.1:19323\",\n    \"connectOk\": true,\n    \"rpcOk\": true,\n    \"healthOk\": true,\n    \"configValid\": true,\n    \"authMode\": \"none\"\n  }\n}\n```\n\nThe focused Commander/RPC option tests also pass:\n\n```text\n$ node scripts/run-vitest.mjs src/cli/gateway-cli.coverage.test.ts\nTest Files  1 passed (1)\nTests  23 passed (23)\n```\n\n**Observed result after fix**: Both `gateway health --port 19323` and `gateway probe --port 19323` accepted the port after the subcommand and successfully connected to a real gateway on `ws://127.0.0.1:19323`. `probe` reported `connectOk: true`, `rpcOk: true`, `healthOk: true`, and `authMode: \"none\"`, proving the command used the loaded local config with only the port overridden.\n\n**What was not tested**: TLS (`wss://`) and token/password auth variants were not live-tested in this proof; the focused tests cover that the implementation preserves config-based auth/TLS selection by patching `config.gateway.port` instead of forcing a `--url` override.\n",
-        "branch": "issue-79100-gateway-port",
-        "head_sha": "39fc9902f181bf1363b2f9d694005eeb9085d7c8",
-        "author": "alix-007",
-        "labels": [
-          "docs",
-          "cli",
-          "commands",
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "docs/cli/gateway.md",
-            "additions": 6,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli.coverage.test.ts",
-            "additions": 56,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/call.ts",
-            "additions": 28,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/register.ts",
-            "additions": 20,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/gateway-status.ts",
-            "additions": 8,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89623",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89623.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 163,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 30,
-            "SUCCESS": 130,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89623:4611488455:2026-06-03T10:42:06Z:re_review",
-      "comment_id": "4611488455",
-      "comment_version_key": "4611488455:2026-06-03T10:42:06Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89623#issuecomment-4611488455",
-      "repo": "openclaw/openclaw",
-      "issue_number": 89623,
-      "author": "Alix-007",
-      "author_id": 267018309,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-03T10:42:06Z",
-      "comment_updated_at": "2026-06-03T10:42:06Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89623:4607614595:2026-06-02T22:50:56Z:re_review",
-      "comment_id": "4607614595",
-      "comment_version_key": "4607614595:2026-06-02T22:50:56Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89623#issuecomment-4607614595",
-      "repo": "openclaw/openclaw",
-      "issue_number": 89623,
-      "author": "Alix-007",
-      "author_id": 267018309,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-02T22:50:56Z",
-      "comment_updated_at": "2026-06-02T22:50:56Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
       "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5495,
+    "total_ms": 1577,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 410
+        "ms": 730
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2425
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2630
+        "ms": 835
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
