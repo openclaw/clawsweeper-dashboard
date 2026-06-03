@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-03T15:56:44.511Z",
+  "generated_at": "2026-06-03T15:57:29.250Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T12:56:44.090Z",
+  "since": "2026-06-03T12:57:27.061Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    88838
+    86733
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 17,
-  "commands_seen": 0,
+  "scanned_comments": 5,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,260 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86733:4539446608:2026-06-03T15:57:22Z:clawsweeper_needs_human",
+      "comment_id": "4539446608",
+      "comment_version_key": "4539446608:2026-06-03T15:57:22Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86733#issuecomment-4539446608",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86733,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-26T02:47:24Z",
+      "comment_updated_at": "2026-06-03T15:57:22Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] The remaining action is maintainer acceptance of an intentional availability tradeoff and overlap coordination, not a narrow automated repair.; Cleared: The diff changes local cron timeout policy and tests only; it does not touch credentials, permissions, dependency sources, workflows, package metadata, or code download paths. (sha=f5f3d7c8ed9a439dfc93eeaf3b43af714d2d504e)",
+      "review_summary": "The PR changes cron timeout resolution so main-session `systemEvent` jobs with `wakeMode: \"now\"` use the existing 60-minute agent-turn safety ceiling, with focused policy and timer regression tests.\n\nPR surface: Source +10, Tests +78. Total +88 across 3 files.\n\nReproducibility: yes. at source level: current main gives every non-agentTurn payload the 10-minute default while the main `wakeMode: \"now\"` path awaits `runHeartbeatOnce`. I did not run tests because this review was read-only.",
+      "review_followup": "- [P2] The remaining action is maintainer acceptance of an intentional availability tradeoff and overlap coordination, not a narrow automated repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "f5f3d7c8ed9a439dfc93eeaf3b43af714d2d504e",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): extend main system event timeout",
+        "body": "## Summary\n\n- Extend the cron outer watchdog only for main-session `systemEvent` jobs with `wakeMode: \"now\"`.\n- Preserve the existing 10-minute default for other `systemEvent` jobs, including `wakeMode: \"next-heartbeat\"`.\n- Preserve existing `agentTurn.timeoutSeconds` behavior and the existing 60-minute safety ceiling for agent-turn jobs without an explicit timeout.\n\n## AI assistance disclosure\n\nI used Codex to inspect the issue, related closed PRs, existing cron source, tests, and validation output, then to draft and verify this patch. I reviewed and understand the affected path: cron resolves the job timeout in `src/cron/service/timeout-policy.ts`, `executeJobCoreWithTimeout` applies that watchdog in `src/cron/service/timer.ts`, and main-session wake-now system events block while awaiting `runHeartbeatOnce`.\n\n## Real behavior proof\n\nBehavior addressed: A blocking main-session cron `systemEvent` with `wakeMode: \"now\"` no longer uses the generic 10-minute job timeout while cron is waiting for `runHeartbeatOnce`; the next-heartbeat systemEvent path remains on the generic timeout.\n\nReal environment tested: Local OpenClaw workspace on the rebased branch using the real cron timeout resolver and `executeJobCoreWithTimeout` path with isolated fake cron dependencies and no live credentials.\n\nExact steps or command run after this patch:\n\n```bash\npnpm exec tsx .artifacts/issue-50621/runtime-proof.ts\n```\n\nEvidence after fix:\n\n```text\nissue_50621_runtime_proof\ntarget_job=sessionTarget:main payload:systemEvent wakeMode:now\ndefault_system_event_timeout_ms=600000\nagent_turn_safety_timeout_ms=3600000\nresolved_target_timeout_ms=3600000\nresolved_next_heartbeat_timeout_ms=600000\nwatchdog_delay_ms=3600000\nsettled_after_default_window=false\nrun_heartbeat_once_calls=1\nfinal_status=ok\nfinal_summary=long main-session task\nproof_passed=true\nproof_status=0\n```\n\nObserved result after fix: The target main-session wake-now systemEvent resolved to the 60-minute safety ceiling, did not settle after the old 10-minute window, called `runHeartbeatOnce` once, and completed successfully after the heartbeat promise resolved. A main-session next-heartbeat systemEvent still resolved to the 10-minute default.\n\nWhat was not tested: A live provider/model run was not exercised; the proof isolates the cron watchdog path rather than spending credentials or model time.\n\n## Root Cause\n\n`resolveCronJobTimeoutMs` treated every `systemEvent` job as generic cron work, so it returned `DEFAULT_JOB_TIMEOUT_MS` even when the main-session wake-now path synchronously awaited `runHeartbeatOnce`. That made a long but valid main-session heartbeat run fail around the generic cron watchdog window even though the underlying work was running in the main session.\n\n## Dependency contract / source proof\n\nNo external dependency behavior is changed. The relevant internal contracts are:\n\n- `src/cron/types.ts`: `timeoutSeconds` belongs to `agentTurn` payloads, not `systemEvent` payloads.\n- `src/cron/service/jobs.ts`: main-session jobs are `systemEvent` payloads; isolated/current/session target jobs are `agentTurn` payloads.\n- `src/cron/service/timer.ts`: `executeJobCoreWithTimeout` wraps the actual run using `resolveCronJobTimeoutMs`, and the blocking main-session path awaits `runHeartbeatOnce` only for `wakeMode: \"now\"`.\n\n## Regression Test Plan\n\n- `src/cron/service/timeout-policy.test.ts` covers the exact policy split:\n  - main `systemEvent` + `wakeMode: \"now\"` uses `AGENT_TURN_SAFETY_TIMEOUT_MS`.\n  - main `systemEvent` + `wakeMode: \"next-heartbeat\"` keeps `DEFAULT_JOB_TIMEOUT_MS`.\n  - existing agent-turn explicit/no-timeout behavior remains unchanged.\n- `src/cron/service/timer.regression.test.ts` covers the real wrapper path by keeping `runHeartbeatOnce` pending past the old default timeout and confirming the job does not complete early.\n\n## Security Impact\n\nNo credential, network, auth, or permission behavior changes. The patch only adjusts a local cron watchdog ceiling for one already-supported blocking runtime path.\n\n## Human Verification\n\nI reviewed the affected cron timeout path, the main-session wake-now execution path, the related issue discussion, and closed reference PRs before accepting the final patch shape.\n\n## CODEOWNERS / owner review\n\nThe touched files are not matched by `.github/CODEOWNERS`. Nearby cron owner rules exist for `src/cron/stagger.ts` and `src/cron/service/jobs.ts`, but this patch does not touch either file.\n\n## Changelog\n\nContributor PR: no `CHANGELOG.md` entry added.\n\n## Review conversations\n\nReference issue/PR review checked before implementation:\n\n- Issue #50621 and duplicate #70325.\n- Closed narrow attempts #50670, #50698, and #50723.\n- Closed broader/configurable watchdog attempt #83066 as a shape to avoid.\n- No open PR currently linked to or substantially addressing #50621 was found.\n\n## Risks\n\n- Main-session wake-now cron jobs can occupy the cron run slot longer than before, up to the existing 60-minute safety ceiling.\n\n## Behavior tradeoffs\n\n- This keeps bounded failure behavior instead of removing the timeout or making all systemEvent jobs unbounded.\n- It gives the blocking path the same ceiling already used for agent-turn-style long work while leaving enqueue-only systemEvent modes short.\n\n## Scope boundaries\n\n- Does not change `wakeMode: \"next-heartbeat\"` behavior.\n- Does not add configuration.\n- Does not make all `systemEvent` jobs unbounded or long-running.\n- Does not change `agentTurn.timeoutSeconds`, including `timeoutSeconds <= 0`.\n- Does not change heartbeat scheduling, delivery, or provider/model timeout behavior.\n\n## Validation\n\n```bash\nnode scripts/run-vitest.mjs src/cron/service/timeout-policy.test.ts src/cron/service/timer.regression.test.ts src/cron/service.runs-one-shot-main-job-disables-it.test.ts\n```\n\nPassed: 3 files, 58 tests.\n\n```bash\nOPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree pnpm check:changed\n```\n\nPassed: changed lanes `core`, `coreTests`.\n\n```bash\ncodex review --base origin/main\n```\n\nPassed: \"The timeout policy change is narrowly scoped to main-session wake-now systemEvent jobs and is covered by focused policy and regression tests. I did not identify a correctness regression in the changed code.\"\n",
+        "branch": "codex/50621-cron-systemevent-timeout",
+        "head_sha": "f5f3d7c8ed9a439dfc93eeaf3b43af714d2d504e",
+        "author": "ferminquant",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/cron/service/timeout-policy.test.ts",
+            "additions": 23,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timeout-policy.ts",
+            "additions": 11,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.regression.test.ts",
+            "additions": 59,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86733",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86733.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 24,
+          "counts": {
+            "QUEUED": 10,
+            "SUCCESS": 7,
+            "SKIPPED": 7
+          },
+          "blockers": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86733:4576093413:2026-05-29T14:07:48Z:re_review",
+      "comment_id": "4576093413",
+      "comment_version_key": "4576093413:2026-05-29T14:07:48Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86733#issuecomment-4576093413",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86733,
+      "author": "ferminquant",
+      "author_id": 14808645,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-29T14:07:48Z",
+      "comment_updated_at": "2026-05-29T14:07:48Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): extend main system event timeout",
+        "body": "## Summary\n\n- Extend the cron outer watchdog only for main-session `systemEvent` jobs with `wakeMode: \"now\"`.\n- Preserve the existing 10-minute default for other `systemEvent` jobs, including `wakeMode: \"next-heartbeat\"`.\n- Preserve existing `agentTurn.timeoutSeconds` behavior and the existing 60-minute safety ceiling for agent-turn jobs without an explicit timeout.\n\n## AI assistance disclosure\n\nI used Codex to inspect the issue, related closed PRs, existing cron source, tests, and validation output, then to draft and verify this patch. I reviewed and understand the affected path: cron resolves the job timeout in `src/cron/service/timeout-policy.ts`, `executeJobCoreWithTimeout` applies that watchdog in `src/cron/service/timer.ts`, and main-session wake-now system events block while awaiting `runHeartbeatOnce`.\n\n## Real behavior proof\n\nBehavior addressed: A blocking main-session cron `systemEvent` with `wakeMode: \"now\"` no longer uses the generic 10-minute job timeout while cron is waiting for `runHeartbeatOnce`; the next-heartbeat systemEvent path remains on the generic timeout.\n\nReal environment tested: Local OpenClaw workspace on the rebased branch using the real cron timeout resolver and `executeJobCoreWithTimeout` path with isolated fake cron dependencies and no live credentials.\n\nExact steps or command run after this patch:\n\n```bash\npnpm exec tsx .artifacts/issue-50621/runtime-proof.ts\n```\n\nEvidence after fix:\n\n```text\nissue_50621_runtime_proof\ntarget_job=sessionTarget:main payload:systemEvent wakeMode:now\ndefault_system_event_timeout_ms=600000\nagent_turn_safety_timeout_ms=3600000\nresolved_target_timeout_ms=3600000\nresolved_next_heartbeat_timeout_ms=600000\nwatchdog_delay_ms=3600000\nsettled_after_default_window=false\nrun_heartbeat_once_calls=1\nfinal_status=ok\nfinal_summary=long main-session task\nproof_passed=true\nproof_status=0\n```\n\nObserved result after fix: The target main-session wake-now systemEvent resolved to the 60-minute safety ceiling, did not settle after the old 10-minute window, called `runHeartbeatOnce` once, and completed successfully after the heartbeat promise resolved. A main-session next-heartbeat systemEvent still resolved to the 10-minute default.\n\nWhat was not tested: A live provider/model run was not exercised; the proof isolates the cron watchdog path rather than spending credentials or model time.\n\n## Root Cause\n\n`resolveCronJobTimeoutMs` treated every `systemEvent` job as generic cron work, so it returned `DEFAULT_JOB_TIMEOUT_MS` even when the main-session wake-now path synchronously awaited `runHeartbeatOnce`. That made a long but valid main-session heartbeat run fail around the generic cron watchdog window even though the underlying work was running in the main session.\n\n## Dependency contract / source proof\n\nNo external dependency behavior is changed. The relevant internal contracts are:\n\n- `src/cron/types.ts`: `timeoutSeconds` belongs to `agentTurn` payloads, not `systemEvent` payloads.\n- `src/cron/service/jobs.ts`: main-session jobs are `systemEvent` payloads; isolated/current/session target jobs are `agentTurn` payloads.\n- `src/cron/service/timer.ts`: `executeJobCoreWithTimeout` wraps the actual run using `resolveCronJobTimeoutMs`, and the blocking main-session path awaits `runHeartbeatOnce` only for `wakeMode: \"now\"`.\n\n## Regression Test Plan\n\n- `src/cron/service/timeout-policy.test.ts` covers the exact policy split:\n  - main `systemEvent` + `wakeMode: \"now\"` uses `AGENT_TURN_SAFETY_TIMEOUT_MS`.\n  - main `systemEvent` + `wakeMode: \"next-heartbeat\"` keeps `DEFAULT_JOB_TIMEOUT_MS`.\n  - existing agent-turn explicit/no-timeout behavior remains unchanged.\n- `src/cron/service/timer.regression.test.ts` covers the real wrapper path by keeping `runHeartbeatOnce` pending past the old default timeout and confirming the job does not complete early.\n\n## Security Impact\n\nNo credential, network, auth, or permission behavior changes. The patch only adjusts a local cron watchdog ceiling for one already-supported blocking runtime path.\n\n## Human Verification\n\nI reviewed the affected cron timeout path, the main-session wake-now execution path, the related issue discussion, and closed reference PRs before accepting the final patch shape.\n\n## CODEOWNERS / owner review\n\nThe touched files are not matched by `.github/CODEOWNERS`. Nearby cron owner rules exist for `src/cron/stagger.ts` and `src/cron/service/jobs.ts`, but this patch does not touch either file.\n\n## Changelog\n\nContributor PR: no `CHANGELOG.md` entry added.\n\n## Review conversations\n\nReference issue/PR review checked before implementation:\n\n- Issue #50621 and duplicate #70325.\n- Closed narrow attempts #50670, #50698, and #50723.\n- Closed broader/configurable watchdog attempt #83066 as a shape to avoid.\n- No open PR currently linked to or substantially addressing #50621 was found.\n\n## Risks\n\n- Main-session wake-now cron jobs can occupy the cron run slot longer than before, up to the existing 60-minute safety ceiling.\n\n## Behavior tradeoffs\n\n- This keeps bounded failure behavior instead of removing the timeout or making all systemEvent jobs unbounded.\n- It gives the blocking path the same ceiling already used for agent-turn-style long work while leaving enqueue-only systemEvent modes short.\n\n## Scope boundaries\n\n- Does not change `wakeMode: \"next-heartbeat\"` behavior.\n- Does not add configuration.\n- Does not make all `systemEvent` jobs unbounded or long-running.\n- Does not change `agentTurn.timeoutSeconds`, including `timeoutSeconds <= 0`.\n- Does not change heartbeat scheduling, delivery, or provider/model timeout behavior.\n\n## Validation\n\n```bash\nnode scripts/run-vitest.mjs src/cron/service/timeout-policy.test.ts src/cron/service/timer.regression.test.ts src/cron/service.runs-one-shot-main-job-disables-it.test.ts\n```\n\nPassed: 3 files, 58 tests.\n\n```bash\nOPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree pnpm check:changed\n```\n\nPassed: changed lanes `core`, `coreTests`.\n\n```bash\ncodex review --base origin/main\n```\n\nPassed: \"The timeout policy change is narrowly scoped to main-session wake-now systemEvent jobs and is covered by focused policy and regression tests. I did not identify a correctness regression in the changed code.\"\n",
+        "branch": "codex/50621-cron-systemevent-timeout",
+        "head_sha": "f5f3d7c8ed9a439dfc93eeaf3b43af714d2d504e",
+        "author": "ferminquant",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/cron/service/timeout-policy.test.ts",
+            "additions": 23,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timeout-policy.ts",
+            "additions": 11,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.regression.test.ts",
+            "additions": 59,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86733",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86733.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 24,
+          "counts": {
+            "QUEUED": 10,
+            "SUCCESS": 7,
+            "SKIPPED": 7
+          },
+          "blockers": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 781,
+    "total_ms": 2521,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 408
+        "ms": 397
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1776
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 360
+        "ms": 320
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
