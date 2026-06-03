@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-03T06:03:45.944Z",
+  "generated_at": "2026-06-03T06:04:34.860Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T03:03:43.213Z",
+  "since": "2026-06-03T03:04:33.565Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    89673
+    83980
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
+  "scanned_comments": 3,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89673:4608728167:2026-06-03T06:03:39Z:clawsweeper_auto_repair",
-      "comment_id": "4608728167",
-      "comment_version_key": "4608728167:2026-06-03T06:03:39Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89673#issuecomment-4608728167",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:83980:4484312208:2026-06-01T03:32:47Z:clawsweeper_auto_repair",
+      "comment_id": "4484312208",
+      "comment_version_key": "4484312208:2026-06-01T03:32:47Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/83980#issuecomment-4484312208",
       "repo": "openclaw/openclaw",
-      "issue_number": 89673,
+      "issue_number": 83980,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-03T03:05:10Z",
-      "comment_updated_at": "2026-06-03T06:03:39Z",
+      "comment_created_at": "2026-05-19T04:12:27Z",
+      "comment_updated_at": "2026-06-01T03:32:47Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -52,64 +52,110 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=46c4ccf9937c6959dc78a07f4506cfb6e8f65ed0)",
-      "review_summary": "The PR makes session write-lock acquisition remove an unchanged live OpenClaw-owned lock once the holder-recorded maxHoldMs is exceeded, and adds a regression test for that path.\n\nPR surface: Source +3, Tests +28. Total +31 across 2 files.\n\nReproducibility: yes. from source inspection: current main detects hold-exceeded but keeps it report-only, so fs-safe remove-if-unchanged does not remove the unchanged live lock. The overnight gateway hang itself was not live-reproduced here.",
-      "review_followup": "- [P2] The remaining blocker is maintainer acceptance of the session-state reclaim policy plus an author-side docs/help update, not a safe autonomous repair lane.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=be10ba3abbb81c55183819cad4787d96f582079a)",
+      "review_summary": "The PR serializes node-pairing read helpers under the existing pairing mutex and changes the shared OpenClawKit snapshot wait from 500ms to 5000ms.\n\nPR surface: Source +6, Other 0. Total +6 across 2 files.\n\nReproducibility: Partially. Source inspection shows the node-pairing read helpers load state outside the module lock, but I did not independently reproduce the full macOS node flapping and invoke timeout path on current main.",
+      "review_followup": "- [P1] Needs contributor real behavior proof plus maintainer judgment on whether the shared 5s connect wait is acceptable or should be narrowed.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "46c4ccf9937c6959dc78a07f4506cfb6e8f65ed0",
+      "expected_head_sha": "be10ba3abbb81c55183819cad4787d96f582079a",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): reclaim session write-locks held past the holder's own maxHoldMs",
-        "body": "### Summary\n\n- **Problem**: Issue #87483 reports that a session write-lock file held by a **live** gateway process persists for hours past `maxHoldMs`/`staleMs`; the watchdog never reclaims it, so later requests fail with `session file locked (timeout 60000ms): pid=…`. The reporter's holder process was alive and busy (83% CPU) while holding the lock for 8+ hours despite the lock recording `maxHoldMs: 1020000` (17 min).\n- **Root Cause**: There are two reclaim mechanisms and both fail for a live-but-stuck holder:\n  1. The per-process watchdog (`ensureWatchdogStarted`) is a `setInterval` running **inside the holding process**. If that process is stuck in a synchronous CPU-bound loop, its event loop is blocked and the watchdog timer never fires, so the holder never self-releases.\n  2. A contending process inspects the lock and, at `acquireSessionWriteLock` time (with `respectMaxHold` on), correctly flags it `hold-exceeded` (age past the holder's own recorded `maxHoldMs`). But `shouldRemoveContendedLockFile` (the `shouldRemoveStaleLock` callback the lock library consults under `staleRecovery: \"remove-if-unchanged\"`) treats **both** `too-old` and `hold-exceeded` as report-only: `REPORT_ONLY_STALE_LOCK_REASONS = {\"too-old\", \"hold-exceeded\"}`. When a live holder's only stale reasons are these, the function returns `false` (don't remove), the library throws `file_lock_stale`, and the acquire eventually fails — the lock is never reclaimed even though it is past the holder's own declared max hold. So a live-but-stuck holder pins the lock forever: it cannot self-release (event loop blocked) and contenders are forbidden from reclaiming it.\n- **Fix**: Remove `\"hold-exceeded\"` from `REPORT_ONLY_STALE_LOCK_REASONS`. A holder past its **own recorded `maxHoldMs`** is overdue by its own contract and is reclaimable by a contender. `\"too-old\"` (past the global `staleMs` heuristic) stays report-only — a live holder may still be working within its own declared `maxHoldMs`, so we do not steal its lock on the global heuristic alone. The acquire path's `remove-if-unchanged` recovery still skips a lock whose file has changed (e.g. a concurrent release), so only a genuinely stalled holder loses the lock.\n- **What changed**:\n  - `src/agents/session-write-lock.ts` — drop `\"hold-exceeded\"` from `REPORT_ONLY_STALE_LOCK_REASONS` (one element + an explanatory comment).\n  - `src/agents/session-write-lock.test.ts` — add an integration regression: a live OpenClaw-owned lock past its own `maxHoldMs` (but within `staleMs`) is now reclaimed by `acquireSessionWriteLock`.\n- **What did NOT change (scope boundary)**:\n  - `\"too-old\"` stays report-only, so a live holder past the global `staleMs` but within its own `maxHoldMs` is still respected (covered by the existing \"reports live OpenClaw-owned stale locks without removing them\" test).\n  - The `cleanStaleLockFiles` doctor sweep does not pass `respectMaxHold` and therefore never produces `hold-exceeded`; its behavior is unchanged (it still force-removes only dead/recycled/orphan locks, never a live holder's).\n  - No config surface (no schema, defaults, env var, doctor migration, or `docs/reference/config`), no plugin SDK surface, no dependency changes. The watchdog interval, timeout, `staleMs`, and `maxHoldMs` resolution are untouched.\n\n### Reproduction\n\n1. A long-running gateway holds a session write-lock and gets stuck in a synchronous CPU loop (event loop blocked).\n2. The holder's in-process watchdog can't fire, so the lock is never self-released past `maxHoldMs`.\n3. Another request tries to write the same session; it sees the lock past the holder's `maxHoldMs` but cannot reclaim it.\n4. **Before this PR**: the contender fails with a stale/`session file locked` error; the lock persists until the gateway restarts or the file is deleted manually.\n5. **After this PR**: the contender reclaims the lock (the stalled holder's overdue lock is removed-if-unchanged) and proceeds.\n\nDeterministic source reproduction (added as a regression test): a live OpenClaw-owned lock file with `maxHoldMs: 1000` and `createdAt` 30s ago, acquired with a large `staleMs`. Before the fix the acquire throws `SessionWriteLockStaleError: session file lock stale (hold-exceeded): … alive=true`; after the fix it reclaims the lock.\n\n### Real behavior proof\n\n**Behavior addressed (#87483 — a stalled live holder's lock is reclaimable)**: a session write-lock held past the holder's own `maxHoldMs` by a live OpenClaw process is reclaimed by a contender instead of pinning the session indefinitely.\n\n**Real environment tested (Linux, Node — Vitest against the production `acquireSessionWriteLock` with a real spawned OpenClaw-recognized owner process; no live gateway)**: verified via `session-write-lock.test.ts`, plus core type-check, lint, and format on the changed files. A live overnight gateway lockup was not reproduced.\n\n**Exact steps or command run after this patch (repo-root)**: `node scripts/run-vitest.mjs src/agents/session-write-lock.test.ts`; `node scripts/run-tsgo.mjs -p tsconfig.core.json`; `oxfmt --check` and `oxlint` on the changed files.\n\n**Evidence after fix (Vitest output for the touched test file)**:\n\n```text\n session-write-lock.test.ts   Tests  54 passed (54)\n```\n\nThe new case fails on current `main` exactly as the issue describes — `SessionWriteLockStaleError: session file lock stale (hold-exceeded): pid=… alive=true ageMs=30005` — and passes after dropping `\"hold-exceeded\"` from the report-only set, while all 53 existing cases (including the conservative \"report live too-old locks without removing them\") stay green.\n\n**Observed result after fix (overdue live holder reclaimed; conservative live holder respected)**: a live holder past its own `maxHoldMs` is reclaimed; a live holder merely past the global `staleMs` (within its `maxHoldMs`) is still only reported, not removed.\n\n**What was not tested (live overnight gateway lockup)**: the multi-hour real-gateway lock retention was not reproduced live; the proof is the deterministic module-level reproduction.\n\n### Risk / Mitigation\n\n- **Risk**: reclaiming a live holder's lock could race with a holder that is making progress. **Mitigation**: only `hold-exceeded` (past the holder's **own** recorded `maxHoldMs`) becomes reclaimable, and the acquire path uses `remove-if-unchanged` — a holder whose lock file has changed (e.g. a concurrent release) is skipped; only a stalled holder (static lock past its own max hold) loses it.\n- **Risk**: behavior change in session-state concurrency. **Mitigation**: the change narrows report-only to the global `staleMs` heuristic; it does not touch thresholds, the watchdog, or the doctor sweep, and the conservative live-`too-old` behavior is preserved (covered by an existing test).\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Agents / session write-lock\n\n### Linked Issue/PR\n\nFixes #87483\n",
-        "branch": "fix/87483-session-writelock-stale-reclaim",
-        "head_sha": "46c4ccf9937c6959dc78a07f4506cfb6e8f65ed0",
-        "author": "openperf",
+        "title": "fix: stabilize macOS app node connection and eliminate pairing file read/write race",
+        "body": "## Summary\n\nFixes #83958 — macOS app node flaps online/offline and gateway invokes time out.\n\n## Root Cause\n\n1. **`pending.json` read/write race**: `node-pairing.ts` read-only operations (`listNodePairing()`, `getPairedNode()`, `verifyNodeToken()`) called `loadState()` **outside** the `withLock()` mutex. Concurrent writes to `pending.json`/`paired.json` could cause \"File changed during read\" errors.\n\n2. **`waitForSnapshot` timeout too short**: `GatewayNodeSession.swift` only waited 500ms for the gateway snapshot after connecting. On slower networks or when the gateway is under load, this caused the node to proceed before registration completed, leading to \"closed before connect\" and failed invokes.\n\n## Changes\n\n### `src/infra/node-pairing.ts`\n- Move `loadState()` **inside** `withLock()` for all read-only operations:\n  - `listNodePairing()`\n  - `getPairedNode()`\n  - `verifyNodeToken()`\n- Ensures all file reads/writes are serialized under the same mutex, eliminating the \"File changed during read\" race.\n\n### `apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayNodeSession.swift`\n- Increase `waitForSnapshot` timeout from **500ms → 5000ms** (5 seconds)\n- Gives the gateway sufficient time to complete registration and deliver the snapshot before the node proceeds.\n\n## Real behavior proof\n\n**Behavior or issue addressed**: macOS app node connection stability and gateway invoke reliability. The node was flapping between online/offline status every 1-2 seconds, causing gateway invoke commands to timeout consistently.\n\n**Real environment tested**: macOS 14.5, OpenClaw Gateway running locally, OpenClaw macOS App\n\n**Before evidence**:\n\n**Observed Behavior**:\n```\n[2024-05-19 10:23:45] ERROR: File changed during read: pending.json\n[2024-05-19 10:23:46] WARN: Node \"macbook-pro\" status changed: online -> offline\n[2024-05-19 10:23:47] INFO: Node \"macbook-pro\" status changed: offline -> online\n[2024-05-19 10:23:48] ERROR: Gateway invoke timeout: nodes.invoke\n[2024-05-19 10:23:49] ERROR: Connection closed before connect completed\n```\n\n**Terminal Screenshot Evidence**:\n- Node status flapping between online/offline every 1-2 seconds\n- Pairing file read errors appearing in gateway logs\n- Gateway invoke commands timing out consistently\n- Connection instability causing failed node operations\n\n**Exact steps or command run after this patch**:\n1. Fresh install of OpenClaw Gateway and macOS App\n2. Initiate node pairing process\n3. Monitor node status for 60 minutes\n4. Execute 20+ gateway invoke commands\n5. Check logs for pairing file errors and connection issues\n6. Verify stable online status throughout test period\n\n**Evidence after fix**:\n\n**Observed Behavior**:\n```\n[2024-05-19 11:45:12] INFO: Node \"macbook-pro\" connected successfully\n[2024-05-19 11:45:13] INFO: Gateway snapshot received (523ms)\n[2024-05-19 11:45:14] INFO: Node \"macbook-pro\" status: online\n[2024-05-19 11:45:30] INFO: Gateway invoke completed: nodes.invoke (success)\n[2024-05-19 11:46:00] INFO: Node \"macbook-pro\" status: online (stable)\n```\n\n**Evidence of Fix**:\n- Node maintains stable online status (no flapping for 60+ minutes)\n- No pairing file read/write race errors in logs\n- Gateway invoke commands complete successfully\n- Connection remains stable under normal load\n- `waitForSnapshot` consistently completes within 500-2000ms (well under 5000ms timeout)\n\n**Comparison Metrics**:\n| Metric | Before Fix | After Fix |\n|--------|------------|-----------|\n| Node status stability | 0-5 minutes | 60+ minutes (ongoing) |\n| Pairing file errors | 15+ per hour | 0 |\n| Gateway invoke success rate | ~30% | 100% |\n| Connection flaps | 20+ per hour | 0 |\n| Average snapshot wait | Timeout (500ms) | 523ms |\n\n**Observed result after fix**: The node connection is now stable with no status flapping, gateway invoke commands complete successfully, and no pairing file race condition errors occur in logs. The system maintains stable operation for extended periods (60+ minutes tested).\n\n**Additional Testing**:\n\n- Tested under network load (simulated slow connection)\n- Tested with multiple concurrent gateway operations\n- Tested node reconnection scenarios\n- All tests passed with stable behavior\n\n**What was not tested**: No additional edge cases or extreme load scenarios were tested beyond the normal operation conditions described above.\n\n## Testing\n\n- [ ] `node scripts/run-vitest.mjs src/gateway/node-registry.test.ts`\n- [ ] `node scripts/run-vitest.mjs src/gateway/server-methods/nodes.invoke-wake.test.ts`\n- [ ] `node scripts/run-vitest.mjs src/gateway/node-connect-reconcile.test.ts`\n- [ ] `node scripts/run-vitest.mjs src/infra/pairing-files.test.ts`\n- [ ] `cd apps/macos && swift test --filter GatewayNodeSessionTests`\n\n## Checklist\n\n- [x] `loadState()` moved inside `withLock()` for all read operations\n- [x] `waitForSnapshot` timeout increased to 5000ms\n- [x] Real behavior proof added with before/after comparison\n- [ ] Tests added/updated for pairing file race condition\n- [ ] Swift tests updated for new timeout value",
+        "branch": "fix/macos-node-connection-stabilization",
+        "head_sha": "11a179221436737bc44b15493949aff6deb5e1e1",
+        "author": "allynsheep",
         "labels": [
-          "agents",
-          "size: XS",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: ⏳ waiting on author"
+          "scripts",
+          "size: M",
+          "proof: supplied",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/session-write-lock.test.ts",
-            "additions": 28,
+            "path": ".github/PULL_REQUEST_TEMPLATE/full_change.md",
+            "additions": 159,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": ".github/PULL_REQUEST_TEMPLATE/quick_fix.md",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayNodeSession.swift",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/install.ps1",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/store-maintenance.ts",
+            "additions": 2,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/session-write-lock.ts",
-            "additions": 4,
-            "deletions": 1,
+            "path": "src/config/sessions/store.ts",
+            "additions": 12,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.base.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/zod-schema.session.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/node-pairing.ts",
+            "additions": 23,
+            "deletions": 17,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89673",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89673.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-83980",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83980.md",
         "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
         "review_decision": "",
         "checks": {
-          "total": 164,
+          "total": 15,
           "counts": {
-            "SUCCESS": 133,
-            "SKIPPED": 30,
-            "NEUTRAL": 1
+            "CANCELLED": 2,
+            "SKIPPED": 10,
+            "SUCCESS": 3
           },
-          "blockers": [],
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
           "pending": [],
-          "terminalBlockers": []
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
         }
       },
       "maintainer_authorized": false,
@@ -119,15 +165,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3106,
+    "total_ms": 1543,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 412
+        "ms": 295
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2306
+        "ms": 983
       },
       {
         "name": "classify_commands",
@@ -135,7 +181,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 365
+        "ms": 236
       },
       {
         "name": "append_ledger",
