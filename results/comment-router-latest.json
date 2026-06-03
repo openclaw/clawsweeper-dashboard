@@ -1,18 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-03T06:45:39.616Z",
+  "generated_at": "2026-06-03T06:45:48.739Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T03:45:37.119Z",
+  "since": "2026-06-03T03:45:45.025Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    72984
+    81921
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4609783981
+  ],
+  "status_comment_id": 4609784286,
   "max_autoclose_targets": 8,
   "scanned_comments": 3,
   "commands_seen": 1,
@@ -31,21 +33,21 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:72984:4333009957:2026-06-03T06:45:32Z:clawsweeper_needs_human",
-      "comment_id": "4333009957",
-      "comment_version_key": "4333009957:2026-06-03T06:45:32Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/72984#issuecomment-4333009957",
+      "idempotency_key": "comment-router:openclaw/openclaw:81921:4609783981:2026-06-03T06:45:09Z:re_review",
+      "comment_id": "4609783981",
+      "comment_version_key": "4609783981:2026-06-03T06:45:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/81921#issuecomment-4609783981",
       "repo": "openclaw/openclaw",
-      "issue_number": 72984,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 81921,
+      "author": "jbetala7",
+      "author_id": 55358314,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-28T06:54:09Z",
-      "comment_updated_at": "2026-06-03T06:45:32Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "comment_created_at": "2026-06-03T06:45:09Z",
+      "comment_updated_at": "2026-06-03T06:45:09Z",
+      "status_comment_id": 4609784286,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -59,118 +61,87 @@
       "visual_lens": null,
       "expected_head_sha": "f4c893b840b9012952f1f2a68f420b8b217fe776",
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-03T06:45:49.689Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 81921
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-03T06:45:50.923Z",
+          "response_comment_id": "4609784286",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(subagent): resolve runtime model from subagent default instead of parent primary",
-        "body": "## Summary\n\nTwo-part fix for subagent model resolution:\n\n- **Commit 1 — read-side fallback (defense in depth, fbbd3c2d5f):** `resolveSessionModelRef` had no subagent awareness. When `entry.model` was empty (race between the spawn-side write and the gateway-side read at run-start), it fell through to `resolveDefaultModelForAgent`, returning the parent agent's primary model instead of the configured subagent default. Also reorders the `??` chain in `resolveSubagentConfiguredModelSelection` so global `agents.defaults.subagents.model` takes precedence over the spawning agent's own `model` field.\n- **Commit 2 — Pi-harness write-side fix (production path, this commit):** `getReplyFromConfig` resolved the run model via `resolveDefaultModel` (which goes through `resolveDefaultModelForAgent` and is not subagent-aware), and post-run persistence in `updateSessionStoreAfterAgentRun` then wrote that model back to `entry.model`, silently flipping every subagent run onto the parent agent's primary. The new `resolveSubagentSessionDefaultModel` helper performs a one-time override after `sessionEntry` is loaded so the Pi runtime boots on the configured subagent default and the post-run write preserves it.\n\n## Failure mode (before)\n\nConfig:\n```\nagents.list[main].model.primary = anthropic/claude-opus-4-7\nagents.defaults.subagents.model.primary = openai-codex/gpt-5.5\nagents.list[main].subagents.model.primary = openai-codex/gpt-5.5\n```\n\nSpawn flow:\n1. Parent calls `sessions_spawn(task=..., agentId=main)` with no explicit `model:`.\n2. Spawn-side computes the right ref (`gpt-5.5`) and writes `entry.model` / `entry.modelProvider` via `persistInitialChildSessionRuntimeModel`.\n3. The Pi runtime starts the run via `getReplyFromConfig`, which resolves `defaultProvider/defaultModel` via `resolveDefaultModelForAgent` — returning Opus (parent primary) — and uses that as the run's `provider/model`.\n4. Subagent runs on Opus instead of gpt-5.5.\n5. Post-run, `updateSessionStoreAfterAgentRun → setSessionRuntimeModel` writes Opus back to `entry.model`, clobbering the spawn-time gpt-5.5.\n\nResult on disk: `~/.openclaw/agents/<agent>/sessions/sessions.json` shows `model: \"claude-opus-4-7\"` for entries with `subagentRole: \"orchestrator\", spawnDepth: 1`, even though `~/.openclaw/subagents/runs.json` correctly recorded `gpt-5.5`. The read-side fallback in commit 1 only kicks in while `entry.model` is empty — once the post-run write fires, `entry.model` is non-empty and the fallback is skipped.\n\n## Fix\n\n- **Commit 1 — `resolveSessionModelRef`:** when `entry.spawnDepth >= 1` or `entry.subagentRole` is set, fall back to the configured subagent default for this agent before falling through to the agent's primary.\n- **Commit 1 — `resolveSubagentConfiguredModelSelection`:** reorder `??` chain to `agentConfig.subagents.model` → `agents.defaults.subagents.model` → `agentConfig.model`.\n- **Commit 2 — `resolveSubagentSessionDefaultModel`:** new helper in `directive-handling.defaults.ts` that, given the loaded `sessionEntry`, checks the same subagent shape (`subagentRole` set or `spawnDepth >= 1`) and resolves the configured subagent default. `getReplyFromConfig` invokes it once after `sessionEntry` is loaded and overrides `defaultProvider/defaultModel/provider/model` so the Pi runtime boots and post-run-persists on the right model.\n\n## Tests\n\n- Read-side fallback tests in `src/gateway/session-utils.test.ts` cover the runtime subagent fallback (with and without `entry.spawnDepth`).\n- Spawn-side chain-order tests cover the case where `agentConfig.subagents.model` is unset, `agents.defaults.subagents.model` is set, and `agentConfig.model` is set — we now return the global default instead of the agent's own primary.\n- New tests in `src/auto-reply/reply/directive-handling.defaults.subagent.test.ts` cover the Pi-harness write-side helper: subagent sessions resolve to the configured subagent default; non-subagent sessions return null so the parent's primary is preserved.\n- Existing get-reply test mocks updated to expose the new export.\n\n## Scope\n\nCommit 1: `src/gateway/session-utils.ts`, `src/agents/model-selection.ts`, and their tests.\nCommit 2: `src/auto-reply/reply/directive-handling.defaults.ts`, `src/auto-reply/reply/get-reply.ts`, and one new test plus two existing test-mock updates.\nNo drive-by changes.\n\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Spawned subagent runs persisted the parent agent's primary model (e.g. `anthropic/claude-opus-4-7`) into `~/.openclaw/agents/<agent>/sessions/sessions.json` even though the configured subagent default was `openai-codex/gpt-5.5` and the spawn-side resolver had already written the correct ref. Subsequent turns then ran on the wrong model.\n- **Real environment tested**: Local OpenClaw install on macOS, Node 22, single-agent config with `agents.list[main].model.primary = anthropic/claude-opus-4-7`, `agents.defaults.subagents.model.primary = openai-codex/gpt-5.5`, and `agents.list[main].subagents.model.primary = openai-codex/gpt-5.5`. Subagent spawned via `sessions_spawn(task=..., agentId=main)` from a parent Telegram chat with no explicit `model:` argument.\n- **Exact steps or command run after this patch**:\n  1. `pnpm openclaw doctor` to confirm config parses cleanly.\n  2. Start gateway: `pnpm openclaw gateway start`.\n  3. From the active chat, ask the agent to spawn a subagent with no model override.\n  4. While the subagent is running and again after it completes, inspect `~/.openclaw/agents/main/sessions/sessions.json` and `~/.openclaw/subagents/runs.json`.\n- **Evidence after fix**: Inspected `~/.openclaw/agents/main/sessions/sessions.json` directly with `jq` — entries with `subagentRole: \"orchestrator\"` and `spawnDepth: 1` now persist `model: \"gpt-5.5\"` and `modelProvider: \"openai-codex\"` instead of `claude-opus-4-7`. `~/.openclaw/subagents/runs.json` continues to record `gpt-5.5` as before, and the gateway run trace prints the `openai-codex/gpt-5.5` provider/model pair when the run starts. Before the fix the same inspection printed `model: \"claude-opus-4-7\"` for those subagent entries even though the runs file recorded `gpt-5.5`.\n- **Observed result after fix**: Subagent runs boot on `openai-codex/gpt-5.5` (visible in CLI run output and provider request logs), and the post-run write preserves that model in `sessions.json`, so subsequent turns of the same subagent session keep using `gpt-5.5`. Parent (non-subagent) sessions still resolve to `anthropic/claude-opus-4-7` as expected.\n- **What was not tested**: Cross-agent configurations where the agent has no `subagents.model` and only `agents.defaults.subagents.model` is set were exercised only via the new unit tests, not on a live install. None of the alias-resolution paths were exercised against a real OpenRouter alias index live.\n\n### Post-rebase verification (2026-05-12)\n\nRebase merged `upstream/main` (`e7e3e903bf`) into the branch and addressed the clawsweeper P2 finding on `src/auto-reply/reply/get-reply.ts:404-416`. Specifically: a spawned subagent child entry with no own `providerOverride`/`modelOverride` could still inherit the parent session's persisted `/model` override via `resolveStoredModelOverride` (parent-inheritance branch), silently flipping the run back to the parent's model. `resolveStoredModelOverride` now skips the parent-inheritance branch when the child entry is a subagent session (`subagentRole` set or `spawnDepth >= 1`). Direct child overrides and non-subagent (topic/thread) child sessions are unaffected. New regression coverage in `src/auto-reply/reply/stored-model-override.test.ts`.\n\nCommands run:\n\n- `pnpm tsgo` (core typecheck) -> exit 0, no diagnostics\n- `pnpm test src/auto-reply/reply/stored-model-override.test.ts src/auto-reply/reply/directive-handling.defaults.subagent.test.ts src/agents/model-selection.test.ts src/gateway/session-utils.test.ts src/cron/isolated-agent.model-formatting.test.ts` -> 4 vitest shards passed (236 tests)\n- `pnpm test src/auto-reply/reply.block-streaming.test.ts` -> passed (1 test)\n- `pnpm format:check` on touched files -> all clean after one auto-fix on `stored-model-override.ts`\n- `node scripts/run-oxlint.mjs` on touched files -> 0 warnings, 0 errors\n\n",
-        "branch": "fix/subagent-model-resolution",
-        "head_sha": "f4c893b840b9012952f1f2a68f420b8b217fe776",
-        "author": "joeykrug",
+        "title": "fix(plugin-sdk): expose skills helper surfaces",
+        "body": "Fixes #81913\n\n## Summary\n- re-export workspace skill loaders and frontmatter metadata helpers from `openclaw/plugin-sdk/skills-runtime`\n- re-export host env override sanitizer helpers from `openclaw/plugin-sdk/sandbox`\n- add focused SDK contract tests for the new public helper surface\n\n## Real behavior proof\nBehavior addressed: third-party plugins can import OpenClaw's supported skills registry, SKILL.md frontmatter, and system-run env sanitizer helpers through public plugin SDK subpaths instead of deep-importing internals or reimplementing them.\n\nReal environment tested: local OpenClaw package build from PR head `a12f2aa1b8` (rebased onto current `main` `ed4c4afc0f` for the Dependency Guard check; SDK patch unchanged) on macOS. I built the dist entrypoints, generated plugin SDK declarations, ran runtime postbuild shims, then imported the package through the public self-reference specifiers `openclaw/plugin-sdk/skills-runtime` and `openclaw/plugin-sdk/sandbox`.\n\nExact steps or command run after this patch:\n\n```bash\nnode scripts/tsdown-build.mjs\nnode scripts/run-tsgo.mjs -p tsconfig.plugin-sdk.dts.json --declaration true\nnode --experimental-strip-types scripts/write-plugin-sdk-entry-dts.ts\nnode scripts/runtime-postbuild.mjs\nnode scripts/check-plugin-sdk-exports.mjs\nnode --input-type=module -e 'const skills = await import(\"openclaw/plugin-sdk/skills-runtime\"); const sandbox = await import(\"openclaw/plugin-sdk/sandbox\"); const frontmatter = skills.parseFrontmatter(\"---\\nname: Demo\\nmetadata: '\\''{\\\"openclaw\\\":{\\\"skillKey\\\":\\\"demo-key\\\"}}'\\''\\n---\\n\"); console.log(JSON.stringify({ skillsRuntime: { hasLoadWorkspaceSkillEntries: typeof skills.loadWorkspaceSkillEntries === \"function\", hasParseFrontmatter: typeof skills.parseFrontmatter === \"function\", skillKey: skills.resolveOpenClawMetadata(frontmatter)?.skillKey }, sandbox: { dangerousHome: sandbox.isDangerousHostEnvOverrideVarName(\"HOME\"), sanitized: sandbox.sanitizeSystemRunEnvOverrides({ shellWrapper: true, overrides: { LANG: \"en_US.UTF-8\", PATH: \"/tmp/bin\", TERM: \"xterm-256color\" } }) } }, null, 2));'\n```\n\nEvidence after fix:\n\n```text\nOK: All 4 required plugin-sdk exports verified.\n```\n\n```json\n{\n  \"skillsRuntime\": {\n    \"hasLoadWorkspaceSkillEntries\": true,\n    \"hasParseFrontmatter\": true,\n    \"skillKey\": \"demo-key\"\n  },\n  \"sandbox\": {\n    \"dangerousHome\": true,\n    \"sanitized\": {\n      \"LANG\": \"en_US.UTF-8\",\n      \"TERM\": \"xterm-256color\"\n    }\n  }\n}\n```\n\nObserved result after fix: the built package self-reference imports resolve from the public SDK subpaths, the new skills helpers are callable, the frontmatter metadata resolver returns the expected `skillKey`, and the sandbox env sanitizer filters `PATH` while preserving allowed shell-wrapper variables.\n\nWhat was not tested: I did not install the package into a separate third-party plugin repo; the proof uses the built local package self-reference and the plugin SDK export checker.\n\n## Verification\n- `node scripts/run-vitest.mjs run src/plugin-sdk/skills-runtime.test.ts src/plugin-sdk/sandbox.test.ts`\n- `node scripts/run-vitest.mjs run src/plugin-sdk/skills-runtime.test.ts src/plugin-sdk/sandbox.test.ts src/plugins/contracts/plugin-sdk-index.test.ts`\n- `node scripts/sync-plugin-sdk-exports.mjs --check`\n- `node scripts/tsdown-build.mjs`\n- `node scripts/run-tsgo.mjs -p tsconfig.plugin-sdk.dts.json --declaration true`\n- `node --experimental-strip-types scripts/write-plugin-sdk-entry-dts.ts`\n- `node scripts/runtime-postbuild.mjs`\n- `node scripts/check-plugin-sdk-exports.mjs`\n- `./node_modules/.bin/oxfmt --check --threads=1 src/plugin-sdk/skills-runtime.ts src/plugin-sdk/sandbox.ts src/plugin-sdk/skills-runtime.test.ts src/plugin-sdk/sandbox.test.ts`\n- `git diff --check`\n- `CI=1 pnpm check:changed`\n\n_Re-verified at head `a12f2aa1b8` on 2026-06-03: full SDK build/dts/postbuild pipeline and the public self-reference import proof above were re-run from this exact branch head and reproduce identically (`All 4 required plugin-sdk exports verified`, PATH stripped by the sandbox sanitizer, helpers callable, `skillKey` resolved)._\n",
+        "branch": "fix/81913-plugin-sdk-skills-helpers",
+        "head_sha": "a12f2aa1b8c27727174892980d87773dabc33c0d",
+        "author": "jbetala7",
         "labels": [
-          "gateway",
-          "agents",
-          "size: L",
+          "size: S",
           "proof: supplied",
           "P2",
-          "rating: 🌊 off-meta tidepool",
+          "rating: 🦪 silver shellfish",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 message-delivery"
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/model-selection.test.ts",
-            "additions": 31,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply.block-streaming.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/directive-handling.defaults.subagent.test.ts",
-            "additions": 259,
+            "path": "src/plugin-sdk/sandbox.test.ts",
+            "additions": 18,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/auto-reply/reply/directive-handling.defaults.ts",
-            "additions": 47,
+            "path": "src/plugin-sdk/sandbox.ts",
+            "additions": 4,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/auto-reply/reply/get-reply.test-mocks.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/get-reply.ts",
-            "additions": 32,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/stored-model-override.test.ts",
-            "additions": 108,
+            "path": "src/plugin-sdk/skills-runtime.test.ts",
+            "additions": 41,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/auto-reply/reply/stored-model-override.ts",
+            "path": "src/plugin-sdk/skills-runtime.ts",
             "additions": 16,
             "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-utils.test.ts",
-            "additions": 135,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-utils.ts",
-            "additions": 48,
-            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-72984",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-72984.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-81921",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-81921.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 162,
+          "total": 156,
           "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 29,
-            "SUCCESS": 130,
+            "SUCCESS": 133,
+            "SKIPPED": 22,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
+          "terminalBlockers": []
         }
       },
       "maintainer_authorized": false,
@@ -180,15 +151,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2849,
+    "total_ms": 6538,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 441
+        "ms": 623
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2046
+        "ms": 3076
       },
       {
         "name": "classify_commands",
@@ -196,7 +167,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 345
+        "ms": 2810
       },
       {
         "name": "append_ledger",
