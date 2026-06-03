@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-03T07:40:11.575Z",
+  "generated_at": "2026-06-03T07:40:54.882Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T04:40:11.147Z",
+  "since": "2026-06-03T04:40:52.809Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    89743
+    89454
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 2,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +29,130 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89454:4602664111:2026-06-03T07:40:50Z:clawsweeper_needs_human",
+      "comment_id": "4602664111",
+      "comment_version_key": "4602664111:2026-06-03T07:40:50Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89454#issuecomment-4602664111",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89454,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-02T13:05:21Z",
+      "comment_updated_at": "2026-06-03T07:40:50Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] Manual maintainer review is appropriate because this active maintainer-authored PR changes Feishu credential resolution during outbound sends and has no narrow blocking defect for automation to repair.; Cleared: No concrete security or supply-chain defect was found; the diff uses existing SDK secret-resolution helpers and changes no dependencies, workflows, or secret storage. (sha=c8c4172b531a935e4acbf88f960e8ace5d846049)",
+      "review_summary": "The branch adds Feishu outbound credential pre-resolution for unresolved appId/appSecret SecretRefs, applies it to Feishu outbound and message-tool send paths, and adds regression coverage for exec/Keychain SecretRefs.\n\nPR surface: Source +123, Tests +168. Total +291 across 5 files.\n\nReproducibility: yes. at source level: current main's strict Feishu runtime resolver throws on unresolved exec/file SecretRefs before media upload, and outbound media catches that failure into a fallback path. I did not run tests or a live Feishu tenant because this review is read-only.",
+      "review_followup": "- [P2] Manual maintainer review is appropriate because this active maintainer-authored PR changes Feishu credential resolution during outbound sends and has no narrow blocking defect for automation to repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "c8c4172b531a935e4acbf88f960e8ace5d846049",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(feishu): resolve exec/keychain appSecret SecretRefs on the outbound path",
+        "body": "### Summary\n\n- **Problem**: Issue #89338 reports that the Feishu **MEDIA** directive (and image/file uploads in general) silently fails when `appSecret` is configured as a `SecretRef` backed by an `exec`/Keychain provider. Normal chat (WebSocket connection) and text replies keep working; only the media upload is dropped, so the recipient receives no image. The regression appeared after migrating credentials from plaintext to a Keychain-backed `SecretRef`.\n- **Root Cause**: Feishu resolves app credentials per outbound API call through `resolveFeishuRuntimeAccount` → `resolveFeishuSecretLike`, a **synchronous** resolver that only understands plaintext strings and `env`-source SecretRefs. For an `exec`/`file`/Keychain `SecretRef` it throws `FeishuSecretRefUnavailableError` (its own message says the value must be *resolved against an active gateway runtime snapshot before reading it*). The WebSocket connection and text replies receive a config in which `appSecret` was already resolved to a string, so they work; the media-upload delivery path can reach `feishuOutbound` with a config in which `appSecret` is still an unresolved `SecretRef`. The sync resolver then throws, the throw is caught in `feishuOutbound.sendMedia` (and the local-image path in `sendText`), and the send degrades to a plain URL/text fallback — the \"silent\" failure the reporter saw. Plaintext worked because a plaintext value is returned immediately, bypassing SecretRef resolution entirely.\n- **Fix**: Resolve still-unresolved app-credential SecretRefs at the Feishu outbound seam before the SDK client is built. A new helper `resolveFeishuOutboundCredentialsConfig` inspects the outbound account's `appId`/`appSecret`; if either is still a `SecretRef`, it first reuses the value the gateway already resolved into the active runtime snapshot (`getRuntimeConfigSnapshot`) — so an `exec`/Keychain secret resolved at connection time is not re-run per send — and only falls back to the async, exec/Keychain-capable SDK resolver (`resolveConfiguredSecretInputString`) for a ref the snapshot does not cover (e.g. a standalone CLI process). The resolved string is inlined into a shallow copy of the config (at the account level when an accounts map exists, top-level otherwise, so an implicit single-account config does not gain a spurious accounts map). When inlining at the account level it patches the **existing matched account-map key** (which may be noncanonical / mixed-case) rather than the normalized id, so the account's other per-account settings are not shadowed by a new entry. Plaintext/already-resolved configs are returned unchanged with no SDK secret resolver call and no clone. The three `feishuOutbound` entry points (`sendPayload`, `sendText`, `sendMedia`) and the agent message-tool `send`/`thread-reply` action handler (`channel.ts`, covering its card / media / text branches) call it first, so the existing synchronous downstream resolution now sees a resolved string and the send proceeds.\n- **What changed**:\n  - `extensions/feishu/src/accounts.ts` — add `resolveFeishuOutboundCredentialsConfig` (and a small `resolveFeishuCredentialRefValue` helper) that resolves unresolved `appId`/`appSecret` SecretRefs — preferring the gateway runtime snapshot (`openclaw/plugin-sdk/runtime-config-snapshot`), then the async `openclaw/plugin-sdk/secret-input-runtime` resolver — and inlines them into the returned config at the existing matched account-map key. Also extract `findFeishuAccountMapKey` (shared with `resolveRawFeishuAccountConfig`) for the case-insensitive key match.\n  - `extensions/feishu/src/outbound.ts` — resolve credentials at the start of the `feishuOutbound` `sendPayload`, `sendText`, and `sendMedia` handlers before any SDK client is built.\n  - `extensions/feishu/src/channel.ts` — resolve credentials once at the start of the message-tool `send`/`thread-reply` action handler and use the resolved config for the card, media, and text branches (the card/text branches do not go through the outbound bridge).\n  - `extensions/feishu/src/accounts.test.ts` / `channel.test.ts` — regression cases on the real resolver: the strict runtime account throws on an exec/Keychain `appSecret` SecretRef and succeeds after the helper inlines it; an inherited top-level SecretRef is resolved without inventing an accounts map; the matched noncanonical/mixed-case account key and its per-account settings are preserved; plaintext credentials return the same config object unchanged; an active runtime snapshot value is reused without the async resolver; and a message-tool text `send` with an exec SecretRef reaches `sendMessageFeishu` with the resolved credential.\n- **What did NOT change (scope boundary)**:\n  - No config surface (no schema, defaults, doctor migrations, or `docs/reference/config`); the on-disk `SecretRef` shape is read, never rewritten.\n  - No plugin SDK surface (no SDK exports, manifest, `extensions/*` api/runtime-api, registry/loader); the helper only consumes existing public SDK subpaths (`openclaw/plugin-sdk/runtime-config-snapshot`, `openclaw/plugin-sdk/secret-input-runtime`), both already used by other bundled plugins.\n  - No dependency/lockfile changes. Gateway protocol unchanged.\n  - The synchronous resolver, its error type, the connection/event-secret resolution, and the existing transient-error fallback are untouched; only the outbound delivery path gains an up-front resolution step.\n\n### Reproduction\n\n1. Configure a Feishu account with `appSecret` as an `exec`/Keychain `SecretRef`, e.g. `channels.feishu.accounts.<id>.appSecret = { \"source\": \"exec\", \"provider\": \"keychain_feishu_<id>\", \"id\": \"value\" }`.\n2. Restart the gateway; WebSocket chat connects normally.\n3. Send a local image via the `MEDIA` directive in a Feishu DM.\n4. **Before this PR**: the upload throws `FeishuSecretRefUnavailableError`, is caught, and degrades to a URL/text fallback — no image is delivered.\n5. **After this PR**: the SecretRef is resolved against the secret runtime before the client is built, and the image is uploaded normally.\n\nDeterministic source reproduction (added as regression tests): with the reporter's exact `exec` SecretRef shape, `resolveFeishuRuntimeAccount` throws; after `resolveFeishuOutboundCredentialsConfig`, the same call resolves with the inlined secret.\n\n### Real behavior proof\n\n**Behavior addressed (#89338 — Feishu media upload now works with an exec/Keychain SecretRef appSecret)**: outbound delivery resolves unresolved app-credential SecretRefs before building the Feishu client, instead of dropping the upload to a URL/text fallback.\n\n**Real environment tested (Linux, Node — Vitest against the real `extensions/feishu/src/accounts.ts` resolution path, with the SDK secret resolver mocked to emulate the gateway secret runtime; no live Feishu tenant)**: verified via `accounts.test.ts`, plus extension production and test type-checks and a format check on the changed files. A live Feishu media send against a real tenant was not run.\n\n**Exact steps or command run after this patch (repo-root)**: `node scripts/run-vitest.mjs extensions/feishu/src/{accounts,channel,outbound}.test.ts`; `node scripts/run-tsgo.mjs -p tsconfig.extensions.json` and `node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.extensions.test.json`; `oxfmt --check` and `oxlint` on the changed files.\n\n**Evidence after fix (Vitest output for the touched test files)**:\n\n```text\n accounts.test.ts   Tests  28 passed (28)\n channel.test.ts    Tests  62 passed (62)\n outbound.test.ts   Tests  42 passed (42)\n```\n\nThe new cases prove the regression and its fix on the real resolver: the strict runtime account throws `FeishuSecretRefUnavailableError` on an exec/Keychain `appSecret` SecretRef and then resolves successfully once `resolveFeishuOutboundCredentialsConfig` has inlined it; an inherited top-level SecretRef resolves without inventing an accounts map; the matched noncanonical/mixed-case account key keeps its per-account settings; plaintext credentials return the identical config object (no clone, no SDK secret resolver call); a value already present in the active runtime snapshot is reused without invoking the async resolver; and a message-tool text `send` with an exec SecretRef reaches `sendMessageFeishu` with the resolved credential. (The two test files mock exactly the SDK seams the helper uses — `openclaw/plugin-sdk/secret-input-runtime` and `runtime-config-snapshot` — which is the helper's real public boundary.)\n\n**Observed result after fix (media path no longer drops the upload)**: `resolveFeishuRuntimeAccount` on the resolved config returns `configured: true` with the resolved `appSecret`, so the SDK client builds and the upload proceeds. Extension prod + test type-checks pass; oxlint and oxfmt are clean.\n\n**What was not tested (live Feishu tenant media send)**: a real Feishu DM image send over a live WebSocket session with a Keychain-backed secret was not reproduced; the proof is the deterministic module-level reproduction the issue describes.\n\n### Risk / Mitigation\n\n- **Risk**: an unresolved-credential outbound send now performs an async secret resolution. **Mitigation**: the resolver is only invoked when `appId`/`appSecret` is still a `SecretRef`; plaintext and already-resolved configs short-circuit with no resolver call and no clone, so the common path is unchanged. When a credential is genuinely unresolvable, the helper leaves the config untouched and the existing transient-error fallback still applies.\n- **Risk**: an exec/Keychain secret could be re-run per send. **Mitigation**: the helper first reuses the gateway's already-resolved runtime snapshot (`getRuntimeConfigSnapshot`), so a secret resolved at connection time is not re-executed per send; the async provider resolver is only reached for a ref the snapshot does not cover (e.g. a standalone CLI process without an active gateway snapshot). This reuses an existing prepared runtime object rather than adding new cache state.\n- **Risk**: config rewriting could change account selection or drop per-account settings. **Mitigation**: the resolved value is inlined at the existing matched account-map key (preserving a noncanonical/mixed-case key and its sibling settings), or top-level when no account entry matches; the original config object is never mutated. Covered by the regression tests.\n\n### Out of scope / known siblings\n\nThis PR fixes the Feishu media path reported in #89338. The underlying shape — a channel resolving its outbound app credentials *per send* through a resolver that does not cover `exec`/keychain `SecretRef`s — is not necessarily unique to Feishu: channels that re-resolve outbound credentials at send time (rather than capturing a resolved token at connection) are worth auditing for the same class of failure (not necessarily silent) once their credentials move to an `exec`/keychain `SecretRef`. The structurally complete fix would be a cross-channel, gateway-outbound-layer unified `SecretRef` pre-resolution — a larger, design-first change. This PR intentionally scopes to the reported Feishu media path and does not change sibling channels.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Channels (Feishu)\n\n### Linked Issue/PR\n\nFixes #89338\n",
+        "branch": "fix/feishu-media-secretref-resolution",
+        "head_sha": "c8c4172b531a935e4acbf88f960e8ace5d846049",
+        "author": "openperf",
+        "labels": [
+          "channel: feishu",
+          "size: M",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 auth-provider",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "extensions/feishu/src/accounts.test.ts",
+            "additions": 129,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/accounts.ts",
+            "additions": 121,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/channel.test.ts",
+            "additions": 40,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/channel.ts",
+            "additions": 11,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/outbound.ts",
+            "additions": 22,
+            "deletions": 23,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89454",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89454.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 150,
+          "counts": {
+            "SUCCESS": 126,
+            "SKIPPED": 23,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 761,
+    "total_ms": 2318,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 415
+        "ms": 376
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1686
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 334
+        "ms": 236
       },
       {
         "name": "append_ledger",
