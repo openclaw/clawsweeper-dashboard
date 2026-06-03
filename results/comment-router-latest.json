@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-03T03:21:38.828Z",
+  "generated_at": "2026-06-03T03:21:48.578Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T00:21:36.834Z",
+  "since": "2026-06-03T00:21:46.633Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    89678
+    82572
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 44,
+  "commands_seen": 18,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89678:4608768727:2026-06-03T03:21:34Z:clawsweeper_auto_repair",
-      "comment_id": "4608768727",
-      "comment_version_key": "4608768727:2026-06-03T03:21:34Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89678#issuecomment-4608768727",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:82572:4466829643:2026-06-03T03:21:43Z:clawsweeper_auto_repair",
+      "comment_id": "4466829643",
+      "comment_version_key": "4466829643:2026-06-03T03:21:43Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4466829643",
       "repo": "openclaw/openclaw",
-      "issue_number": 89678,
+      "issue_number": 82572,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-03T03:15:45Z",
-      "comment_updated_at": "2026-06-03T03:21:34Z",
+      "comment_created_at": "2026-05-16T12:19:59Z",
+      "comment_updated_at": "2026-06-03T03:21:43Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -52,47 +52,166 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=f7f37a58709270649f61f1a001fd8996b9e97bcb)",
-      "review_summary": "The PR moves gateway restart-intent writing into the macOS launchd restart path, adds an optional restartIntent service-control argument, and updates launchd tests for the extra runtime probe and intent file contract.\n\nPR surface: Source +29, Tests +54. Total +83 across 3 files.\n\nReproducibility: yes. for a source-level reproduction path: current main shows SIGTERM routes through consumeGatewayRestartIntentPayloadSync, and launchd restart has pre-kickstart busy-port failure coverage. I did not run a live macOS LaunchAgent repro in this read-only review.",
-      "review_followup": "- The remaining blockers are narrow code and test repairs on the PR branch rather than a product decision.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=920cc1153a25dc8b2f526e0e12149f410478c5b4)",
+      "review_summary": "The branch adds SQLite-backed followup queue persistence, doctor migration from the legacy JSON sidecar, gateway startup wake recovery, and queue persistence tests.\n\nPR surface: Source +789, Tests +1342, Generated +16, Other +8. Total +2155 across 22 files.\n\nReproducibility: yes. at source level: current main keeps followup queues only in a process-global map, so a process restart drops queued in-memory items. I did not run a live gateway restart in this read-only review.",
+      "review_followup": "- [P1] Human/contributor follow-up is required because the PR needs a code repair plus real Telegram/gateway proof and maintainer acceptance of state/tooling risk.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "f7f37a58709270649f61f1a001fd8996b9e97bcb",
-      "finding_id": "review-feedback",
+      "expected_head_sha": "920cc1153a25dc8b2f526e0e12149f410478c5b4",
+      "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(daemon): write restart intent before launchd kickstart so SIGTERM routes to restart",
-        "body": "## Summary\n\n### Problem\n\nOn macOS with the gateway installed as a LaunchAgent (`KeepAlive=true`), any CLI-initiated restart can leave the service shut down instead of restarting. The run-loop SIGTERM handler routes to `restart` only when a gateway-restart intent file is present on disk; otherwise it falls through to a full stop. Once the old process exits cleanly, launchd may take hours to re-bootstrap the LaunchAgent, leaving channels dead and ports stale.\n\nReporter (#88309) showed the failure for `gateway` tool restart. A follow-up case in the issue thread reported the same shape on `2026.5.28` from an in-band channel turn (`Gateway restart failed: gateway port 18789 is still busy before LaunchAgent restart`) — same root cause, different entry point.\n\n### Root cause\n\n`writeGatewayRestartIntentSync` was only called from `lifecycle-core` (the `openclaw gateway restart` CLI path). Every other restart entry point that flows through `service.restart()` on darwin — configure prompt, `doctor --fix`, `update-command` retry, wizard, and the in-band `service.restart` retry after stale-pid cleanup — invoked `restartLaunchAgent` without first stamping intent. `restartLaunchAgent` then issued `launchctl kickstart -k` (or `bootout` + `bootstrap`) which delivered SIGTERM to the running gateway. The gateway's `onSigterm` handler consumed a `null` intent payload and routed to `request(\"stop\", \"SIGTERM\")`, starting graceful shutdown rather than the bounded drain-and-relaunch restart path.\n\n### Fix\n\nMove intent-write into `restartLaunchAgent` so every SIGTERM-emitting branch stamps the file first:\n\n- **Detached-handoff branch** (caller IS the gateway): write intent with `process.pid`, then schedule the helper.\n- **CLI branch** (caller is a separate process): resolve the live gateway pid via `readLaunchAgentRuntime` (`launchctl print`), then write intent before any `enable` / `kickstart` / `bootout` / `bootstrap`.\n\nAdd `restartIntent?: GatewayRestartIntent` to `GatewayServiceControlArgs` so callers with richer payloads (notably the existing `lifecycle-core` path) can pipe `reason`, `force`, and `waitMs` through. Default `reason` stays `\"gateway.restart\"`. When `readLaunchAgentRuntime` returns no pid (service unloaded), intent write is skipped — there is no live gateway to inform, and launchd's bootstrap path is unaffected.\n\n### What changed\n\n- `src/daemon/launchd.ts` — `restartLaunchAgent` now resolves gateway pid and stamps restart intent before any SIGTERM-emitting launchctl call. New import of `writeGatewayRestartIntentSync`.\n- `src/daemon/service-types.ts` — `GatewayServiceControlArgs` gains optional `restartIntent` field; new type import.\n- `src/daemon/launchd.test.ts` — new behavior test pinning the contract (writes a real intent file under a temp `OPENCLAW_STATE_DIR`, asserts payload). Four pre-existing test fixtures updated to include the new `launchctl print` runtime probe in their expected call sequences; the `#52208` re-bootstrap test now expects two `not-loaded` probes (the runtime lookup we added, plus the recovery probe).\n\n### What did NOT change\n\n- No new config keys, env vars, CLI flags, or doctor migrations.\n- No plugin SDK, channel, or extensions surface touched.\n- No gateway-protocol changes.\n- No dependency, lockfile, or shrinkwrap changes.\n- `lifecycle-core.ts`'s explicit `writeGatewayRestartIntentSync` is preserved — atomic replace converges with the in-`restartLaunchAgent` write to the same payload, no behavior change for `openclaw gateway restart`.\n- `triggerOpenClawRestart` (used by `auto-reply` `/restart` fallback and Windows supervised respawn) is left as-is. The auto-reply path only fires when no SIGUSR1 listener is installed, which does not happen while the gateway run-loop is active; the Windows path is `schtasks`-only and unrelated to launchd. Flagged as a follow-up for completeness, but no current macOS reporter touches it.\n\n## Reproduction\n\nThe failure is reachable from any darwin entry point that calls `service.restart()` without first writing intent. Concretely:\n\n1. Install OpenClaw as a managed LaunchAgent (`openclaw gateway install`, `KeepAlive=true` in the generated plist).\n2. From a separate CLI process, run anything that ends in `service.restart()` without going through `lifecycle-core` — e.g. `openclaw configure` and select \"Restart\" when the prompt offers it, or `openclaw doctor --fix` with a gateway-impacting repair, or a failed `openclaw update` that triggers `maybeRestartServiceAfterFailedPackageUpdate`.\n3. Observe the gateway log: `signal SIGTERM received` followed by `received SIGTERM; shutting down`, then a `Gateway stop failed: gateway port 18789 is still busy after LaunchAgent stop` message and a long delay before launchd re-bootstraps.\n\nThe included unit-level reproducer (`launchd.test.ts` -> `restartLaunchAgent restart-intent contract (#88309)`) drives the kickstart branch with a real temp `OPENCLAW_STATE_DIR` and asserts the intent file exists with the resolved gateway pid after `restartLaunchAgent` returns. It fails on `main` (intent file absent) and passes after this change.\n\n## Real behavior proof\n\n**Behavior addressed (#88309)**: CLI-initiated LaunchAgent restart leaves the gateway shut down because the run-loop SIGTERM handler reads a missing intent and routes to stop.\n\n**Real environment tested (Linux Codex worktree, Node 22, Vitest 4.1 against mocked `execLaunchctl`)**: Yes, unit-level repro of the contract (intent file persisted under a real temp `OPENCLAW_STATE_DIR` with the resolved gateway pid). Live macOS LaunchAgent was not exercised in this PR.\n\n**Exact steps or command run after this patch (`node scripts/run-vitest.mjs src/daemon/launchd.test.ts`)**: Single-file vitest run with the wt-88309 worktree (72 passed, 14 skipped, 0 failed). `node scripts/run-tsgo.mjs -p tsconfig.core.json` and `-p test/tsconfig/tsconfig.core.test.json` both clean. `node scripts/run-oxlint.mjs src/daemon/launchd.ts src/daemon/launchd.test.ts src/daemon/service-types.ts` clean. `oxfmt --check` clean.\n\n**Evidence after fix (`launchd.test.ts` reproducer + updated existing call-sequence fixtures)**: Reproducer test now passes: the intent file at `${OPENCLAW_STATE_DIR}/gateway-restart-intent.json` contains `{ \"kind\": \"gateway-restart\", \"pid\": <gateway pid>, \"reason\": \"gateway.restart\", ... }` after `restartLaunchAgent` returns. The four updated call-sequence tests confirm the new `launchctl print` runtime probe is the first call and that the rest of the restart sequence is unchanged.\n\n**Observed result after fix (kickstart-branch behavior, contract-level)**: Every `service.restart()` caller on darwin now leaves a parseable intent file targeting the live gateway pid before SIGTERM is sent. The run-loop SIGTERM handler will consume it and route to `request(\"restart\", \"SIGTERM\")`, preserving graceful drain semantics rather than full shutdown.\n\n**What was not tested (live macOS launchd KeepAlive race, real port-release timing)**: This PR does not include macOS device proof. The remaining risk surfaces — `launchctl kickstart -k` versus port 18789 release timing, KeepAlive throttle thresholds, and the bootout/bootstrap path under a held port — are platform-specific and need a Mac harness run before merge if the maintainer wants device-level confirmation.\n\n## Risk / Mitigation\n\n- **New `launchctl print` call on every darwin `restartLaunchAgent` invocation.** Cost is one synchronous spawn, bounded by `execLaunchctl`'s existing timeout. Failure is caught (`readLaunchAgentRuntime(...).catch(() => null)`); intent write is then skipped and the restart proceeds as before, so the worst case is the pre-fix behavior, not a regression.\n- **Intent file is now written even when the caller did not request one.** Payload uses `targetPid: gateway pid` so a CLI process restarting the gateway cannot accidentally consume its own intent; `consumeGatewayRestartIntentPayloadSync` already gates on `payload.pid === process.pid` plus the existing TTL. Same `replaceFileAtomicSync` writer used by `lifecycle-core`, so concurrent writes converge.\n- **`GatewayServiceControlArgs` now carries an optional `restartIntent`.** Existing implementations (`restartSystemdService`, `restartScheduledTask`) ignore unknown fields; pure-additive, no runtime contract change.\n\n## Change Type\n\n`fix(daemon)` — runtime bug fix in the launchd restart path; no public API addition or removal.\n\n## Scope\n\n- Surfaces touched: `src/daemon/launchd.ts`, `src/daemon/launchd.test.ts`, `src/daemon/service-types.ts`\n- Diff size: prod +29 / test +54 / -3 (delete only stale expectations)\n- Config surface unchanged\n- Plugin surface unchanged\n- Protocol surface unchanged\n- Dependency / lockfile unchanged\n\n## Linked Issue\n\nCloses #88309\n",
-        "branch": "fix/88309-launchd-restart-intent",
-        "head_sha": "f7f37a58709270649f61f1a001fd8996b9e97bcb",
-        "author": "openperf",
+        "title": "feat(queue): persist followup queues across gateway restarts",
+        "body": "## Problem\n\nWhen the gateway process restarts, followup messages queued during an active agent turn are silently lost.\n\n## Solution\n\nPersist followup queues in shared SQLite (`followup_queue_entries` on `openclaw.sqlite`) with doctor migration for legacy `live-chat-followup-queues.json`. Persist routing, provenance, and inbound turn context across restarts. On gateway ready, wake sessions that still have restored followup queues so the next agent turn can drain them.\n\n## Real behavior proof\n\n- Behavior or issue addressed: Queued followup messages survive a gateway restart and redeliver exactly once with Telegram routing, reply target, input provenance, and inbound turn context intact. Production drain paths: (1) gateway startup schedules heartbeat wake per restored route (`server-followup-queue-recovery.ts`), (2) first post-restart agent enqueue with `restartIfIdle=true` kicks restored drains via `kickFollowupDrainIfIdle` (same path as `agent-runner.ts`).\n- Real environment tested: Linux dev checkout (`jewseppi/openclaw`, branch `feat/queue-followup-persistence`), Node 24, real temp state dir via `OPENCLAW_STATE_DIR`, real on-disk `openclaw.sqlite` I/O (persist/restore/migration modules, not in-memory mocks).\n- Exact steps or command run after this patch:\n  ```bash\n  cd openclaw\n  export OPENCLAW_STATE_DIR=$(mktemp -d)\n  pnpm exec vitest run \\\n    src/auto-reply/reply/queue/persist.test.ts \\\n    src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts \\\n    src/auto-reply/reply/queue.drain-restart.test.ts \\\n    src/infra/state-migrations.test.ts \\\n    src/infra/followup-queue-sqlite.test.ts \\\n    src/gateway/server-followup-queue-recovery.test.ts\n  ```\n- Evidence after fix: Copied live terminal output from real on-disk OpenClaw state (`openclaw.sqlite` I/O, no persist mocks):\n  ```\n  RUN  v4.1.7 /home/joseph/dev/openclaw\n  Test Files  5 passed (5)\n  Tests  35 passed (35)\n  Head 920cc1153 behaviors verified:\n  - Telegram followup → SQLite → simulated restart → exactly-once redelivery\n  - Production enqueue idle-kick drains restored queue before next prompt\n  - Gateway startup wake enqueues system event + heartbeat for restored routes\n  - Doctor: live-chat-followup-queues.json → followup_queue_entries\n  - room_event + quoted-reply + bare-reset inbound context round-trip\n  ```\n- Observed result after fix: After simulated restart, restored queue items retain prompt, routing, reply target, provenance, and inbound context; drain delivers the restored prompt first; post-drain persistence prevents replay on a second restart.\n- What was not tested: Live native Telegram desktop capture (Mantis workflow requires write/admin on `openclaw/openclaw`; contributor account has read-only access on upstream).",
+        "branch": "feat/queue-followup-persistence",
+        "head_sha": "920cc1153a25dc8b2f526e0e12149f410478c5b4",
+        "author": "jewseppi",
         "labels": [
           "gateway",
-          "size: S",
+          "scripts",
+          "commands",
+          "size: XL",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
           "P1",
           "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/daemon/launchd.test.ts",
-            "additions": 57,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/launchd.ts",
-            "additions": 24,
+            "path": "scripts/deadcode-unused-files.allowlist.mjs",
+            "additions": 7,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/daemon/service-types.ts",
-            "additions": 5,
+            "path": "scripts/lib/ci-node-test-plan.mjs",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.drain-restart.test.ts",
+            "additions": 331,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts",
+            "additions": 147,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.identity-guard.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/enqueue.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.test.ts",
+            "additions": 485,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.ts",
+            "additions": 402,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/state.ts",
+            "additions": 7,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor.e2e-harness.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.test.ts",
+            "additions": 90,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.ts",
+            "additions": 61,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-runtime-services.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.test.ts",
+            "additions": 84,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.ts",
+            "additions": 115,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/state-migrations.test.ts",
+            "additions": 154,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/state-migrations.ts",
+            "additions": 139,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.generated.d.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.generated.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.sql",
+            "additions": 9,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
@@ -100,59 +219,3066 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89678",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89678.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82572",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82572.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 164,
+          "total": 162,
           "counts": {
-            "SUCCESS": 130,
-            "SKIPPED": 31,
-            "FAILURE": 2,
+            "SUCCESS": 129,
+            "SKIPPED": 29,
+            "FAILURE": 3,
             "NEUTRAL": 1
           },
           "blockers": [
-            "check-dependencies:FAILURE",
-            "check-additional-runtime-topology-architecture:FAILURE"
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "check-dependencies:FAILURE",
-            "check-additional-runtime-topology-architecture:FAILURE"
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
           ]
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
       "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4608766346:2026-06-03T03:15:05Z:re_review",
+      "comment_id": "4608766346",
+      "comment_version_key": "4608766346:2026-06-03T03:15:05Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4608766346",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-03T03:15:05Z",
+      "comment_updated_at": "2026-06-03T03:15:05Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4608247916:2026-06-03T01:12:55Z:re_review",
+      "comment_id": "4608247916",
+      "comment_version_key": "4608247916:2026-06-03T01:12:55Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4608247916",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-03T01:12:55Z",
+      "comment_updated_at": "2026-06-03T01:12:55Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review — head `8066e406c` addresses the inbound-context p1: persists `currentinboundeventkind`, `currentinboundaudio`, and `currentinboundcontext` with restart tests for room_event, quoted reply, and bare session reset. pr body proof updated",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": "— head `8066e406c` addresses the inbound-context P1: persists `currentInboundEventKind`, `currentInboundAudio`, and `currentInboundContext` with restart tests for room_event, quoted reply, and bare session reset. PR body proof updated.",
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4607931039:2026-06-02T23:57:49Z:re_review",
+      "comment_id": "4607931039",
+      "comment_version_key": "4607931039:2026-06-02T23:57:49Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4607931039",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-02T23:57:49Z",
+      "comment_updated_at": "2026-06-02T23:57:49Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review — head `3a5baafd3` adds doctor migration + fresh-install + conflict tests for followup_queue_entries (see pr body proof). @openclaw-mantis telegram desktop proof: verify this pr by queuing a telegram followup during an active turn, restarting the gateway, and confirming the queued reply is delivered exactly once with reply context intact",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": "— head `3a5baafd3` adds doctor migration + fresh-install + conflict tests for followup_queue_entries (see PR body proof). @openclaw-mantis telegram desktop proof: verify this PR by queuing a Telegram followup during an active turn, restarting the gateway, and confirming the queued reply is delivered exactly once with reply context intact.",
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4607629901:2026-06-02T22:53:18Z:re_review",
+      "comment_id": "4607629901",
+      "comment_version_key": "4607629901:2026-06-02T22:53:18Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4607629901",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-02T22:53:18Z",
+      "comment_updated_at": "2026-06-02T22:53:18Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review — head `9ca2acbea` moves followup queue persistence from the json sidecar into shared sqlite (`followup_queue_entries`) with doctor migration for legacy `live-chat-followup-queues.json`. pr body proof updated",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": "— head `9ca2acbea` moves followup queue persistence from the JSON sidecar into shared SQLite (`followup_queue_entries`) with doctor migration for legacy `live-chat-followup-queues.json`. PR body proof updated.",
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(queue): persist followup queues across gateway restarts",
+        "body": "## Problem\n\nWhen the gateway process restarts, followup messages queued during an active agent turn are silently lost.\n\n## Solution\n\nPersist followup queues in shared SQLite (`followup_queue_entries` on `openclaw.sqlite`) with doctor migration for legacy `live-chat-followup-queues.json`. Persist routing, provenance, and inbound turn context across restarts. On gateway ready, wake sessions that still have restored followup queues so the next agent turn can drain them.\n\n## Real behavior proof\n\n- Behavior or issue addressed: Queued followup messages survive a gateway restart and redeliver exactly once with Telegram routing, reply target, input provenance, and inbound turn context intact. Production drain paths: (1) gateway startup schedules heartbeat wake per restored route (`server-followup-queue-recovery.ts`), (2) first post-restart agent enqueue with `restartIfIdle=true` kicks restored drains via `kickFollowupDrainIfIdle` (same path as `agent-runner.ts`).\n- Real environment tested: Linux dev checkout (`jewseppi/openclaw`, branch `feat/queue-followup-persistence`), Node 24, real temp state dir via `OPENCLAW_STATE_DIR`, real on-disk `openclaw.sqlite` I/O (persist/restore/migration modules, not in-memory mocks).\n- Exact steps or command run after this patch:\n  ```bash\n  cd openclaw\n  export OPENCLAW_STATE_DIR=$(mktemp -d)\n  pnpm exec vitest run \\\n    src/auto-reply/reply/queue/persist.test.ts \\\n    src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts \\\n    src/auto-reply/reply/queue.drain-restart.test.ts \\\n    src/infra/state-migrations.test.ts \\\n    src/infra/followup-queue-sqlite.test.ts \\\n    src/gateway/server-followup-queue-recovery.test.ts\n  ```\n- Evidence after fix: Copied live terminal output from real on-disk OpenClaw state (`openclaw.sqlite` I/O, no persist mocks):\n  ```\n  RUN  v4.1.7 /home/joseph/dev/openclaw\n  Test Files  5 passed (5)\n  Tests  35 passed (35)\n  Head 920cc1153 behaviors verified:\n  - Telegram followup → SQLite → simulated restart → exactly-once redelivery\n  - Production enqueue idle-kick drains restored queue before next prompt\n  - Gateway startup wake enqueues system event + heartbeat for restored routes\n  - Doctor: live-chat-followup-queues.json → followup_queue_entries\n  - room_event + quoted-reply + bare-reset inbound context round-trip\n  ```\n- Observed result after fix: After simulated restart, restored queue items retain prompt, routing, reply target, provenance, and inbound context; drain delivers the restored prompt first; post-drain persistence prevents replay on a second restart.\n- What was not tested: Live native Telegram desktop capture (Mantis workflow requires write/admin on `openclaw/openclaw`; contributor account has read-only access on upstream).",
+        "branch": "feat/queue-followup-persistence",
+        "head_sha": "920cc1153a25dc8b2f526e0e12149f410478c5b4",
+        "author": "jewseppi",
+        "labels": [
+          "gateway",
+          "scripts",
+          "commands",
+          "size: XL",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/deadcode-unused-files.allowlist.mjs",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/lib/ci-node-test-plan.mjs",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.drain-restart.test.ts",
+            "additions": 331,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts",
+            "additions": 147,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.identity-guard.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/enqueue.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.test.ts",
+            "additions": 485,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.ts",
+            "additions": 402,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/state.ts",
+            "additions": 7,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor.e2e-harness.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.test.ts",
+            "additions": 90,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.ts",
+            "additions": 61,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-runtime-services.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.test.ts",
+            "additions": 84,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.ts",
+            "additions": 115,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/state-migrations.test.ts",
+            "additions": 154,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/state-migrations.ts",
+            "additions": 139,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.generated.d.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.generated.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.sql",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82572",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82572.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 129,
+            "SKIPPED": 29,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4607379832:2026-06-02T22:06:00Z:re_review",
+      "comment_id": "4607379832",
+      "comment_version_key": "4607379832:2026-06-02T22:06:00Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4607379832",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-02T22:06:00Z",
+      "comment_updated_at": "2026-06-02T22:06:00Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4502480009:2026-05-20T20:43:17Z:re_review",
+      "comment_id": "4502480009",
+      "comment_version_key": "4502480009:2026-05-20T20:43:17Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4502480009",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-20T20:43:17Z",
+      "comment_updated_at": "2026-05-20T20:43:17Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(queue): persist followup queues across gateway restarts",
+        "body": "## Problem\n\nWhen the gateway process restarts, followup messages queued during an active agent turn are silently lost.\n\n## Solution\n\nPersist followup queues in shared SQLite (`followup_queue_entries` on `openclaw.sqlite`) with doctor migration for legacy `live-chat-followup-queues.json`. Persist routing, provenance, and inbound turn context across restarts. On gateway ready, wake sessions that still have restored followup queues so the next agent turn can drain them.\n\n## Real behavior proof\n\n- Behavior or issue addressed: Queued followup messages survive a gateway restart and redeliver exactly once with Telegram routing, reply target, input provenance, and inbound turn context intact. Production drain paths: (1) gateway startup schedules heartbeat wake per restored route (`server-followup-queue-recovery.ts`), (2) first post-restart agent enqueue with `restartIfIdle=true` kicks restored drains via `kickFollowupDrainIfIdle` (same path as `agent-runner.ts`).\n- Real environment tested: Linux dev checkout (`jewseppi/openclaw`, branch `feat/queue-followup-persistence`), Node 24, real temp state dir via `OPENCLAW_STATE_DIR`, real on-disk `openclaw.sqlite` I/O (persist/restore/migration modules, not in-memory mocks).\n- Exact steps or command run after this patch:\n  ```bash\n  cd openclaw\n  export OPENCLAW_STATE_DIR=$(mktemp -d)\n  pnpm exec vitest run \\\n    src/auto-reply/reply/queue/persist.test.ts \\\n    src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts \\\n    src/auto-reply/reply/queue.drain-restart.test.ts \\\n    src/infra/state-migrations.test.ts \\\n    src/infra/followup-queue-sqlite.test.ts \\\n    src/gateway/server-followup-queue-recovery.test.ts\n  ```\n- Evidence after fix: Copied live terminal output from real on-disk OpenClaw state (`openclaw.sqlite` I/O, no persist mocks):\n  ```\n  RUN  v4.1.7 /home/joseph/dev/openclaw\n  Test Files  5 passed (5)\n  Tests  35 passed (35)\n  Head 920cc1153 behaviors verified:\n  - Telegram followup → SQLite → simulated restart → exactly-once redelivery\n  - Production enqueue idle-kick drains restored queue before next prompt\n  - Gateway startup wake enqueues system event + heartbeat for restored routes\n  - Doctor: live-chat-followup-queues.json → followup_queue_entries\n  - room_event + quoted-reply + bare-reset inbound context round-trip\n  ```\n- Observed result after fix: After simulated restart, restored queue items retain prompt, routing, reply target, provenance, and inbound context; drain delivers the restored prompt first; post-drain persistence prevents replay on a second restart.\n- What was not tested: Live native Telegram desktop capture (Mantis workflow requires write/admin on `openclaw/openclaw`; contributor account has read-only access on upstream).",
+        "branch": "feat/queue-followup-persistence",
+        "head_sha": "920cc1153a25dc8b2f526e0e12149f410478c5b4",
+        "author": "jewseppi",
+        "labels": [
+          "gateway",
+          "scripts",
+          "commands",
+          "size: XL",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/deadcode-unused-files.allowlist.mjs",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/lib/ci-node-test-plan.mjs",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.drain-restart.test.ts",
+            "additions": 331,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts",
+            "additions": 147,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.identity-guard.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/enqueue.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.test.ts",
+            "additions": 485,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.ts",
+            "additions": 402,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/state.ts",
+            "additions": 7,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor.e2e-harness.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.test.ts",
+            "additions": 90,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.ts",
+            "additions": 61,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-runtime-services.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.test.ts",
+            "additions": 84,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.ts",
+            "additions": 115,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/state-migrations.test.ts",
+            "additions": 154,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/state-migrations.ts",
+            "additions": 139,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.generated.d.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.generated.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.sql",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82572",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82572.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 129,
+            "SKIPPED": 29,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4491078735:2026-05-19T19:23:06Z:status",
+      "comment_id": "4491078735",
+      "comment_version_key": "4491078735:2026-05-19T19:23:06Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4491078735",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-19T19:01:46Z",
+      "comment_updated_at": "2026-05-19T19:23:06Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "status",
+      "intent": "status",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "ignored",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(queue): persist followup queues across gateway restarts",
+        "body": "## Problem\n\nWhen the gateway process restarts, followup messages queued during an active agent turn are silently lost.\n\n## Solution\n\nPersist followup queues in shared SQLite (`followup_queue_entries` on `openclaw.sqlite`) with doctor migration for legacy `live-chat-followup-queues.json`. Persist routing, provenance, and inbound turn context across restarts. On gateway ready, wake sessions that still have restored followup queues so the next agent turn can drain them.\n\n## Real behavior proof\n\n- Behavior or issue addressed: Queued followup messages survive a gateway restart and redeliver exactly once with Telegram routing, reply target, input provenance, and inbound turn context intact. Production drain paths: (1) gateway startup schedules heartbeat wake per restored route (`server-followup-queue-recovery.ts`), (2) first post-restart agent enqueue with `restartIfIdle=true` kicks restored drains via `kickFollowupDrainIfIdle` (same path as `agent-runner.ts`).\n- Real environment tested: Linux dev checkout (`jewseppi/openclaw`, branch `feat/queue-followup-persistence`), Node 24, real temp state dir via `OPENCLAW_STATE_DIR`, real on-disk `openclaw.sqlite` I/O (persist/restore/migration modules, not in-memory mocks).\n- Exact steps or command run after this patch:\n  ```bash\n  cd openclaw\n  export OPENCLAW_STATE_DIR=$(mktemp -d)\n  pnpm exec vitest run \\\n    src/auto-reply/reply/queue/persist.test.ts \\\n    src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts \\\n    src/auto-reply/reply/queue.drain-restart.test.ts \\\n    src/infra/state-migrations.test.ts \\\n    src/infra/followup-queue-sqlite.test.ts \\\n    src/gateway/server-followup-queue-recovery.test.ts\n  ```\n- Evidence after fix: Copied live terminal output from real on-disk OpenClaw state (`openclaw.sqlite` I/O, no persist mocks):\n  ```\n  RUN  v4.1.7 /home/joseph/dev/openclaw\n  Test Files  5 passed (5)\n  Tests  35 passed (35)\n  Head 920cc1153 behaviors verified:\n  - Telegram followup → SQLite → simulated restart → exactly-once redelivery\n  - Production enqueue idle-kick drains restored queue before next prompt\n  - Gateway startup wake enqueues system event + heartbeat for restored routes\n  - Doctor: live-chat-followup-queues.json → followup_queue_entries\n  - room_event + quoted-reply + bare-reset inbound context round-trip\n  ```\n- Observed result after fix: After simulated restart, restored queue items retain prompt, routing, reply target, provenance, and inbound context; drain delivers the restored prompt first; post-drain persistence prevents replay on a second restart.\n- What was not tested: Live native Telegram desktop capture (Mantis workflow requires write/admin on `openclaw/openclaw`; contributor account has read-only access on upstream).",
+        "branch": "feat/queue-followup-persistence",
+        "head_sha": "920cc1153a25dc8b2f526e0e12149f410478c5b4",
+        "author": "jewseppi",
+        "labels": [
+          "gateway",
+          "scripts",
+          "commands",
+          "size: XL",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/deadcode-unused-files.allowlist.mjs",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/lib/ci-node-test-plan.mjs",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.drain-restart.test.ts",
+            "additions": 331,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts",
+            "additions": 147,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.identity-guard.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/enqueue.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.test.ts",
+            "additions": 485,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.ts",
+            "additions": 402,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/state.ts",
+            "additions": 7,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor.e2e-harness.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.test.ts",
+            "additions": 90,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.ts",
+            "additions": 61,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-runtime-services.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.test.ts",
+            "additions": 84,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.ts",
+            "additions": 115,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/state-migrations.test.ts",
+            "additions": 154,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/state-migrations.ts",
+            "additions": 139,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.generated.d.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.generated.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.sql",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82572",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82572.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 129,
+            "SKIPPED": 29,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "author association NONE and repository permission read are not allowed"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4484098386:2026-05-19T03:16:36Z:re_review",
+      "comment_id": "4484098386",
+      "comment_version_key": "4484098386:2026-05-19T03:16:36Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4484098386",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-19T03:16:36Z",
+      "comment_updated_at": "2026-05-19T03:16:36Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(queue): persist followup queues across gateway restarts",
+        "body": "## Problem\n\nWhen the gateway process restarts, followup messages queued during an active agent turn are silently lost.\n\n## Solution\n\nPersist followup queues in shared SQLite (`followup_queue_entries` on `openclaw.sqlite`) with doctor migration for legacy `live-chat-followup-queues.json`. Persist routing, provenance, and inbound turn context across restarts. On gateway ready, wake sessions that still have restored followup queues so the next agent turn can drain them.\n\n## Real behavior proof\n\n- Behavior or issue addressed: Queued followup messages survive a gateway restart and redeliver exactly once with Telegram routing, reply target, input provenance, and inbound turn context intact. Production drain paths: (1) gateway startup schedules heartbeat wake per restored route (`server-followup-queue-recovery.ts`), (2) first post-restart agent enqueue with `restartIfIdle=true` kicks restored drains via `kickFollowupDrainIfIdle` (same path as `agent-runner.ts`).\n- Real environment tested: Linux dev checkout (`jewseppi/openclaw`, branch `feat/queue-followup-persistence`), Node 24, real temp state dir via `OPENCLAW_STATE_DIR`, real on-disk `openclaw.sqlite` I/O (persist/restore/migration modules, not in-memory mocks).\n- Exact steps or command run after this patch:\n  ```bash\n  cd openclaw\n  export OPENCLAW_STATE_DIR=$(mktemp -d)\n  pnpm exec vitest run \\\n    src/auto-reply/reply/queue/persist.test.ts \\\n    src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts \\\n    src/auto-reply/reply/queue.drain-restart.test.ts \\\n    src/infra/state-migrations.test.ts \\\n    src/infra/followup-queue-sqlite.test.ts \\\n    src/gateway/server-followup-queue-recovery.test.ts\n  ```\n- Evidence after fix: Copied live terminal output from real on-disk OpenClaw state (`openclaw.sqlite` I/O, no persist mocks):\n  ```\n  RUN  v4.1.7 /home/joseph/dev/openclaw\n  Test Files  5 passed (5)\n  Tests  35 passed (35)\n  Head 920cc1153 behaviors verified:\n  - Telegram followup → SQLite → simulated restart → exactly-once redelivery\n  - Production enqueue idle-kick drains restored queue before next prompt\n  - Gateway startup wake enqueues system event + heartbeat for restored routes\n  - Doctor: live-chat-followup-queues.json → followup_queue_entries\n  - room_event + quoted-reply + bare-reset inbound context round-trip\n  ```\n- Observed result after fix: After simulated restart, restored queue items retain prompt, routing, reply target, provenance, and inbound context; drain delivers the restored prompt first; post-drain persistence prevents replay on a second restart.\n- What was not tested: Live native Telegram desktop capture (Mantis workflow requires write/admin on `openclaw/openclaw`; contributor account has read-only access on upstream).",
+        "branch": "feat/queue-followup-persistence",
+        "head_sha": "920cc1153a25dc8b2f526e0e12149f410478c5b4",
+        "author": "jewseppi",
+        "labels": [
+          "gateway",
+          "scripts",
+          "commands",
+          "size: XL",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/deadcode-unused-files.allowlist.mjs",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/lib/ci-node-test-plan.mjs",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.drain-restart.test.ts",
+            "additions": 331,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts",
+            "additions": 147,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.identity-guard.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/enqueue.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.test.ts",
+            "additions": 485,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.ts",
+            "additions": 402,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/state.ts",
+            "additions": 7,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor.e2e-harness.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.test.ts",
+            "additions": 90,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.ts",
+            "additions": 61,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-runtime-services.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.test.ts",
+            "additions": 84,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.ts",
+            "additions": 115,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/state-migrations.test.ts",
+            "additions": 154,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/state-migrations.ts",
+            "additions": 139,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.generated.d.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.generated.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.sql",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82572",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82572.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 129,
+            "SKIPPED": 29,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4483989864:2026-05-19T02:50:11Z:re_review",
+      "comment_id": "4483989864",
+      "comment_version_key": "4483989864:2026-05-19T02:50:11Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4483989864",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-19T02:50:11Z",
+      "comment_updated_at": "2026-05-19T02:50:11Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(queue): persist followup queues across gateway restarts",
+        "body": "## Problem\n\nWhen the gateway process restarts, followup messages queued during an active agent turn are silently lost.\n\n## Solution\n\nPersist followup queues in shared SQLite (`followup_queue_entries` on `openclaw.sqlite`) with doctor migration for legacy `live-chat-followup-queues.json`. Persist routing, provenance, and inbound turn context across restarts. On gateway ready, wake sessions that still have restored followup queues so the next agent turn can drain them.\n\n## Real behavior proof\n\n- Behavior or issue addressed: Queued followup messages survive a gateway restart and redeliver exactly once with Telegram routing, reply target, input provenance, and inbound turn context intact. Production drain paths: (1) gateway startup schedules heartbeat wake per restored route (`server-followup-queue-recovery.ts`), (2) first post-restart agent enqueue with `restartIfIdle=true` kicks restored drains via `kickFollowupDrainIfIdle` (same path as `agent-runner.ts`).\n- Real environment tested: Linux dev checkout (`jewseppi/openclaw`, branch `feat/queue-followup-persistence`), Node 24, real temp state dir via `OPENCLAW_STATE_DIR`, real on-disk `openclaw.sqlite` I/O (persist/restore/migration modules, not in-memory mocks).\n- Exact steps or command run after this patch:\n  ```bash\n  cd openclaw\n  export OPENCLAW_STATE_DIR=$(mktemp -d)\n  pnpm exec vitest run \\\n    src/auto-reply/reply/queue/persist.test.ts \\\n    src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts \\\n    src/auto-reply/reply/queue.drain-restart.test.ts \\\n    src/infra/state-migrations.test.ts \\\n    src/infra/followup-queue-sqlite.test.ts \\\n    src/gateway/server-followup-queue-recovery.test.ts\n  ```\n- Evidence after fix: Copied live terminal output from real on-disk OpenClaw state (`openclaw.sqlite` I/O, no persist mocks):\n  ```\n  RUN  v4.1.7 /home/joseph/dev/openclaw\n  Test Files  5 passed (5)\n  Tests  35 passed (35)\n  Head 920cc1153 behaviors verified:\n  - Telegram followup → SQLite → simulated restart → exactly-once redelivery\n  - Production enqueue idle-kick drains restored queue before next prompt\n  - Gateway startup wake enqueues system event + heartbeat for restored routes\n  - Doctor: live-chat-followup-queues.json → followup_queue_entries\n  - room_event + quoted-reply + bare-reset inbound context round-trip\n  ```\n- Observed result after fix: After simulated restart, restored queue items retain prompt, routing, reply target, provenance, and inbound context; drain delivers the restored prompt first; post-drain persistence prevents replay on a second restart.\n- What was not tested: Live native Telegram desktop capture (Mantis workflow requires write/admin on `openclaw/openclaw`; contributor account has read-only access on upstream).",
+        "branch": "feat/queue-followup-persistence",
+        "head_sha": "920cc1153a25dc8b2f526e0e12149f410478c5b4",
+        "author": "jewseppi",
+        "labels": [
+          "gateway",
+          "scripts",
+          "commands",
+          "size: XL",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/deadcode-unused-files.allowlist.mjs",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/lib/ci-node-test-plan.mjs",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.drain-restart.test.ts",
+            "additions": 331,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts",
+            "additions": 147,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.identity-guard.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/enqueue.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.test.ts",
+            "additions": 485,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.ts",
+            "additions": 402,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/state.ts",
+            "additions": 7,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor.e2e-harness.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.test.ts",
+            "additions": 90,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.ts",
+            "additions": 61,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-runtime-services.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.test.ts",
+            "additions": 84,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.ts",
+            "additions": 115,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/state-migrations.test.ts",
+            "additions": 154,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/state-migrations.ts",
+            "additions": 139,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.generated.d.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.generated.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.sql",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82572",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82572.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 129,
+            "SKIPPED": 29,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4483604105:2026-05-19T01:15:29Z:re_review",
+      "comment_id": "4483604105",
+      "comment_version_key": "4483604105:2026-05-19T01:15:29Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4483604105",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-19T01:15:29Z",
+      "comment_updated_at": "2026-05-19T01:15:29Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(queue): persist followup queues across gateway restarts",
+        "body": "## Problem\n\nWhen the gateway process restarts, followup messages queued during an active agent turn are silently lost.\n\n## Solution\n\nPersist followup queues in shared SQLite (`followup_queue_entries` on `openclaw.sqlite`) with doctor migration for legacy `live-chat-followup-queues.json`. Persist routing, provenance, and inbound turn context across restarts. On gateway ready, wake sessions that still have restored followup queues so the next agent turn can drain them.\n\n## Real behavior proof\n\n- Behavior or issue addressed: Queued followup messages survive a gateway restart and redeliver exactly once with Telegram routing, reply target, input provenance, and inbound turn context intact. Production drain paths: (1) gateway startup schedules heartbeat wake per restored route (`server-followup-queue-recovery.ts`), (2) first post-restart agent enqueue with `restartIfIdle=true` kicks restored drains via `kickFollowupDrainIfIdle` (same path as `agent-runner.ts`).\n- Real environment tested: Linux dev checkout (`jewseppi/openclaw`, branch `feat/queue-followup-persistence`), Node 24, real temp state dir via `OPENCLAW_STATE_DIR`, real on-disk `openclaw.sqlite` I/O (persist/restore/migration modules, not in-memory mocks).\n- Exact steps or command run after this patch:\n  ```bash\n  cd openclaw\n  export OPENCLAW_STATE_DIR=$(mktemp -d)\n  pnpm exec vitest run \\\n    src/auto-reply/reply/queue/persist.test.ts \\\n    src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts \\\n    src/auto-reply/reply/queue.drain-restart.test.ts \\\n    src/infra/state-migrations.test.ts \\\n    src/infra/followup-queue-sqlite.test.ts \\\n    src/gateway/server-followup-queue-recovery.test.ts\n  ```\n- Evidence after fix: Copied live terminal output from real on-disk OpenClaw state (`openclaw.sqlite` I/O, no persist mocks):\n  ```\n  RUN  v4.1.7 /home/joseph/dev/openclaw\n  Test Files  5 passed (5)\n  Tests  35 passed (35)\n  Head 920cc1153 behaviors verified:\n  - Telegram followup → SQLite → simulated restart → exactly-once redelivery\n  - Production enqueue idle-kick drains restored queue before next prompt\n  - Gateway startup wake enqueues system event + heartbeat for restored routes\n  - Doctor: live-chat-followup-queues.json → followup_queue_entries\n  - room_event + quoted-reply + bare-reset inbound context round-trip\n  ```\n- Observed result after fix: After simulated restart, restored queue items retain prompt, routing, reply target, provenance, and inbound context; drain delivers the restored prompt first; post-drain persistence prevents replay on a second restart.\n- What was not tested: Live native Telegram desktop capture (Mantis workflow requires write/admin on `openclaw/openclaw`; contributor account has read-only access on upstream).",
+        "branch": "feat/queue-followup-persistence",
+        "head_sha": "920cc1153a25dc8b2f526e0e12149f410478c5b4",
+        "author": "jewseppi",
+        "labels": [
+          "gateway",
+          "scripts",
+          "commands",
+          "size: XL",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/deadcode-unused-files.allowlist.mjs",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/lib/ci-node-test-plan.mjs",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.drain-restart.test.ts",
+            "additions": 331,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts",
+            "additions": 147,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.identity-guard.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/enqueue.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.test.ts",
+            "additions": 485,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.ts",
+            "additions": 402,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/state.ts",
+            "additions": 7,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor.e2e-harness.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.test.ts",
+            "additions": 90,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.ts",
+            "additions": 61,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-runtime-services.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.test.ts",
+            "additions": 84,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.ts",
+            "additions": 115,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/state-migrations.test.ts",
+            "additions": 154,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/state-migrations.ts",
+            "additions": 139,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.generated.d.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.generated.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.sql",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82572",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82572.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 129,
+            "SKIPPED": 29,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4482829352:2026-05-18T22:33:17Z:re_review",
+      "comment_id": "4482829352",
+      "comment_version_key": "4482829352:2026-05-18T22:33:17Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4482829352",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-18T22:33:17Z",
+      "comment_updated_at": "2026-05-18T22:33:17Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(queue): persist followup queues across gateway restarts",
+        "body": "## Problem\n\nWhen the gateway process restarts, followup messages queued during an active agent turn are silently lost.\n\n## Solution\n\nPersist followup queues in shared SQLite (`followup_queue_entries` on `openclaw.sqlite`) with doctor migration for legacy `live-chat-followup-queues.json`. Persist routing, provenance, and inbound turn context across restarts. On gateway ready, wake sessions that still have restored followup queues so the next agent turn can drain them.\n\n## Real behavior proof\n\n- Behavior or issue addressed: Queued followup messages survive a gateway restart and redeliver exactly once with Telegram routing, reply target, input provenance, and inbound turn context intact. Production drain paths: (1) gateway startup schedules heartbeat wake per restored route (`server-followup-queue-recovery.ts`), (2) first post-restart agent enqueue with `restartIfIdle=true` kicks restored drains via `kickFollowupDrainIfIdle` (same path as `agent-runner.ts`).\n- Real environment tested: Linux dev checkout (`jewseppi/openclaw`, branch `feat/queue-followup-persistence`), Node 24, real temp state dir via `OPENCLAW_STATE_DIR`, real on-disk `openclaw.sqlite` I/O (persist/restore/migration modules, not in-memory mocks).\n- Exact steps or command run after this patch:\n  ```bash\n  cd openclaw\n  export OPENCLAW_STATE_DIR=$(mktemp -d)\n  pnpm exec vitest run \\\n    src/auto-reply/reply/queue/persist.test.ts \\\n    src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts \\\n    src/auto-reply/reply/queue.drain-restart.test.ts \\\n    src/infra/state-migrations.test.ts \\\n    src/infra/followup-queue-sqlite.test.ts \\\n    src/gateway/server-followup-queue-recovery.test.ts\n  ```\n- Evidence after fix: Copied live terminal output from real on-disk OpenClaw state (`openclaw.sqlite` I/O, no persist mocks):\n  ```\n  RUN  v4.1.7 /home/joseph/dev/openclaw\n  Test Files  5 passed (5)\n  Tests  35 passed (35)\n  Head 920cc1153 behaviors verified:\n  - Telegram followup → SQLite → simulated restart → exactly-once redelivery\n  - Production enqueue idle-kick drains restored queue before next prompt\n  - Gateway startup wake enqueues system event + heartbeat for restored routes\n  - Doctor: live-chat-followup-queues.json → followup_queue_entries\n  - room_event + quoted-reply + bare-reset inbound context round-trip\n  ```\n- Observed result after fix: After simulated restart, restored queue items retain prompt, routing, reply target, provenance, and inbound context; drain delivers the restored prompt first; post-drain persistence prevents replay on a second restart.\n- What was not tested: Live native Telegram desktop capture (Mantis workflow requires write/admin on `openclaw/openclaw`; contributor account has read-only access on upstream).",
+        "branch": "feat/queue-followup-persistence",
+        "head_sha": "920cc1153a25dc8b2f526e0e12149f410478c5b4",
+        "author": "jewseppi",
+        "labels": [
+          "gateway",
+          "scripts",
+          "commands",
+          "size: XL",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/deadcode-unused-files.allowlist.mjs",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/lib/ci-node-test-plan.mjs",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.drain-restart.test.ts",
+            "additions": 331,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts",
+            "additions": 147,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.identity-guard.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/enqueue.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.test.ts",
+            "additions": 485,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.ts",
+            "additions": 402,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/state.ts",
+            "additions": 7,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor.e2e-harness.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.test.ts",
+            "additions": 90,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.ts",
+            "additions": 61,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-runtime-services.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.test.ts",
+            "additions": 84,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.ts",
+            "additions": 115,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/state-migrations.test.ts",
+            "additions": 154,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/state-migrations.ts",
+            "additions": 139,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.generated.d.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.generated.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.sql",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82572",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82572.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 129,
+            "SKIPPED": 29,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4481548108:2026-05-18T20:00:43Z:re_review",
+      "comment_id": "4481548108",
+      "comment_version_key": "4481548108:2026-05-18T20:00:43Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4481548108",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-18T20:00:43Z",
+      "comment_updated_at": "2026-05-18T20:00:43Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(queue): persist followup queues across gateway restarts",
+        "body": "## Problem\n\nWhen the gateway process restarts, followup messages queued during an active agent turn are silently lost.\n\n## Solution\n\nPersist followup queues in shared SQLite (`followup_queue_entries` on `openclaw.sqlite`) with doctor migration for legacy `live-chat-followup-queues.json`. Persist routing, provenance, and inbound turn context across restarts. On gateway ready, wake sessions that still have restored followup queues so the next agent turn can drain them.\n\n## Real behavior proof\n\n- Behavior or issue addressed: Queued followup messages survive a gateway restart and redeliver exactly once with Telegram routing, reply target, input provenance, and inbound turn context intact. Production drain paths: (1) gateway startup schedules heartbeat wake per restored route (`server-followup-queue-recovery.ts`), (2) first post-restart agent enqueue with `restartIfIdle=true` kicks restored drains via `kickFollowupDrainIfIdle` (same path as `agent-runner.ts`).\n- Real environment tested: Linux dev checkout (`jewseppi/openclaw`, branch `feat/queue-followup-persistence`), Node 24, real temp state dir via `OPENCLAW_STATE_DIR`, real on-disk `openclaw.sqlite` I/O (persist/restore/migration modules, not in-memory mocks).\n- Exact steps or command run after this patch:\n  ```bash\n  cd openclaw\n  export OPENCLAW_STATE_DIR=$(mktemp -d)\n  pnpm exec vitest run \\\n    src/auto-reply/reply/queue/persist.test.ts \\\n    src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts \\\n    src/auto-reply/reply/queue.drain-restart.test.ts \\\n    src/infra/state-migrations.test.ts \\\n    src/infra/followup-queue-sqlite.test.ts \\\n    src/gateway/server-followup-queue-recovery.test.ts\n  ```\n- Evidence after fix: Copied live terminal output from real on-disk OpenClaw state (`openclaw.sqlite` I/O, no persist mocks):\n  ```\n  RUN  v4.1.7 /home/joseph/dev/openclaw\n  Test Files  5 passed (5)\n  Tests  35 passed (35)\n  Head 920cc1153 behaviors verified:\n  - Telegram followup → SQLite → simulated restart → exactly-once redelivery\n  - Production enqueue idle-kick drains restored queue before next prompt\n  - Gateway startup wake enqueues system event + heartbeat for restored routes\n  - Doctor: live-chat-followup-queues.json → followup_queue_entries\n  - room_event + quoted-reply + bare-reset inbound context round-trip\n  ```\n- Observed result after fix: After simulated restart, restored queue items retain prompt, routing, reply target, provenance, and inbound context; drain delivers the restored prompt first; post-drain persistence prevents replay on a second restart.\n- What was not tested: Live native Telegram desktop capture (Mantis workflow requires write/admin on `openclaw/openclaw`; contributor account has read-only access on upstream).",
+        "branch": "feat/queue-followup-persistence",
+        "head_sha": "920cc1153a25dc8b2f526e0e12149f410478c5b4",
+        "author": "jewseppi",
+        "labels": [
+          "gateway",
+          "scripts",
+          "commands",
+          "size: XL",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/deadcode-unused-files.allowlist.mjs",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/lib/ci-node-test-plan.mjs",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.drain-restart.test.ts",
+            "additions": 331,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts",
+            "additions": 147,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.identity-guard.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/enqueue.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.test.ts",
+            "additions": 485,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.ts",
+            "additions": 402,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/state.ts",
+            "additions": 7,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor.e2e-harness.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.test.ts",
+            "additions": 90,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.ts",
+            "additions": 61,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-runtime-services.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.test.ts",
+            "additions": 84,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.ts",
+            "additions": 115,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/state-migrations.test.ts",
+            "additions": 154,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/state-migrations.ts",
+            "additions": 139,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.generated.d.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.generated.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.sql",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82572",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82572.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 129,
+            "SKIPPED": 29,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4480968971:2026-05-18T19:01:27Z:re_review",
+      "comment_id": "4480968971",
+      "comment_version_key": "4480968971:2026-05-18T19:01:27Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4480968971",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-18T19:01:27Z",
+      "comment_updated_at": "2026-05-18T19:01:27Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(queue): persist followup queues across gateway restarts",
+        "body": "## Problem\n\nWhen the gateway process restarts, followup messages queued during an active agent turn are silently lost.\n\n## Solution\n\nPersist followup queues in shared SQLite (`followup_queue_entries` on `openclaw.sqlite`) with doctor migration for legacy `live-chat-followup-queues.json`. Persist routing, provenance, and inbound turn context across restarts. On gateway ready, wake sessions that still have restored followup queues so the next agent turn can drain them.\n\n## Real behavior proof\n\n- Behavior or issue addressed: Queued followup messages survive a gateway restart and redeliver exactly once with Telegram routing, reply target, input provenance, and inbound turn context intact. Production drain paths: (1) gateway startup schedules heartbeat wake per restored route (`server-followup-queue-recovery.ts`), (2) first post-restart agent enqueue with `restartIfIdle=true` kicks restored drains via `kickFollowupDrainIfIdle` (same path as `agent-runner.ts`).\n- Real environment tested: Linux dev checkout (`jewseppi/openclaw`, branch `feat/queue-followup-persistence`), Node 24, real temp state dir via `OPENCLAW_STATE_DIR`, real on-disk `openclaw.sqlite` I/O (persist/restore/migration modules, not in-memory mocks).\n- Exact steps or command run after this patch:\n  ```bash\n  cd openclaw\n  export OPENCLAW_STATE_DIR=$(mktemp -d)\n  pnpm exec vitest run \\\n    src/auto-reply/reply/queue/persist.test.ts \\\n    src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts \\\n    src/auto-reply/reply/queue.drain-restart.test.ts \\\n    src/infra/state-migrations.test.ts \\\n    src/infra/followup-queue-sqlite.test.ts \\\n    src/gateway/server-followup-queue-recovery.test.ts\n  ```\n- Evidence after fix: Copied live terminal output from real on-disk OpenClaw state (`openclaw.sqlite` I/O, no persist mocks):\n  ```\n  RUN  v4.1.7 /home/joseph/dev/openclaw\n  Test Files  5 passed (5)\n  Tests  35 passed (35)\n  Head 920cc1153 behaviors verified:\n  - Telegram followup → SQLite → simulated restart → exactly-once redelivery\n  - Production enqueue idle-kick drains restored queue before next prompt\n  - Gateway startup wake enqueues system event + heartbeat for restored routes\n  - Doctor: live-chat-followup-queues.json → followup_queue_entries\n  - room_event + quoted-reply + bare-reset inbound context round-trip\n  ```\n- Observed result after fix: After simulated restart, restored queue items retain prompt, routing, reply target, provenance, and inbound context; drain delivers the restored prompt first; post-drain persistence prevents replay on a second restart.\n- What was not tested: Live native Telegram desktop capture (Mantis workflow requires write/admin on `openclaw/openclaw`; contributor account has read-only access on upstream).",
+        "branch": "feat/queue-followup-persistence",
+        "head_sha": "920cc1153a25dc8b2f526e0e12149f410478c5b4",
+        "author": "jewseppi",
+        "labels": [
+          "gateway",
+          "scripts",
+          "commands",
+          "size: XL",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/deadcode-unused-files.allowlist.mjs",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/lib/ci-node-test-plan.mjs",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.drain-restart.test.ts",
+            "additions": 331,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts",
+            "additions": 147,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.identity-guard.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/enqueue.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.test.ts",
+            "additions": 485,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.ts",
+            "additions": 402,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/state.ts",
+            "additions": 7,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor.e2e-harness.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.test.ts",
+            "additions": 90,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.ts",
+            "additions": 61,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-runtime-services.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.test.ts",
+            "additions": 84,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.ts",
+            "additions": 115,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/state-migrations.test.ts",
+            "additions": 154,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/state-migrations.ts",
+            "additions": 139,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.generated.d.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.generated.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.sql",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82572",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82572.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 129,
+            "SKIPPED": 29,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4480889950:2026-05-18T18:52:12Z:re_review",
+      "comment_id": "4480889950",
+      "comment_version_key": "4480889950:2026-05-18T18:52:12Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4480889950",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-18T18:52:12Z",
+      "comment_updated_at": "2026-05-18T18:52:12Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(queue): persist followup queues across gateway restarts",
+        "body": "## Problem\n\nWhen the gateway process restarts, followup messages queued during an active agent turn are silently lost.\n\n## Solution\n\nPersist followup queues in shared SQLite (`followup_queue_entries` on `openclaw.sqlite`) with doctor migration for legacy `live-chat-followup-queues.json`. Persist routing, provenance, and inbound turn context across restarts. On gateway ready, wake sessions that still have restored followup queues so the next agent turn can drain them.\n\n## Real behavior proof\n\n- Behavior or issue addressed: Queued followup messages survive a gateway restart and redeliver exactly once with Telegram routing, reply target, input provenance, and inbound turn context intact. Production drain paths: (1) gateway startup schedules heartbeat wake per restored route (`server-followup-queue-recovery.ts`), (2) first post-restart agent enqueue with `restartIfIdle=true` kicks restored drains via `kickFollowupDrainIfIdle` (same path as `agent-runner.ts`).\n- Real environment tested: Linux dev checkout (`jewseppi/openclaw`, branch `feat/queue-followup-persistence`), Node 24, real temp state dir via `OPENCLAW_STATE_DIR`, real on-disk `openclaw.sqlite` I/O (persist/restore/migration modules, not in-memory mocks).\n- Exact steps or command run after this patch:\n  ```bash\n  cd openclaw\n  export OPENCLAW_STATE_DIR=$(mktemp -d)\n  pnpm exec vitest run \\\n    src/auto-reply/reply/queue/persist.test.ts \\\n    src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts \\\n    src/auto-reply/reply/queue.drain-restart.test.ts \\\n    src/infra/state-migrations.test.ts \\\n    src/infra/followup-queue-sqlite.test.ts \\\n    src/gateway/server-followup-queue-recovery.test.ts\n  ```\n- Evidence after fix: Copied live terminal output from real on-disk OpenClaw state (`openclaw.sqlite` I/O, no persist mocks):\n  ```\n  RUN  v4.1.7 /home/joseph/dev/openclaw\n  Test Files  5 passed (5)\n  Tests  35 passed (35)\n  Head 920cc1153 behaviors verified:\n  - Telegram followup → SQLite → simulated restart → exactly-once redelivery\n  - Production enqueue idle-kick drains restored queue before next prompt\n  - Gateway startup wake enqueues system event + heartbeat for restored routes\n  - Doctor: live-chat-followup-queues.json → followup_queue_entries\n  - room_event + quoted-reply + bare-reset inbound context round-trip\n  ```\n- Observed result after fix: After simulated restart, restored queue items retain prompt, routing, reply target, provenance, and inbound context; drain delivers the restored prompt first; post-drain persistence prevents replay on a second restart.\n- What was not tested: Live native Telegram desktop capture (Mantis workflow requires write/admin on `openclaw/openclaw`; contributor account has read-only access on upstream).",
+        "branch": "feat/queue-followup-persistence",
+        "head_sha": "920cc1153a25dc8b2f526e0e12149f410478c5b4",
+        "author": "jewseppi",
+        "labels": [
+          "gateway",
+          "scripts",
+          "commands",
+          "size: XL",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/deadcode-unused-files.allowlist.mjs",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/lib/ci-node-test-plan.mjs",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.drain-restart.test.ts",
+            "additions": 331,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts",
+            "additions": 147,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.identity-guard.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/enqueue.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.test.ts",
+            "additions": 485,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.ts",
+            "additions": 402,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/state.ts",
+            "additions": 7,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor.e2e-harness.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.test.ts",
+            "additions": 90,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.ts",
+            "additions": 61,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-runtime-services.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.test.ts",
+            "additions": 84,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.ts",
+            "additions": 115,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/state-migrations.test.ts",
+            "additions": 154,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/state-migrations.ts",
+            "additions": 139,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.generated.d.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.generated.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.sql",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82572",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82572.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 129,
+            "SKIPPED": 29,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4480878190:2026-05-18T18:50:41Z:re_review",
+      "comment_id": "4480878190",
+      "comment_version_key": "4480878190:2026-05-18T18:50:41Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4480878190",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-18T18:50:41Z",
+      "comment_updated_at": "2026-05-18T18:50:41Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(queue): persist followup queues across gateway restarts",
+        "body": "## Problem\n\nWhen the gateway process restarts, followup messages queued during an active agent turn are silently lost.\n\n## Solution\n\nPersist followup queues in shared SQLite (`followup_queue_entries` on `openclaw.sqlite`) with doctor migration for legacy `live-chat-followup-queues.json`. Persist routing, provenance, and inbound turn context across restarts. On gateway ready, wake sessions that still have restored followup queues so the next agent turn can drain them.\n\n## Real behavior proof\n\n- Behavior or issue addressed: Queued followup messages survive a gateway restart and redeliver exactly once with Telegram routing, reply target, input provenance, and inbound turn context intact. Production drain paths: (1) gateway startup schedules heartbeat wake per restored route (`server-followup-queue-recovery.ts`), (2) first post-restart agent enqueue with `restartIfIdle=true` kicks restored drains via `kickFollowupDrainIfIdle` (same path as `agent-runner.ts`).\n- Real environment tested: Linux dev checkout (`jewseppi/openclaw`, branch `feat/queue-followup-persistence`), Node 24, real temp state dir via `OPENCLAW_STATE_DIR`, real on-disk `openclaw.sqlite` I/O (persist/restore/migration modules, not in-memory mocks).\n- Exact steps or command run after this patch:\n  ```bash\n  cd openclaw\n  export OPENCLAW_STATE_DIR=$(mktemp -d)\n  pnpm exec vitest run \\\n    src/auto-reply/reply/queue/persist.test.ts \\\n    src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts \\\n    src/auto-reply/reply/queue.drain-restart.test.ts \\\n    src/infra/state-migrations.test.ts \\\n    src/infra/followup-queue-sqlite.test.ts \\\n    src/gateway/server-followup-queue-recovery.test.ts\n  ```\n- Evidence after fix: Copied live terminal output from real on-disk OpenClaw state (`openclaw.sqlite` I/O, no persist mocks):\n  ```\n  RUN  v4.1.7 /home/joseph/dev/openclaw\n  Test Files  5 passed (5)\n  Tests  35 passed (35)\n  Head 920cc1153 behaviors verified:\n  - Telegram followup → SQLite → simulated restart → exactly-once redelivery\n  - Production enqueue idle-kick drains restored queue before next prompt\n  - Gateway startup wake enqueues system event + heartbeat for restored routes\n  - Doctor: live-chat-followup-queues.json → followup_queue_entries\n  - room_event + quoted-reply + bare-reset inbound context round-trip\n  ```\n- Observed result after fix: After simulated restart, restored queue items retain prompt, routing, reply target, provenance, and inbound context; drain delivers the restored prompt first; post-drain persistence prevents replay on a second restart.\n- What was not tested: Live native Telegram desktop capture (Mantis workflow requires write/admin on `openclaw/openclaw`; contributor account has read-only access on upstream).",
+        "branch": "feat/queue-followup-persistence",
+        "head_sha": "920cc1153a25dc8b2f526e0e12149f410478c5b4",
+        "author": "jewseppi",
+        "labels": [
+          "gateway",
+          "scripts",
+          "commands",
+          "size: XL",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/deadcode-unused-files.allowlist.mjs",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/lib/ci-node-test-plan.mjs",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.drain-restart.test.ts",
+            "additions": 331,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts",
+            "additions": 147,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.identity-guard.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/enqueue.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.test.ts",
+            "additions": 485,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.ts",
+            "additions": 402,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/state.ts",
+            "additions": 7,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor.e2e-harness.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.test.ts",
+            "additions": 90,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.ts",
+            "additions": 61,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-runtime-services.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.test.ts",
+            "additions": 84,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.ts",
+            "additions": 115,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/state-migrations.test.ts",
+            "additions": 154,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/state-migrations.ts",
+            "additions": 139,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.generated.d.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.generated.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.sql",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82572",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82572.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 129,
+            "SKIPPED": 29,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4480566549:2026-05-18T18:14:47Z:re_review",
+      "comment_id": "4480566549",
+      "comment_version_key": "4480566549:2026-05-18T18:14:47Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4480566549",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-18T18:14:47Z",
+      "comment_updated_at": "2026-05-18T18:14:47Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(queue): persist followup queues across gateway restarts",
+        "body": "## Problem\n\nWhen the gateway process restarts, followup messages queued during an active agent turn are silently lost.\n\n## Solution\n\nPersist followup queues in shared SQLite (`followup_queue_entries` on `openclaw.sqlite`) with doctor migration for legacy `live-chat-followup-queues.json`. Persist routing, provenance, and inbound turn context across restarts. On gateway ready, wake sessions that still have restored followup queues so the next agent turn can drain them.\n\n## Real behavior proof\n\n- Behavior or issue addressed: Queued followup messages survive a gateway restart and redeliver exactly once with Telegram routing, reply target, input provenance, and inbound turn context intact. Production drain paths: (1) gateway startup schedules heartbeat wake per restored route (`server-followup-queue-recovery.ts`), (2) first post-restart agent enqueue with `restartIfIdle=true` kicks restored drains via `kickFollowupDrainIfIdle` (same path as `agent-runner.ts`).\n- Real environment tested: Linux dev checkout (`jewseppi/openclaw`, branch `feat/queue-followup-persistence`), Node 24, real temp state dir via `OPENCLAW_STATE_DIR`, real on-disk `openclaw.sqlite` I/O (persist/restore/migration modules, not in-memory mocks).\n- Exact steps or command run after this patch:\n  ```bash\n  cd openclaw\n  export OPENCLAW_STATE_DIR=$(mktemp -d)\n  pnpm exec vitest run \\\n    src/auto-reply/reply/queue/persist.test.ts \\\n    src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts \\\n    src/auto-reply/reply/queue.drain-restart.test.ts \\\n    src/infra/state-migrations.test.ts \\\n    src/infra/followup-queue-sqlite.test.ts \\\n    src/gateway/server-followup-queue-recovery.test.ts\n  ```\n- Evidence after fix: Copied live terminal output from real on-disk OpenClaw state (`openclaw.sqlite` I/O, no persist mocks):\n  ```\n  RUN  v4.1.7 /home/joseph/dev/openclaw\n  Test Files  5 passed (5)\n  Tests  35 passed (35)\n  Head 920cc1153 behaviors verified:\n  - Telegram followup → SQLite → simulated restart → exactly-once redelivery\n  - Production enqueue idle-kick drains restored queue before next prompt\n  - Gateway startup wake enqueues system event + heartbeat for restored routes\n  - Doctor: live-chat-followup-queues.json → followup_queue_entries\n  - room_event + quoted-reply + bare-reset inbound context round-trip\n  ```\n- Observed result after fix: After simulated restart, restored queue items retain prompt, routing, reply target, provenance, and inbound context; drain delivers the restored prompt first; post-drain persistence prevents replay on a second restart.\n- What was not tested: Live native Telegram desktop capture (Mantis workflow requires write/admin on `openclaw/openclaw`; contributor account has read-only access on upstream).",
+        "branch": "feat/queue-followup-persistence",
+        "head_sha": "920cc1153a25dc8b2f526e0e12149f410478c5b4",
+        "author": "jewseppi",
+        "labels": [
+          "gateway",
+          "scripts",
+          "commands",
+          "size: XL",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/deadcode-unused-files.allowlist.mjs",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/lib/ci-node-test-plan.mjs",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.drain-restart.test.ts",
+            "additions": 331,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts",
+            "additions": 147,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.identity-guard.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/enqueue.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.test.ts",
+            "additions": 485,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.ts",
+            "additions": 402,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/state.ts",
+            "additions": 7,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor.e2e-harness.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.test.ts",
+            "additions": 90,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.ts",
+            "additions": 61,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-runtime-services.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.test.ts",
+            "additions": 84,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.ts",
+            "additions": 115,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/state-migrations.test.ts",
+            "additions": 154,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/state-migrations.ts",
+            "additions": 139,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.generated.d.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.generated.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.sql",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82572",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82572.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 129,
+            "SKIPPED": 29,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:82572:4478739614:2026-05-18T14:35:32Z:re_review",
+      "comment_id": "4478739614",
+      "comment_version_key": "4478739614:2026-05-18T14:35:32Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/82572#issuecomment-4478739614",
+      "repo": "openclaw/openclaw",
+      "issue_number": 82572,
+      "author": "jewseppi",
+      "author_id": 6901751,
+      "author_association": "NONE",
+      "comment_created_at": "2026-05-18T14:35:32Z",
+      "comment_updated_at": "2026-05-18T14:35:32Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(queue): persist followup queues across gateway restarts",
+        "body": "## Problem\n\nWhen the gateway process restarts, followup messages queued during an active agent turn are silently lost.\n\n## Solution\n\nPersist followup queues in shared SQLite (`followup_queue_entries` on `openclaw.sqlite`) with doctor migration for legacy `live-chat-followup-queues.json`. Persist routing, provenance, and inbound turn context across restarts. On gateway ready, wake sessions that still have restored followup queues so the next agent turn can drain them.\n\n## Real behavior proof\n\n- Behavior or issue addressed: Queued followup messages survive a gateway restart and redeliver exactly once with Telegram routing, reply target, input provenance, and inbound turn context intact. Production drain paths: (1) gateway startup schedules heartbeat wake per restored route (`server-followup-queue-recovery.ts`), (2) first post-restart agent enqueue with `restartIfIdle=true` kicks restored drains via `kickFollowupDrainIfIdle` (same path as `agent-runner.ts`).\n- Real environment tested: Linux dev checkout (`jewseppi/openclaw`, branch `feat/queue-followup-persistence`), Node 24, real temp state dir via `OPENCLAW_STATE_DIR`, real on-disk `openclaw.sqlite` I/O (persist/restore/migration modules, not in-memory mocks).\n- Exact steps or command run after this patch:\n  ```bash\n  cd openclaw\n  export OPENCLAW_STATE_DIR=$(mktemp -d)\n  pnpm exec vitest run \\\n    src/auto-reply/reply/queue/persist.test.ts \\\n    src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts \\\n    src/auto-reply/reply/queue.drain-restart.test.ts \\\n    src/infra/state-migrations.test.ts \\\n    src/infra/followup-queue-sqlite.test.ts \\\n    src/gateway/server-followup-queue-recovery.test.ts\n  ```\n- Evidence after fix: Copied live terminal output from real on-disk OpenClaw state (`openclaw.sqlite` I/O, no persist mocks):\n  ```\n  RUN  v4.1.7 /home/joseph/dev/openclaw\n  Test Files  5 passed (5)\n  Tests  35 passed (35)\n  Head 920cc1153 behaviors verified:\n  - Telegram followup → SQLite → simulated restart → exactly-once redelivery\n  - Production enqueue idle-kick drains restored queue before next prompt\n  - Gateway startup wake enqueues system event + heartbeat for restored routes\n  - Doctor: live-chat-followup-queues.json → followup_queue_entries\n  - room_event + quoted-reply + bare-reset inbound context round-trip\n  ```\n- Observed result after fix: After simulated restart, restored queue items retain prompt, routing, reply target, provenance, and inbound context; drain delivers the restored prompt first; post-drain persistence prevents replay on a second restart.\n- What was not tested: Live native Telegram desktop capture (Mantis workflow requires write/admin on `openclaw/openclaw`; contributor account has read-only access on upstream).",
+        "branch": "feat/queue-followup-persistence",
+        "head_sha": "920cc1153a25dc8b2f526e0e12149f410478c5b4",
+        "author": "jewseppi",
+        "labels": [
+          "gateway",
+          "scripts",
+          "commands",
+          "size: XL",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/deadcode-unused-files.allowlist.mjs",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/lib/ci-node-test-plan.mjs",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.drain-restart.test.ts",
+            "additions": 331,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue.followup-restart-roundtrip.test.ts",
+            "additions": 147,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.identity-guard.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/drain.ts",
+            "additions": 44,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/enqueue.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.test.ts",
+            "additions": 485,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/persist.ts",
+            "additions": 402,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/state.ts",
+            "additions": 7,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/queue/types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor.e2e-harness.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.test.ts",
+            "additions": 90,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-followup-queue-recovery.ts",
+            "additions": 61,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-runtime-services.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.test.ts",
+            "additions": 84,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/followup-queue-sqlite.ts",
+            "additions": 115,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/infra/state-migrations.test.ts",
+            "additions": 154,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/state-migrations.ts",
+            "additions": 139,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-db.generated.d.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.generated.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/state/openclaw-state-schema.sql",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-82572",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82572.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 129,
+            "SKIPPED": 29,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2199,
+    "total_ms": 5035,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 218
+        "ms": 286
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1759
+        "ms": 1634
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 8
       },
       {
         "name": "execute_commands",
-        "ms": 193
+        "ms": 3078
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
