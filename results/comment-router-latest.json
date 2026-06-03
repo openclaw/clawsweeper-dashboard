@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-03T09:03:54.092Z",
+  "generated_at": "2026-06-03T09:04:05.216Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T06:03:53.855Z",
+  "since": "2026-06-03T06:04:01.014Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    89761
+    89752
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,142 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89752:4610310394:2026-06-03T09:03:57Z:clawsweeper_needs_human",
+      "comment_id": "4610310394",
+      "comment_version_key": "4610310394:2026-06-03T09:03:57Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89752#issuecomment-4610310394",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89752,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-03T08:06:48Z",
+      "comment_updated_at": "2026-06-03T09:03:57Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] The remaining action is maintainer review of the session-fence safety tradeoff, not an automated code repair.; Needs attention: No supply-chain or secrets issue was found, but the PR changes a session takeover safety boundary and needs maintainer review. (sha=7492ae09db43a157e60925380355446f52c1630a)",
+      "review_summary": "The PR makes the legacy linear-to-parent-linked transcript migration rewrite through an fsync'd sibling temp file and updates the embedded attempt fence to accept that inode-replacing benign migration with a re-stat guard.\n\nPR surface: Source +52, Tests +222. Total +274 across 5 files.\n\nReproducibility: yes. from source and supplied proof. Current main and v2026.5.28 rewrite the migrated transcript in place, and the PR body includes terminal output for an on-disk ENOSPC failure and retry path; I did not run tests because this was a read-only review.",
+      "review_followup": "- [P2] The remaining action is maintainer review of the session-fence safety tradeoff, not an automated code repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "7492ae09db43a157e60925380355446f52c1630a",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(sessions): make transcript migration rewrite atomic",
+        "body": "## Summary\n\n- The one-time legacy linear→parent-linked transcript migration rewrote the whole conversation-history JSONL **in place** (`fs.writeFile` = `O_TRUNC` then write). A crash, power loss, or `ENOSPC` mid-write left the transcript empty or partially rewritten — **irreversible loss of user conversation history**.\n- New path: the migration rewrite goes through a small `writeJsonlLinesAtomic` helper that writes an **fsync'd sibling temp file and atomically renames it** over the target. A failed rewrite now leaves the original transcript intact and is retryable. **Output bytes are unchanged.**\n- The atomic rename changes the transcript's **inode**, which the embedded-attempt takeover fence's benign-migration recognizer (`sessionFenceRewriteIsBenign`) previously rejected because it required inode identity. The recognizer is adjusted to be **content-based** (its per-line migration check is the real guard), and a **TOCTOU re-stat guard** is added so the accepted baseline cannot be swapped after benign classification.\n\nWhy this matters now: transcripts are a user-facing product artifact (conversation history). The migration fires once per legacy transcript on the next append after upgrade, so any real user upgrading across the linear→parent-linked format change is exposed to one-shot data loss on a mistimed crash/disk-full.\n\nIntended outcome: a failed migration write leaves the existing transcript intact and retryable under the helper's temp+rename+fsync contract.\n\nWhat success looks like: the migration is atomic (temp+rename+fsync), output is byte-identical, locking/append semantics are unchanged, and the takeover fence still rejects genuine takeovers.\n\nWhat reviewers should focus on: the fence change in `src/agents/embedded-agent-runner/run/attempt.session-lock.ts` — see **Why the fence change is in scope** below.\n\n### Why the fence change is in scope (please read before flagging it)\n\nThis is the non-obvious part of the PR, so it is called out explicitly:\n\n- The atomic write replaces in-place truncate+write with **temp + rename**, which necessarily gives the rewritten transcript a **new inode**.\n- `sessionFenceRewriteIsBenign` exists specifically to recognize *this* linear→parent-linked migration as a benign in-process change while an embedded attempt is released for model I/O. It was written for the **in-place** rewrite and gated acceptance on `sameSessionFileIdentity` (same dev+ino).\n- With the migration now atomic, that inode gate falsely flags the legitimate migration as `EmbeddedAttemptSessionTakeoverError` (an existing test, *\"allows delivery mirror appends that migrate legacy linear transcripts\"*, fails without this change). So the fence change is **required by**, not incidental to, the atomicity fix.\n- The **safety invariant for this benign-migration exception is content, not identity**: acceptance still requires every prior line to be exactly the parent-linked migration of the release-time snapshot (`lineMatchesLinearTranscriptMigration`) and every appended line to be a transcript-only OpenClaw assistant entry (`delivery-mirror` / `gateway-injected`). An inode-replacing rewrite whose content is not that exact benign shape is **still rejected as a takeover** (covered by a new test).\n- The removed inode check only blocked the legitimate atomic temp+rename migration; for this recognizer, the narrow content matcher plus the re-stat baseline check is the meaningful defense.\n- **TOCTOU:** because the recognizer no longer pins identity, `assertSessionFileFence` now re-stats after classification and only adopts the new fence baseline if it still matches the fingerprint that was classified benign — otherwise it falls through to takeover. This closes the window where a rename-capable writer could show benign content to the check and swap different content into the trusted baseline.\n- `sessionFenceAdvanceIsBenign` (the pure `O_APPEND` advance path, which is still genuinely in-place) **remains inode-gated** — only the rewrite recognizer is relaxed.\n\n## Linked context\n\nWhich issue does this close?\n\nCloses: N/A (no tracking issue)\n\nWhich issues, PRs, or discussions are related?\n\nRelated: N/A; nearby prior art: an atomic temp+rename fix for `auth.json` landed previously (same pattern, different file). The in-flight transcript-writer refactor stack (scoped writer/seam PRs) touches `transcript-append.ts` and may require a trivial rebase; no semantic overlap.\n\nWas this requested by a maintainer or owner? No — proactive data-loss hardening.\n\n## Real behavior proof (required for external PRs)\n\n- **Behavior or issue addressed:** an interrupted one-time linear→parent-linked transcript migration could truncate/partially overwrite the user's conversation-history JSONL, losing it irreversibly.\n- **Real environment tested:** Linux, Node 22, OpenClaw worktree at the PR head. A real legacy linear transcript was written to a real session directory on disk and migrated end-to-end through the production `appendSessionTranscriptMessage` (no mocked transcript writer), with a real `rename` failure (`ENOSPC`) injected at the atomic-replace boundary.\n- **Exact steps or command run after this patch:** a small harness drove the production migration against a real on-disk transcript and was run with `node --import tsx`; it created a legacy linear transcript, made the next `fs/promises.rename` throw `ENOSPC` once, called `appendSessionTranscriptMessage`, then inspected the on-disk file and retried. The committed deterministic version of the same scenario is `src/config/sessions/transcript-append.test.ts` (runnable by reviewers).\n- **Evidence after fix:** live captured terminal output from the on-disk run (production code path, real injected disk-full failure):\n\n  ```text\n  transcript: /tmp/.../agents/main/sessions/repro.jsonl\n  original bytes: 213, sha=f5d898dab594a9fb\n\n  [1] migration write fails mid-rename (simulated disk-full):\n      -> append rejected: ENOSPC: no space left on device, rename\n      rejected:            true\n      original preserved:  true (213 bytes, byte-for-byte equal)\n      no temp left behind: true (dir entries: [\"repro.jsonl\"])\n\n  [2] retry after the failure (rename restored):\n      append succeeded:    true (lock was released after the failure)\n      header version:      3 (bumped to current = 3)\n      m1 now parent-linked: parentId=null (was linear, no parentId)\n      appended entry:      type=message parentId=\"m2\"\n      total entries:       4\n\n  RESULT:\n    data-loss window closed = true\n  ```\n\n  Supplemental regression coverage (not the primary proof): the committed `src/config/sessions/transcript-append.test.ts` encodes the byte-identity / failure-injection / retry invariants, and `attempt.session-lock.test.ts` adds a test that an inode-replacing non-migration rewrite still raises `EmbeddedAttemptSessionTakeoverError`.\n- **Observed result after fix:** on the injected disk-full failure the original transcript stays byte-for-byte intact (213 → 213 bytes) with no partial write and no leftover temp sibling, and the call rejects; the retry then acquires the lock (proving it was released) and completes the migration to parent-linked form. Genuine takeovers are still detected.\n- **What was not tested:** an actual hardware power-loss / kernel-level write tear (simulated via `rename`-boundary failure injection + `fsync` on temp and parent dir, not a real power cut); Windows rename-over-open-file behavior (POSIX-reasoned: old fd keeps old inode; a Windows sharing-violation surfaces as an operational error, not data loss); a deterministic race-injection test for the TOCTOU re-stat window (that guard is covered by code review, while hostile non-migration replacement is covered by a regression test).\n- **Proof limitations or environment constraints:** crash/power-loss durability relies on `fsync` of the temp file and parent directory (best-effort per platform); deterministic proof uses failure injection at the rename boundary, which is the contract under test.\n- **Before evidence (optional):** on the base commit the same injected-failure test against the in-place path leaves the transcript truncated/empty (the bug).\n\n## Tests and validation\n\nWhich commands did you run?\n\n- `pnpm test src/config/sessions/transcript-append.test.ts` (migration byte-identity + failure-injection + retry)\n- `pnpm test src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts` (migration-under-fence + new hostile-rewrite takeover test + all existing takeover tests)\n- adjacent: `transcript-append-redact`, `transcript`, `transcript-stream`\n- `pnpm tsgo:core`, `pnpm tsgo:core:test`, `oxfmt --check`, `oxlint` — all green\n\nWhat regression coverage was added or updated?\n\n- `transcript-append.test.ts` (new): (1) `writeJsonlLinesAtomic` is byte-identical and mode-identical (0o600) to `writeJsonlLines`; (2) rename-failure leaves the existing file intact with no temp sibling and rejects; (3) migration succeeds end-to-end producing valid parent-linked output; (4) original transcript intact after an injected migration-write failure; (5) retry after injected failure completes the migration (lock released).\n- `attempt.session-lock.test.ts` (+1): an inode-replacing rewrite whose content is *not* a benign migration still raises `EmbeddedAttemptSessionTakeoverError`.\n\nWhat failed before this fix, if known?\n\n- Before: injecting a failure during the in-place migration write leaves the transcript empty/partial (data loss). After: the original is preserved and the write is retryable.\n\nIf no test was added, why not? N/A — failure-injection + invariant tests added.\n\nTotal: **102 tests pass**; `tsgo` / `oxfmt` / `oxlint` green.\n\n## Risk checklist\n\nDid user-visible behavior change? (`Yes/No`) — **No** for successful migrations (output bytes identical). The only behavior change is on failure: data is now preserved instead of lost.\n\nDid config, environment, or migration behavior change? (`Yes/No`) — **No** config/env. The transcript *migration* is made crash-safe; its successful output is unchanged.\n\nDid security, auth, secrets, network, or tool execution behavior change? (`Yes/No`) — **Yes (security-adjacent, please review):** the embedded-attempt takeover fence's benign-migration recognizer is relaxed from inode-identity to content-based, with a compensating TOCTOU re-stat guard. Takeover detection is otherwise unchanged; genuine takeovers still trip (tested).\n\nWhat is the highest-risk area? The `sessionFenceRewriteIsBenign` relaxation in `attempt.session-lock.ts`.\n\nHow is that risk mitigated? The per-line migration content check (unchanged) is the real guard; the in-place advance path stays inode-gated; a TOCTOU re-stat binds the accepted baseline to the verified fingerprint; a new test asserts hostile inode-replacing rewrites still raise takeover.\n\nPrivacy note: the sibling temp file holds transcript content during the rewrite; it is created in the same session directory with `0o600` mode and is removed on failure before returning. No new network or secrets surface.\n\n### Intentionally out of scope (split follow-up)\n\n- The sibling non-atomic whole-file rewrites in `agents/embedded-agent-runner/session-manager-init.ts` and `agents/sessions/session-manager.ts` (incl. a `writeFileSync` variant) share the same torn-write shape but live in the SessionManager subsystem and overlap the in-flight SQLite session-store refactor. They are **deliberately not** in this PR and are named here as documented follow-up.\n- No SQLite migration, no JSON-store reorder, no commitments changes, no ACP persist-ordering changes.\n- **No `CHANGELOG.md` edit** (release-only per repo policy; release notes derive from this PR body).\n- No ClawBench: this is a correctness / data-loss fix, not a performance change — proof is failure-injection + invariant tests, not latency/token measurement.\n\n## Current review state\n\nWhat is the next action? Maintainer review of the fence relaxation rationale + the atomic-write helper.\n\nWhat is still waiting on author, maintainer, CI, or external proof? Nothing from the author — tests/typecheck/lint green locally; CI pending on push.\n\nWhich bot or reviewer comments were addressed? N/A (initial submission).\n",
+        "branch": "fix/transcript-migration-atomicity",
+        "head_sha": "7492ae09db43a157e60925380355446f52c1630a",
+        "author": "masatohoshino",
+        "labels": [
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts",
+            "additions": 40,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.ts",
+            "additions": 21,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/transcript-append.test.ts",
+            "additions": 182,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/config/sessions/transcript-append.ts",
+            "additions": 5,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/transcript-jsonl.ts",
+            "additions": 33,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89752",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89752.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 130,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 373,
+    "total_ms": 4549,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 225
+        "ms": 481
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 3705
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 137
+        "ms": 334
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
