@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-03T18:45:44.303Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-03T18:49:22.582Z",
+  "repo": "steipete/oracle",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T15:45:41.443Z",
+  "since": "2026-06-03T15:49:22.354Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    89965
+    241
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,228 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89965:4615492400:2026-06-03T18:45:37Z:clawsweeper_auto_repair",
-      "comment_id": "4615492400",
-      "comment_version_key": "4615492400:2026-06-03T18:45:37Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89965#issuecomment-4615492400",
-      "repo": "openclaw/openclaw",
-      "issue_number": 89965,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-03T18:22:53Z",
-      "comment_updated_at": "2026-06-03T18:45:37Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=07c7538f211514ad6a0154474d8166e232a11c37)",
-      "review_summary": "Adds a helper and terminal `runEmbeddedAgent` branch that emits a user-visible error payload when a timed-out turn would otherwise return no payload, plus helper coverage.\n\nPR surface: Source +126, Tests +57. Total +183 across 3 files.\n\nReproducibility: Do we have a high-confidence way to reproduce the issue? Source inspection gives a high-confidence path: tool-execution timeouts skip the prompt-timeout branch and the terminal path can return `payloads: undefined`, but I did not run a live current-main reproduction.",
-      "review_followup": "- [P1] The PR needs contributor follow-up for a code blocker and real after-fix behavior proof; ClawSweeper should not auto-repair around the external proof gate.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "07c7538f211514ad6a0154474d8166e232a11c37",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): emit user-visible notice when a turn exhausts its time budget",
-        "body": "## Problem\n\nWhen an agent turn exhausts its time budget (`agents.defaults.timeoutSeconds`) or a run-level deadline **while no assistant reply has been produced**, the gateway can go completely silent — no message reaches the channel, no indication a limit was hit. From a user's seat this is indistinguishable from a hung process.\n\nThis is not the prompt/provider timeout case, which already surfaces *\"Request timed out before a response was generated…\"*. It's the **timeout that fires outside a model prompt** — most commonly while a tool is executing on a complex turn. In that case:\n\n- `attempt.timedOut` is `true`, but because `countActiveToolExecutions(...) > 0` the runner also sets `timedOutDuringToolExecution = true`;\n- `timedOutDuringPrompt = timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution` is therefore `false`, so the existing prompt-timeout notice (`run.ts`, the `timedOutDuringPrompt` branch) is skipped;\n- with no partial assistant text there's no `incompleteTurnText`, so the run falls through to the terminal \"embedded run done\" path, returns `payloads: undefined`, and the reply layer (`auto-reply/reply/agent-runner.ts`) returns silently on the empty payload array.\n\n## Fix\n\nAdd one terminal branch in `runEmbeddedAgent` that surfaces a recoverable, user-visible notice when a turn timed out and is about to deliver nothing visible — mirroring the prompt-level timeout copy already emitted from the same function. Because the branch now returns a non-empty payload, it flows through the normal reply-delivery path (gateway-agnostic: Discord, Matrix, etc.) and never reaches the silent `return undefined`.\n\nThe decision is factored into a small pure helper, `resolveTurnBudgetTimeoutNotice(...)`, which returns the notice text only when it is correct to do so and `null` otherwise:\n\n- keyed on **`timedOut`** — distinct from a user cancel (`aborted` / `externalAbort`), so a user-initiated stop never produces the notice;\n- **suppressed** when a visible payload is already being returned (`payloadCount > 0`);\n- **suppressed** for intentionally-silent turns (cron / heartbeat contexts that set `allowEmptyAssistantReplyAsSilent`);\n- **suppressed** when a messaging tool already delivered a reply out-of-band (no double-notify).\n\nA separate copy variant is used for an idle (no-output) model timeout, pointing at the provider-level timeout knob in addition to the agent run ceiling.\n\nNet change is additive: it only produces output where there is currently none.\n\n## Real-behavior proof\n\nDriving the **real** `runEmbeddedAgent` terminal path with a fault-injected timed-out, tool-execution, empty-reply attempt (the exact shape that triggers the silent failure):\n\n**Before (origin/main):**\n```\n[PROOF] result.payloads = undefined\n[PROOF] result.meta.livenessState = blocked\n```\n→ the turn returns no payload; the channel stays silent.\n\n**After (this PR):**\n```\n[PROOF] result.payloads = [{\"text\":\"⚠️ I hit my time budget on this request and stopped before finishing. Ask me to continue, or simplify the request. If this happens often, raise `agents.defaults.timeoutSeconds` in your config.\",\"isError\":true}]\n[PROOF] result.meta.livenessState = abandoned\n```\n→ a recoverable notice is delivered through the normal reply path.\n\n(The harness drives `runEmbeddedAgent` via the existing test loader with `makeAttemptResult({ timedOut: true, timedOutDuringToolExecution: true, assistantTexts: [] })`; it is intentionally **not** part of the committed diff — the patch is kept narrow.)\n\n## Tests\n\n- Unit tests for `resolveTurnBudgetTimeoutNotice` covering the full decision matrix (times-out-silently → notice; idle timeout → idle variant; not-timed-out / visible-payload / intentionally-silent / messaging-delivered → `null`).\n- Existing `run.incomplete-turn` suite stays green (118 passed), including the prompt-timeout-races-completion case (visible payload → no notice).\n- `pnpm tsgo:core` and oxlint clean.\n",
-        "branch": "fix/emit-user-message-on-turn-timeout",
-        "head_sha": "07c7538f211514ad6a0154474d8166e232a11c37",
-        "author": "spencer2211",
-        "labels": [
-          "agents",
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-runner/run.incomplete-turn.test.ts",
-            "additions": 57,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.ts",
-            "additions": 66,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/incomplete-turn.ts",
-            "additions": 60,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89965",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89965.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 29,
-            "SUCCESS": 132,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89965:4615609811:2026-06-03T18:37:31Z:re_review",
-      "comment_id": "4615609811",
-      "comment_version_key": "4615609811:2026-06-03T18:37:31Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89965#issuecomment-4615609811",
-      "repo": "openclaw/openclaw",
-      "issue_number": 89965,
-      "author": "spencer2211",
-      "author_id": 28957500,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-03T18:37:31Z",
-      "comment_updated_at": "2026-06-03T18:37:31Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): emit user-visible notice when a turn exhausts its time budget",
-        "body": "## Problem\n\nWhen an agent turn exhausts its time budget (`agents.defaults.timeoutSeconds`) or a run-level deadline **while no assistant reply has been produced**, the gateway can go completely silent — no message reaches the channel, no indication a limit was hit. From a user's seat this is indistinguishable from a hung process.\n\nThis is not the prompt/provider timeout case, which already surfaces *\"Request timed out before a response was generated…\"*. It's the **timeout that fires outside a model prompt** — most commonly while a tool is executing on a complex turn. In that case:\n\n- `attempt.timedOut` is `true`, but because `countActiveToolExecutions(...) > 0` the runner also sets `timedOutDuringToolExecution = true`;\n- `timedOutDuringPrompt = timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution` is therefore `false`, so the existing prompt-timeout notice (`run.ts`, the `timedOutDuringPrompt` branch) is skipped;\n- with no partial assistant text there's no `incompleteTurnText`, so the run falls through to the terminal \"embedded run done\" path, returns `payloads: undefined`, and the reply layer (`auto-reply/reply/agent-runner.ts`) returns silently on the empty payload array.\n\n## Fix\n\nAdd one terminal branch in `runEmbeddedAgent` that surfaces a recoverable, user-visible notice when a turn timed out and is about to deliver nothing visible — mirroring the prompt-level timeout copy already emitted from the same function. Because the branch now returns a non-empty payload, it flows through the normal reply-delivery path (gateway-agnostic: Discord, Matrix, etc.) and never reaches the silent `return undefined`.\n\nThe decision is factored into a small pure helper, `resolveTurnBudgetTimeoutNotice(...)`, which returns the notice text only when it is correct to do so and `null` otherwise:\n\n- keyed on **`timedOut`** — distinct from a user cancel (`aborted` / `externalAbort`), so a user-initiated stop never produces the notice;\n- **suppressed** when a visible payload is already being returned (`payloadCount > 0`);\n- **suppressed** for intentionally-silent turns (cron / heartbeat contexts that set `allowEmptyAssistantReplyAsSilent`);\n- **suppressed** when a messaging tool already delivered a reply out-of-band (no double-notify).\n\nA separate copy variant is used for an idle (no-output) model timeout, pointing at the provider-level timeout knob in addition to the agent run ceiling.\n\nNet change is additive: it only produces output where there is currently none.\n\n## Real-behavior proof\n\nDriving the **real** `runEmbeddedAgent` terminal path with a fault-injected timed-out, tool-execution, empty-reply attempt (the exact shape that triggers the silent failure):\n\n**Before (origin/main):**\n```\n[PROOF] result.payloads = undefined\n[PROOF] result.meta.livenessState = blocked\n```\n→ the turn returns no payload; the channel stays silent.\n\n**After (this PR):**\n```\n[PROOF] result.payloads = [{\"text\":\"⚠️ I hit my time budget on this request and stopped before finishing. Ask me to continue, or simplify the request. If this happens often, raise `agents.defaults.timeoutSeconds` in your config.\",\"isError\":true}]\n[PROOF] result.meta.livenessState = abandoned\n```\n→ a recoverable notice is delivered through the normal reply path.\n\n(The harness drives `runEmbeddedAgent` via the existing test loader with `makeAttemptResult({ timedOut: true, timedOutDuringToolExecution: true, assistantTexts: [] })`; it is intentionally **not** part of the committed diff — the patch is kept narrow.)\n\n## Tests\n\n- Unit tests for `resolveTurnBudgetTimeoutNotice` covering the full decision matrix (times-out-silently → notice; idle timeout → idle variant; not-timed-out / visible-payload / intentionally-silent / messaging-delivered → `null`).\n- Existing `run.incomplete-turn` suite stays green (118 passed), including the prompt-timeout-races-completion case (visible payload → no notice).\n- `pnpm tsgo:core` and oxlint clean.\n",
-        "branch": "fix/emit-user-message-on-turn-timeout",
-        "head_sha": "07c7538f211514ad6a0154474d8166e232a11c37",
-        "author": "spencer2211",
-        "labels": [
-          "agents",
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-runner/run.incomplete-turn.test.ts",
-            "additions": 57,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.ts",
-            "additions": 66,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/incomplete-turn.ts",
-            "additions": 60,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89965",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89965.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 29,
-            "SUCCESS": 132,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3222,
+    "total_ms": 398,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 487
+        "ms": 216
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2356
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 350
+        "ms": 171
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
