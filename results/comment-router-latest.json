@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-03T17:18:35.410Z",
+  "generated_at": "2026-06-03T17:19:11.254Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T14:18:33.214Z",
+  "since": "2026-06-03T14:19:10.761Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     88682
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4587211194
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
-  "commands_seen": 3,
-  "actionable": 1,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -61,512 +63,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "Preserve Telegram streamed text blocks between tool calls",
-        "body": "Fixes https://github.com/openclaw/openclaw/issues/87326.\n\n## Summary\n\n- Preserve Telegram streamed answer blocks across tool-call / assistant-message boundaries instead of letting later blocks edit the same draft preview.\n- Keep same-assistant chunks on one Telegram draft, and rotate only when the next answer block belongs to a different assistant message or after tool-progress-only drafts.\n- Preserve reply-payload assistant-message metadata through internal auto-reply metadata helpers across `beforeDeliver`, TTS cleanup, reply-payload-sending hooks, message-sending hooks, and block coalescing so Telegram can still match queued blocks after payload rewrites.\n- Materialize a stale queued answer-block preview through normal non-durable delivery before resetting the draft lane, so a failed/stale preview is not lost during rotation.\n- Keep the public Plugin SDK API surface unchanged for this Telegram/channel bugfix.\n\n## User-facing bug\n\nWhen Telegram block streaming was enabled, answer text emitted between tool calls could be visible briefly and then disappear. A later assistant block or final answer could edit the same Telegram draft preview, so users lost intermediate findings such as \"Site A shows X\" after the agent checked another tool.\n\n## Exact repro\n\nThe focused repro shape is:\n\n1. Stream a partial answer for assistant message 0.\n2. Queue the final block for assistant message 0.\n3. Cross an assistant-message/tool boundary.\n4. Deliver assistant message 0's block.\n5. Stream assistant message 1.\n\nBefore the fix, the message-1 partial could overwrite the message-0 draft. After the fix, the message-0 block is delivered first, then Telegram rotates to a fresh answer draft for message 1.\n\nThe stale-preview path from review feedback is:\n\n1. Deliver assistant message 0's block into the answer draft.\n2. Observe Telegram draft state has stale visible text before the next queued block arrives.\n3. Queue assistant message 1's block.\n4. Verify the stale message-0 block is cleared and delivered normally before `forceNewMessage()`.\n5. Verify message 1 writes to the fresh answer draft.\n\n## Fix summary\n\nTelegram dispatch now tracks queued answer blocks by assistant-message index. The queue is filled from `onBlockReplyQueued`, matched after final `beforeDeliver` / TTS / message-sending rewrites, and drained when a queued block is cancelled, skipped, or no longer contains answer text. Assistant-message-start no longer rotates immediately when there are queued prior blocks; it delays rotation until those blocks settle so the old message is finalized before the next assistant message writes to a fresh draft.\n\nFor stale previews, queued-block rotation now first materializes the previous answer block using the existing clear + normal-send fallback path. That materialization is explicitly non-durable: it does not use durable final delivery and does not mirror the intermediate block as the final answer transcript. Media fallback for this intermediate path also stays non-durable.\n\nTo make matching reliable, reply-payload metadata is preserved across the auto-reply delivery hooks and coalescer paths that may replace payload objects. The public Plugin SDK API surface stays unchanged: this branch has no diff for `src/plugin-sdk/reply-payload.ts`, `src/plugin-sdk/reply-runtime.ts`, `src/auto-reply/get-reply-options.types.ts`, or `docs/.generated/plugin-sdk-api-baseline.sha256`.\n\n## Real behavior proof\n\nBehavior addressed: Telegram answer text emitted between tool calls remains visible after the next assistant block starts. If the previous answer draft is stale before rotation, the previous block is delivered normally before the lane reset, then the next assistant message writes to a fresh draft.\n\nReal environment tested: local OpenClaw source checkout on Node v24.4.1, branch `fix/telegram-preserve-stream-blocks`, commit `d48cb9ee13057e8ed5b005bb680031e69f9d7615`, rebased on current `origin/main` commit `ec47d1cdd5`. The run executed the real `dispatchTelegramMessage` entrypoint, channel inbound lifecycle, queued block matching, draft lane rotation, and lane delivery code with a local transport capture so the runtime could log send/edit/rotate order.\n\nExact steps or command run after this patch: from `/Users/alex/PR/projects/openclaw__openclaw/worktrees/88682`, ran:\n\n```bash\nnode --import tsx -e 'await import(\"./.artifacts/pr-88682-runtime-log.mjs\"); process.exit(0)'\n```\n\nEvidence after fix: copied redacted runtime log from `.artifacts/pr-88682-runtime-log.txt`:\n\n```text\nOpenClaw Telegram dispatch runtime proof\nstarted_at=2026-06-03T17:06:32.220Z\ncommit=d48cb9ee13057e8ed5b005bb680031e69f9d7615\nchannel=telegram account=default chat=[redacted-chat] message=[redacted-message]\n\n01 session.recordInboundSession sessionKey=\"agent:proof:telegram:direct:redacted\"\n02 runtime.dispatch.start channel=\"telegram\" account=\"default\" chatId=\"[redacted-chat]\" sessionKey=\"agent:proof:telegram:direct:redacted\"\n03 runtime.block.queued assistantMessageIndex=0 text=\"Site A shows X.\"\n04 draft.update lane=\"answer\" messageId=2001 previewRevision=1 text=\"Site A shows X.\"\n05 draft.flush lane=\"answer\" messageId=2001\n06 runtime.observed_stale_draft lane=\"answer\" messageId=2001 lastDeliveredText=\"stale draft still visible\"\n07 runtime.block.queued assistantMessageIndex=1 text=\"Site B shows Y.\"\n08 draft.update lane=\"answer\" messageId=2001 previewRevision=2 text=\"Site A shows X.\"\n09 draft.stop lane=\"answer\" messageId=2001 lastDeliveredText=\"stale draft still visible\"\n10 draft.clear lane=\"answer\" messageId=2001 lastDeliveredText=\"stale draft still visible\"\n11 telegram.deliverReplies chatId=\"[redacted-chat]\" text=\"Site A shows X.\" transcriptMirror=\"absent\" silent=false\n12 draft.stop lane=\"answer\" messageId=2001 lastDeliveredText=\"stale draft still visible\"\n13 draft.forceNewMessage lane=\"answer\" previousMessageId=2001\n14 draft.update lane=\"answer\" messageId=2002 previewRevision=1 text=\"Site B shows Y.\"\n15 draft.flush lane=\"answer\" messageId=2002\n16 runtime.dispatch.complete queuedFinal=true visibleReplySent=true\n17 draft.clear lane=\"answer\" messageId=2002 lastDeliveredText=\"Site B shows Y.\"\n18 runtime.proof.complete result=\"stale first block was sent through normal delivery before forceNewMessage, then second block updated fresh draft\"\n\nresult=PASS\nproof_statement=stale queued answer block used normal delivery before lane rotation; next answer block used fresh draft\n```\n\nObserved result after fix: the stale first answer block is sent through `telegram.deliverReplies` at event 11 before `draft.forceNewMessage` at event 13. That delivery has `transcriptMirror=\"absent\"`, so the intermediate block is not treated as the durable final transcript. The next assistant block updates message 2002 after rotation, proving it uses a fresh answer draft instead of overwriting message 2001.\n\nWhat was not tested: native Telegram Desktop recording and live Telegram Bot API credentials were not available in this workspace. The runtime proof above covers the OpenClaw dispatch/send/rotate order but is not a native Telegram client video. The local TSX runner wrote the PASS artifact and stdout but did not exit on its own after the proof completed, so I terminated that runner after capturing the log.\n\n## Supplemental validation\n\nCommands run after the fix:\n\n```bash\nOPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-vitest.mjs extensions/telegram/src/bot-message-dispatch.test.ts extensions/telegram/src/lane-delivery.test.ts src/auto-reply/reply/before-deliver.test.ts src/auto-reply/reply/block-reply-pipeline.test.ts src/auto-reply/reply/dispatch-from-config.test.ts src/auto-reply/dispatch.test.ts src/plugins/wired-hooks-reply-payload-sending.test.ts\n```\n\n```bash\ngit diff --check origin/main...HEAD\n```\n\n```bash\ngit diff origin/main...HEAD -- src/plugin-sdk/reply-payload.ts docs/.generated/plugin-sdk-api-baseline.sha256 src/auto-reply/get-reply-options.types.ts src/plugin-sdk/reply-runtime.ts\n```\n\n```bash\nnode_modules/.bin/oxlint --tsconfig config/tsconfig/oxlint.core.json src/auto-reply/reply/block-reply-coalescer.ts src/auto-reply/reply/block-reply-pipeline.ts src/auto-reply/reply/block-reply-pipeline.test.ts src/auto-reply/reply/reply-dispatcher.ts src/auto-reply/reply/before-deliver.test.ts src/auto-reply/dispatch.ts src/auto-reply/dispatch.test.ts src/auto-reply/reply/dispatch-from-config.ts src/auto-reply/reply/dispatch-from-config.test.ts src/auto-reply/reply/reply-payload-sending-hook.ts\n```\n\n```bash\nnode_modules/.bin/oxlint --tsconfig config/tsconfig/oxlint.extensions.json extensions/telegram/src/bot-message-dispatch.ts extensions/telegram/src/bot-message-dispatch.test.ts extensions/telegram/src/lane-delivery-text-deliverer.ts extensions/telegram/src/lane-delivery.test.ts\n```\n\n```bash\ncodex review --base origin/main\n```\n\nResults:\n\n- Rebased onto current `origin/main` commit `ec47d1cdd5`; branch is ahead by 2 commits and not behind. This rebase had to reconcile with main's `e4993ec00f` (`fix(telegram): prevent preview duplication in partial and block streaming modes`, #87624), which introduced a `skipTextOnlyBlock` duplicate-draft suppression on the same answer-block delivery path this PR rotates. The merge keeps both behaviors: a duplicate text-only block is still suppressed at delivery time, but when it is owned by a queued-block rotation (assistant-message split) or is followed by tool progress, the preserved block is materialized before the lane rotates instead of being dropped. Progress-draft state introduced by main was migrated into the `createChannelProgressDraftCompositor` helper (`progressDraft.reset()` / `.suppress()`).\n- Focused Vitest set: 7 files passed, 412 tests passed (`extensions/telegram/src/bot-message-dispatch.test.ts` 128, `extensions/telegram/src/lane-delivery.test.ts` 169 incl. the auto-reply files, plus the auto-reply and wired-hooks suites). Both regression tests that encode this PR's contract pass: `does not rotate a partial preview before queued block delivery drains` and `keeps tool progress visible after a partial-streamed intermediate block`. Main's duplicate-dedup regression tests (`finalizes a duplicate text-only block when no final follows`, `materializes a pending duplicate text-only block before finalizing it`) still pass.\n- `tsgo` extensions typecheck (`tsconfig.extensions.json`) passed for all Telegram sources (the only remaining diagnostics are a pre-existing, unrelated `extensions/discord/.../receive-recovery.ts` ↔ `libopus-wasm` API mismatch in this local environment, untouched by this PR).\n- `git diff --check origin/main...HEAD`: passed.\n- Public SDK/API surface check: no output, so no public Plugin SDK helper or generated API baseline change remains in this branch.\n- Changed auto-reply/core oxlint command: passed.\n- Changed Telegram oxlint command: passed.\n- Not run after the final rebase: broad `pnpm check`, full repository test suite, native Telegram Bot API/Desktop recording.\n\n## AI-assisted disclosure\n\nThis change was implemented with AI assistance.\n",
-        "branch": "fix/telegram-preserve-stream-blocks",
-        "head_sha": "d48cb9ee13057e8ed5b005bb680031e69f9d7615",
-        "author": "alexzhu0",
-        "labels": [
-          "channel: telegram",
-          "size: XL",
-          "proof: supplied",
-          "mantis: telegram-visible-proof",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/telegram/src/bot-message-dispatch.test.ts",
-            "additions": 830,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message-dispatch.ts",
-            "additions": 311,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/draft-stream.test-helpers.ts",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/lane-delivery-text-deliverer.ts",
-            "additions": 50,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/lane-delivery.test.ts",
-            "additions": 159,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/dispatch.test.ts",
-            "additions": 24,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/dispatch.ts",
-            "additions": 4,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/before-deliver.test.ts",
-            "additions": 86,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/block-reply-coalescer.ts",
-            "additions": 25,
-            "deletions": 21,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/block-reply-pipeline.test.ts",
-            "additions": 26,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-from-config.test.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-from-config.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-dispatcher.ts",
-            "additions": 47,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-payload-sending-hook.ts",
-            "additions": 3,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88682",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88682.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 161,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 28,
-            "SUCCESS": 130,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:88682:4600445936:2026-06-02T08:42:50Z:re_review",
-      "comment_id": "4600445936",
-      "comment_version_key": "4600445936:2026-06-02T08:42:50Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/88682#issuecomment-4600445936",
-      "repo": "openclaw/openclaw",
-      "issue_number": 88682,
-      "author": "alexzhu0",
-      "author_id": 178769291,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-02T08:42:50Z",
-      "comment_updated_at": "2026-06-02T08:42:50Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "Preserve Telegram streamed text blocks between tool calls",
-        "body": "Fixes https://github.com/openclaw/openclaw/issues/87326.\n\n## Summary\n\n- Preserve Telegram streamed answer blocks across tool-call / assistant-message boundaries instead of letting later blocks edit the same draft preview.\n- Keep same-assistant chunks on one Telegram draft, and rotate only when the next answer block belongs to a different assistant message or after tool-progress-only drafts.\n- Preserve reply-payload assistant-message metadata through internal auto-reply metadata helpers across `beforeDeliver`, TTS cleanup, reply-payload-sending hooks, message-sending hooks, and block coalescing so Telegram can still match queued blocks after payload rewrites.\n- Materialize a stale queued answer-block preview through normal non-durable delivery before resetting the draft lane, so a failed/stale preview is not lost during rotation.\n- Keep the public Plugin SDK API surface unchanged for this Telegram/channel bugfix.\n\n## User-facing bug\n\nWhen Telegram block streaming was enabled, answer text emitted between tool calls could be visible briefly and then disappear. A later assistant block or final answer could edit the same Telegram draft preview, so users lost intermediate findings such as \"Site A shows X\" after the agent checked another tool.\n\n## Exact repro\n\nThe focused repro shape is:\n\n1. Stream a partial answer for assistant message 0.\n2. Queue the final block for assistant message 0.\n3. Cross an assistant-message/tool boundary.\n4. Deliver assistant message 0's block.\n5. Stream assistant message 1.\n\nBefore the fix, the message-1 partial could overwrite the message-0 draft. After the fix, the message-0 block is delivered first, then Telegram rotates to a fresh answer draft for message 1.\n\nThe stale-preview path from review feedback is:\n\n1. Deliver assistant message 0's block into the answer draft.\n2. Observe Telegram draft state has stale visible text before the next queued block arrives.\n3. Queue assistant message 1's block.\n4. Verify the stale message-0 block is cleared and delivered normally before `forceNewMessage()`.\n5. Verify message 1 writes to the fresh answer draft.\n\n## Fix summary\n\nTelegram dispatch now tracks queued answer blocks by assistant-message index. The queue is filled from `onBlockReplyQueued`, matched after final `beforeDeliver` / TTS / message-sending rewrites, and drained when a queued block is cancelled, skipped, or no longer contains answer text. Assistant-message-start no longer rotates immediately when there are queued prior blocks; it delays rotation until those blocks settle so the old message is finalized before the next assistant message writes to a fresh draft.\n\nFor stale previews, queued-block rotation now first materializes the previous answer block using the existing clear + normal-send fallback path. That materialization is explicitly non-durable: it does not use durable final delivery and does not mirror the intermediate block as the final answer transcript. Media fallback for this intermediate path also stays non-durable.\n\nTo make matching reliable, reply-payload metadata is preserved across the auto-reply delivery hooks and coalescer paths that may replace payload objects. The public Plugin SDK API surface stays unchanged: this branch has no diff for `src/plugin-sdk/reply-payload.ts`, `src/plugin-sdk/reply-runtime.ts`, `src/auto-reply/get-reply-options.types.ts`, or `docs/.generated/plugin-sdk-api-baseline.sha256`.\n\n## Real behavior proof\n\nBehavior addressed: Telegram answer text emitted between tool calls remains visible after the next assistant block starts. If the previous answer draft is stale before rotation, the previous block is delivered normally before the lane reset, then the next assistant message writes to a fresh draft.\n\nReal environment tested: local OpenClaw source checkout on Node v24.4.1, branch `fix/telegram-preserve-stream-blocks`, commit `d48cb9ee13057e8ed5b005bb680031e69f9d7615`, rebased on current `origin/main` commit `ec47d1cdd5`. The run executed the real `dispatchTelegramMessage` entrypoint, channel inbound lifecycle, queued block matching, draft lane rotation, and lane delivery code with a local transport capture so the runtime could log send/edit/rotate order.\n\nExact steps or command run after this patch: from `/Users/alex/PR/projects/openclaw__openclaw/worktrees/88682`, ran:\n\n```bash\nnode --import tsx -e 'await import(\"./.artifacts/pr-88682-runtime-log.mjs\"); process.exit(0)'\n```\n\nEvidence after fix: copied redacted runtime log from `.artifacts/pr-88682-runtime-log.txt`:\n\n```text\nOpenClaw Telegram dispatch runtime proof\nstarted_at=2026-06-03T17:06:32.220Z\ncommit=d48cb9ee13057e8ed5b005bb680031e69f9d7615\nchannel=telegram account=default chat=[redacted-chat] message=[redacted-message]\n\n01 session.recordInboundSession sessionKey=\"agent:proof:telegram:direct:redacted\"\n02 runtime.dispatch.start channel=\"telegram\" account=\"default\" chatId=\"[redacted-chat]\" sessionKey=\"agent:proof:telegram:direct:redacted\"\n03 runtime.block.queued assistantMessageIndex=0 text=\"Site A shows X.\"\n04 draft.update lane=\"answer\" messageId=2001 previewRevision=1 text=\"Site A shows X.\"\n05 draft.flush lane=\"answer\" messageId=2001\n06 runtime.observed_stale_draft lane=\"answer\" messageId=2001 lastDeliveredText=\"stale draft still visible\"\n07 runtime.block.queued assistantMessageIndex=1 text=\"Site B shows Y.\"\n08 draft.update lane=\"answer\" messageId=2001 previewRevision=2 text=\"Site A shows X.\"\n09 draft.stop lane=\"answer\" messageId=2001 lastDeliveredText=\"stale draft still visible\"\n10 draft.clear lane=\"answer\" messageId=2001 lastDeliveredText=\"stale draft still visible\"\n11 telegram.deliverReplies chatId=\"[redacted-chat]\" text=\"Site A shows X.\" transcriptMirror=\"absent\" silent=false\n12 draft.stop lane=\"answer\" messageId=2001 lastDeliveredText=\"stale draft still visible\"\n13 draft.forceNewMessage lane=\"answer\" previousMessageId=2001\n14 draft.update lane=\"answer\" messageId=2002 previewRevision=1 text=\"Site B shows Y.\"\n15 draft.flush lane=\"answer\" messageId=2002\n16 runtime.dispatch.complete queuedFinal=true visibleReplySent=true\n17 draft.clear lane=\"answer\" messageId=2002 lastDeliveredText=\"Site B shows Y.\"\n18 runtime.proof.complete result=\"stale first block was sent through normal delivery before forceNewMessage, then second block updated fresh draft\"\n\nresult=PASS\nproof_statement=stale queued answer block used normal delivery before lane rotation; next answer block used fresh draft\n```\n\nObserved result after fix: the stale first answer block is sent through `telegram.deliverReplies` at event 11 before `draft.forceNewMessage` at event 13. That delivery has `transcriptMirror=\"absent\"`, so the intermediate block is not treated as the durable final transcript. The next assistant block updates message 2002 after rotation, proving it uses a fresh answer draft instead of overwriting message 2001.\n\nWhat was not tested: native Telegram Desktop recording and live Telegram Bot API credentials were not available in this workspace. The runtime proof above covers the OpenClaw dispatch/send/rotate order but is not a native Telegram client video. The local TSX runner wrote the PASS artifact and stdout but did not exit on its own after the proof completed, so I terminated that runner after capturing the log.\n\n## Supplemental validation\n\nCommands run after the fix:\n\n```bash\nOPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-vitest.mjs extensions/telegram/src/bot-message-dispatch.test.ts extensions/telegram/src/lane-delivery.test.ts src/auto-reply/reply/before-deliver.test.ts src/auto-reply/reply/block-reply-pipeline.test.ts src/auto-reply/reply/dispatch-from-config.test.ts src/auto-reply/dispatch.test.ts src/plugins/wired-hooks-reply-payload-sending.test.ts\n```\n\n```bash\ngit diff --check origin/main...HEAD\n```\n\n```bash\ngit diff origin/main...HEAD -- src/plugin-sdk/reply-payload.ts docs/.generated/plugin-sdk-api-baseline.sha256 src/auto-reply/get-reply-options.types.ts src/plugin-sdk/reply-runtime.ts\n```\n\n```bash\nnode_modules/.bin/oxlint --tsconfig config/tsconfig/oxlint.core.json src/auto-reply/reply/block-reply-coalescer.ts src/auto-reply/reply/block-reply-pipeline.ts src/auto-reply/reply/block-reply-pipeline.test.ts src/auto-reply/reply/reply-dispatcher.ts src/auto-reply/reply/before-deliver.test.ts src/auto-reply/dispatch.ts src/auto-reply/dispatch.test.ts src/auto-reply/reply/dispatch-from-config.ts src/auto-reply/reply/dispatch-from-config.test.ts src/auto-reply/reply/reply-payload-sending-hook.ts\n```\n\n```bash\nnode_modules/.bin/oxlint --tsconfig config/tsconfig/oxlint.extensions.json extensions/telegram/src/bot-message-dispatch.ts extensions/telegram/src/bot-message-dispatch.test.ts extensions/telegram/src/lane-delivery-text-deliverer.ts extensions/telegram/src/lane-delivery.test.ts\n```\n\n```bash\ncodex review --base origin/main\n```\n\nResults:\n\n- Rebased onto current `origin/main` commit `ec47d1cdd5`; branch is ahead by 2 commits and not behind. This rebase had to reconcile with main's `e4993ec00f` (`fix(telegram): prevent preview duplication in partial and block streaming modes`, #87624), which introduced a `skipTextOnlyBlock` duplicate-draft suppression on the same answer-block delivery path this PR rotates. The merge keeps both behaviors: a duplicate text-only block is still suppressed at delivery time, but when it is owned by a queued-block rotation (assistant-message split) or is followed by tool progress, the preserved block is materialized before the lane rotates instead of being dropped. Progress-draft state introduced by main was migrated into the `createChannelProgressDraftCompositor` helper (`progressDraft.reset()` / `.suppress()`).\n- Focused Vitest set: 7 files passed, 412 tests passed (`extensions/telegram/src/bot-message-dispatch.test.ts` 128, `extensions/telegram/src/lane-delivery.test.ts` 169 incl. the auto-reply files, plus the auto-reply and wired-hooks suites). Both regression tests that encode this PR's contract pass: `does not rotate a partial preview before queued block delivery drains` and `keeps tool progress visible after a partial-streamed intermediate block`. Main's duplicate-dedup regression tests (`finalizes a duplicate text-only block when no final follows`, `materializes a pending duplicate text-only block before finalizing it`) still pass.\n- `tsgo` extensions typecheck (`tsconfig.extensions.json`) passed for all Telegram sources (the only remaining diagnostics are a pre-existing, unrelated `extensions/discord/.../receive-recovery.ts` ↔ `libopus-wasm` API mismatch in this local environment, untouched by this PR).\n- `git diff --check origin/main...HEAD`: passed.\n- Public SDK/API surface check: no output, so no public Plugin SDK helper or generated API baseline change remains in this branch.\n- Changed auto-reply/core oxlint command: passed.\n- Changed Telegram oxlint command: passed.\n- Not run after the final rebase: broad `pnpm check`, full repository test suite, native Telegram Bot API/Desktop recording.\n\n## AI-assisted disclosure\n\nThis change was implemented with AI assistance.\n",
-        "branch": "fix/telegram-preserve-stream-blocks",
-        "head_sha": "d48cb9ee13057e8ed5b005bb680031e69f9d7615",
-        "author": "alexzhu0",
-        "labels": [
-          "channel: telegram",
-          "size: XL",
-          "proof: supplied",
-          "mantis: telegram-visible-proof",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/telegram/src/bot-message-dispatch.test.ts",
-            "additions": 830,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message-dispatch.ts",
-            "additions": 311,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/draft-stream.test-helpers.ts",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/lane-delivery-text-deliverer.ts",
-            "additions": 50,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/lane-delivery.test.ts",
-            "additions": 159,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/dispatch.test.ts",
-            "additions": 24,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/dispatch.ts",
-            "additions": 4,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/before-deliver.test.ts",
-            "additions": 86,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/block-reply-coalescer.ts",
-            "additions": 25,
-            "deletions": 21,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/block-reply-pipeline.test.ts",
-            "additions": 26,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-from-config.test.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-from-config.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-dispatcher.ts",
-            "additions": 47,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-payload-sending-hook.ts",
-            "additions": 3,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88682",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88682.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 161,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 28,
-            "SUCCESS": 130,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:88682:4600231067:2026-06-02T08:25:48Z:re_review",
-      "comment_id": "4600231067",
-      "comment_version_key": "4600231067:2026-06-02T08:25:48Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/88682#issuecomment-4600231067",
-      "repo": "openclaw/openclaw",
-      "issue_number": 88682,
-      "author": "alexzhu0",
-      "author_id": 178769291,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-02T08:25:48Z",
-      "comment_updated_at": "2026-06-02T08:25:48Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-03T17:18:36.320Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 88682
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-03T17:18:37.549Z",
-          "response_comment_id": null,
-          "response_comment_mode": "created"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "Preserve Telegram streamed text blocks between tool calls",
-        "body": "Fixes https://github.com/openclaw/openclaw/issues/87326.\n\n## Summary\n\n- Preserve Telegram streamed answer blocks across tool-call / assistant-message boundaries instead of letting later blocks edit the same draft preview.\n- Keep same-assistant chunks on one Telegram draft, and rotate only when the next answer block belongs to a different assistant message or after tool-progress-only drafts.\n- Preserve reply-payload assistant-message metadata through internal auto-reply metadata helpers across `beforeDeliver`, TTS cleanup, reply-payload-sending hooks, message-sending hooks, and block coalescing so Telegram can still match queued blocks after payload rewrites.\n- Materialize a stale queued answer-block preview through normal non-durable delivery before resetting the draft lane, so a failed/stale preview is not lost during rotation.\n- Keep the public Plugin SDK API surface unchanged for this Telegram/channel bugfix.\n\n## User-facing bug\n\nWhen Telegram block streaming was enabled, answer text emitted between tool calls could be visible briefly and then disappear. A later assistant block or final answer could edit the same Telegram draft preview, so users lost intermediate findings such as \"Site A shows X\" after the agent checked another tool.\n\n## Exact repro\n\nThe focused repro shape is:\n\n1. Stream a partial answer for assistant message 0.\n2. Queue the final block for assistant message 0.\n3. Cross an assistant-message/tool boundary.\n4. Deliver assistant message 0's block.\n5. Stream assistant message 1.\n\nBefore the fix, the message-1 partial could overwrite the message-0 draft. After the fix, the message-0 block is delivered first, then Telegram rotates to a fresh answer draft for message 1.\n\nThe stale-preview path from review feedback is:\n\n1. Deliver assistant message 0's block into the answer draft.\n2. Observe Telegram draft state has stale visible text before the next queued block arrives.\n3. Queue assistant message 1's block.\n4. Verify the stale message-0 block is cleared and delivered normally before `forceNewMessage()`.\n5. Verify message 1 writes to the fresh answer draft.\n\n## Fix summary\n\nTelegram dispatch now tracks queued answer blocks by assistant-message index. The queue is filled from `onBlockReplyQueued`, matched after final `beforeDeliver` / TTS / message-sending rewrites, and drained when a queued block is cancelled, skipped, or no longer contains answer text. Assistant-message-start no longer rotates immediately when there are queued prior blocks; it delays rotation until those blocks settle so the old message is finalized before the next assistant message writes to a fresh draft.\n\nFor stale previews, queued-block rotation now first materializes the previous answer block using the existing clear + normal-send fallback path. That materialization is explicitly non-durable: it does not use durable final delivery and does not mirror the intermediate block as the final answer transcript. Media fallback for this intermediate path also stays non-durable.\n\nTo make matching reliable, reply-payload metadata is preserved across the auto-reply delivery hooks and coalescer paths that may replace payload objects. The public Plugin SDK API surface stays unchanged: this branch has no diff for `src/plugin-sdk/reply-payload.ts`, `src/plugin-sdk/reply-runtime.ts`, `src/auto-reply/get-reply-options.types.ts`, or `docs/.generated/plugin-sdk-api-baseline.sha256`.\n\n## Real behavior proof\n\nBehavior addressed: Telegram answer text emitted between tool calls remains visible after the next assistant block starts. If the previous answer draft is stale before rotation, the previous block is delivered normally before the lane reset, then the next assistant message writes to a fresh draft.\n\nReal environment tested: local OpenClaw source checkout on Node v24.4.1, branch `fix/telegram-preserve-stream-blocks`, commit `d48cb9ee13057e8ed5b005bb680031e69f9d7615`, rebased on current `origin/main` commit `ec47d1cdd5`. The run executed the real `dispatchTelegramMessage` entrypoint, channel inbound lifecycle, queued block matching, draft lane rotation, and lane delivery code with a local transport capture so the runtime could log send/edit/rotate order.\n\nExact steps or command run after this patch: from `/Users/alex/PR/projects/openclaw__openclaw/worktrees/88682`, ran:\n\n```bash\nnode --import tsx -e 'await import(\"./.artifacts/pr-88682-runtime-log.mjs\"); process.exit(0)'\n```\n\nEvidence after fix: copied redacted runtime log from `.artifacts/pr-88682-runtime-log.txt`:\n\n```text\nOpenClaw Telegram dispatch runtime proof\nstarted_at=2026-06-03T17:06:32.220Z\ncommit=d48cb9ee13057e8ed5b005bb680031e69f9d7615\nchannel=telegram account=default chat=[redacted-chat] message=[redacted-message]\n\n01 session.recordInboundSession sessionKey=\"agent:proof:telegram:direct:redacted\"\n02 runtime.dispatch.start channel=\"telegram\" account=\"default\" chatId=\"[redacted-chat]\" sessionKey=\"agent:proof:telegram:direct:redacted\"\n03 runtime.block.queued assistantMessageIndex=0 text=\"Site A shows X.\"\n04 draft.update lane=\"answer\" messageId=2001 previewRevision=1 text=\"Site A shows X.\"\n05 draft.flush lane=\"answer\" messageId=2001\n06 runtime.observed_stale_draft lane=\"answer\" messageId=2001 lastDeliveredText=\"stale draft still visible\"\n07 runtime.block.queued assistantMessageIndex=1 text=\"Site B shows Y.\"\n08 draft.update lane=\"answer\" messageId=2001 previewRevision=2 text=\"Site A shows X.\"\n09 draft.stop lane=\"answer\" messageId=2001 lastDeliveredText=\"stale draft still visible\"\n10 draft.clear lane=\"answer\" messageId=2001 lastDeliveredText=\"stale draft still visible\"\n11 telegram.deliverReplies chatId=\"[redacted-chat]\" text=\"Site A shows X.\" transcriptMirror=\"absent\" silent=false\n12 draft.stop lane=\"answer\" messageId=2001 lastDeliveredText=\"stale draft still visible\"\n13 draft.forceNewMessage lane=\"answer\" previousMessageId=2001\n14 draft.update lane=\"answer\" messageId=2002 previewRevision=1 text=\"Site B shows Y.\"\n15 draft.flush lane=\"answer\" messageId=2002\n16 runtime.dispatch.complete queuedFinal=true visibleReplySent=true\n17 draft.clear lane=\"answer\" messageId=2002 lastDeliveredText=\"Site B shows Y.\"\n18 runtime.proof.complete result=\"stale first block was sent through normal delivery before forceNewMessage, then second block updated fresh draft\"\n\nresult=PASS\nproof_statement=stale queued answer block used normal delivery before lane rotation; next answer block used fresh draft\n```\n\nObserved result after fix: the stale first answer block is sent through `telegram.deliverReplies` at event 11 before `draft.forceNewMessage` at event 13. That delivery has `transcriptMirror=\"absent\"`, so the intermediate block is not treated as the durable final transcript. The next assistant block updates message 2002 after rotation, proving it uses a fresh answer draft instead of overwriting message 2001.\n\nWhat was not tested: native Telegram Desktop recording and live Telegram Bot API credentials were not available in this workspace. The runtime proof above covers the OpenClaw dispatch/send/rotate order but is not a native Telegram client video. The local TSX runner wrote the PASS artifact and stdout but did not exit on its own after the proof completed, so I terminated that runner after capturing the log.\n\n## Supplemental validation\n\nCommands run after the fix:\n\n```bash\nOPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-vitest.mjs extensions/telegram/src/bot-message-dispatch.test.ts extensions/telegram/src/lane-delivery.test.ts src/auto-reply/reply/before-deliver.test.ts src/auto-reply/reply/block-reply-pipeline.test.ts src/auto-reply/reply/dispatch-from-config.test.ts src/auto-reply/dispatch.test.ts src/plugins/wired-hooks-reply-payload-sending.test.ts\n```\n\n```bash\ngit diff --check origin/main...HEAD\n```\n\n```bash\ngit diff origin/main...HEAD -- src/plugin-sdk/reply-payload.ts docs/.generated/plugin-sdk-api-baseline.sha256 src/auto-reply/get-reply-options.types.ts src/plugin-sdk/reply-runtime.ts\n```\n\n```bash\nnode_modules/.bin/oxlint --tsconfig config/tsconfig/oxlint.core.json src/auto-reply/reply/block-reply-coalescer.ts src/auto-reply/reply/block-reply-pipeline.ts src/auto-reply/reply/block-reply-pipeline.test.ts src/auto-reply/reply/reply-dispatcher.ts src/auto-reply/reply/before-deliver.test.ts src/auto-reply/dispatch.ts src/auto-reply/dispatch.test.ts src/auto-reply/reply/dispatch-from-config.ts src/auto-reply/reply/dispatch-from-config.test.ts src/auto-reply/reply/reply-payload-sending-hook.ts\n```\n\n```bash\nnode_modules/.bin/oxlint --tsconfig config/tsconfig/oxlint.extensions.json extensions/telegram/src/bot-message-dispatch.ts extensions/telegram/src/bot-message-dispatch.test.ts extensions/telegram/src/lane-delivery-text-deliverer.ts extensions/telegram/src/lane-delivery.test.ts\n```\n\n```bash\ncodex review --base origin/main\n```\n\nResults:\n\n- Rebased onto current `origin/main` commit `ec47d1cdd5`; branch is ahead by 2 commits and not behind. This rebase had to reconcile with main's `e4993ec00f` (`fix(telegram): prevent preview duplication in partial and block streaming modes`, #87624), which introduced a `skipTextOnlyBlock` duplicate-draft suppression on the same answer-block delivery path this PR rotates. The merge keeps both behaviors: a duplicate text-only block is still suppressed at delivery time, but when it is owned by a queued-block rotation (assistant-message split) or is followed by tool progress, the preserved block is materialized before the lane rotates instead of being dropped. Progress-draft state introduced by main was migrated into the `createChannelProgressDraftCompositor` helper (`progressDraft.reset()` / `.suppress()`).\n- Focused Vitest set: 7 files passed, 412 tests passed (`extensions/telegram/src/bot-message-dispatch.test.ts` 128, `extensions/telegram/src/lane-delivery.test.ts` 169 incl. the auto-reply files, plus the auto-reply and wired-hooks suites). Both regression tests that encode this PR's contract pass: `does not rotate a partial preview before queued block delivery drains` and `keeps tool progress visible after a partial-streamed intermediate block`. Main's duplicate-dedup regression tests (`finalizes a duplicate text-only block when no final follows`, `materializes a pending duplicate text-only block before finalizing it`) still pass.\n- `tsgo` extensions typecheck (`tsconfig.extensions.json`) passed for all Telegram sources (the only remaining diagnostics are a pre-existing, unrelated `extensions/discord/.../receive-recovery.ts` ↔ `libopus-wasm` API mismatch in this local environment, untouched by this PR).\n- `git diff --check origin/main...HEAD`: passed.\n- Public SDK/API surface check: no output, so no public Plugin SDK helper or generated API baseline change remains in this branch.\n- Changed auto-reply/core oxlint command: passed.\n- Changed Telegram oxlint command: passed.\n- Not run after the final rebase: broad `pnpm check`, full repository test suite, native Telegram Bot API/Desktop recording.\n\n## AI-assisted disclosure\n\nThis change was implemented with AI assistance.\n",
-        "branch": "fix/telegram-preserve-stream-blocks",
-        "head_sha": "d48cb9ee13057e8ed5b005bb680031e69f9d7615",
-        "author": "alexzhu0",
-        "labels": [
-          "channel: telegram",
-          "size: XL",
-          "proof: supplied",
-          "mantis: telegram-visible-proof",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/telegram/src/bot-message-dispatch.test.ts",
-            "additions": 830,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-message-dispatch.ts",
-            "additions": 311,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/draft-stream.test-helpers.ts",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/lane-delivery-text-deliverer.ts",
-            "additions": 50,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/lane-delivery.test.ts",
-            "additions": 159,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/dispatch.test.ts",
-            "additions": 24,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/dispatch.ts",
-            "additions": 4,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/before-deliver.test.ts",
-            "additions": 86,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/block-reply-coalescer.ts",
-            "additions": 25,
-            "deletions": 21,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/block-reply-pipeline.test.ts",
-            "additions": 26,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-from-config.test.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/dispatch-from-config.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-dispatcher.ts",
-            "additions": 47,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-payload-sending-hook.ts",
-            "additions": 3,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88682",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88682.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 161,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 28,
-            "SUCCESS": 130,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5053,
+    "total_ms": 993,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 297
+        "ms": 480
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1880
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2845
+        "ms": 500
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
