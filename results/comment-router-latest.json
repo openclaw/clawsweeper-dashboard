@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-03T07:26:35.887Z",
+  "generated_at": "2026-06-03T07:27:03.744Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T04:26:32.489Z",
+  "since": "2026-06-03T04:27:01.339Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    89038
+    89741
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4610032343
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 32,
-  "commands_seen": 12,
-  "actionable": 1,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,334 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89038:4591486635:2026-06-03T07:26:28Z:clawsweeper_needs_human",
-      "comment_id": "4591486635",
-      "comment_version_key": "4591486635:2026-06-03T07:26:28Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89038#issuecomment-4591486635",
+      "idempotency_key": "comment-router:openclaw/openclaw:89741:4610032343:2026-06-03T07:25:45Z:re_review",
+      "comment_id": "4610032343",
+      "comment_version_key": "4610032343:2026-06-03T07:25:45Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89741#issuecomment-4610032343",
       "repo": "openclaw/openclaw",
-      "issue_number": 89038,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 89741,
+      "author": "TurboTheTurtle",
+      "author_id": 35905412,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-01T09:55:53Z",
-      "comment_updated_at": "2026-06-03T07:26:28Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- No automated repair is queued because I found no blocking patch defect; the remaining action is maintainer review of a shared message-delivery compatibility change.; Cleared: The diff does not add dependencies, workflow changes, secrets handling, package scripts, downloaded artifacts, or new privileged execution paths. (sha=d9b98ed3af7c1ac3d735072141b4691f762ec696)",
-      "review_summary": "The PR adds a send-capability-filtered outbound resolver for delivery paths, switches message delivery callers to it, and drains matching qqbot pending deliveries on gateway ready/resumed.\n\nPR surface: Source +100, Tests +280. Total +380 across 8 files.\n\nReproducibility: yes. from source and reporter logs, though I did not live-reproduce QQ Bot here. Current main still resolves the first plugin for message adapters and has no qqbot reconnect drain, matching the linked failure path.",
-      "review_followup": "- No automated repair is queued because I found no blocking patch defect; the remaining action is maintainer review of a shared message-delivery compatibility change.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "d9b98ed3af7c1ac3d735072141b4691f762ec696",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: skip setup-only channel plugins in outbound resolution and drain pending deliveries on qqbot reconnect",
-        "body": "## Summary\n\nWhen the qqbot WebSocket reconnects after a session timeout (close code `4009`), `resolveOutboundChannelPlugin()` returns a setup-only plugin stub that lacks any send capability. This causes the `\"Outbound not configured for channel: qqbot\"` error, and all messages queued during the disconnection window are permanently lost.\n\n## Root Cause\n\n`resolveOutboundChannelPlugin()` resolves the first matching plugin entry for a channel id without verifying that the entry actually has send capability (`outbound.sendText`, `message.send.text`, etc.). During qqbot WebSocket reconnection, a setup-only plugin entry (registered for configuration/pairing but not for message delivery) shadows the real sending plugin, causing the resolution to short-circuit with a non-functional stub.\n\nRegression introduced in 2026.5.28 (commit `e932160`).\n\n## Fix\n\n### 1. Split outbound channel resolution into shared and delivery paths (`channel-resolution.ts`)\n\nAdd a `channelPluginCanSend()` predicate that checks for any of the 10 known send methods across both the legacy `outbound` adapter and the newer `message.send` adapter:\n\n- `outbound.sendText / sendMedia / sendPayload / sendPoll / sendFormattedText / sendFormattedMedia`\n- `message.send.text / media / payload / poll`\n\nInstead of gating the shared `resolveOutboundChannelPlugin()` resolver (which would break action-only channel plugins that have `actions.handleAction` but no send capability), a new **`resolveOutboundChannelPluginForDelivery()`** resolver applies the send-capability guard exclusively for message delivery paths.\n\n- **`resolveOutboundChannelPlugin()`**: Shared resolver — returns any matching plugin regardless of send capability, preserving resolution for action dispatch, target resolution, and other non-send callers.\n- **`resolveOutboundChannelPluginForDelivery()`**: Delivery resolver — skips setup-only entries and only returns plugins that can actually send messages.\n- **`resolveOutboundChannelMessageAdapter()`**: Updated to use the delivery resolver.\n- **`message.ts`**: `sendMessage`/`sendPoll` updated to use the delivery resolver.\n\n### 2. Drain pending deliveries on qqbot reconnect (`extensions/qqbot/src/channel.ts`)\n\nThe `onReady` and `onResumed` gateway callbacks now call `drainPendingDeliveries()` from the plugin SDK delivery queue runtime, recovering messages that were queued while the WebSocket was disconnected. The drain is:\n\n- Filtered by channel (`qqbot`) and account id, with a fallback for default-account entries where `accountId` may be `undefined`\n- Deduplicated via `drainKey` to prevent concurrent drains\n- Wrapped in try/catch so drain failures do not break the reconnection flow\n\n## Tests\n\n- `channel-resolution.test.ts`: 17 tests (5 new — setup-only plugin returns from shared resolver, action-only plugin resolves from shared but not delivery resolver, delivery resolver skips setup-only and returns sending fallback, legacy outbound adapter, poll-only outbound)\n- `channel.test.ts`: 2 tests (new file — onReady drain, onResumed drain)\n\nFixes #88955.\n\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: After a QQ Bot WebSocket disconnect (session takeover / close code 4009), `resolveOutboundChannelPlugin()` returned a setup-only plugin stub instead of the runtime entry, causing `\"Outbound not configured for channel: qqbot\"` and dropping all pending deliveries.\n\n- **Real environment tested**: Local patched OpenClaw `2026.6.2` (commit `b90683e`, branch `fix/qqbot-reconnect-outbound-88955`), macOS arm64, Node.js v24.10.0. QQ Bot plugin `@openclaw/qqbot@2026.5.31-beta.4` with live QQ Bot credentials (appId `<redacted>`).\n\n- **Exact steps or command run after this patch**:\n  1. Built patched OpenClaw from fix branch: `pnpm build && npm pack --ignore-scripts`\n  2. Installed globally: `npm install -g openclaw-2026.6.2.tgz` — confirmed version: `OpenClaw 2026.6.2 (b90683e)`\n  3. Restarted gateway: `openclaw gateway restart`\n  4. Observed qqbot plugin startup, WebSocket connection, and `Gateway ready` callback sequence in logs\n  5. Verified normal QQ Bot C2C message round-trip: user sent \"hello\" → bot received → processed → replied with markdown (20 chars, 200 OK)\n  6. Scanned full gateway log for `\"Outbound not configured\"` errors — zero matches\n  7. Repeated restart cycle to confirm reconnect stability across multiple `Gateway ready` events\n\n- **Evidence after fix**:\n  ```\n  # Patched OpenClaw installed and running\n  $ openclaw --version\n  OpenClaw 2026.6.2 (b90683e)\n\n  # Gateway restart sequence — qqbot reconnects cleanly\n  2026-06-02T22:38:53.727+08:00 [gateway] received SIGTERM; restarting\n  2026-06-02T22:39:15.986+08:00 [gateway] http server listening (8 plugins: ..., qqbot, ...; 1.6s)\n  2026-06-02T22:39:16.171+08:00 [qqbot] [qqbot:default] Starting gateway — appId=<redacted>, enabled=true\n  2026-06-02T22:39:17.387+08:00 [qqbot] [default] Connecting to wss://api.sgroup.qq.com/websocket\n  2026-06-02T22:39:18.468+08:00 [qqbot] [default] WebSocket connected\n  2026-06-02T22:39:18.641+08:00 [qqbot] [qqbot:default] Gateway ready\n\n  # Successful QQ Bot message delivery after reconnect\n  2026-06-02T22:32:40.229+08:00 [qqbot] [default] Processing message from <redacted>: hello\n  2026-06-02T22:32:59.431+08:00 [qqbot] [default] [qqbot:api] <<< Status: 200 OK\n  2026-06-02T22:32:59.432+08:00 [qqbot] [default] Sent markdown chunk (20/20 chars) with 0 HTTP images (c2c)\n\n  # Zero outbound resolution errors across entire log history\n  $ grep -c \"Outbound not configured.*qqbot\" ~/Library/Logs/openclaw/gateway.log\n  0\n\n  # Multiple Gateway ready events over 4+ hours — all clean reconnects\n  $ grep \"qqbot.*Gateway ready\" ~/Library/Logs/openclaw/gateway.log | wc -l\n  18\n  ```\n\n- **Observed result after fix**: The delivery resolver correctly skipped the setup-only plugin entry (which has no `sendText`/`sendMedia` methods) and resolved the runtime entry with full send capability. Outbound messages delivered successfully through the QQ Bot API (HTTP 200). Zero occurrences of the `\"Outbound not configured for channel: qqbot\"` error across 18 reconnect cycles over a 4+ hour observation window. The shared resolver continued to return all plugin entries for non-send callers (action dispatch, target resolution), preserving action-only plugin compatibility.\n\n- **What was not tested — and why live drain proof is not reproducible on the fixed build**:\n\n  The `drainReconnectPendingDeliveries()` mechanism (Fix 2) was verified via unit tests but not observed draining actual queued entries in a live environment. This is not an oversight — it is a structural consequence of the resolver fix (Fix 1) eliminating the only deterministic cause of pending qqbot entries. Code-level analysis confirms this:\n\n  **How the delivery queue works** (`deliver.ts:1254-1280`): Every outbound delivery is write-ahead enqueued via `enqueueDelivery()` before any send attempt. On success, `ackDelivery()` removes the entry (`deliver.ts:1367`). On throw, `failDelivery()` bumps `retryCount` and **leaves it pending** (`delivery-queue-storage.ts:137-144`).\n\n  **What created the pending entries in #88955**: The `\"Outbound not configured for channel: qqbot\"` throw fired from `createChannelHandler` (`deliver.ts:223-231`) when `resolveOutboundChannelPluginForDelivery` returned a setup-only plugin with no send methods. This throw occurs **outside** the per-payload try/catch (`deliver.ts:1451`), so it propagated to the queue-cleanup catch → `failDelivery` → entry left pending. The resolver fix eliminates this throw by filtering setup-only entries via `channelPluginCanSend()`.\n\n  **Why transient QQ API failures also do not create pending entries**: The qqbot engine **swallows** HTTP/network errors into returned `{error}` result objects instead of throwing (`outbound.ts:301-304, 313-318`). The delivery core text branch records \"sent\" purely on `deliveredResults.length > 0` with no message-id identity gate (`deliver.ts:1772-1778`), so a swallowed engine error yields a \"sent\" outcome → `ackDelivery` → entry removed, not pending.\n\n  **The drain's real value**: It is a belt-and-suspenders safeguard for the **upgrade path** — entries left pending (with `lastError: \"Outbound not configured for channel: qqbot\"`) by an unfixed build are drained immediately after a fixed gateway reconnects. The `bypassBackoff` predicate explicitly matches this exact error string (`/outbound not configured/i`), ensuring these entries skip retry backoff and are retried on the first reconnect event. If the retry still fails (e.g., the plugin is genuinely misconfigured), `isPermanentDeliveryError` (`delivery-queue-recovery.ts:79`) moves the entry to `failed/` — no infinite retry loop. `MAX_RETRIES` is also enforced before the bypass branch (`delivery-queue-recovery.ts:544`). The drain also covers the narrow crash-in-enqueue-to-ack window handled by `recoverPendingDeliveries` at startup (`delivery-queue-recovery.ts:604`). The drain selection filter (`channel === \"qqbot\"` + account id match + bypassBackoff for `\"Outbound not configured\"`, `channel.test.ts:90-152`) and the reconnect-drain integration logic (`delivery-queue.reconnect-drain.test.ts`) are exercised by 35 unit tests (all passing).\n\n  **Seeded pending-drain proof**: To validate the drain recovery path end-to-end, a pending delivery entry was manually seeded into the SQLite delivery queue to simulate the upgrade scenario (entries left by an unfixed build):\n\n  1. Inserted a pending entry: `id=seeded-drain-test-001`, `channel=qqbot`, `accountId=default`, `lastError=\"Outbound not configured for channel: qqbot\"`, `retry_count=1`\n  2. Restarted gateway: `openclaw gateway restart`\n  3. Observed recovery sequence in logs:\n\n  ```\n  00:30:00.353 [gateway] http server listening (8 plugins: ..., qqbot, ...; 1.9s)\n  00:30:00.987 [delivery-recovery] Found 1 pending delivery entries — starting recovery\n  00:30:01.567 [qqbot] [qqbot:api] <<< Status: 200 OK\n  00:30:02.703 [delivery-recovery] Recovered delivery seeded-drain-test-001 on qqbot\n  00:30:02.703 [delivery-recovery] Delivery recovery complete: 1 recovered, 0 failed, 0 skipped (max retries), 0 deferred (backoff)\n  00:30:02.816 [qqbot] [default] WebSocket connected\n  00:30:02.952 [qqbot] [qqbot:default] Gateway ready\n  ```\n\n  4. Verified entry removed from DB: `SELECT count(*) FROM delivery_queue_entries WHERE channel='qqbot' AND status='pending'` → **0**\n  5. Zero `\"Outbound not configured\"` errors after restart\n\n  **Key observation**: The `0 deferred (backoff)` in the recovery summary confirms the `bypassBackoff` predicate (`/outbound not configured/i`) correctly matched the seeded entry's `lastError`, allowing immediate retry without waiting for backoff. The entry was successfully delivered (HTTP 200) and acked (removed from queue).\n\n  **Note**: The startup `recoverPendingDeliveries` path (`delivery-queue-recovery.ts:604`) executed before the qqbot `onReady` callback (`00:30:00.987` vs `00:30:02.952`), so startup recovery handled the entry before the reconnect drain fired. Both paths share the same underlying drain logic and bypass predicates; the startup path simply runs first. A naturally-occurring live drain on the `onReady` path cannot be reliably reproduced because the fix removes the deterministic failure that created those entries, and startup recovery pre-empts the reconnect drain for entries present at boot. Multi-shard configurations were not tested.\n\n",
-        "branch": "fix/qqbot-reconnect-outbound-88955",
-        "head_sha": "d9b98ed3af7c1ac3d735072141b4691f762ec696",
-        "author": "jerry-xin",
-        "labels": [
-          "size: M",
-          "channel: qqbot",
-          "triage: needs-real-behavior-proof",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "extensions/qqbot/src/channel.test.ts",
-            "additions": 187,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/qqbot/src/channel.ts",
-            "additions": 33,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/channel-resolution.test.ts",
-            "additions": 101,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/channel-resolution.ts",
-            "additions": 65,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message-action-runner.test-helpers.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.channels.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89038",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89038.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "FAILURE": 11,
-            "CANCELLED": 1,
-            "SKIPPED": 29,
-            "SUCCESS": 120,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-approval-exec:FAILURE",
-            "checks-node-core-runtime-infra-provider-push:FAILURE",
-            "checks-node-core-runtime-infra-process:FAILURE",
-            "checks-node-agentic-control-plane-http-plugin-ws:FAILURE",
-            "checks-node-agentic-control-plane-runtime-shared-token:FAILURE",
-            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
-            "checks-node-agentic-agents-core-subagents:FAILURE",
-            "checks-node-agentic-agents-embedded:FAILURE",
-            "checks-node-auto-reply-core-top-level:FAILURE",
-            "checks-node-auto-reply-reply-agent-runner:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-approval-exec:FAILURE",
-            "checks-node-core-runtime-infra-provider-push:FAILURE",
-            "checks-node-core-runtime-infra-process:FAILURE",
-            "checks-node-agentic-control-plane-http-plugin-ws:FAILURE",
-            "checks-node-agentic-control-plane-runtime-shared-token:FAILURE",
-            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
-            "checks-node-agentic-agents-core-subagents:FAILURE",
-            "checks-node-agentic-agents-embedded:FAILURE",
-            "checks-node-auto-reply-core-top-level:FAILURE",
-            "checks-node-auto-reply-reply-agent-runner:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89038:4609656299:2026-06-03T06:22:17Z:re_review",
-      "comment_id": "4609656299",
-      "comment_version_key": "4609656299:2026-06-03T06:22:17Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89038#issuecomment-4609656299",
-      "repo": "openclaw/openclaw",
-      "issue_number": 89038,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-03T06:22:17Z",
-      "comment_updated_at": "2026-06-03T06:22:17Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-03T07:26:40.850Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 89038
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-03T07:26:42.434Z",
-          "response_comment_id": "4609845147",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: skip setup-only channel plugins in outbound resolution and drain pending deliveries on qqbot reconnect",
-        "body": "## Summary\n\nWhen the qqbot WebSocket reconnects after a session timeout (close code `4009`), `resolveOutboundChannelPlugin()` returns a setup-only plugin stub that lacks any send capability. This causes the `\"Outbound not configured for channel: qqbot\"` error, and all messages queued during the disconnection window are permanently lost.\n\n## Root Cause\n\n`resolveOutboundChannelPlugin()` resolves the first matching plugin entry for a channel id without verifying that the entry actually has send capability (`outbound.sendText`, `message.send.text`, etc.). During qqbot WebSocket reconnection, a setup-only plugin entry (registered for configuration/pairing but not for message delivery) shadows the real sending plugin, causing the resolution to short-circuit with a non-functional stub.\n\nRegression introduced in 2026.5.28 (commit `e932160`).\n\n## Fix\n\n### 1. Split outbound channel resolution into shared and delivery paths (`channel-resolution.ts`)\n\nAdd a `channelPluginCanSend()` predicate that checks for any of the 10 known send methods across both the legacy `outbound` adapter and the newer `message.send` adapter:\n\n- `outbound.sendText / sendMedia / sendPayload / sendPoll / sendFormattedText / sendFormattedMedia`\n- `message.send.text / media / payload / poll`\n\nInstead of gating the shared `resolveOutboundChannelPlugin()` resolver (which would break action-only channel plugins that have `actions.handleAction` but no send capability), a new **`resolveOutboundChannelPluginForDelivery()`** resolver applies the send-capability guard exclusively for message delivery paths.\n\n- **`resolveOutboundChannelPlugin()`**: Shared resolver — returns any matching plugin regardless of send capability, preserving resolution for action dispatch, target resolution, and other non-send callers.\n- **`resolveOutboundChannelPluginForDelivery()`**: Delivery resolver — skips setup-only entries and only returns plugins that can actually send messages.\n- **`resolveOutboundChannelMessageAdapter()`**: Updated to use the delivery resolver.\n- **`message.ts`**: `sendMessage`/`sendPoll` updated to use the delivery resolver.\n\n### 2. Drain pending deliveries on qqbot reconnect (`extensions/qqbot/src/channel.ts`)\n\nThe `onReady` and `onResumed` gateway callbacks now call `drainPendingDeliveries()` from the plugin SDK delivery queue runtime, recovering messages that were queued while the WebSocket was disconnected. The drain is:\n\n- Filtered by channel (`qqbot`) and account id, with a fallback for default-account entries where `accountId` may be `undefined`\n- Deduplicated via `drainKey` to prevent concurrent drains\n- Wrapped in try/catch so drain failures do not break the reconnection flow\n\n## Tests\n\n- `channel-resolution.test.ts`: 17 tests (5 new — setup-only plugin returns from shared resolver, action-only plugin resolves from shared but not delivery resolver, delivery resolver skips setup-only and returns sending fallback, legacy outbound adapter, poll-only outbound)\n- `channel.test.ts`: 2 tests (new file — onReady drain, onResumed drain)\n\nFixes #88955.\n\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: After a QQ Bot WebSocket disconnect (session takeover / close code 4009), `resolveOutboundChannelPlugin()` returned a setup-only plugin stub instead of the runtime entry, causing `\"Outbound not configured for channel: qqbot\"` and dropping all pending deliveries.\n\n- **Real environment tested**: Local patched OpenClaw `2026.6.2` (commit `b90683e`, branch `fix/qqbot-reconnect-outbound-88955`), macOS arm64, Node.js v24.10.0. QQ Bot plugin `@openclaw/qqbot@2026.5.31-beta.4` with live QQ Bot credentials (appId `<redacted>`).\n\n- **Exact steps or command run after this patch**:\n  1. Built patched OpenClaw from fix branch: `pnpm build && npm pack --ignore-scripts`\n  2. Installed globally: `npm install -g openclaw-2026.6.2.tgz` — confirmed version: `OpenClaw 2026.6.2 (b90683e)`\n  3. Restarted gateway: `openclaw gateway restart`\n  4. Observed qqbot plugin startup, WebSocket connection, and `Gateway ready` callback sequence in logs\n  5. Verified normal QQ Bot C2C message round-trip: user sent \"hello\" → bot received → processed → replied with markdown (20 chars, 200 OK)\n  6. Scanned full gateway log for `\"Outbound not configured\"` errors — zero matches\n  7. Repeated restart cycle to confirm reconnect stability across multiple `Gateway ready` events\n\n- **Evidence after fix**:\n  ```\n  # Patched OpenClaw installed and running\n  $ openclaw --version\n  OpenClaw 2026.6.2 (b90683e)\n\n  # Gateway restart sequence — qqbot reconnects cleanly\n  2026-06-02T22:38:53.727+08:00 [gateway] received SIGTERM; restarting\n  2026-06-02T22:39:15.986+08:00 [gateway] http server listening (8 plugins: ..., qqbot, ...; 1.6s)\n  2026-06-02T22:39:16.171+08:00 [qqbot] [qqbot:default] Starting gateway — appId=<redacted>, enabled=true\n  2026-06-02T22:39:17.387+08:00 [qqbot] [default] Connecting to wss://api.sgroup.qq.com/websocket\n  2026-06-02T22:39:18.468+08:00 [qqbot] [default] WebSocket connected\n  2026-06-02T22:39:18.641+08:00 [qqbot] [qqbot:default] Gateway ready\n\n  # Successful QQ Bot message delivery after reconnect\n  2026-06-02T22:32:40.229+08:00 [qqbot] [default] Processing message from <redacted>: hello\n  2026-06-02T22:32:59.431+08:00 [qqbot] [default] [qqbot:api] <<< Status: 200 OK\n  2026-06-02T22:32:59.432+08:00 [qqbot] [default] Sent markdown chunk (20/20 chars) with 0 HTTP images (c2c)\n\n  # Zero outbound resolution errors across entire log history\n  $ grep -c \"Outbound not configured.*qqbot\" ~/Library/Logs/openclaw/gateway.log\n  0\n\n  # Multiple Gateway ready events over 4+ hours — all clean reconnects\n  $ grep \"qqbot.*Gateway ready\" ~/Library/Logs/openclaw/gateway.log | wc -l\n  18\n  ```\n\n- **Observed result after fix**: The delivery resolver correctly skipped the setup-only plugin entry (which has no `sendText`/`sendMedia` methods) and resolved the runtime entry with full send capability. Outbound messages delivered successfully through the QQ Bot API (HTTP 200). Zero occurrences of the `\"Outbound not configured for channel: qqbot\"` error across 18 reconnect cycles over a 4+ hour observation window. The shared resolver continued to return all plugin entries for non-send callers (action dispatch, target resolution), preserving action-only plugin compatibility.\n\n- **What was not tested — and why live drain proof is not reproducible on the fixed build**:\n\n  The `drainReconnectPendingDeliveries()` mechanism (Fix 2) was verified via unit tests but not observed draining actual queued entries in a live environment. This is not an oversight — it is a structural consequence of the resolver fix (Fix 1) eliminating the only deterministic cause of pending qqbot entries. Code-level analysis confirms this:\n\n  **How the delivery queue works** (`deliver.ts:1254-1280`): Every outbound delivery is write-ahead enqueued via `enqueueDelivery()` before any send attempt. On success, `ackDelivery()` removes the entry (`deliver.ts:1367`). On throw, `failDelivery()` bumps `retryCount` and **leaves it pending** (`delivery-queue-storage.ts:137-144`).\n\n  **What created the pending entries in #88955**: The `\"Outbound not configured for channel: qqbot\"` throw fired from `createChannelHandler` (`deliver.ts:223-231`) when `resolveOutboundChannelPluginForDelivery` returned a setup-only plugin with no send methods. This throw occurs **outside** the per-payload try/catch (`deliver.ts:1451`), so it propagated to the queue-cleanup catch → `failDelivery` → entry left pending. The resolver fix eliminates this throw by filtering setup-only entries via `channelPluginCanSend()`.\n\n  **Why transient QQ API failures also do not create pending entries**: The qqbot engine **swallows** HTTP/network errors into returned `{error}` result objects instead of throwing (`outbound.ts:301-304, 313-318`). The delivery core text branch records \"sent\" purely on `deliveredResults.length > 0` with no message-id identity gate (`deliver.ts:1772-1778`), so a swallowed engine error yields a \"sent\" outcome → `ackDelivery` → entry removed, not pending.\n\n  **The drain's real value**: It is a belt-and-suspenders safeguard for the **upgrade path** — entries left pending (with `lastError: \"Outbound not configured for channel: qqbot\"`) by an unfixed build are drained immediately after a fixed gateway reconnects. The `bypassBackoff` predicate explicitly matches this exact error string (`/outbound not configured/i`), ensuring these entries skip retry backoff and are retried on the first reconnect event. If the retry still fails (e.g., the plugin is genuinely misconfigured), `isPermanentDeliveryError` (`delivery-queue-recovery.ts:79`) moves the entry to `failed/` — no infinite retry loop. `MAX_RETRIES` is also enforced before the bypass branch (`delivery-queue-recovery.ts:544`). The drain also covers the narrow crash-in-enqueue-to-ack window handled by `recoverPendingDeliveries` at startup (`delivery-queue-recovery.ts:604`). The drain selection filter (`channel === \"qqbot\"` + account id match + bypassBackoff for `\"Outbound not configured\"`, `channel.test.ts:90-152`) and the reconnect-drain integration logic (`delivery-queue.reconnect-drain.test.ts`) are exercised by 35 unit tests (all passing).\n\n  **Seeded pending-drain proof**: To validate the drain recovery path end-to-end, a pending delivery entry was manually seeded into the SQLite delivery queue to simulate the upgrade scenario (entries left by an unfixed build):\n\n  1. Inserted a pending entry: `id=seeded-drain-test-001`, `channel=qqbot`, `accountId=default`, `lastError=\"Outbound not configured for channel: qqbot\"`, `retry_count=1`\n  2. Restarted gateway: `openclaw gateway restart`\n  3. Observed recovery sequence in logs:\n\n  ```\n  00:30:00.353 [gateway] http server listening (8 plugins: ..., qqbot, ...; 1.9s)\n  00:30:00.987 [delivery-recovery] Found 1 pending delivery entries — starting recovery\n  00:30:01.567 [qqbot] [qqbot:api] <<< Status: 200 OK\n  00:30:02.703 [delivery-recovery] Recovered delivery seeded-drain-test-001 on qqbot\n  00:30:02.703 [delivery-recovery] Delivery recovery complete: 1 recovered, 0 failed, 0 skipped (max retries), 0 deferred (backoff)\n  00:30:02.816 [qqbot] [default] WebSocket connected\n  00:30:02.952 [qqbot] [qqbot:default] Gateway ready\n  ```\n\n  4. Verified entry removed from DB: `SELECT count(*) FROM delivery_queue_entries WHERE channel='qqbot' AND status='pending'` → **0**\n  5. Zero `\"Outbound not configured\"` errors after restart\n\n  **Key observation**: The `0 deferred (backoff)` in the recovery summary confirms the `bypassBackoff` predicate (`/outbound not configured/i`) correctly matched the seeded entry's `lastError`, allowing immediate retry without waiting for backoff. The entry was successfully delivered (HTTP 200) and acked (removed from queue).\n\n  **Note**: The startup `recoverPendingDeliveries` path (`delivery-queue-recovery.ts:604`) executed before the qqbot `onReady` callback (`00:30:00.987` vs `00:30:02.952`), so startup recovery handled the entry before the reconnect drain fired. Both paths share the same underlying drain logic and bypass predicates; the startup path simply runs first. A naturally-occurring live drain on the `onReady` path cannot be reliably reproduced because the fix removes the deterministic failure that created those entries, and startup recovery pre-empts the reconnect drain for entries present at boot. Multi-shard configurations were not tested.\n\n",
-        "branch": "fix/qqbot-reconnect-outbound-88955",
-        "head_sha": "d9b98ed3af7c1ac3d735072141b4691f762ec696",
-        "author": "jerry-xin",
-        "labels": [
-          "size: M",
-          "channel: qqbot",
-          "triage: needs-real-behavior-proof",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "extensions/qqbot/src/channel.test.ts",
-            "additions": 187,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/qqbot/src/channel.ts",
-            "additions": 33,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/channel-resolution.test.ts",
-            "additions": 101,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/channel-resolution.ts",
-            "additions": 65,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message-action-runner.test-helpers.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.channels.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89038",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89038.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "FAILURE": 11,
-            "CANCELLED": 1,
-            "SKIPPED": 29,
-            "SUCCESS": 120,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-approval-exec:FAILURE",
-            "checks-node-core-runtime-infra-provider-push:FAILURE",
-            "checks-node-core-runtime-infra-process:FAILURE",
-            "checks-node-agentic-control-plane-http-plugin-ws:FAILURE",
-            "checks-node-agentic-control-plane-runtime-shared-token:FAILURE",
-            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
-            "checks-node-agentic-agents-core-subagents:FAILURE",
-            "checks-node-agentic-agents-embedded:FAILURE",
-            "checks-node-auto-reply-core-top-level:FAILURE",
-            "checks-node-auto-reply-reply-agent-runner:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-approval-exec:FAILURE",
-            "checks-node-core-runtime-infra-provider-push:FAILURE",
-            "checks-node-core-runtime-infra-process:FAILURE",
-            "checks-node-agentic-control-plane-http-plugin-ws:FAILURE",
-            "checks-node-agentic-control-plane-runtime-shared-token:FAILURE",
-            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
-            "checks-node-agentic-agents-core-subagents:FAILURE",
-            "checks-node-agentic-agents-embedded:FAILURE",
-            "checks-node-auto-reply-core-top-level:FAILURE",
-            "checks-node-auto-reply-reply-agent-runner:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89038:4605245031:2026-06-02T17:35:16Z:re_review",
-      "comment_id": "4605245031",
-      "comment_version_key": "4605245031:2026-06-02T17:35:16Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89038#issuecomment-4605245031",
-      "repo": "openclaw/openclaw",
-      "issue_number": 89038,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-02T17:35:16Z",
-      "comment_updated_at": "2026-06-02T17:35:16Z",
+      "comment_created_at": "2026-06-03T07:25:45Z",
+      "comment_updated_at": "2026-06-03T07:25:45Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -381,1122 +66,145 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix: skip setup-only channel plugins in outbound resolution and drain pending deliveries on qqbot reconnect",
-        "body": "## Summary\n\nWhen the qqbot WebSocket reconnects after a session timeout (close code `4009`), `resolveOutboundChannelPlugin()` returns a setup-only plugin stub that lacks any send capability. This causes the `\"Outbound not configured for channel: qqbot\"` error, and all messages queued during the disconnection window are permanently lost.\n\n## Root Cause\n\n`resolveOutboundChannelPlugin()` resolves the first matching plugin entry for a channel id without verifying that the entry actually has send capability (`outbound.sendText`, `message.send.text`, etc.). During qqbot WebSocket reconnection, a setup-only plugin entry (registered for configuration/pairing but not for message delivery) shadows the real sending plugin, causing the resolution to short-circuit with a non-functional stub.\n\nRegression introduced in 2026.5.28 (commit `e932160`).\n\n## Fix\n\n### 1. Split outbound channel resolution into shared and delivery paths (`channel-resolution.ts`)\n\nAdd a `channelPluginCanSend()` predicate that checks for any of the 10 known send methods across both the legacy `outbound` adapter and the newer `message.send` adapter:\n\n- `outbound.sendText / sendMedia / sendPayload / sendPoll / sendFormattedText / sendFormattedMedia`\n- `message.send.text / media / payload / poll`\n\nInstead of gating the shared `resolveOutboundChannelPlugin()` resolver (which would break action-only channel plugins that have `actions.handleAction` but no send capability), a new **`resolveOutboundChannelPluginForDelivery()`** resolver applies the send-capability guard exclusively for message delivery paths.\n\n- **`resolveOutboundChannelPlugin()`**: Shared resolver — returns any matching plugin regardless of send capability, preserving resolution for action dispatch, target resolution, and other non-send callers.\n- **`resolveOutboundChannelPluginForDelivery()`**: Delivery resolver — skips setup-only entries and only returns plugins that can actually send messages.\n- **`resolveOutboundChannelMessageAdapter()`**: Updated to use the delivery resolver.\n- **`message.ts`**: `sendMessage`/`sendPoll` updated to use the delivery resolver.\n\n### 2. Drain pending deliveries on qqbot reconnect (`extensions/qqbot/src/channel.ts`)\n\nThe `onReady` and `onResumed` gateway callbacks now call `drainPendingDeliveries()` from the plugin SDK delivery queue runtime, recovering messages that were queued while the WebSocket was disconnected. The drain is:\n\n- Filtered by channel (`qqbot`) and account id, with a fallback for default-account entries where `accountId` may be `undefined`\n- Deduplicated via `drainKey` to prevent concurrent drains\n- Wrapped in try/catch so drain failures do not break the reconnection flow\n\n## Tests\n\n- `channel-resolution.test.ts`: 17 tests (5 new — setup-only plugin returns from shared resolver, action-only plugin resolves from shared but not delivery resolver, delivery resolver skips setup-only and returns sending fallback, legacy outbound adapter, poll-only outbound)\n- `channel.test.ts`: 2 tests (new file — onReady drain, onResumed drain)\n\nFixes #88955.\n\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: After a QQ Bot WebSocket disconnect (session takeover / close code 4009), `resolveOutboundChannelPlugin()` returned a setup-only plugin stub instead of the runtime entry, causing `\"Outbound not configured for channel: qqbot\"` and dropping all pending deliveries.\n\n- **Real environment tested**: Local patched OpenClaw `2026.6.2` (commit `b90683e`, branch `fix/qqbot-reconnect-outbound-88955`), macOS arm64, Node.js v24.10.0. QQ Bot plugin `@openclaw/qqbot@2026.5.31-beta.4` with live QQ Bot credentials (appId `<redacted>`).\n\n- **Exact steps or command run after this patch**:\n  1. Built patched OpenClaw from fix branch: `pnpm build && npm pack --ignore-scripts`\n  2. Installed globally: `npm install -g openclaw-2026.6.2.tgz` — confirmed version: `OpenClaw 2026.6.2 (b90683e)`\n  3. Restarted gateway: `openclaw gateway restart`\n  4. Observed qqbot plugin startup, WebSocket connection, and `Gateway ready` callback sequence in logs\n  5. Verified normal QQ Bot C2C message round-trip: user sent \"hello\" → bot received → processed → replied with markdown (20 chars, 200 OK)\n  6. Scanned full gateway log for `\"Outbound not configured\"` errors — zero matches\n  7. Repeated restart cycle to confirm reconnect stability across multiple `Gateway ready` events\n\n- **Evidence after fix**:\n  ```\n  # Patched OpenClaw installed and running\n  $ openclaw --version\n  OpenClaw 2026.6.2 (b90683e)\n\n  # Gateway restart sequence — qqbot reconnects cleanly\n  2026-06-02T22:38:53.727+08:00 [gateway] received SIGTERM; restarting\n  2026-06-02T22:39:15.986+08:00 [gateway] http server listening (8 plugins: ..., qqbot, ...; 1.6s)\n  2026-06-02T22:39:16.171+08:00 [qqbot] [qqbot:default] Starting gateway — appId=<redacted>, enabled=true\n  2026-06-02T22:39:17.387+08:00 [qqbot] [default] Connecting to wss://api.sgroup.qq.com/websocket\n  2026-06-02T22:39:18.468+08:00 [qqbot] [default] WebSocket connected\n  2026-06-02T22:39:18.641+08:00 [qqbot] [qqbot:default] Gateway ready\n\n  # Successful QQ Bot message delivery after reconnect\n  2026-06-02T22:32:40.229+08:00 [qqbot] [default] Processing message from <redacted>: hello\n  2026-06-02T22:32:59.431+08:00 [qqbot] [default] [qqbot:api] <<< Status: 200 OK\n  2026-06-02T22:32:59.432+08:00 [qqbot] [default] Sent markdown chunk (20/20 chars) with 0 HTTP images (c2c)\n\n  # Zero outbound resolution errors across entire log history\n  $ grep -c \"Outbound not configured.*qqbot\" ~/Library/Logs/openclaw/gateway.log\n  0\n\n  # Multiple Gateway ready events over 4+ hours — all clean reconnects\n  $ grep \"qqbot.*Gateway ready\" ~/Library/Logs/openclaw/gateway.log | wc -l\n  18\n  ```\n\n- **Observed result after fix**: The delivery resolver correctly skipped the setup-only plugin entry (which has no `sendText`/`sendMedia` methods) and resolved the runtime entry with full send capability. Outbound messages delivered successfully through the QQ Bot API (HTTP 200). Zero occurrences of the `\"Outbound not configured for channel: qqbot\"` error across 18 reconnect cycles over a 4+ hour observation window. The shared resolver continued to return all plugin entries for non-send callers (action dispatch, target resolution), preserving action-only plugin compatibility.\n\n- **What was not tested — and why live drain proof is not reproducible on the fixed build**:\n\n  The `drainReconnectPendingDeliveries()` mechanism (Fix 2) was verified via unit tests but not observed draining actual queued entries in a live environment. This is not an oversight — it is a structural consequence of the resolver fix (Fix 1) eliminating the only deterministic cause of pending qqbot entries. Code-level analysis confirms this:\n\n  **How the delivery queue works** (`deliver.ts:1254-1280`): Every outbound delivery is write-ahead enqueued via `enqueueDelivery()` before any send attempt. On success, `ackDelivery()` removes the entry (`deliver.ts:1367`). On throw, `failDelivery()` bumps `retryCount` and **leaves it pending** (`delivery-queue-storage.ts:137-144`).\n\n  **What created the pending entries in #88955**: The `\"Outbound not configured for channel: qqbot\"` throw fired from `createChannelHandler` (`deliver.ts:223-231`) when `resolveOutboundChannelPluginForDelivery` returned a setup-only plugin with no send methods. This throw occurs **outside** the per-payload try/catch (`deliver.ts:1451`), so it propagated to the queue-cleanup catch → `failDelivery` → entry left pending. The resolver fix eliminates this throw by filtering setup-only entries via `channelPluginCanSend()`.\n\n  **Why transient QQ API failures also do not create pending entries**: The qqbot engine **swallows** HTTP/network errors into returned `{error}` result objects instead of throwing (`outbound.ts:301-304, 313-318`). The delivery core text branch records \"sent\" purely on `deliveredResults.length > 0` with no message-id identity gate (`deliver.ts:1772-1778`), so a swallowed engine error yields a \"sent\" outcome → `ackDelivery` → entry removed, not pending.\n\n  **The drain's real value**: It is a belt-and-suspenders safeguard for the **upgrade path** — entries left pending (with `lastError: \"Outbound not configured for channel: qqbot\"`) by an unfixed build are drained immediately after a fixed gateway reconnects. The `bypassBackoff` predicate explicitly matches this exact error string (`/outbound not configured/i`), ensuring these entries skip retry backoff and are retried on the first reconnect event. If the retry still fails (e.g., the plugin is genuinely misconfigured), `isPermanentDeliveryError` (`delivery-queue-recovery.ts:79`) moves the entry to `failed/` — no infinite retry loop. `MAX_RETRIES` is also enforced before the bypass branch (`delivery-queue-recovery.ts:544`). The drain also covers the narrow crash-in-enqueue-to-ack window handled by `recoverPendingDeliveries` at startup (`delivery-queue-recovery.ts:604`). The drain selection filter (`channel === \"qqbot\"` + account id match + bypassBackoff for `\"Outbound not configured\"`, `channel.test.ts:90-152`) and the reconnect-drain integration logic (`delivery-queue.reconnect-drain.test.ts`) are exercised by 35 unit tests (all passing).\n\n  **Seeded pending-drain proof**: To validate the drain recovery path end-to-end, a pending delivery entry was manually seeded into the SQLite delivery queue to simulate the upgrade scenario (entries left by an unfixed build):\n\n  1. Inserted a pending entry: `id=seeded-drain-test-001`, `channel=qqbot`, `accountId=default`, `lastError=\"Outbound not configured for channel: qqbot\"`, `retry_count=1`\n  2. Restarted gateway: `openclaw gateway restart`\n  3. Observed recovery sequence in logs:\n\n  ```\n  00:30:00.353 [gateway] http server listening (8 plugins: ..., qqbot, ...; 1.9s)\n  00:30:00.987 [delivery-recovery] Found 1 pending delivery entries — starting recovery\n  00:30:01.567 [qqbot] [qqbot:api] <<< Status: 200 OK\n  00:30:02.703 [delivery-recovery] Recovered delivery seeded-drain-test-001 on qqbot\n  00:30:02.703 [delivery-recovery] Delivery recovery complete: 1 recovered, 0 failed, 0 skipped (max retries), 0 deferred (backoff)\n  00:30:02.816 [qqbot] [default] WebSocket connected\n  00:30:02.952 [qqbot] [qqbot:default] Gateway ready\n  ```\n\n  4. Verified entry removed from DB: `SELECT count(*) FROM delivery_queue_entries WHERE channel='qqbot' AND status='pending'` → **0**\n  5. Zero `\"Outbound not configured\"` errors after restart\n\n  **Key observation**: The `0 deferred (backoff)` in the recovery summary confirms the `bypassBackoff` predicate (`/outbound not configured/i`) correctly matched the seeded entry's `lastError`, allowing immediate retry without waiting for backoff. The entry was successfully delivered (HTTP 200) and acked (removed from queue).\n\n  **Note**: The startup `recoverPendingDeliveries` path (`delivery-queue-recovery.ts:604`) executed before the qqbot `onReady` callback (`00:30:00.987` vs `00:30:02.952`), so startup recovery handled the entry before the reconnect drain fired. Both paths share the same underlying drain logic and bypass predicates; the startup path simply runs first. A naturally-occurring live drain on the `onReady` path cannot be reliably reproduced because the fix removes the deterministic failure that created those entries, and startup recovery pre-empts the reconnect drain for entries present at boot. Multi-shard configurations were not tested.\n\n",
-        "branch": "fix/qqbot-reconnect-outbound-88955",
-        "head_sha": "d9b98ed3af7c1ac3d735072141b4691f762ec696",
-        "author": "jerry-xin",
+        "title": "fix(memory): add EPERM fallback for atomic reindex",
+        "body": "Fixes #78640\n\n## Summary\n\nWhat problem does this PR solve?\n\nMemory atomic reindex could still fail on Windows after exhausting the existing `EPERM` rename retry loop, leaving `openclaw memory index --force` unable to replace the sqlite index files.\n\nWhy does this matter now?\n\nIssue #78640 reports that retrying `fs.rename` is not enough for persistent Windows `EPERM` failures during the memory index swap. The failed swap blocks forced memory reindexing for affected users.\n\nWhat is the intended outcome?\n\nAfter the bounded retry loop is exhausted for `EPERM`, the atomic reindex move path falls back to `copyFile` followed by `unlink` for the sqlite file and optional `-wal`/`-shm` sidecars.\n\nWhat should reviewers focus on?\n\n- The exhausted-`EPERM` fallback in `extensions/memory-core/src/memory/manager-atomic-reindex.ts`.\n- The deterministic persistent-`EPERM` regression in `extensions/memory-core/src/memory/manager.atomic-reindex.test.ts`.\n\n## Linked context\n\nWhich issue does this close?\n\nCloses #78640.\n\nWas this requested by a maintainer or owner?\n\nNo direct maintainer request beyond the open issue classification.\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: memory atomic reindex no longer throws after a persistent `EPERM` from `rename`; once configured attempts are exhausted, the move path copies the source index file to the target and unlinks the source.\n- Real environment tested: local OpenClaw contributor checkout `/Users/andy/openclaw-78640` on branch `fix/memory-atomic-reindex-eperm-78640`, macOS, Node/Vitest through the repo's `pnpm exec vitest` wrapper. The proof uses the production `moveMemoryIndexFiles` implementation with injected file operations.\n- Exact steps or command run after this patch: ran the focused atomic reindex test file with `pnpm exec vitest run extensions/memory-core/src/memory/manager.atomic-reindex.test.ts`.\n- Evidence after fix (copied terminal output):\n\n```text\nRUN  v4.1.7 /Users/andy/openclaw-78640\n\nTest Files  1 passed (1)\n     Tests  13 passed (13)\n  Start at  00:22:47\n  Duration  347ms (transform 265ms, setup 208ms, import 8ms, tests 57ms, environment 0ms)\n```\n\n- Observed result after fix: the new regression injects persistent `EPERM` for every rename attempt, verifies 9 total rename attempts across the base sqlite file plus `-wal` and `-shm`, then verifies fallback `copyFile` and `unlink` calls for each source/target pair.\n- What was not tested: no Windows VM was used; this is deterministic source-level proof of the Windows failure mode by injecting persistent `EPERM` into the production move helper.\n- Proof limitations or environment constraints: the test does not exercise Windows kernel file-handle behavior directly, but it proves the code path taken after the exact persistent `EPERM` error reported in the issue.\n- Before evidence (optional but encouraged): before this patch, the same persistent `EPERM` path would exhaust the rename attempts and throw the original `EPERM` instead of copying and unlinking the index files.\n\n## Tests and validation\n\nWhich commands did you run?\n\n- `pnpm exec vitest run extensions/memory-core/src/memory/manager.atomic-reindex.test.ts`\n- `pnpm exec oxfmt --check --threads=1 extensions/memory-core/src/memory/manager-atomic-reindex.ts extensions/memory-core/src/memory/manager.atomic-reindex.test.ts`\n- `pnpm tsgo:test:extensions`\n- `pnpm exec oxlint --tsconfig config/tsconfig/oxlint.extensions.json extensions/memory-core/src/memory/manager-atomic-reindex.ts extensions/memory-core/src/memory/manager.atomic-reindex.test.ts`\n- `git diff --check`\n- `git log --format='%h %an <%ae> %s' upstream/main..HEAD`\n\nWhat regression coverage was added or updated?\n\nAdded a deterministic unit regression that forces persistent `EPERM` from rename and asserts the fallback copies and unlinks the base sqlite file plus `-wal`/`-shm` sidecars.\n\nWhat failed before this fix, if known?\n\nWith persistent `EPERM`, `renameWithRetry` exhausted the retry limit and threw instead of falling back to copy/unlink.\n\nIf no test was added, why not?\n\nA focused regression test was added.\n\n## Risk checklist\n\nDid user-visible behavior change? (`Yes/No`)\n\nYes.\n\nDid config, environment, or migration behavior change? (`Yes/No`)\n\nNo.\n\nDid security, auth, secrets, network, or tool execution behavior change? (`Yes/No`)\n\nNo.\n\nWhat is the highest-risk area?\n\nIndex swap behavior when rename fails for reasons other than the reported persistent Windows `EPERM`.\n\nHow is that risk mitigated?\n\nThe fallback only runs for `EPERM` after the existing bounded retry loop is exhausted; `ENOENT`, non-transient errors, and non-`EPERM` transient exhaustion keep their previous behavior.\n\n## Current review state\n\nWhat is the next action?\n\nReady for maintainer and ClawSweeper review.\n\nWhat is still waiting on author, maintainer, CI, or external proof?\n\nWaiting on GitHub CI and ClawSweeper review. A Windows VM proof was not run because the requested deterministic persistent-`EPERM` unit proof covers the failure path without requiring real Windows infrastructure.\n\n@clawsweeper please re-review.\n",
+        "branch": "fix/memory-atomic-reindex-eperm-78640",
+        "head_sha": "8b46233606a0151e23bca94ae8b765fba022a7c5",
+        "author": "turbotheturtle",
         "labels": [
-          "size: M",
-          "channel: qqbot",
-          "triage: needs-real-behavior-proof",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look"
+          "extensions: memory-core",
+          "size: S",
+          "proof: supplied"
         ],
         "files": [
           {
-            "path": "extensions/qqbot/src/channel.test.ts",
-            "additions": 187,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/qqbot/src/channel.ts",
-            "additions": 33,
-            "deletions": 0,
+            "path": "extensions/memory-core/src/memory/manager-atomic-reindex.ts",
+            "additions": 14,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/infra/outbound/channel-resolution.test.ts",
-            "additions": 101,
+            "path": "extensions/memory-core/src/memory/manager.atomic-reindex.test.ts",
+            "additions": 38,
             "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/channel-resolution.ts",
-            "additions": 65,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message-action-runner.test-helpers.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.channels.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.ts",
-            "additions": 2,
-            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89038",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89038.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89741",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89741.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 162,
+          "total": 156,
           "counts": {
-            "FAILURE": 11,
-            "CANCELLED": 1,
-            "SKIPPED": 29,
-            "SUCCESS": 120,
-            "NEUTRAL": 1
+            "SUCCESS": 78,
+            "SKIPPED": 31,
+            "IN_PROGRESS": 47
           },
           "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-approval-exec:FAILURE",
-            "checks-node-core-runtime-infra-provider-push:FAILURE",
-            "checks-node-core-runtime-infra-process:FAILURE",
-            "checks-node-agentic-control-plane-http-plugin-ws:FAILURE",
-            "checks-node-agentic-control-plane-runtime-shared-token:FAILURE",
-            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
-            "checks-node-agentic-agents-core-subagents:FAILURE",
-            "checks-node-agentic-agents-embedded:FAILURE",
-            "checks-node-auto-reply-core-top-level:FAILURE",
-            "checks-node-auto-reply-reply-agent-runner:FAILURE"
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-core-fast:IN_PROGRESS",
+            "checks-node-core-runtime-infra-files-commands:IN_PROGRESS",
+            "checks-node-core-runtime-infra-gateway-processes:IN_PROGRESS",
+            "checks-node-core-runtime-infra-provider-push:IN_PROGRESS",
+            "checks-node-core-runtime-infra-storage-state:IN_PROGRESS",
+            "checks-node-core-runtime-infra-system-runtime:IN_PROGRESS",
+            "checks-node-core-runtime-infra-process:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
+            "checks-node-agentic-control-plane-http-plugin-ws:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-config:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-server:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-shared-token:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-state:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-core:IN_PROGRESS",
+            "checks-node-agentic-cli:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-sessions-cron:IN_PROGRESS",
+            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
+            "checks-node-agentic-agents-core-models:IN_PROGRESS",
+            "checks-node-agentic-agents-core-tools:IN_PROGRESS",
+            "checks-node-agentic-agents-core-subagents:IN_PROGRESS",
+            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
+            "checks-node-agentic-agents-core-runtime:IN_PROGRESS",
+            "checks-node-agentic-agents-embedded:IN_PROGRESS",
+            "checks-node-agentic-agents-support:IN_PROGRESS",
+            "checks-node-agentic-agents-tools:IN_PROGRESS",
+            "checks-node-agentic-gateway-core:IN_PROGRESS",
+            "checks-node-agentic-gateway-methods:IN_PROGRESS",
+            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
+            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
+            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-approval-exec:FAILURE",
-            "checks-node-core-runtime-infra-provider-push:FAILURE",
-            "checks-node-core-runtime-infra-process:FAILURE",
-            "checks-node-agentic-control-plane-http-plugin-ws:FAILURE",
-            "checks-node-agentic-control-plane-runtime-shared-token:FAILURE",
-            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
-            "checks-node-agentic-agents-core-subagents:FAILURE",
-            "checks-node-agentic-agents-embedded:FAILURE",
-            "checks-node-auto-reply-core-top-level:FAILURE",
-            "checks-node-auto-reply-reply-agent-runner:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89038:4604954953:2026-06-02T17:12:16Z:re_review",
-      "comment_id": "4604954953",
-      "comment_version_key": "4604954953:2026-06-02T17:12:16Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89038#issuecomment-4604954953",
-      "repo": "openclaw/openclaw",
-      "issue_number": 89038,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-02T17:12:16Z",
-      "comment_updated_at": "2026-06-02T17:12:16Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89038:4604695476:2026-06-02T16:50:10Z:re_review",
-      "comment_id": "4604695476",
-      "comment_version_key": "4604695476:2026-06-02T16:50:10Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89038#issuecomment-4604695476",
-      "repo": "openclaw/openclaw",
-      "issue_number": 89038,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-02T16:50:10Z",
-      "comment_updated_at": "2026-06-02T16:50:10Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89038:4604272234:2026-06-02T16:02:49Z:re_review",
-      "comment_id": "4604272234",
-      "comment_version_key": "4604272234:2026-06-02T16:02:49Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89038#issuecomment-4604272234",
-      "repo": "openclaw/openclaw",
-      "issue_number": 89038,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-02T16:02:49Z",
-      "comment_updated_at": "2026-06-02T16:02:49Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89038:4603986420:2026-06-02T15:29:47Z:re_review",
-      "comment_id": "4603986420",
-      "comment_version_key": "4603986420:2026-06-02T15:29:47Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89038#issuecomment-4603986420",
-      "repo": "openclaw/openclaw",
-      "issue_number": 89038,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-02T15:29:47Z",
-      "comment_updated_at": "2026-06-02T15:29:47Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: skip setup-only channel plugins in outbound resolution and drain pending deliveries on qqbot reconnect",
-        "body": "## Summary\n\nWhen the qqbot WebSocket reconnects after a session timeout (close code `4009`), `resolveOutboundChannelPlugin()` returns a setup-only plugin stub that lacks any send capability. This causes the `\"Outbound not configured for channel: qqbot\"` error, and all messages queued during the disconnection window are permanently lost.\n\n## Root Cause\n\n`resolveOutboundChannelPlugin()` resolves the first matching plugin entry for a channel id without verifying that the entry actually has send capability (`outbound.sendText`, `message.send.text`, etc.). During qqbot WebSocket reconnection, a setup-only plugin entry (registered for configuration/pairing but not for message delivery) shadows the real sending plugin, causing the resolution to short-circuit with a non-functional stub.\n\nRegression introduced in 2026.5.28 (commit `e932160`).\n\n## Fix\n\n### 1. Split outbound channel resolution into shared and delivery paths (`channel-resolution.ts`)\n\nAdd a `channelPluginCanSend()` predicate that checks for any of the 10 known send methods across both the legacy `outbound` adapter and the newer `message.send` adapter:\n\n- `outbound.sendText / sendMedia / sendPayload / sendPoll / sendFormattedText / sendFormattedMedia`\n- `message.send.text / media / payload / poll`\n\nInstead of gating the shared `resolveOutboundChannelPlugin()` resolver (which would break action-only channel plugins that have `actions.handleAction` but no send capability), a new **`resolveOutboundChannelPluginForDelivery()`** resolver applies the send-capability guard exclusively for message delivery paths.\n\n- **`resolveOutboundChannelPlugin()`**: Shared resolver — returns any matching plugin regardless of send capability, preserving resolution for action dispatch, target resolution, and other non-send callers.\n- **`resolveOutboundChannelPluginForDelivery()`**: Delivery resolver — skips setup-only entries and only returns plugins that can actually send messages.\n- **`resolveOutboundChannelMessageAdapter()`**: Updated to use the delivery resolver.\n- **`message.ts`**: `sendMessage`/`sendPoll` updated to use the delivery resolver.\n\n### 2. Drain pending deliveries on qqbot reconnect (`extensions/qqbot/src/channel.ts`)\n\nThe `onReady` and `onResumed` gateway callbacks now call `drainPendingDeliveries()` from the plugin SDK delivery queue runtime, recovering messages that were queued while the WebSocket was disconnected. The drain is:\n\n- Filtered by channel (`qqbot`) and account id, with a fallback for default-account entries where `accountId` may be `undefined`\n- Deduplicated via `drainKey` to prevent concurrent drains\n- Wrapped in try/catch so drain failures do not break the reconnection flow\n\n## Tests\n\n- `channel-resolution.test.ts`: 17 tests (5 new — setup-only plugin returns from shared resolver, action-only plugin resolves from shared but not delivery resolver, delivery resolver skips setup-only and returns sending fallback, legacy outbound adapter, poll-only outbound)\n- `channel.test.ts`: 2 tests (new file — onReady drain, onResumed drain)\n\nFixes #88955.\n\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: After a QQ Bot WebSocket disconnect (session takeover / close code 4009), `resolveOutboundChannelPlugin()` returned a setup-only plugin stub instead of the runtime entry, causing `\"Outbound not configured for channel: qqbot\"` and dropping all pending deliveries.\n\n- **Real environment tested**: Local patched OpenClaw `2026.6.2` (commit `b90683e`, branch `fix/qqbot-reconnect-outbound-88955`), macOS arm64, Node.js v24.10.0. QQ Bot plugin `@openclaw/qqbot@2026.5.31-beta.4` with live QQ Bot credentials (appId `<redacted>`).\n\n- **Exact steps or command run after this patch**:\n  1. Built patched OpenClaw from fix branch: `pnpm build && npm pack --ignore-scripts`\n  2. Installed globally: `npm install -g openclaw-2026.6.2.tgz` — confirmed version: `OpenClaw 2026.6.2 (b90683e)`\n  3. Restarted gateway: `openclaw gateway restart`\n  4. Observed qqbot plugin startup, WebSocket connection, and `Gateway ready` callback sequence in logs\n  5. Verified normal QQ Bot C2C message round-trip: user sent \"hello\" → bot received → processed → replied with markdown (20 chars, 200 OK)\n  6. Scanned full gateway log for `\"Outbound not configured\"` errors — zero matches\n  7. Repeated restart cycle to confirm reconnect stability across multiple `Gateway ready` events\n\n- **Evidence after fix**:\n  ```\n  # Patched OpenClaw installed and running\n  $ openclaw --version\n  OpenClaw 2026.6.2 (b90683e)\n\n  # Gateway restart sequence — qqbot reconnects cleanly\n  2026-06-02T22:38:53.727+08:00 [gateway] received SIGTERM; restarting\n  2026-06-02T22:39:15.986+08:00 [gateway] http server listening (8 plugins: ..., qqbot, ...; 1.6s)\n  2026-06-02T22:39:16.171+08:00 [qqbot] [qqbot:default] Starting gateway — appId=<redacted>, enabled=true\n  2026-06-02T22:39:17.387+08:00 [qqbot] [default] Connecting to wss://api.sgroup.qq.com/websocket\n  2026-06-02T22:39:18.468+08:00 [qqbot] [default] WebSocket connected\n  2026-06-02T22:39:18.641+08:00 [qqbot] [qqbot:default] Gateway ready\n\n  # Successful QQ Bot message delivery after reconnect\n  2026-06-02T22:32:40.229+08:00 [qqbot] [default] Processing message from <redacted>: hello\n  2026-06-02T22:32:59.431+08:00 [qqbot] [default] [qqbot:api] <<< Status: 200 OK\n  2026-06-02T22:32:59.432+08:00 [qqbot] [default] Sent markdown chunk (20/20 chars) with 0 HTTP images (c2c)\n\n  # Zero outbound resolution errors across entire log history\n  $ grep -c \"Outbound not configured.*qqbot\" ~/Library/Logs/openclaw/gateway.log\n  0\n\n  # Multiple Gateway ready events over 4+ hours — all clean reconnects\n  $ grep \"qqbot.*Gateway ready\" ~/Library/Logs/openclaw/gateway.log | wc -l\n  18\n  ```\n\n- **Observed result after fix**: The delivery resolver correctly skipped the setup-only plugin entry (which has no `sendText`/`sendMedia` methods) and resolved the runtime entry with full send capability. Outbound messages delivered successfully through the QQ Bot API (HTTP 200). Zero occurrences of the `\"Outbound not configured for channel: qqbot\"` error across 18 reconnect cycles over a 4+ hour observation window. The shared resolver continued to return all plugin entries for non-send callers (action dispatch, target resolution), preserving action-only plugin compatibility.\n\n- **What was not tested — and why live drain proof is not reproducible on the fixed build**:\n\n  The `drainReconnectPendingDeliveries()` mechanism (Fix 2) was verified via unit tests but not observed draining actual queued entries in a live environment. This is not an oversight — it is a structural consequence of the resolver fix (Fix 1) eliminating the only deterministic cause of pending qqbot entries. Code-level analysis confirms this:\n\n  **How the delivery queue works** (`deliver.ts:1254-1280`): Every outbound delivery is write-ahead enqueued via `enqueueDelivery()` before any send attempt. On success, `ackDelivery()` removes the entry (`deliver.ts:1367`). On throw, `failDelivery()` bumps `retryCount` and **leaves it pending** (`delivery-queue-storage.ts:137-144`).\n\n  **What created the pending entries in #88955**: The `\"Outbound not configured for channel: qqbot\"` throw fired from `createChannelHandler` (`deliver.ts:223-231`) when `resolveOutboundChannelPluginForDelivery` returned a setup-only plugin with no send methods. This throw occurs **outside** the per-payload try/catch (`deliver.ts:1451`), so it propagated to the queue-cleanup catch → `failDelivery` → entry left pending. The resolver fix eliminates this throw by filtering setup-only entries via `channelPluginCanSend()`.\n\n  **Why transient QQ API failures also do not create pending entries**: The qqbot engine **swallows** HTTP/network errors into returned `{error}` result objects instead of throwing (`outbound.ts:301-304, 313-318`). The delivery core text branch records \"sent\" purely on `deliveredResults.length > 0` with no message-id identity gate (`deliver.ts:1772-1778`), so a swallowed engine error yields a \"sent\" outcome → `ackDelivery` → entry removed, not pending.\n\n  **The drain's real value**: It is a belt-and-suspenders safeguard for the **upgrade path** — entries left pending (with `lastError: \"Outbound not configured for channel: qqbot\"`) by an unfixed build are drained immediately after a fixed gateway reconnects. The `bypassBackoff` predicate explicitly matches this exact error string (`/outbound not configured/i`), ensuring these entries skip retry backoff and are retried on the first reconnect event. If the retry still fails (e.g., the plugin is genuinely misconfigured), `isPermanentDeliveryError` (`delivery-queue-recovery.ts:79`) moves the entry to `failed/` — no infinite retry loop. `MAX_RETRIES` is also enforced before the bypass branch (`delivery-queue-recovery.ts:544`). The drain also covers the narrow crash-in-enqueue-to-ack window handled by `recoverPendingDeliveries` at startup (`delivery-queue-recovery.ts:604`). The drain selection filter (`channel === \"qqbot\"` + account id match + bypassBackoff for `\"Outbound not configured\"`, `channel.test.ts:90-152`) and the reconnect-drain integration logic (`delivery-queue.reconnect-drain.test.ts`) are exercised by 35 unit tests (all passing).\n\n  **Seeded pending-drain proof**: To validate the drain recovery path end-to-end, a pending delivery entry was manually seeded into the SQLite delivery queue to simulate the upgrade scenario (entries left by an unfixed build):\n\n  1. Inserted a pending entry: `id=seeded-drain-test-001`, `channel=qqbot`, `accountId=default`, `lastError=\"Outbound not configured for channel: qqbot\"`, `retry_count=1`\n  2. Restarted gateway: `openclaw gateway restart`\n  3. Observed recovery sequence in logs:\n\n  ```\n  00:30:00.353 [gateway] http server listening (8 plugins: ..., qqbot, ...; 1.9s)\n  00:30:00.987 [delivery-recovery] Found 1 pending delivery entries — starting recovery\n  00:30:01.567 [qqbot] [qqbot:api] <<< Status: 200 OK\n  00:30:02.703 [delivery-recovery] Recovered delivery seeded-drain-test-001 on qqbot\n  00:30:02.703 [delivery-recovery] Delivery recovery complete: 1 recovered, 0 failed, 0 skipped (max retries), 0 deferred (backoff)\n  00:30:02.816 [qqbot] [default] WebSocket connected\n  00:30:02.952 [qqbot] [qqbot:default] Gateway ready\n  ```\n\n  4. Verified entry removed from DB: `SELECT count(*) FROM delivery_queue_entries WHERE channel='qqbot' AND status='pending'` → **0**\n  5. Zero `\"Outbound not configured\"` errors after restart\n\n  **Key observation**: The `0 deferred (backoff)` in the recovery summary confirms the `bypassBackoff` predicate (`/outbound not configured/i`) correctly matched the seeded entry's `lastError`, allowing immediate retry without waiting for backoff. The entry was successfully delivered (HTTP 200) and acked (removed from queue).\n\n  **Note**: The startup `recoverPendingDeliveries` path (`delivery-queue-recovery.ts:604`) executed before the qqbot `onReady` callback (`00:30:00.987` vs `00:30:02.952`), so startup recovery handled the entry before the reconnect drain fired. Both paths share the same underlying drain logic and bypass predicates; the startup path simply runs first. A naturally-occurring live drain on the `onReady` path cannot be reliably reproduced because the fix removes the deterministic failure that created those entries, and startup recovery pre-empts the reconnect drain for entries present at boot. Multi-shard configurations were not tested.\n\n",
-        "branch": "fix/qqbot-reconnect-outbound-88955",
-        "head_sha": "d9b98ed3af7c1ac3d735072141b4691f762ec696",
-        "author": "jerry-xin",
-        "labels": [
-          "size: M",
-          "channel: qqbot",
-          "triage: needs-real-behavior-proof",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "extensions/qqbot/src/channel.test.ts",
-            "additions": 187,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/qqbot/src/channel.ts",
-            "additions": 33,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/channel-resolution.test.ts",
-            "additions": 101,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/channel-resolution.ts",
-            "additions": 65,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message-action-runner.test-helpers.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.channels.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89038",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89038.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "FAILURE": 11,
-            "CANCELLED": 1,
-            "SKIPPED": 29,
-            "SUCCESS": 120,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-approval-exec:FAILURE",
-            "checks-node-core-runtime-infra-provider-push:FAILURE",
-            "checks-node-core-runtime-infra-process:FAILURE",
-            "checks-node-agentic-control-plane-http-plugin-ws:FAILURE",
-            "checks-node-agentic-control-plane-runtime-shared-token:FAILURE",
-            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
-            "checks-node-agentic-agents-core-subagents:FAILURE",
-            "checks-node-agentic-agents-embedded:FAILURE",
-            "checks-node-auto-reply-core-top-level:FAILURE",
-            "checks-node-auto-reply-reply-agent-runner:FAILURE"
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-core-fast:IN_PROGRESS",
+            "checks-node-core-runtime-infra-files-commands:IN_PROGRESS",
+            "checks-node-core-runtime-infra-gateway-processes:IN_PROGRESS",
+            "checks-node-core-runtime-infra-provider-push:IN_PROGRESS",
+            "checks-node-core-runtime-infra-storage-state:IN_PROGRESS",
+            "checks-node-core-runtime-infra-system-runtime:IN_PROGRESS",
+            "checks-node-core-runtime-infra-process:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
+            "checks-node-agentic-control-plane-http-plugin-ws:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-config:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-server:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-shared-token:IN_PROGRESS",
+            "checks-node-agentic-control-plane-runtime-state:IN_PROGRESS",
+            "checks-node-agentic-control-plane-startup-core:IN_PROGRESS",
+            "checks-node-agentic-cli:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-sessions-cron:IN_PROGRESS",
+            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
+            "checks-node-agentic-agents-core-models:IN_PROGRESS",
+            "checks-node-agentic-agents-core-tools:IN_PROGRESS",
+            "checks-node-agentic-agents-core-subagents:IN_PROGRESS",
+            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
+            "checks-node-agentic-agents-core-runtime:IN_PROGRESS",
+            "checks-node-agentic-agents-embedded:IN_PROGRESS",
+            "checks-node-agentic-agents-support:IN_PROGRESS",
+            "checks-node-agentic-agents-tools:IN_PROGRESS",
+            "checks-node-agentic-gateway-core:IN_PROGRESS",
+            "checks-node-agentic-gateway-methods:IN_PROGRESS",
+            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
+            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
+            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-approval-exec:FAILURE",
-            "checks-node-core-runtime-infra-provider-push:FAILURE",
-            "checks-node-core-runtime-infra-process:FAILURE",
-            "checks-node-agentic-control-plane-http-plugin-ws:FAILURE",
-            "checks-node-agentic-control-plane-runtime-shared-token:FAILURE",
-            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
-            "checks-node-agentic-agents-core-subagents:FAILURE",
-            "checks-node-agentic-agents-embedded:FAILURE",
-            "checks-node-auto-reply-core-top-level:FAILURE",
-            "checks-node-auto-reply-reply-agent-runner:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89038:4603572460:2026-06-02T14:45:09Z:re_review",
-      "comment_id": "4603572460",
-      "comment_version_key": "4603572460:2026-06-02T14:45:09Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89038#issuecomment-4603572460",
-      "repo": "openclaw/openclaw",
-      "issue_number": 89038,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-02T14:45:09Z",
-      "comment_updated_at": "2026-06-02T14:45:09Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: skip setup-only channel plugins in outbound resolution and drain pending deliveries on qqbot reconnect",
-        "body": "## Summary\n\nWhen the qqbot WebSocket reconnects after a session timeout (close code `4009`), `resolveOutboundChannelPlugin()` returns a setup-only plugin stub that lacks any send capability. This causes the `\"Outbound not configured for channel: qqbot\"` error, and all messages queued during the disconnection window are permanently lost.\n\n## Root Cause\n\n`resolveOutboundChannelPlugin()` resolves the first matching plugin entry for a channel id without verifying that the entry actually has send capability (`outbound.sendText`, `message.send.text`, etc.). During qqbot WebSocket reconnection, a setup-only plugin entry (registered for configuration/pairing but not for message delivery) shadows the real sending plugin, causing the resolution to short-circuit with a non-functional stub.\n\nRegression introduced in 2026.5.28 (commit `e932160`).\n\n## Fix\n\n### 1. Split outbound channel resolution into shared and delivery paths (`channel-resolution.ts`)\n\nAdd a `channelPluginCanSend()` predicate that checks for any of the 10 known send methods across both the legacy `outbound` adapter and the newer `message.send` adapter:\n\n- `outbound.sendText / sendMedia / sendPayload / sendPoll / sendFormattedText / sendFormattedMedia`\n- `message.send.text / media / payload / poll`\n\nInstead of gating the shared `resolveOutboundChannelPlugin()` resolver (which would break action-only channel plugins that have `actions.handleAction` but no send capability), a new **`resolveOutboundChannelPluginForDelivery()`** resolver applies the send-capability guard exclusively for message delivery paths.\n\n- **`resolveOutboundChannelPlugin()`**: Shared resolver — returns any matching plugin regardless of send capability, preserving resolution for action dispatch, target resolution, and other non-send callers.\n- **`resolveOutboundChannelPluginForDelivery()`**: Delivery resolver — skips setup-only entries and only returns plugins that can actually send messages.\n- **`resolveOutboundChannelMessageAdapter()`**: Updated to use the delivery resolver.\n- **`message.ts`**: `sendMessage`/`sendPoll` updated to use the delivery resolver.\n\n### 2. Drain pending deliveries on qqbot reconnect (`extensions/qqbot/src/channel.ts`)\n\nThe `onReady` and `onResumed` gateway callbacks now call `drainPendingDeliveries()` from the plugin SDK delivery queue runtime, recovering messages that were queued while the WebSocket was disconnected. The drain is:\n\n- Filtered by channel (`qqbot`) and account id, with a fallback for default-account entries where `accountId` may be `undefined`\n- Deduplicated via `drainKey` to prevent concurrent drains\n- Wrapped in try/catch so drain failures do not break the reconnection flow\n\n## Tests\n\n- `channel-resolution.test.ts`: 17 tests (5 new — setup-only plugin returns from shared resolver, action-only plugin resolves from shared but not delivery resolver, delivery resolver skips setup-only and returns sending fallback, legacy outbound adapter, poll-only outbound)\n- `channel.test.ts`: 2 tests (new file — onReady drain, onResumed drain)\n\nFixes #88955.\n\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: After a QQ Bot WebSocket disconnect (session takeover / close code 4009), `resolveOutboundChannelPlugin()` returned a setup-only plugin stub instead of the runtime entry, causing `\"Outbound not configured for channel: qqbot\"` and dropping all pending deliveries.\n\n- **Real environment tested**: Local patched OpenClaw `2026.6.2` (commit `b90683e`, branch `fix/qqbot-reconnect-outbound-88955`), macOS arm64, Node.js v24.10.0. QQ Bot plugin `@openclaw/qqbot@2026.5.31-beta.4` with live QQ Bot credentials (appId `<redacted>`).\n\n- **Exact steps or command run after this patch**:\n  1. Built patched OpenClaw from fix branch: `pnpm build && npm pack --ignore-scripts`\n  2. Installed globally: `npm install -g openclaw-2026.6.2.tgz` — confirmed version: `OpenClaw 2026.6.2 (b90683e)`\n  3. Restarted gateway: `openclaw gateway restart`\n  4. Observed qqbot plugin startup, WebSocket connection, and `Gateway ready` callback sequence in logs\n  5. Verified normal QQ Bot C2C message round-trip: user sent \"hello\" → bot received → processed → replied with markdown (20 chars, 200 OK)\n  6. Scanned full gateway log for `\"Outbound not configured\"` errors — zero matches\n  7. Repeated restart cycle to confirm reconnect stability across multiple `Gateway ready` events\n\n- **Evidence after fix**:\n  ```\n  # Patched OpenClaw installed and running\n  $ openclaw --version\n  OpenClaw 2026.6.2 (b90683e)\n\n  # Gateway restart sequence — qqbot reconnects cleanly\n  2026-06-02T22:38:53.727+08:00 [gateway] received SIGTERM; restarting\n  2026-06-02T22:39:15.986+08:00 [gateway] http server listening (8 plugins: ..., qqbot, ...; 1.6s)\n  2026-06-02T22:39:16.171+08:00 [qqbot] [qqbot:default] Starting gateway — appId=<redacted>, enabled=true\n  2026-06-02T22:39:17.387+08:00 [qqbot] [default] Connecting to wss://api.sgroup.qq.com/websocket\n  2026-06-02T22:39:18.468+08:00 [qqbot] [default] WebSocket connected\n  2026-06-02T22:39:18.641+08:00 [qqbot] [qqbot:default] Gateway ready\n\n  # Successful QQ Bot message delivery after reconnect\n  2026-06-02T22:32:40.229+08:00 [qqbot] [default] Processing message from <redacted>: hello\n  2026-06-02T22:32:59.431+08:00 [qqbot] [default] [qqbot:api] <<< Status: 200 OK\n  2026-06-02T22:32:59.432+08:00 [qqbot] [default] Sent markdown chunk (20/20 chars) with 0 HTTP images (c2c)\n\n  # Zero outbound resolution errors across entire log history\n  $ grep -c \"Outbound not configured.*qqbot\" ~/Library/Logs/openclaw/gateway.log\n  0\n\n  # Multiple Gateway ready events over 4+ hours — all clean reconnects\n  $ grep \"qqbot.*Gateway ready\" ~/Library/Logs/openclaw/gateway.log | wc -l\n  18\n  ```\n\n- **Observed result after fix**: The delivery resolver correctly skipped the setup-only plugin entry (which has no `sendText`/`sendMedia` methods) and resolved the runtime entry with full send capability. Outbound messages delivered successfully through the QQ Bot API (HTTP 200). Zero occurrences of the `\"Outbound not configured for channel: qqbot\"` error across 18 reconnect cycles over a 4+ hour observation window. The shared resolver continued to return all plugin entries for non-send callers (action dispatch, target resolution), preserving action-only plugin compatibility.\n\n- **What was not tested — and why live drain proof is not reproducible on the fixed build**:\n\n  The `drainReconnectPendingDeliveries()` mechanism (Fix 2) was verified via unit tests but not observed draining actual queued entries in a live environment. This is not an oversight — it is a structural consequence of the resolver fix (Fix 1) eliminating the only deterministic cause of pending qqbot entries. Code-level analysis confirms this:\n\n  **How the delivery queue works** (`deliver.ts:1254-1280`): Every outbound delivery is write-ahead enqueued via `enqueueDelivery()` before any send attempt. On success, `ackDelivery()` removes the entry (`deliver.ts:1367`). On throw, `failDelivery()` bumps `retryCount` and **leaves it pending** (`delivery-queue-storage.ts:137-144`).\n\n  **What created the pending entries in #88955**: The `\"Outbound not configured for channel: qqbot\"` throw fired from `createChannelHandler` (`deliver.ts:223-231`) when `resolveOutboundChannelPluginForDelivery` returned a setup-only plugin with no send methods. This throw occurs **outside** the per-payload try/catch (`deliver.ts:1451`), so it propagated to the queue-cleanup catch → `failDelivery` → entry left pending. The resolver fix eliminates this throw by filtering setup-only entries via `channelPluginCanSend()`.\n\n  **Why transient QQ API failures also do not create pending entries**: The qqbot engine **swallows** HTTP/network errors into returned `{error}` result objects instead of throwing (`outbound.ts:301-304, 313-318`). The delivery core text branch records \"sent\" purely on `deliveredResults.length > 0` with no message-id identity gate (`deliver.ts:1772-1778`), so a swallowed engine error yields a \"sent\" outcome → `ackDelivery` → entry removed, not pending.\n\n  **The drain's real value**: It is a belt-and-suspenders safeguard for the **upgrade path** — entries left pending (with `lastError: \"Outbound not configured for channel: qqbot\"`) by an unfixed build are drained immediately after a fixed gateway reconnects. The `bypassBackoff` predicate explicitly matches this exact error string (`/outbound not configured/i`), ensuring these entries skip retry backoff and are retried on the first reconnect event. If the retry still fails (e.g., the plugin is genuinely misconfigured), `isPermanentDeliveryError` (`delivery-queue-recovery.ts:79`) moves the entry to `failed/` — no infinite retry loop. `MAX_RETRIES` is also enforced before the bypass branch (`delivery-queue-recovery.ts:544`). The drain also covers the narrow crash-in-enqueue-to-ack window handled by `recoverPendingDeliveries` at startup (`delivery-queue-recovery.ts:604`). The drain selection filter (`channel === \"qqbot\"` + account id match + bypassBackoff for `\"Outbound not configured\"`, `channel.test.ts:90-152`) and the reconnect-drain integration logic (`delivery-queue.reconnect-drain.test.ts`) are exercised by 35 unit tests (all passing).\n\n  **Seeded pending-drain proof**: To validate the drain recovery path end-to-end, a pending delivery entry was manually seeded into the SQLite delivery queue to simulate the upgrade scenario (entries left by an unfixed build):\n\n  1. Inserted a pending entry: `id=seeded-drain-test-001`, `channel=qqbot`, `accountId=default`, `lastError=\"Outbound not configured for channel: qqbot\"`, `retry_count=1`\n  2. Restarted gateway: `openclaw gateway restart`\n  3. Observed recovery sequence in logs:\n\n  ```\n  00:30:00.353 [gateway] http server listening (8 plugins: ..., qqbot, ...; 1.9s)\n  00:30:00.987 [delivery-recovery] Found 1 pending delivery entries — starting recovery\n  00:30:01.567 [qqbot] [qqbot:api] <<< Status: 200 OK\n  00:30:02.703 [delivery-recovery] Recovered delivery seeded-drain-test-001 on qqbot\n  00:30:02.703 [delivery-recovery] Delivery recovery complete: 1 recovered, 0 failed, 0 skipped (max retries), 0 deferred (backoff)\n  00:30:02.816 [qqbot] [default] WebSocket connected\n  00:30:02.952 [qqbot] [qqbot:default] Gateway ready\n  ```\n\n  4. Verified entry removed from DB: `SELECT count(*) FROM delivery_queue_entries WHERE channel='qqbot' AND status='pending'` → **0**\n  5. Zero `\"Outbound not configured\"` errors after restart\n\n  **Key observation**: The `0 deferred (backoff)` in the recovery summary confirms the `bypassBackoff` predicate (`/outbound not configured/i`) correctly matched the seeded entry's `lastError`, allowing immediate retry without waiting for backoff. The entry was successfully delivered (HTTP 200) and acked (removed from queue).\n\n  **Note**: The startup `recoverPendingDeliveries` path (`delivery-queue-recovery.ts:604`) executed before the qqbot `onReady` callback (`00:30:00.987` vs `00:30:02.952`), so startup recovery handled the entry before the reconnect drain fired. Both paths share the same underlying drain logic and bypass predicates; the startup path simply runs first. A naturally-occurring live drain on the `onReady` path cannot be reliably reproduced because the fix removes the deterministic failure that created those entries, and startup recovery pre-empts the reconnect drain for entries present at boot. Multi-shard configurations were not tested.\n\n",
-        "branch": "fix/qqbot-reconnect-outbound-88955",
-        "head_sha": "d9b98ed3af7c1ac3d735072141b4691f762ec696",
-        "author": "jerry-xin",
-        "labels": [
-          "size: M",
-          "channel: qqbot",
-          "triage: needs-real-behavior-proof",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "extensions/qqbot/src/channel.test.ts",
-            "additions": 187,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/qqbot/src/channel.ts",
-            "additions": 33,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/channel-resolution.test.ts",
-            "additions": 101,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/channel-resolution.ts",
-            "additions": 65,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message-action-runner.test-helpers.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.channels.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89038",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89038.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "FAILURE": 11,
-            "CANCELLED": 1,
-            "SKIPPED": 29,
-            "SUCCESS": 120,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-approval-exec:FAILURE",
-            "checks-node-core-runtime-infra-provider-push:FAILURE",
-            "checks-node-core-runtime-infra-process:FAILURE",
-            "checks-node-agentic-control-plane-http-plugin-ws:FAILURE",
-            "checks-node-agentic-control-plane-runtime-shared-token:FAILURE",
-            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
-            "checks-node-agentic-agents-core-subagents:FAILURE",
-            "checks-node-agentic-agents-embedded:FAILURE",
-            "checks-node-auto-reply-core-top-level:FAILURE",
-            "checks-node-auto-reply-reply-agent-runner:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-approval-exec:FAILURE",
-            "checks-node-core-runtime-infra-provider-push:FAILURE",
-            "checks-node-core-runtime-infra-process:FAILURE",
-            "checks-node-agentic-control-plane-http-plugin-ws:FAILURE",
-            "checks-node-agentic-control-plane-runtime-shared-token:FAILURE",
-            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
-            "checks-node-agentic-agents-core-subagents:FAILURE",
-            "checks-node-agentic-agents-embedded:FAILURE",
-            "checks-node-auto-reply-core-top-level:FAILURE",
-            "checks-node-auto-reply-reply-agent-runner:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89038:4603428203:2026-06-02T14:30:05Z:re_review",
-      "comment_id": "4603428203",
-      "comment_version_key": "4603428203:2026-06-02T14:30:05Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89038#issuecomment-4603428203",
-      "repo": "openclaw/openclaw",
-      "issue_number": 89038,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-02T14:30:05Z",
-      "comment_updated_at": "2026-06-02T14:30:05Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: skip setup-only channel plugins in outbound resolution and drain pending deliveries on qqbot reconnect",
-        "body": "## Summary\n\nWhen the qqbot WebSocket reconnects after a session timeout (close code `4009`), `resolveOutboundChannelPlugin()` returns a setup-only plugin stub that lacks any send capability. This causes the `\"Outbound not configured for channel: qqbot\"` error, and all messages queued during the disconnection window are permanently lost.\n\n## Root Cause\n\n`resolveOutboundChannelPlugin()` resolves the first matching plugin entry for a channel id without verifying that the entry actually has send capability (`outbound.sendText`, `message.send.text`, etc.). During qqbot WebSocket reconnection, a setup-only plugin entry (registered for configuration/pairing but not for message delivery) shadows the real sending plugin, causing the resolution to short-circuit with a non-functional stub.\n\nRegression introduced in 2026.5.28 (commit `e932160`).\n\n## Fix\n\n### 1. Split outbound channel resolution into shared and delivery paths (`channel-resolution.ts`)\n\nAdd a `channelPluginCanSend()` predicate that checks for any of the 10 known send methods across both the legacy `outbound` adapter and the newer `message.send` adapter:\n\n- `outbound.sendText / sendMedia / sendPayload / sendPoll / sendFormattedText / sendFormattedMedia`\n- `message.send.text / media / payload / poll`\n\nInstead of gating the shared `resolveOutboundChannelPlugin()` resolver (which would break action-only channel plugins that have `actions.handleAction` but no send capability), a new **`resolveOutboundChannelPluginForDelivery()`** resolver applies the send-capability guard exclusively for message delivery paths.\n\n- **`resolveOutboundChannelPlugin()`**: Shared resolver — returns any matching plugin regardless of send capability, preserving resolution for action dispatch, target resolution, and other non-send callers.\n- **`resolveOutboundChannelPluginForDelivery()`**: Delivery resolver — skips setup-only entries and only returns plugins that can actually send messages.\n- **`resolveOutboundChannelMessageAdapter()`**: Updated to use the delivery resolver.\n- **`message.ts`**: `sendMessage`/`sendPoll` updated to use the delivery resolver.\n\n### 2. Drain pending deliveries on qqbot reconnect (`extensions/qqbot/src/channel.ts`)\n\nThe `onReady` and `onResumed` gateway callbacks now call `drainPendingDeliveries()` from the plugin SDK delivery queue runtime, recovering messages that were queued while the WebSocket was disconnected. The drain is:\n\n- Filtered by channel (`qqbot`) and account id, with a fallback for default-account entries where `accountId` may be `undefined`\n- Deduplicated via `drainKey` to prevent concurrent drains\n- Wrapped in try/catch so drain failures do not break the reconnection flow\n\n## Tests\n\n- `channel-resolution.test.ts`: 17 tests (5 new — setup-only plugin returns from shared resolver, action-only plugin resolves from shared but not delivery resolver, delivery resolver skips setup-only and returns sending fallback, legacy outbound adapter, poll-only outbound)\n- `channel.test.ts`: 2 tests (new file — onReady drain, onResumed drain)\n\nFixes #88955.\n\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: After a QQ Bot WebSocket disconnect (session takeover / close code 4009), `resolveOutboundChannelPlugin()` returned a setup-only plugin stub instead of the runtime entry, causing `\"Outbound not configured for channel: qqbot\"` and dropping all pending deliveries.\n\n- **Real environment tested**: Local patched OpenClaw `2026.6.2` (commit `b90683e`, branch `fix/qqbot-reconnect-outbound-88955`), macOS arm64, Node.js v24.10.0. QQ Bot plugin `@openclaw/qqbot@2026.5.31-beta.4` with live QQ Bot credentials (appId `<redacted>`).\n\n- **Exact steps or command run after this patch**:\n  1. Built patched OpenClaw from fix branch: `pnpm build && npm pack --ignore-scripts`\n  2. Installed globally: `npm install -g openclaw-2026.6.2.tgz` — confirmed version: `OpenClaw 2026.6.2 (b90683e)`\n  3. Restarted gateway: `openclaw gateway restart`\n  4. Observed qqbot plugin startup, WebSocket connection, and `Gateway ready` callback sequence in logs\n  5. Verified normal QQ Bot C2C message round-trip: user sent \"hello\" → bot received → processed → replied with markdown (20 chars, 200 OK)\n  6. Scanned full gateway log for `\"Outbound not configured\"` errors — zero matches\n  7. Repeated restart cycle to confirm reconnect stability across multiple `Gateway ready` events\n\n- **Evidence after fix**:\n  ```\n  # Patched OpenClaw installed and running\n  $ openclaw --version\n  OpenClaw 2026.6.2 (b90683e)\n\n  # Gateway restart sequence — qqbot reconnects cleanly\n  2026-06-02T22:38:53.727+08:00 [gateway] received SIGTERM; restarting\n  2026-06-02T22:39:15.986+08:00 [gateway] http server listening (8 plugins: ..., qqbot, ...; 1.6s)\n  2026-06-02T22:39:16.171+08:00 [qqbot] [qqbot:default] Starting gateway — appId=<redacted>, enabled=true\n  2026-06-02T22:39:17.387+08:00 [qqbot] [default] Connecting to wss://api.sgroup.qq.com/websocket\n  2026-06-02T22:39:18.468+08:00 [qqbot] [default] WebSocket connected\n  2026-06-02T22:39:18.641+08:00 [qqbot] [qqbot:default] Gateway ready\n\n  # Successful QQ Bot message delivery after reconnect\n  2026-06-02T22:32:40.229+08:00 [qqbot] [default] Processing message from <redacted>: hello\n  2026-06-02T22:32:59.431+08:00 [qqbot] [default] [qqbot:api] <<< Status: 200 OK\n  2026-06-02T22:32:59.432+08:00 [qqbot] [default] Sent markdown chunk (20/20 chars) with 0 HTTP images (c2c)\n\n  # Zero outbound resolution errors across entire log history\n  $ grep -c \"Outbound not configured.*qqbot\" ~/Library/Logs/openclaw/gateway.log\n  0\n\n  # Multiple Gateway ready events over 4+ hours — all clean reconnects\n  $ grep \"qqbot.*Gateway ready\" ~/Library/Logs/openclaw/gateway.log | wc -l\n  18\n  ```\n\n- **Observed result after fix**: The delivery resolver correctly skipped the setup-only plugin entry (which has no `sendText`/`sendMedia` methods) and resolved the runtime entry with full send capability. Outbound messages delivered successfully through the QQ Bot API (HTTP 200). Zero occurrences of the `\"Outbound not configured for channel: qqbot\"` error across 18 reconnect cycles over a 4+ hour observation window. The shared resolver continued to return all plugin entries for non-send callers (action dispatch, target resolution), preserving action-only plugin compatibility.\n\n- **What was not tested — and why live drain proof is not reproducible on the fixed build**:\n\n  The `drainReconnectPendingDeliveries()` mechanism (Fix 2) was verified via unit tests but not observed draining actual queued entries in a live environment. This is not an oversight — it is a structural consequence of the resolver fix (Fix 1) eliminating the only deterministic cause of pending qqbot entries. Code-level analysis confirms this:\n\n  **How the delivery queue works** (`deliver.ts:1254-1280`): Every outbound delivery is write-ahead enqueued via `enqueueDelivery()` before any send attempt. On success, `ackDelivery()` removes the entry (`deliver.ts:1367`). On throw, `failDelivery()` bumps `retryCount` and **leaves it pending** (`delivery-queue-storage.ts:137-144`).\n\n  **What created the pending entries in #88955**: The `\"Outbound not configured for channel: qqbot\"` throw fired from `createChannelHandler` (`deliver.ts:223-231`) when `resolveOutboundChannelPluginForDelivery` returned a setup-only plugin with no send methods. This throw occurs **outside** the per-payload try/catch (`deliver.ts:1451`), so it propagated to the queue-cleanup catch → `failDelivery` → entry left pending. The resolver fix eliminates this throw by filtering setup-only entries via `channelPluginCanSend()`.\n\n  **Why transient QQ API failures also do not create pending entries**: The qqbot engine **swallows** HTTP/network errors into returned `{error}` result objects instead of throwing (`outbound.ts:301-304, 313-318`). The delivery core text branch records \"sent\" purely on `deliveredResults.length > 0` with no message-id identity gate (`deliver.ts:1772-1778`), so a swallowed engine error yields a \"sent\" outcome → `ackDelivery` → entry removed, not pending.\n\n  **The drain's real value**: It is a belt-and-suspenders safeguard for the **upgrade path** — entries left pending (with `lastError: \"Outbound not configured for channel: qqbot\"`) by an unfixed build are drained immediately after a fixed gateway reconnects. The `bypassBackoff` predicate explicitly matches this exact error string (`/outbound not configured/i`), ensuring these entries skip retry backoff and are retried on the first reconnect event. If the retry still fails (e.g., the plugin is genuinely misconfigured), `isPermanentDeliveryError` (`delivery-queue-recovery.ts:79`) moves the entry to `failed/` — no infinite retry loop. `MAX_RETRIES` is also enforced before the bypass branch (`delivery-queue-recovery.ts:544`). The drain also covers the narrow crash-in-enqueue-to-ack window handled by `recoverPendingDeliveries` at startup (`delivery-queue-recovery.ts:604`). The drain selection filter (`channel === \"qqbot\"` + account id match + bypassBackoff for `\"Outbound not configured\"`, `channel.test.ts:90-152`) and the reconnect-drain integration logic (`delivery-queue.reconnect-drain.test.ts`) are exercised by 35 unit tests (all passing).\n\n  **Seeded pending-drain proof**: To validate the drain recovery path end-to-end, a pending delivery entry was manually seeded into the SQLite delivery queue to simulate the upgrade scenario (entries left by an unfixed build):\n\n  1. Inserted a pending entry: `id=seeded-drain-test-001`, `channel=qqbot`, `accountId=default`, `lastError=\"Outbound not configured for channel: qqbot\"`, `retry_count=1`\n  2. Restarted gateway: `openclaw gateway restart`\n  3. Observed recovery sequence in logs:\n\n  ```\n  00:30:00.353 [gateway] http server listening (8 plugins: ..., qqbot, ...; 1.9s)\n  00:30:00.987 [delivery-recovery] Found 1 pending delivery entries — starting recovery\n  00:30:01.567 [qqbot] [qqbot:api] <<< Status: 200 OK\n  00:30:02.703 [delivery-recovery] Recovered delivery seeded-drain-test-001 on qqbot\n  00:30:02.703 [delivery-recovery] Delivery recovery complete: 1 recovered, 0 failed, 0 skipped (max retries), 0 deferred (backoff)\n  00:30:02.816 [qqbot] [default] WebSocket connected\n  00:30:02.952 [qqbot] [qqbot:default] Gateway ready\n  ```\n\n  4. Verified entry removed from DB: `SELECT count(*) FROM delivery_queue_entries WHERE channel='qqbot' AND status='pending'` → **0**\n  5. Zero `\"Outbound not configured\"` errors after restart\n\n  **Key observation**: The `0 deferred (backoff)` in the recovery summary confirms the `bypassBackoff` predicate (`/outbound not configured/i`) correctly matched the seeded entry's `lastError`, allowing immediate retry without waiting for backoff. The entry was successfully delivered (HTTP 200) and acked (removed from queue).\n\n  **Note**: The startup `recoverPendingDeliveries` path (`delivery-queue-recovery.ts:604`) executed before the qqbot `onReady` callback (`00:30:00.987` vs `00:30:02.952`), so startup recovery handled the entry before the reconnect drain fired. Both paths share the same underlying drain logic and bypass predicates; the startup path simply runs first. A naturally-occurring live drain on the `onReady` path cannot be reliably reproduced because the fix removes the deterministic failure that created those entries, and startup recovery pre-empts the reconnect drain for entries present at boot. Multi-shard configurations were not tested.\n\n",
-        "branch": "fix/qqbot-reconnect-outbound-88955",
-        "head_sha": "d9b98ed3af7c1ac3d735072141b4691f762ec696",
-        "author": "jerry-xin",
-        "labels": [
-          "size: M",
-          "channel: qqbot",
-          "triage: needs-real-behavior-proof",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "extensions/qqbot/src/channel.test.ts",
-            "additions": 187,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/qqbot/src/channel.ts",
-            "additions": 33,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/channel-resolution.test.ts",
-            "additions": 101,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/channel-resolution.ts",
-            "additions": 65,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message-action-runner.test-helpers.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.channels.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89038",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89038.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "FAILURE": 11,
-            "CANCELLED": 1,
-            "SKIPPED": 29,
-            "SUCCESS": 120,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-approval-exec:FAILURE",
-            "checks-node-core-runtime-infra-provider-push:FAILURE",
-            "checks-node-core-runtime-infra-process:FAILURE",
-            "checks-node-agentic-control-plane-http-plugin-ws:FAILURE",
-            "checks-node-agentic-control-plane-runtime-shared-token:FAILURE",
-            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
-            "checks-node-agentic-agents-core-subagents:FAILURE",
-            "checks-node-agentic-agents-embedded:FAILURE",
-            "checks-node-auto-reply-core-top-level:FAILURE",
-            "checks-node-auto-reply-reply-agent-runner:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-approval-exec:FAILURE",
-            "checks-node-core-runtime-infra-provider-push:FAILURE",
-            "checks-node-core-runtime-infra-process:FAILURE",
-            "checks-node-agentic-control-plane-http-plugin-ws:FAILURE",
-            "checks-node-agentic-control-plane-runtime-shared-token:FAILURE",
-            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
-            "checks-node-agentic-agents-core-subagents:FAILURE",
-            "checks-node-agentic-agents-embedded:FAILURE",
-            "checks-node-auto-reply-core-top-level:FAILURE",
-            "checks-node-auto-reply-reply-agent-runner:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89038:4599833295:2026-06-02T07:35:53Z:re_review",
-      "comment_id": "4599833295",
-      "comment_version_key": "4599833295:2026-06-02T07:35:53Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89038#issuecomment-4599833295",
-      "repo": "openclaw/openclaw",
-      "issue_number": 89038,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-02T07:35:53Z",
-      "comment_updated_at": "2026-06-02T07:35:53Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: skip setup-only channel plugins in outbound resolution and drain pending deliveries on qqbot reconnect",
-        "body": "## Summary\n\nWhen the qqbot WebSocket reconnects after a session timeout (close code `4009`), `resolveOutboundChannelPlugin()` returns a setup-only plugin stub that lacks any send capability. This causes the `\"Outbound not configured for channel: qqbot\"` error, and all messages queued during the disconnection window are permanently lost.\n\n## Root Cause\n\n`resolveOutboundChannelPlugin()` resolves the first matching plugin entry for a channel id without verifying that the entry actually has send capability (`outbound.sendText`, `message.send.text`, etc.). During qqbot WebSocket reconnection, a setup-only plugin entry (registered for configuration/pairing but not for message delivery) shadows the real sending plugin, causing the resolution to short-circuit with a non-functional stub.\n\nRegression introduced in 2026.5.28 (commit `e932160`).\n\n## Fix\n\n### 1. Split outbound channel resolution into shared and delivery paths (`channel-resolution.ts`)\n\nAdd a `channelPluginCanSend()` predicate that checks for any of the 10 known send methods across both the legacy `outbound` adapter and the newer `message.send` adapter:\n\n- `outbound.sendText / sendMedia / sendPayload / sendPoll / sendFormattedText / sendFormattedMedia`\n- `message.send.text / media / payload / poll`\n\nInstead of gating the shared `resolveOutboundChannelPlugin()` resolver (which would break action-only channel plugins that have `actions.handleAction` but no send capability), a new **`resolveOutboundChannelPluginForDelivery()`** resolver applies the send-capability guard exclusively for message delivery paths.\n\n- **`resolveOutboundChannelPlugin()`**: Shared resolver — returns any matching plugin regardless of send capability, preserving resolution for action dispatch, target resolution, and other non-send callers.\n- **`resolveOutboundChannelPluginForDelivery()`**: Delivery resolver — skips setup-only entries and only returns plugins that can actually send messages.\n- **`resolveOutboundChannelMessageAdapter()`**: Updated to use the delivery resolver.\n- **`message.ts`**: `sendMessage`/`sendPoll` updated to use the delivery resolver.\n\n### 2. Drain pending deliveries on qqbot reconnect (`extensions/qqbot/src/channel.ts`)\n\nThe `onReady` and `onResumed` gateway callbacks now call `drainPendingDeliveries()` from the plugin SDK delivery queue runtime, recovering messages that were queued while the WebSocket was disconnected. The drain is:\n\n- Filtered by channel (`qqbot`) and account id, with a fallback for default-account entries where `accountId` may be `undefined`\n- Deduplicated via `drainKey` to prevent concurrent drains\n- Wrapped in try/catch so drain failures do not break the reconnection flow\n\n## Tests\n\n- `channel-resolution.test.ts`: 17 tests (5 new — setup-only plugin returns from shared resolver, action-only plugin resolves from shared but not delivery resolver, delivery resolver skips setup-only and returns sending fallback, legacy outbound adapter, poll-only outbound)\n- `channel.test.ts`: 2 tests (new file — onReady drain, onResumed drain)\n\nFixes #88955.\n\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: After a QQ Bot WebSocket disconnect (session takeover / close code 4009), `resolveOutboundChannelPlugin()` returned a setup-only plugin stub instead of the runtime entry, causing `\"Outbound not configured for channel: qqbot\"` and dropping all pending deliveries.\n\n- **Real environment tested**: Local patched OpenClaw `2026.6.2` (commit `b90683e`, branch `fix/qqbot-reconnect-outbound-88955`), macOS arm64, Node.js v24.10.0. QQ Bot plugin `@openclaw/qqbot@2026.5.31-beta.4` with live QQ Bot credentials (appId `<redacted>`).\n\n- **Exact steps or command run after this patch**:\n  1. Built patched OpenClaw from fix branch: `pnpm build && npm pack --ignore-scripts`\n  2. Installed globally: `npm install -g openclaw-2026.6.2.tgz` — confirmed version: `OpenClaw 2026.6.2 (b90683e)`\n  3. Restarted gateway: `openclaw gateway restart`\n  4. Observed qqbot plugin startup, WebSocket connection, and `Gateway ready` callback sequence in logs\n  5. Verified normal QQ Bot C2C message round-trip: user sent \"hello\" → bot received → processed → replied with markdown (20 chars, 200 OK)\n  6. Scanned full gateway log for `\"Outbound not configured\"` errors — zero matches\n  7. Repeated restart cycle to confirm reconnect stability across multiple `Gateway ready` events\n\n- **Evidence after fix**:\n  ```\n  # Patched OpenClaw installed and running\n  $ openclaw --version\n  OpenClaw 2026.6.2 (b90683e)\n\n  # Gateway restart sequence — qqbot reconnects cleanly\n  2026-06-02T22:38:53.727+08:00 [gateway] received SIGTERM; restarting\n  2026-06-02T22:39:15.986+08:00 [gateway] http server listening (8 plugins: ..., qqbot, ...; 1.6s)\n  2026-06-02T22:39:16.171+08:00 [qqbot] [qqbot:default] Starting gateway — appId=<redacted>, enabled=true\n  2026-06-02T22:39:17.387+08:00 [qqbot] [default] Connecting to wss://api.sgroup.qq.com/websocket\n  2026-06-02T22:39:18.468+08:00 [qqbot] [default] WebSocket connected\n  2026-06-02T22:39:18.641+08:00 [qqbot] [qqbot:default] Gateway ready\n\n  # Successful QQ Bot message delivery after reconnect\n  2026-06-02T22:32:40.229+08:00 [qqbot] [default] Processing message from <redacted>: hello\n  2026-06-02T22:32:59.431+08:00 [qqbot] [default] [qqbot:api] <<< Status: 200 OK\n  2026-06-02T22:32:59.432+08:00 [qqbot] [default] Sent markdown chunk (20/20 chars) with 0 HTTP images (c2c)\n\n  # Zero outbound resolution errors across entire log history\n  $ grep -c \"Outbound not configured.*qqbot\" ~/Library/Logs/openclaw/gateway.log\n  0\n\n  # Multiple Gateway ready events over 4+ hours — all clean reconnects\n  $ grep \"qqbot.*Gateway ready\" ~/Library/Logs/openclaw/gateway.log | wc -l\n  18\n  ```\n\n- **Observed result after fix**: The delivery resolver correctly skipped the setup-only plugin entry (which has no `sendText`/`sendMedia` methods) and resolved the runtime entry with full send capability. Outbound messages delivered successfully through the QQ Bot API (HTTP 200). Zero occurrences of the `\"Outbound not configured for channel: qqbot\"` error across 18 reconnect cycles over a 4+ hour observation window. The shared resolver continued to return all plugin entries for non-send callers (action dispatch, target resolution), preserving action-only plugin compatibility.\n\n- **What was not tested — and why live drain proof is not reproducible on the fixed build**:\n\n  The `drainReconnectPendingDeliveries()` mechanism (Fix 2) was verified via unit tests but not observed draining actual queued entries in a live environment. This is not an oversight — it is a structural consequence of the resolver fix (Fix 1) eliminating the only deterministic cause of pending qqbot entries. Code-level analysis confirms this:\n\n  **How the delivery queue works** (`deliver.ts:1254-1280`): Every outbound delivery is write-ahead enqueued via `enqueueDelivery()` before any send attempt. On success, `ackDelivery()` removes the entry (`deliver.ts:1367`). On throw, `failDelivery()` bumps `retryCount` and **leaves it pending** (`delivery-queue-storage.ts:137-144`).\n\n  **What created the pending entries in #88955**: The `\"Outbound not configured for channel: qqbot\"` throw fired from `createChannelHandler` (`deliver.ts:223-231`) when `resolveOutboundChannelPluginForDelivery` returned a setup-only plugin with no send methods. This throw occurs **outside** the per-payload try/catch (`deliver.ts:1451`), so it propagated to the queue-cleanup catch → `failDelivery` → entry left pending. The resolver fix eliminates this throw by filtering setup-only entries via `channelPluginCanSend()`.\n\n  **Why transient QQ API failures also do not create pending entries**: The qqbot engine **swallows** HTTP/network errors into returned `{error}` result objects instead of throwing (`outbound.ts:301-304, 313-318`). The delivery core text branch records \"sent\" purely on `deliveredResults.length > 0` with no message-id identity gate (`deliver.ts:1772-1778`), so a swallowed engine error yields a \"sent\" outcome → `ackDelivery` → entry removed, not pending.\n\n  **The drain's real value**: It is a belt-and-suspenders safeguard for the **upgrade path** — entries left pending (with `lastError: \"Outbound not configured for channel: qqbot\"`) by an unfixed build are drained immediately after a fixed gateway reconnects. The `bypassBackoff` predicate explicitly matches this exact error string (`/outbound not configured/i`), ensuring these entries skip retry backoff and are retried on the first reconnect event. If the retry still fails (e.g., the plugin is genuinely misconfigured), `isPermanentDeliveryError` (`delivery-queue-recovery.ts:79`) moves the entry to `failed/` — no infinite retry loop. `MAX_RETRIES` is also enforced before the bypass branch (`delivery-queue-recovery.ts:544`). The drain also covers the narrow crash-in-enqueue-to-ack window handled by `recoverPendingDeliveries` at startup (`delivery-queue-recovery.ts:604`). The drain selection filter (`channel === \"qqbot\"` + account id match + bypassBackoff for `\"Outbound not configured\"`, `channel.test.ts:90-152`) and the reconnect-drain integration logic (`delivery-queue.reconnect-drain.test.ts`) are exercised by 35 unit tests (all passing).\n\n  **Seeded pending-drain proof**: To validate the drain recovery path end-to-end, a pending delivery entry was manually seeded into the SQLite delivery queue to simulate the upgrade scenario (entries left by an unfixed build):\n\n  1. Inserted a pending entry: `id=seeded-drain-test-001`, `channel=qqbot`, `accountId=default`, `lastError=\"Outbound not configured for channel: qqbot\"`, `retry_count=1`\n  2. Restarted gateway: `openclaw gateway restart`\n  3. Observed recovery sequence in logs:\n\n  ```\n  00:30:00.353 [gateway] http server listening (8 plugins: ..., qqbot, ...; 1.9s)\n  00:30:00.987 [delivery-recovery] Found 1 pending delivery entries — starting recovery\n  00:30:01.567 [qqbot] [qqbot:api] <<< Status: 200 OK\n  00:30:02.703 [delivery-recovery] Recovered delivery seeded-drain-test-001 on qqbot\n  00:30:02.703 [delivery-recovery] Delivery recovery complete: 1 recovered, 0 failed, 0 skipped (max retries), 0 deferred (backoff)\n  00:30:02.816 [qqbot] [default] WebSocket connected\n  00:30:02.952 [qqbot] [qqbot:default] Gateway ready\n  ```\n\n  4. Verified entry removed from DB: `SELECT count(*) FROM delivery_queue_entries WHERE channel='qqbot' AND status='pending'` → **0**\n  5. Zero `\"Outbound not configured\"` errors after restart\n\n  **Key observation**: The `0 deferred (backoff)` in the recovery summary confirms the `bypassBackoff` predicate (`/outbound not configured/i`) correctly matched the seeded entry's `lastError`, allowing immediate retry without waiting for backoff. The entry was successfully delivered (HTTP 200) and acked (removed from queue).\n\n  **Note**: The startup `recoverPendingDeliveries` path (`delivery-queue-recovery.ts:604`) executed before the qqbot `onReady` callback (`00:30:00.987` vs `00:30:02.952`), so startup recovery handled the entry before the reconnect drain fired. Both paths share the same underlying drain logic and bypass predicates; the startup path simply runs first. A naturally-occurring live drain on the `onReady` path cannot be reliably reproduced because the fix removes the deterministic failure that created those entries, and startup recovery pre-empts the reconnect drain for entries present at boot. Multi-shard configurations were not tested.\n\n",
-        "branch": "fix/qqbot-reconnect-outbound-88955",
-        "head_sha": "d9b98ed3af7c1ac3d735072141b4691f762ec696",
-        "author": "jerry-xin",
-        "labels": [
-          "size: M",
-          "channel: qqbot",
-          "triage: needs-real-behavior-proof",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "extensions/qqbot/src/channel.test.ts",
-            "additions": 187,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/qqbot/src/channel.ts",
-            "additions": 33,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/channel-resolution.test.ts",
-            "additions": 101,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/channel-resolution.ts",
-            "additions": 65,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message-action-runner.test-helpers.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.channels.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89038",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89038.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "FAILURE": 11,
-            "CANCELLED": 1,
-            "SKIPPED": 29,
-            "SUCCESS": 120,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-approval-exec:FAILURE",
-            "checks-node-core-runtime-infra-provider-push:FAILURE",
-            "checks-node-core-runtime-infra-process:FAILURE",
-            "checks-node-agentic-control-plane-http-plugin-ws:FAILURE",
-            "checks-node-agentic-control-plane-runtime-shared-token:FAILURE",
-            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
-            "checks-node-agentic-agents-core-subagents:FAILURE",
-            "checks-node-agentic-agents-embedded:FAILURE",
-            "checks-node-auto-reply-core-top-level:FAILURE",
-            "checks-node-auto-reply-reply-agent-runner:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-approval-exec:FAILURE",
-            "checks-node-core-runtime-infra-provider-push:FAILURE",
-            "checks-node-core-runtime-infra-process:FAILURE",
-            "checks-node-agentic-control-plane-http-plugin-ws:FAILURE",
-            "checks-node-agentic-control-plane-runtime-shared-token:FAILURE",
-            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
-            "checks-node-agentic-agents-core-subagents:FAILURE",
-            "checks-node-agentic-agents-embedded:FAILURE",
-            "checks-node-auto-reply-core-top-level:FAILURE",
-            "checks-node-auto-reply-reply-agent-runner:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89038:4598119142:2026-06-02T02:11:48Z:re_review",
-      "comment_id": "4598119142",
-      "comment_version_key": "4598119142:2026-06-02T02:11:48Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89038#issuecomment-4598119142",
-      "repo": "openclaw/openclaw",
-      "issue_number": 89038,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-02T02:11:48Z",
-      "comment_updated_at": "2026-06-02T02:11:48Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: skip setup-only channel plugins in outbound resolution and drain pending deliveries on qqbot reconnect",
-        "body": "## Summary\n\nWhen the qqbot WebSocket reconnects after a session timeout (close code `4009`), `resolveOutboundChannelPlugin()` returns a setup-only plugin stub that lacks any send capability. This causes the `\"Outbound not configured for channel: qqbot\"` error, and all messages queued during the disconnection window are permanently lost.\n\n## Root Cause\n\n`resolveOutboundChannelPlugin()` resolves the first matching plugin entry for a channel id without verifying that the entry actually has send capability (`outbound.sendText`, `message.send.text`, etc.). During qqbot WebSocket reconnection, a setup-only plugin entry (registered for configuration/pairing but not for message delivery) shadows the real sending plugin, causing the resolution to short-circuit with a non-functional stub.\n\nRegression introduced in 2026.5.28 (commit `e932160`).\n\n## Fix\n\n### 1. Split outbound channel resolution into shared and delivery paths (`channel-resolution.ts`)\n\nAdd a `channelPluginCanSend()` predicate that checks for any of the 10 known send methods across both the legacy `outbound` adapter and the newer `message.send` adapter:\n\n- `outbound.sendText / sendMedia / sendPayload / sendPoll / sendFormattedText / sendFormattedMedia`\n- `message.send.text / media / payload / poll`\n\nInstead of gating the shared `resolveOutboundChannelPlugin()` resolver (which would break action-only channel plugins that have `actions.handleAction` but no send capability), a new **`resolveOutboundChannelPluginForDelivery()`** resolver applies the send-capability guard exclusively for message delivery paths.\n\n- **`resolveOutboundChannelPlugin()`**: Shared resolver — returns any matching plugin regardless of send capability, preserving resolution for action dispatch, target resolution, and other non-send callers.\n- **`resolveOutboundChannelPluginForDelivery()`**: Delivery resolver — skips setup-only entries and only returns plugins that can actually send messages.\n- **`resolveOutboundChannelMessageAdapter()`**: Updated to use the delivery resolver.\n- **`message.ts`**: `sendMessage`/`sendPoll` updated to use the delivery resolver.\n\n### 2. Drain pending deliveries on qqbot reconnect (`extensions/qqbot/src/channel.ts`)\n\nThe `onReady` and `onResumed` gateway callbacks now call `drainPendingDeliveries()` from the plugin SDK delivery queue runtime, recovering messages that were queued while the WebSocket was disconnected. The drain is:\n\n- Filtered by channel (`qqbot`) and account id, with a fallback for default-account entries where `accountId` may be `undefined`\n- Deduplicated via `drainKey` to prevent concurrent drains\n- Wrapped in try/catch so drain failures do not break the reconnection flow\n\n## Tests\n\n- `channel-resolution.test.ts`: 17 tests (5 new — setup-only plugin returns from shared resolver, action-only plugin resolves from shared but not delivery resolver, delivery resolver skips setup-only and returns sending fallback, legacy outbound adapter, poll-only outbound)\n- `channel.test.ts`: 2 tests (new file — onReady drain, onResumed drain)\n\nFixes #88955.\n\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: After a QQ Bot WebSocket disconnect (session takeover / close code 4009), `resolveOutboundChannelPlugin()` returned a setup-only plugin stub instead of the runtime entry, causing `\"Outbound not configured for channel: qqbot\"` and dropping all pending deliveries.\n\n- **Real environment tested**: Local patched OpenClaw `2026.6.2` (commit `b90683e`, branch `fix/qqbot-reconnect-outbound-88955`), macOS arm64, Node.js v24.10.0. QQ Bot plugin `@openclaw/qqbot@2026.5.31-beta.4` with live QQ Bot credentials (appId `<redacted>`).\n\n- **Exact steps or command run after this patch**:\n  1. Built patched OpenClaw from fix branch: `pnpm build && npm pack --ignore-scripts`\n  2. Installed globally: `npm install -g openclaw-2026.6.2.tgz` — confirmed version: `OpenClaw 2026.6.2 (b90683e)`\n  3. Restarted gateway: `openclaw gateway restart`\n  4. Observed qqbot plugin startup, WebSocket connection, and `Gateway ready` callback sequence in logs\n  5. Verified normal QQ Bot C2C message round-trip: user sent \"hello\" → bot received → processed → replied with markdown (20 chars, 200 OK)\n  6. Scanned full gateway log for `\"Outbound not configured\"` errors — zero matches\n  7. Repeated restart cycle to confirm reconnect stability across multiple `Gateway ready` events\n\n- **Evidence after fix**:\n  ```\n  # Patched OpenClaw installed and running\n  $ openclaw --version\n  OpenClaw 2026.6.2 (b90683e)\n\n  # Gateway restart sequence — qqbot reconnects cleanly\n  2026-06-02T22:38:53.727+08:00 [gateway] received SIGTERM; restarting\n  2026-06-02T22:39:15.986+08:00 [gateway] http server listening (8 plugins: ..., qqbot, ...; 1.6s)\n  2026-06-02T22:39:16.171+08:00 [qqbot] [qqbot:default] Starting gateway — appId=<redacted>, enabled=true\n  2026-06-02T22:39:17.387+08:00 [qqbot] [default] Connecting to wss://api.sgroup.qq.com/websocket\n  2026-06-02T22:39:18.468+08:00 [qqbot] [default] WebSocket connected\n  2026-06-02T22:39:18.641+08:00 [qqbot] [qqbot:default] Gateway ready\n\n  # Successful QQ Bot message delivery after reconnect\n  2026-06-02T22:32:40.229+08:00 [qqbot] [default] Processing message from <redacted>: hello\n  2026-06-02T22:32:59.431+08:00 [qqbot] [default] [qqbot:api] <<< Status: 200 OK\n  2026-06-02T22:32:59.432+08:00 [qqbot] [default] Sent markdown chunk (20/20 chars) with 0 HTTP images (c2c)\n\n  # Zero outbound resolution errors across entire log history\n  $ grep -c \"Outbound not configured.*qqbot\" ~/Library/Logs/openclaw/gateway.log\n  0\n\n  # Multiple Gateway ready events over 4+ hours — all clean reconnects\n  $ grep \"qqbot.*Gateway ready\" ~/Library/Logs/openclaw/gateway.log | wc -l\n  18\n  ```\n\n- **Observed result after fix**: The delivery resolver correctly skipped the setup-only plugin entry (which has no `sendText`/`sendMedia` methods) and resolved the runtime entry with full send capability. Outbound messages delivered successfully through the QQ Bot API (HTTP 200). Zero occurrences of the `\"Outbound not configured for channel: qqbot\"` error across 18 reconnect cycles over a 4+ hour observation window. The shared resolver continued to return all plugin entries for non-send callers (action dispatch, target resolution), preserving action-only plugin compatibility.\n\n- **What was not tested — and why live drain proof is not reproducible on the fixed build**:\n\n  The `drainReconnectPendingDeliveries()` mechanism (Fix 2) was verified via unit tests but not observed draining actual queued entries in a live environment. This is not an oversight — it is a structural consequence of the resolver fix (Fix 1) eliminating the only deterministic cause of pending qqbot entries. Code-level analysis confirms this:\n\n  **How the delivery queue works** (`deliver.ts:1254-1280`): Every outbound delivery is write-ahead enqueued via `enqueueDelivery()` before any send attempt. On success, `ackDelivery()` removes the entry (`deliver.ts:1367`). On throw, `failDelivery()` bumps `retryCount` and **leaves it pending** (`delivery-queue-storage.ts:137-144`).\n\n  **What created the pending entries in #88955**: The `\"Outbound not configured for channel: qqbot\"` throw fired from `createChannelHandler` (`deliver.ts:223-231`) when `resolveOutboundChannelPluginForDelivery` returned a setup-only plugin with no send methods. This throw occurs **outside** the per-payload try/catch (`deliver.ts:1451`), so it propagated to the queue-cleanup catch → `failDelivery` → entry left pending. The resolver fix eliminates this throw by filtering setup-only entries via `channelPluginCanSend()`.\n\n  **Why transient QQ API failures also do not create pending entries**: The qqbot engine **swallows** HTTP/network errors into returned `{error}` result objects instead of throwing (`outbound.ts:301-304, 313-318`). The delivery core text branch records \"sent\" purely on `deliveredResults.length > 0` with no message-id identity gate (`deliver.ts:1772-1778`), so a swallowed engine error yields a \"sent\" outcome → `ackDelivery` → entry removed, not pending.\n\n  **The drain's real value**: It is a belt-and-suspenders safeguard for the **upgrade path** — entries left pending (with `lastError: \"Outbound not configured for channel: qqbot\"`) by an unfixed build are drained immediately after a fixed gateway reconnects. The `bypassBackoff` predicate explicitly matches this exact error string (`/outbound not configured/i`), ensuring these entries skip retry backoff and are retried on the first reconnect event. If the retry still fails (e.g., the plugin is genuinely misconfigured), `isPermanentDeliveryError` (`delivery-queue-recovery.ts:79`) moves the entry to `failed/` — no infinite retry loop. `MAX_RETRIES` is also enforced before the bypass branch (`delivery-queue-recovery.ts:544`). The drain also covers the narrow crash-in-enqueue-to-ack window handled by `recoverPendingDeliveries` at startup (`delivery-queue-recovery.ts:604`). The drain selection filter (`channel === \"qqbot\"` + account id match + bypassBackoff for `\"Outbound not configured\"`, `channel.test.ts:90-152`) and the reconnect-drain integration logic (`delivery-queue.reconnect-drain.test.ts`) are exercised by 35 unit tests (all passing).\n\n  **Seeded pending-drain proof**: To validate the drain recovery path end-to-end, a pending delivery entry was manually seeded into the SQLite delivery queue to simulate the upgrade scenario (entries left by an unfixed build):\n\n  1. Inserted a pending entry: `id=seeded-drain-test-001`, `channel=qqbot`, `accountId=default`, `lastError=\"Outbound not configured for channel: qqbot\"`, `retry_count=1`\n  2. Restarted gateway: `openclaw gateway restart`\n  3. Observed recovery sequence in logs:\n\n  ```\n  00:30:00.353 [gateway] http server listening (8 plugins: ..., qqbot, ...; 1.9s)\n  00:30:00.987 [delivery-recovery] Found 1 pending delivery entries — starting recovery\n  00:30:01.567 [qqbot] [qqbot:api] <<< Status: 200 OK\n  00:30:02.703 [delivery-recovery] Recovered delivery seeded-drain-test-001 on qqbot\n  00:30:02.703 [delivery-recovery] Delivery recovery complete: 1 recovered, 0 failed, 0 skipped (max retries), 0 deferred (backoff)\n  00:30:02.816 [qqbot] [default] WebSocket connected\n  00:30:02.952 [qqbot] [qqbot:default] Gateway ready\n  ```\n\n  4. Verified entry removed from DB: `SELECT count(*) FROM delivery_queue_entries WHERE channel='qqbot' AND status='pending'` → **0**\n  5. Zero `\"Outbound not configured\"` errors after restart\n\n  **Key observation**: The `0 deferred (backoff)` in the recovery summary confirms the `bypassBackoff` predicate (`/outbound not configured/i`) correctly matched the seeded entry's `lastError`, allowing immediate retry without waiting for backoff. The entry was successfully delivered (HTTP 200) and acked (removed from queue).\n\n  **Note**: The startup `recoverPendingDeliveries` path (`delivery-queue-recovery.ts:604`) executed before the qqbot `onReady` callback (`00:30:00.987` vs `00:30:02.952`), so startup recovery handled the entry before the reconnect drain fired. Both paths share the same underlying drain logic and bypass predicates; the startup path simply runs first. A naturally-occurring live drain on the `onReady` path cannot be reliably reproduced because the fix removes the deterministic failure that created those entries, and startup recovery pre-empts the reconnect drain for entries present at boot. Multi-shard configurations were not tested.\n\n",
-        "branch": "fix/qqbot-reconnect-outbound-88955",
-        "head_sha": "d9b98ed3af7c1ac3d735072141b4691f762ec696",
-        "author": "jerry-xin",
-        "labels": [
-          "size: M",
-          "channel: qqbot",
-          "triage: needs-real-behavior-proof",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "extensions/qqbot/src/channel.test.ts",
-            "additions": 187,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/qqbot/src/channel.ts",
-            "additions": 33,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/channel-resolution.test.ts",
-            "additions": 101,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/channel-resolution.ts",
-            "additions": 65,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message-action-runner.test-helpers.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.channels.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89038",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89038.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "FAILURE": 11,
-            "CANCELLED": 1,
-            "SKIPPED": 29,
-            "SUCCESS": 120,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-approval-exec:FAILURE",
-            "checks-node-core-runtime-infra-provider-push:FAILURE",
-            "checks-node-core-runtime-infra-process:FAILURE",
-            "checks-node-agentic-control-plane-http-plugin-ws:FAILURE",
-            "checks-node-agentic-control-plane-runtime-shared-token:FAILURE",
-            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
-            "checks-node-agentic-agents-core-subagents:FAILURE",
-            "checks-node-agentic-agents-embedded:FAILURE",
-            "checks-node-auto-reply-core-top-level:FAILURE",
-            "checks-node-auto-reply-reply-agent-runner:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-approval-exec:FAILURE",
-            "checks-node-core-runtime-infra-provider-push:FAILURE",
-            "checks-node-core-runtime-infra-process:FAILURE",
-            "checks-node-agentic-control-plane-http-plugin-ws:FAILURE",
-            "checks-node-agentic-control-plane-runtime-shared-token:FAILURE",
-            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
-            "checks-node-agentic-agents-core-subagents:FAILURE",
-            "checks-node-agentic-agents-embedded:FAILURE",
-            "checks-node-auto-reply-core-top-level:FAILURE",
-            "checks-node-auto-reply-reply-agent-runner:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:89038:4593723067:2026-06-01T14:50:12Z:re_review",
-      "comment_id": "4593723067",
-      "comment_version_key": "4593723067:2026-06-01T14:50:12Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89038#issuecomment-4593723067",
-      "repo": "openclaw/openclaw",
-      "issue_number": 89038,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-01T14:50:12Z",
-      "comment_updated_at": "2026-06-01T14:50:12Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: skip setup-only channel plugins in outbound resolution and drain pending deliveries on qqbot reconnect",
-        "body": "## Summary\n\nWhen the qqbot WebSocket reconnects after a session timeout (close code `4009`), `resolveOutboundChannelPlugin()` returns a setup-only plugin stub that lacks any send capability. This causes the `\"Outbound not configured for channel: qqbot\"` error, and all messages queued during the disconnection window are permanently lost.\n\n## Root Cause\n\n`resolveOutboundChannelPlugin()` resolves the first matching plugin entry for a channel id without verifying that the entry actually has send capability (`outbound.sendText`, `message.send.text`, etc.). During qqbot WebSocket reconnection, a setup-only plugin entry (registered for configuration/pairing but not for message delivery) shadows the real sending plugin, causing the resolution to short-circuit with a non-functional stub.\n\nRegression introduced in 2026.5.28 (commit `e932160`).\n\n## Fix\n\n### 1. Split outbound channel resolution into shared and delivery paths (`channel-resolution.ts`)\n\nAdd a `channelPluginCanSend()` predicate that checks for any of the 10 known send methods across both the legacy `outbound` adapter and the newer `message.send` adapter:\n\n- `outbound.sendText / sendMedia / sendPayload / sendPoll / sendFormattedText / sendFormattedMedia`\n- `message.send.text / media / payload / poll`\n\nInstead of gating the shared `resolveOutboundChannelPlugin()` resolver (which would break action-only channel plugins that have `actions.handleAction` but no send capability), a new **`resolveOutboundChannelPluginForDelivery()`** resolver applies the send-capability guard exclusively for message delivery paths.\n\n- **`resolveOutboundChannelPlugin()`**: Shared resolver — returns any matching plugin regardless of send capability, preserving resolution for action dispatch, target resolution, and other non-send callers.\n- **`resolveOutboundChannelPluginForDelivery()`**: Delivery resolver — skips setup-only entries and only returns plugins that can actually send messages.\n- **`resolveOutboundChannelMessageAdapter()`**: Updated to use the delivery resolver.\n- **`message.ts`**: `sendMessage`/`sendPoll` updated to use the delivery resolver.\n\n### 2. Drain pending deliveries on qqbot reconnect (`extensions/qqbot/src/channel.ts`)\n\nThe `onReady` and `onResumed` gateway callbacks now call `drainPendingDeliveries()` from the plugin SDK delivery queue runtime, recovering messages that were queued while the WebSocket was disconnected. The drain is:\n\n- Filtered by channel (`qqbot`) and account id, with a fallback for default-account entries where `accountId` may be `undefined`\n- Deduplicated via `drainKey` to prevent concurrent drains\n- Wrapped in try/catch so drain failures do not break the reconnection flow\n\n## Tests\n\n- `channel-resolution.test.ts`: 17 tests (5 new — setup-only plugin returns from shared resolver, action-only plugin resolves from shared but not delivery resolver, delivery resolver skips setup-only and returns sending fallback, legacy outbound adapter, poll-only outbound)\n- `channel.test.ts`: 2 tests (new file — onReady drain, onResumed drain)\n\nFixes #88955.\n\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: After a QQ Bot WebSocket disconnect (session takeover / close code 4009), `resolveOutboundChannelPlugin()` returned a setup-only plugin stub instead of the runtime entry, causing `\"Outbound not configured for channel: qqbot\"` and dropping all pending deliveries.\n\n- **Real environment tested**: Local patched OpenClaw `2026.6.2` (commit `b90683e`, branch `fix/qqbot-reconnect-outbound-88955`), macOS arm64, Node.js v24.10.0. QQ Bot plugin `@openclaw/qqbot@2026.5.31-beta.4` with live QQ Bot credentials (appId `<redacted>`).\n\n- **Exact steps or command run after this patch**:\n  1. Built patched OpenClaw from fix branch: `pnpm build && npm pack --ignore-scripts`\n  2. Installed globally: `npm install -g openclaw-2026.6.2.tgz` — confirmed version: `OpenClaw 2026.6.2 (b90683e)`\n  3. Restarted gateway: `openclaw gateway restart`\n  4. Observed qqbot plugin startup, WebSocket connection, and `Gateway ready` callback sequence in logs\n  5. Verified normal QQ Bot C2C message round-trip: user sent \"hello\" → bot received → processed → replied with markdown (20 chars, 200 OK)\n  6. Scanned full gateway log for `\"Outbound not configured\"` errors — zero matches\n  7. Repeated restart cycle to confirm reconnect stability across multiple `Gateway ready` events\n\n- **Evidence after fix**:\n  ```\n  # Patched OpenClaw installed and running\n  $ openclaw --version\n  OpenClaw 2026.6.2 (b90683e)\n\n  # Gateway restart sequence — qqbot reconnects cleanly\n  2026-06-02T22:38:53.727+08:00 [gateway] received SIGTERM; restarting\n  2026-06-02T22:39:15.986+08:00 [gateway] http server listening (8 plugins: ..., qqbot, ...; 1.6s)\n  2026-06-02T22:39:16.171+08:00 [qqbot] [qqbot:default] Starting gateway — appId=<redacted>, enabled=true\n  2026-06-02T22:39:17.387+08:00 [qqbot] [default] Connecting to wss://api.sgroup.qq.com/websocket\n  2026-06-02T22:39:18.468+08:00 [qqbot] [default] WebSocket connected\n  2026-06-02T22:39:18.641+08:00 [qqbot] [qqbot:default] Gateway ready\n\n  # Successful QQ Bot message delivery after reconnect\n  2026-06-02T22:32:40.229+08:00 [qqbot] [default] Processing message from <redacted>: hello\n  2026-06-02T22:32:59.431+08:00 [qqbot] [default] [qqbot:api] <<< Status: 200 OK\n  2026-06-02T22:32:59.432+08:00 [qqbot] [default] Sent markdown chunk (20/20 chars) with 0 HTTP images (c2c)\n\n  # Zero outbound resolution errors across entire log history\n  $ grep -c \"Outbound not configured.*qqbot\" ~/Library/Logs/openclaw/gateway.log\n  0\n\n  # Multiple Gateway ready events over 4+ hours — all clean reconnects\n  $ grep \"qqbot.*Gateway ready\" ~/Library/Logs/openclaw/gateway.log | wc -l\n  18\n  ```\n\n- **Observed result after fix**: The delivery resolver correctly skipped the setup-only plugin entry (which has no `sendText`/`sendMedia` methods) and resolved the runtime entry with full send capability. Outbound messages delivered successfully through the QQ Bot API (HTTP 200). Zero occurrences of the `\"Outbound not configured for channel: qqbot\"` error across 18 reconnect cycles over a 4+ hour observation window. The shared resolver continued to return all plugin entries for non-send callers (action dispatch, target resolution), preserving action-only plugin compatibility.\n\n- **What was not tested — and why live drain proof is not reproducible on the fixed build**:\n\n  The `drainReconnectPendingDeliveries()` mechanism (Fix 2) was verified via unit tests but not observed draining actual queued entries in a live environment. This is not an oversight — it is a structural consequence of the resolver fix (Fix 1) eliminating the only deterministic cause of pending qqbot entries. Code-level analysis confirms this:\n\n  **How the delivery queue works** (`deliver.ts:1254-1280`): Every outbound delivery is write-ahead enqueued via `enqueueDelivery()` before any send attempt. On success, `ackDelivery()` removes the entry (`deliver.ts:1367`). On throw, `failDelivery()` bumps `retryCount` and **leaves it pending** (`delivery-queue-storage.ts:137-144`).\n\n  **What created the pending entries in #88955**: The `\"Outbound not configured for channel: qqbot\"` throw fired from `createChannelHandler` (`deliver.ts:223-231`) when `resolveOutboundChannelPluginForDelivery` returned a setup-only plugin with no send methods. This throw occurs **outside** the per-payload try/catch (`deliver.ts:1451`), so it propagated to the queue-cleanup catch → `failDelivery` → entry left pending. The resolver fix eliminates this throw by filtering setup-only entries via `channelPluginCanSend()`.\n\n  **Why transient QQ API failures also do not create pending entries**: The qqbot engine **swallows** HTTP/network errors into returned `{error}` result objects instead of throwing (`outbound.ts:301-304, 313-318`). The delivery core text branch records \"sent\" purely on `deliveredResults.length > 0` with no message-id identity gate (`deliver.ts:1772-1778`), so a swallowed engine error yields a \"sent\" outcome → `ackDelivery` → entry removed, not pending.\n\n  **The drain's real value**: It is a belt-and-suspenders safeguard for the **upgrade path** — entries left pending (with `lastError: \"Outbound not configured for channel: qqbot\"`) by an unfixed build are drained immediately after a fixed gateway reconnects. The `bypassBackoff` predicate explicitly matches this exact error string (`/outbound not configured/i`), ensuring these entries skip retry backoff and are retried on the first reconnect event. If the retry still fails (e.g., the plugin is genuinely misconfigured), `isPermanentDeliveryError` (`delivery-queue-recovery.ts:79`) moves the entry to `failed/` — no infinite retry loop. `MAX_RETRIES` is also enforced before the bypass branch (`delivery-queue-recovery.ts:544`). The drain also covers the narrow crash-in-enqueue-to-ack window handled by `recoverPendingDeliveries` at startup (`delivery-queue-recovery.ts:604`). The drain selection filter (`channel === \"qqbot\"` + account id match + bypassBackoff for `\"Outbound not configured\"`, `channel.test.ts:90-152`) and the reconnect-drain integration logic (`delivery-queue.reconnect-drain.test.ts`) are exercised by 35 unit tests (all passing).\n\n  **Seeded pending-drain proof**: To validate the drain recovery path end-to-end, a pending delivery entry was manually seeded into the SQLite delivery queue to simulate the upgrade scenario (entries left by an unfixed build):\n\n  1. Inserted a pending entry: `id=seeded-drain-test-001`, `channel=qqbot`, `accountId=default`, `lastError=\"Outbound not configured for channel: qqbot\"`, `retry_count=1`\n  2. Restarted gateway: `openclaw gateway restart`\n  3. Observed recovery sequence in logs:\n\n  ```\n  00:30:00.353 [gateway] http server listening (8 plugins: ..., qqbot, ...; 1.9s)\n  00:30:00.987 [delivery-recovery] Found 1 pending delivery entries — starting recovery\n  00:30:01.567 [qqbot] [qqbot:api] <<< Status: 200 OK\n  00:30:02.703 [delivery-recovery] Recovered delivery seeded-drain-test-001 on qqbot\n  00:30:02.703 [delivery-recovery] Delivery recovery complete: 1 recovered, 0 failed, 0 skipped (max retries), 0 deferred (backoff)\n  00:30:02.816 [qqbot] [default] WebSocket connected\n  00:30:02.952 [qqbot] [qqbot:default] Gateway ready\n  ```\n\n  4. Verified entry removed from DB: `SELECT count(*) FROM delivery_queue_entries WHERE channel='qqbot' AND status='pending'` → **0**\n  5. Zero `\"Outbound not configured\"` errors after restart\n\n  **Key observation**: The `0 deferred (backoff)` in the recovery summary confirms the `bypassBackoff` predicate (`/outbound not configured/i`) correctly matched the seeded entry's `lastError`, allowing immediate retry without waiting for backoff. The entry was successfully delivered (HTTP 200) and acked (removed from queue).\n\n  **Note**: The startup `recoverPendingDeliveries` path (`delivery-queue-recovery.ts:604`) executed before the qqbot `onReady` callback (`00:30:00.987` vs `00:30:02.952`), so startup recovery handled the entry before the reconnect drain fired. Both paths share the same underlying drain logic and bypass predicates; the startup path simply runs first. A naturally-occurring live drain on the `onReady` path cannot be reliably reproduced because the fix removes the deterministic failure that created those entries, and startup recovery pre-empts the reconnect drain for entries present at boot. Multi-shard configurations were not tested.\n\n",
-        "branch": "fix/qqbot-reconnect-outbound-88955",
-        "head_sha": "d9b98ed3af7c1ac3d735072141b4691f762ec696",
-        "author": "jerry-xin",
-        "labels": [
-          "size: M",
-          "channel: qqbot",
-          "triage: needs-real-behavior-proof",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "extensions/qqbot/src/channel.test.ts",
-            "additions": 187,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/qqbot/src/channel.ts",
-            "additions": 33,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/channel-resolution.test.ts",
-            "additions": 101,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/channel-resolution.ts",
-            "additions": 65,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message-action-runner.test-helpers.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.channels.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/message.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89038",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89038.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "FAILURE": 11,
-            "CANCELLED": 1,
-            "SKIPPED": 29,
-            "SUCCESS": 120,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-approval-exec:FAILURE",
-            "checks-node-core-runtime-infra-provider-push:FAILURE",
-            "checks-node-core-runtime-infra-process:FAILURE",
-            "checks-node-agentic-control-plane-http-plugin-ws:FAILURE",
-            "checks-node-agentic-control-plane-runtime-shared-token:FAILURE",
-            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
-            "checks-node-agentic-agents-core-subagents:FAILURE",
-            "checks-node-agentic-agents-embedded:FAILURE",
-            "checks-node-auto-reply-core-top-level:FAILURE",
-            "checks-node-auto-reply-reply-agent-runner:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra-approval-exec:FAILURE",
-            "checks-node-core-runtime-infra-provider-push:FAILURE",
-            "checks-node-core-runtime-infra-process:FAILURE",
-            "checks-node-agentic-control-plane-http-plugin-ws:FAILURE",
-            "checks-node-agentic-control-plane-runtime-shared-token:FAILURE",
-            "checks-node-agentic-control-plane-startup-health-runtime:FAILURE",
-            "checks-node-agentic-agents-core-subagents:FAILURE",
-            "checks-node-agentic-agents-embedded:FAILURE",
-            "checks-node-auto-reply-core-top-level:FAILURE",
-            "checks-node-auto-reply-reply-agent-runner:FAILURE"
-          ]
+          "terminalBlockers": []
         }
       },
       "maintainer_authorized": false,
@@ -1504,29 +212,29 @@
       "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 10729,
+    "total_ms": 2631,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 509
+        "ms": 501
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2866
+        "ms": 1890
       },
       {
         "name": "classify_commands",
-        "ms": 6
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 7318
+        "ms": 226
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
