@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-03T12:09:37.078Z",
+  "generated_at": "2026-06-03T12:10:02.901Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T09:09:34.174Z",
+  "since": "2026-06-03T09:10:02.359Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    89817
+    89692
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4612145994
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,115 +31,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89817:4612112185:2026-06-03T12:09:30Z:clawsweeper_needs_human",
-      "comment_id": "4612112185",
-      "comment_version_key": "4612112185:2026-06-03T12:09:30Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89817#issuecomment-4612112185",
-      "repo": "openclaw/openclaw",
-      "issue_number": 89817,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-03T12:05:12Z",
-      "comment_updated_at": "2026-06-03T12:09:30Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] No automated repair target: the remaining blocker is contributor or maintainer proof review, not a concrete code defect.; Cleared: The diff only changes internal TypeScript queue logic and tests; it does not touch dependencies, CI, scripts, secrets, lockfiles, or code-execution surfaces. (sha=d6360b18e477e5d98c9dc5e1ca61b658dbdec98b)",
-      "review_summary": "This PR restores non-terminal commitment extraction batches to the front of the in-memory queue, shares drain scheduling, and adds regression tests for restore, ordering, terminal failure, and full-queue retry cases.\n\nPR surface: Source +18, Tests +243. Total +261 across 2 files.\n\nReproducibility: yes. source inspection gives a high-confidence reproduction path: enqueue eligible commitment items, make the extractor throw a non-terminal error after the batch is spliced, and current main loses the batch. I did not execute tests because this review is read-only.",
-      "review_followup": "- [P1] No automated repair target: the remaining blocker is contributor or maintainer proof review, not a concrete code defect.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "d6360b18e477e5d98c9dc5e1ca61b658dbdec98b",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(commitments): preserve extraction batch on transient failure",
-        "body": "## Summary\n\nThe commitment extraction queue drains in batches: `drainCommitmentExtractionQueue` does `queue.splice(0, batchMaxItems)` to take a batch off the queue, then runs the extractor. If the extractor threw a **non-terminal** error (e.g. a transient model/network error), the `catch` only re-threw — the already-dequeued batch was never put back, so those extraction items were silently lost and never retried.\n\nThis fixes the data-loss window with a minimal change:\n\n- **Non-terminal extraction failure no longer drops the already-dequeued batch.** The batch is restored to the front of the queue in original order (`queue.unshift(...batch)`) and the error is rethrown so the existing caller still logs it; the next drain reprocesses the same batch in order.\n- **Terminal extraction errors keep their existing drop/stop behavior.** Model/auth failures (`No API key found`, `OAuth token refresh failed`, etc.) still go through `openTerminalFailureCooldown` (cooldown + drop the agent's queued items) and rethrow — unchanged.\n- **Retry scheduling stays healthy even when the queue was full after a restore.** The single-slot debounce is extracted into one helper and is now also invoked from the queue-overflow branch. Without this, a queue left at `queueMaxItems` by a restored batch could never schedule another drain (every later enqueue returns early at the overflow guard before the old scheduling line), leaving the restored batch stuck forever.\n\nNet production change is `src/commitments/runtime.ts` only (+26/−8); the rest is tests.\n\n## Real behavior proof\n\n- **Behavior addressed:** A non-terminal failure in `drainCommitmentExtractionQueue` permanently lost the dequeued extraction batch (no restore, no retry). After the fix the batch is restored and retried; terminal failures still drop/stop; the debounce still schedules a retry when the queue is full.\n- **Real environment tested:** Deterministic unit / failure-injection tests against the real `drainCommitmentExtractionQueue` / `enqueueCommitmentExtraction` runtime with an injected `extractBatch` and a recorded `setTimer` (this is pure in-memory queue/scheduler logic; there is no channel/provider surface to exercise live).\n- **Exact steps or command run after this patch:** `node scripts/run-vitest.mjs src/commitments/runtime.test.ts` (plus adjacent `src/commitments/extraction.test.ts src/commitments/store.test.ts`); `tsgo` core + test-src lanes; `oxfmt --check`; `oxlint`.\n- **Evidence after fix:** `runtime.test.ts` → 11 passed (7 pre-existing + 4 new); adjacent commitments tests → 15 passed; `tsgo:core` and `tsgo:test:src` exit 0; `oxfmt --check` clean; `oxlint` exit 0. New tests:\n  - *restores and reprocesses a batch after a non-terminal extractor failure* — first drain rejects, store stays empty, retry drain resolves and reprocesses the **same** item ids; a third drain is a no-op (no duplicate extraction), store has exactly the two expected dedupe keys (no duplicate persistence).\n  - *restores a failed batch to the front, preserving order across batches* — 10 items (> `batchMaxItems` = 8); the restored batch lands ahead of the tail, so the observed `sourceMessageId` order across successful runs is `m0..m9`.\n  - *keeps the existing drop/stop behavior on terminal extraction failures* — terminal throw, then a retry drain resolves to 0 and the extractor is not re-invoked (dropped, not restored).\n  - *schedules a retry when a non-terminal failure leaves the queue full* — the debounce schedules exactly once while filling; after a fired-then-failed drain, an overflow enqueue still schedules a retry, and the full queue then drains cleanly (in-flight/`draining` state healthy).\n- **Observed result after fix:** Non-terminal failures preserve and retry the batch in order with no duplicate persistence/extraction; terminal failures keep dropping/stopping; a full queue still drains after a restore.\n- **What was not tested:** No live channel/provider end-to-end run (the change is internal queue logic with no user-visible surface). `hydrateBatch()` throwing before the batch is consumed, bounded-retry/backoff, and a broader retry redesign are intentionally **out of scope** (see below).\n\n## Scope\n\nSingle correctness/data-loss fix in `src/commitments/runtime.ts` plus its colocated test. Out-of-scope follow-ups (not addressed here):\n\n- `hydrateBatch()` throwing *before* the `splice`d batch reaches the extractor is a separate loss window.\n- Bounded retry / backoff for repeated non-terminal failures.\n- Any broader extraction-queue retry redesign.\n\n## No ClawBench\n\nThis is a correctness / data-loss fix, not a latency or token-efficiency change, so there is no performance claim to benchmark. Proof is deterministic via unit / invariant / failure-injection tests.\n\n## No CHANGELOG\n\nNo `CHANGELOG.md` edit: this is a contributor PR and release notes are generated at release time; the user-facing context lives in this PR body.\n",
-        "branch": "fix/commitment-extraction-batch-loss",
-        "head_sha": "d6360b18e477e5d98c9dc5e1ca61b658dbdec98b",
-        "author": "masatohoshino",
-        "labels": [
-          "size: M",
-          "triage: mock-only-proof",
-          "rating: 🦐 gold shrimp",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/commitments/runtime.test.ts",
-            "additions": 243,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commitments/runtime.ts",
-            "additions": 26,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89817",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89817.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 31,
-            "SUCCESS": 128,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3266,
+    "total_ms": 747,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 472
+        "ms": 530
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2417
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 349
+        "ms": 206
       },
       {
         "name": "append_ledger",
