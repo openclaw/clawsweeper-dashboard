@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-03T12:27:58.807Z",
-  "repo": "openclaw/openclaw-windows-node",
+  "generated_at": "2026-06-03T12:28:53.043Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T09:27:58.527Z",
+  "since": "2026-06-03T09:28:49.508Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    662
+    89817
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,121 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89817:4612112185:2026-06-03T12:28:45Z:clawsweeper_needs_human",
+      "comment_id": "4612112185",
+      "comment_version_key": "4612112185:2026-06-03T12:28:45Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89817#issuecomment-4612112185",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89817,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-03T12:05:12Z",
+      "comment_updated_at": "2026-06-03T12:28:45Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- No automated repair target; this PR is ready for maintainer merge and CI review with supplied proof, and any broader retry redesign is separate work.; Cleared: The diff only changes in-memory commitment queue logic and colocated tests; no dependencies, CI, package metadata, permissions, or secret-handling surfaces are touched. (sha=d6360b18e477e5d98c9dc5e1ca61b658dbdec98b)",
+      "review_summary": "Restores non-terminal commitment-extraction batches to the front of the in-memory queue, shares drain scheduling, and adds regression tests for retry, ordering, terminal drop, and full-queue scheduling.\n\nPR surface: Source +18, Tests +243. Total +261 across 2 files.\n\nReproducibility: yes. source-reproducible: current main splices the batch before extraction and rethrows non-terminal extractor errors without restoring it. The updated PR body also includes terminal output from a production-runtime path showing the after-fix retry behavior.",
+      "review_followup": "- No automated repair target; this PR is ready for maintainer merge and CI review with supplied proof, and any broader retry redesign is separate work.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "d6360b18e477e5d98c9dc5e1ca61b658dbdec98b",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(commitments): preserve extraction batch on transient failure",
+        "body": "## Summary\n\nThe commitment extraction queue drains in batches: `drainCommitmentExtractionQueue` does `queue.splice(0, batchMaxItems)` to take a batch off the queue, then runs the extractor. If the extractor threw a **non-terminal** error (e.g. a transient model/network error), the `catch` only re-threw — the already-dequeued batch was never put back, so those extraction items were silently lost and never retried.\n\nThis fixes the data-loss window with a minimal change:\n\n- **Non-terminal extraction failure no longer drops the already-dequeued batch.** The batch is restored to the front of the queue in original order (`queue.unshift(...batch)`) and the error is rethrown so the existing caller still logs it; the next drain reprocesses the same batch in order.\n- **Terminal extraction errors keep their existing drop/stop behavior.** Model/auth failures (`No API key found`, `OAuth token refresh failed`, etc.) still go through `openTerminalFailureCooldown` (cooldown + drop the agent's queued items) and rethrow — unchanged.\n- **Retry scheduling stays healthy even when the queue was full after a restore.** The single-slot debounce is extracted into one helper and is now also invoked from the queue-overflow branch. Without this, a queue left at `queueMaxItems` by a restored batch could never schedule another drain, leaving the restored batch stuck.\n\nNet production change is `src/commitments/runtime.ts` only (+26/−8); the rest is tests.\n\n## Real behavior proof\n\n- **Behavior addressed:** In `drainCommitmentExtractionQueue` a non-terminal extractor failure permanently lost the already-dequeued extraction batch (no restore, no retry). After the fix the batch is restored to the front of the queue and retried; terminal model/auth failures still drop and stop; the debounce still schedules a retry when the queue is full.\n- **Real environment tested:** Ran the production commitment-extraction runtime at this PR head (`src/commitments/runtime.ts`) end to end on Node — real `enqueueCommitmentExtraction` → `drainCommitmentExtractionQueue` → on-disk commitment store persistence (`loadCommitmentStore`, writing under `OPENCLAW_STATE_DIR`). The only injected seam is the `extractBatch` model/network call, made to throw so the failure is deterministic with no provider API, prompt, or secret involved; the queue splice/restore, persistence, dedupe, and terminal cooldown are the real code paths.\n- **Exact steps or command run after this patch:** `node --import tsx ./e1-proof.mts` from the worktree, where the script enqueues two items, forces the injected `extractBatch` to throw a transient error on the first drain, then lets it recover on retry, and separately exercises a terminal `No API key found` failure.\n- **Evidence after fix:** redacted terminal output (stdout) from the `node --import tsx` run against the production runtime:\n\n```text\n=== OpenClaw commitments runtime — transient-failure batch-loss proof ===\nstate dir (redacted): <tmp>/openclaw-e1-proof-XXXXXX\n\n[A] commitments.enabled = true\n    queued m1: enqueued=true\n    queued m2: enqueued=true\n\n[A] first drain — inject transient extractor failure after batch is dequeued:\n    drain threw: ECONNRESET socket hang up (transient upstream)\n    after failure: persisted commitments = 0 (batch retained for retry, nothing persisted)\n\n[A] retry drain — extractor recovers:\n    retry processed 2 item(s); extractor invocations so far = 2\n    persisted dedupe keys = [\"event:m1\",\"event:m2\"]\n\n[A] third drain — confirm nothing reprocessed (no duplicate extraction/persistence):\n    third drain processed 0 item(s); total extractor invocations = 2; persisted count = 2\n\n[B] terminal auth failure path (existing behavior must be unchanged):\n[commitments] commitment extraction disabled temporarily after terminal model/auth failure\n    terminal drain threw: No API key found for provider \"openai\".\n    retry after terminal failure processed 0 item(s); extractor invocations = 1 (dropped + cooled down, not retried)\n\n=== summary ===\nA: transient failure restored the dequeued batch, retry reprocessed it once, store holds [event:m1, event:m2] exactly; extractor called 2x (1 fail + 1 success), no duplicate persistence\nB: terminal failure dropped the batch and did not retry (extractor called 1x) — unchanged\n```\n\n- **Observed result after fix:** The first drain threw the transient error and persisted nothing (store count 0), so the dequeued batch was held rather than lost; the retry drain reprocessed exactly the two queued items and the store ended with the dedupe keys `event:m1` and `event:m2` exactly once each; a third drain processed nothing and the extractor was invoked only twice total, so there was no duplicate extraction or persistence. The terminal `No API key found` path threw, logged the existing cooldown message, dropped the agent's queued work, and did not retry on the next drain — the terminal drop/stop behavior is unchanged by this PR.\n- **What was not tested:** No live channel/provider end-to-end run was performed — the change is internal queue logic with no user-visible channel surface, so the runtime path above exercises it directly. `hydrateBatch()` throwing before the batch reaches the extractor, bounded retry/backoff, and a broader retry redesign were intentionally not exercised (out of scope, see below).\n\n## Supplemental automated checks\n\nBeyond the runtime capture above, the colocated regression suite covers the same paths (restore + reprocess without duplicate persistence, front-of-queue ordering across batches, unchanged terminal drop, and full-queue retry scheduling); typecheck and formatter/linter are also green on the touched files. These are supplemental to the real-runtime proof.\n\n## Scope\n\nSingle correctness/data-loss fix in `src/commitments/runtime.ts` plus its colocated test. Out-of-scope follow-ups (not addressed here):\n\n- `hydrateBatch()` throwing *before* the `splice`d batch reaches the extractor is a separate loss window.\n- Bounded retry / backoff for repeated non-terminal failures.\n- Any broader extraction-queue retry redesign.\n\n## No ClawBench\n\nThis is a correctness / data-loss fix, not a latency or token-efficiency change, so there is no performance claim to benchmark. Proof is the real-runtime capture above.\n\n## No CHANGELOG\n\nNo `CHANGELOG.md` edit: this is a contributor PR and release notes are generated at release time; the user-facing context lives in this PR body.\n",
+        "branch": "fix/commitment-extraction-batch-loss",
+        "head_sha": "d6360b18e477e5d98c9dc5e1ca61b658dbdec98b",
+        "author": "masatohoshino",
+        "labels": [
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦞 diamond lobster",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/commitments/runtime.test.ts",
+            "additions": 243,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commitments/runtime.ts",
+            "additions": 26,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89817",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89817.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 31,
+            "SUCCESS": 128,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 496,
+    "total_ms": 3910,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 267
+        "ms": 480
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 3041
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 217
+        "ms": 364
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
