@@ -1,24 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-04T12:28:04.169Z",
+  "generated_at": "2026-06-04T12:28:06.009Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-04T09:28:01.478Z",
+  "since": "2026-06-04T09:28:03.224Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    90287
-  ],
-  "comment_ids": [
-    4622111348
+    75299
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 20,
+  "commands_seen": 7,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -34,21 +31,127 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:90287:4622111348:2026-06-04T12:26:08Z:automerge",
-      "comment_id": "4622111348",
-      "comment_version_key": "4622111348:2026-06-04T12:26:08Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/90287#issuecomment-4622111348",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:75299:4356786404:2026-06-04T12:27:58Z:clawsweeper_auto_repair",
+      "comment_id": "4356786404",
+      "comment_version_key": "4356786404:2026-06-04T12:27:58Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/75299#issuecomment-4356786404",
       "repo": "openclaw/openclaw",
-      "issue_number": 90287,
-      "author": "hxy91819",
-      "author_id": 8814856,
-      "author_association": "MEMBER",
-      "comment_created_at": "2026-06-04T12:26:08Z",
-      "comment_updated_at": "2026-06-04T12:26:08Z",
+      "issue_number": 75299,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-04-30T23:11:09Z",
+      "comment_updated_at": "2026-06-04T12:27:58Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=be70656837b93f74f6a4d4731aff3b8e1ab833d8)",
+      "review_summary": "The branch adds a 30-second starvation-promotion threshold to the process command queue, switches dequeue selection from `shift()` to `pickNextIndex()`/`splice()`, exports the threshold, and adds focused queue tests.\n\nPR surface: Source +55, Tests +36. Total +91 across 3 files.\n\nReproducibility: Do we have a high-confidence way to reproduce the issue? Yes for the queue primitive from source: current main drains the first pre-sorted entry with no age-based promotion, so continuous foreground insertion can keep background entries waiting; no live gateway/session reproduction was inspected.",
+      "review_followup": "- [P2] The remaining blocker is maintainer scheduling-policy judgment on foreground precedence versus starvation fairness, not a narrow mechanical repair for automation.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "be70656837b93f74f6a4d4731aff3b8e1ab833d8",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "write",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(process): add starvation guard to priority command queue",
+        "body": "## Problem\n\nUpstream added priority scheduling (foreground/normal/background) via insertion-sort at enqueue time (#82765). This works well for the common case but has no protection against indefinite starvation: a steady stream of foreground enqueues can keep background work queued forever.\n\nFor example, manual user turns are enqueued with `priority: \"foreground\"` (#82765). If a user sends messages faster than the agent processes them, any background maintenance work (cron, heartbeats, plugin updates) queued at normal or background priority would never execute.\n\n## Fix\n\nAdd a starvation guard that promotes entries waiting longer than `STARVATION_PROMOTION_MS` (30 seconds) above all standard priorities at dequeue time.\n\n- `lanes.ts`: Export `STARVATION_PROMOTION_MS` constant (30s)\n- `command-queue.ts`: Add `effectivePriority()` and `pickNextIndex()` functions. Replace `queue.shift()` with `splice(pickNextIndex())` in `drainLane()` so the dequeue considers starvation-promoted entries\n- `command-queue.test.ts`: Add starvation promotion regression test, FIFO order test, and sequence tie-breaker test\n\nThe insertion-sort enqueue order is preserved for the common case (no scanning overhead when no aged entries exist). The starvation scan only changes behavior when an entry has been waiting 30+ seconds.\n\n## Real behavior proof\n\n**Behavior addressed:** Command queue now prevents indefinite starvation of low-priority work when higher-priority commands continuously arrive. Items waiting longer than 30 seconds are promoted above all standard priorities at dequeue time.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `0ab6fa2e8e`\n\n**Exact steps or command run after this patch:**\n\n```\n$ OPENCLAW_TEST_FAST=1 pnpm test src/process/command-queue.test.ts -- --reporter=verbose\n```\n\n**Evidence after fix:** All 31 tests pass, including the starvation promotion contention test that exercises the actual `enqueueCommand` and `drainLane` functions with real `effectivePriority()` and `pickNextIndex()` calls:\n\n```\n ✓  preserves FIFO order within each priority (0ms)\n ✓  reports queueAhead after priority insertion (1ms)\n ✓  runs foreground work before already queued background work (0ms)\n ✓  waitForActiveTasks returns drained=false when timeout is zero and tasks are active (0ms)\n ✓  waitForActiveTasks returns drained=false on timeout (0ms)\n ✓  resetAllLanes drains queued work immediately after reset (0ms)\n ✓  resetCommandLane releases one stuck lane and drains its queued work (0ms)\n ✓  task timeout releases a stuck lane and drains queued work (1ms)\n ✓  keeps work queued while a lane has zero concurrency and drains after resume (0ms)\n ✓  keeps draining functional after synchronous onWait failure (0ms)\n ✓  resetAllLanes clears gateway draining flag and re-allows enqueue (0ms)\n ✓  migrates legacy queued entries missing priority and wait diagnostics (0ms)\n ✓  promotes aged background entry above steady foreground stream (0ms)\n ✓  shares lane state across distinct module instances (4ms)\n\n Test Files  1 passed (1)\n      Tests  31 passed (31)\n```\n\nThe key contention test (\"promotes aged background entry above steady foreground stream\") exercises the full starvation drain flow:\n\n1. Enqueue a blocker task on the main lane that holds the lane busy\n2. Enqueue a `priority: \"background\"` task while the blocker is active\n3. Advance fake timers past `STARVATION_PROMOTION_MS` (30s) so the background entry ages\n4. Enqueue a `priority: \"foreground\"` task (higher static priority than background)\n5. Release the blocker, allowing queued work to drain\n6. Assert execution order is `[\"background\", \"foreground\"]`, proving the aged background entry drained before the fresh foreground entry despite lower static priority\n\nThis demonstrates the core behavior: lower-priority work that has waited 30+ seconds is promoted above all standard priorities and drains first when a lane becomes available, even while higher-priority work continues arriving.\n\nSource confirmation of the starvation constants:\n\n```\n$ grep -n 'STARVATION_PROMOTION_MS' src/process/lanes.ts src/process/command-queue.ts\nsrc/process/lanes.ts:14:export const STARVATION_PROMOTION_MS = 30_000;\nsrc/process/command-queue.ts:8:import { CommandLane, STARVATION_PROMOTION_MS } from \"./lanes.js\";\nsrc/process/command-queue.ts:283:  if (Date.now() - entry.enqueuedAt >= STARVATION_PROMOTION_MS) {\n```\n\n**Observed result after fix:** The test confirms that when a background entry ages past the 30-second starvation threshold and a fresh foreground entry is enqueued, the drain order is `[\"background\", \"foreground\"]`. Without the starvation guard, the order would be `[\"foreground\", \"background\"]` since foreground has higher static priority.\n\n```\nnode -e proof (queue fairness on macOS, Node 26.0.0):\n\nExecution order (maxConsecutiveHigh=3):\n  [high] urgent-1\n  [high] urgent-2\n  [high] urgent-3\n  [normal] background-scan ← STARVATION GUARD\n  [high] urgent-4\n  [high] urgent-5\n  [high] urgent-6\n  [normal] cleanup-temp ← STARVATION GUARD\n\nWithout guard, normal tasks would only run after all 6 urgent tasks.\n```\n\n\n**What was not tested:** No live gateway session with real concurrent foreground/background commands under wall-clock timing. The test uses `vi.useFakeTimers()` to control time deterministically. The FIFO tie-breaker for same-millisecond entries and the sequence number ordering are covered by separate tests in the same suite.\n\n\n\n### Production runtime proof (OpenClaw v2026.5.25)\n\nBranch rebased onto latest upstream/main. 31/31 command queue tests pass.\n\nExercised production starvation guard via tsx import with real wall-clock timing:\n```\n=== OpenClaw starvation guard proof (real wall-clock) ===\nModule: src/process/command-queue.ts + src/process/lanes.ts\nSTARVATION_PROMOTION_MS: 30000ms\n\n--- Priority calculation ---\nRecent low-priority (age 5s):\n  static priority: 1\n  effective priority: 1\n\nStarved low-priority (age 31000ms):\n  static priority: 1\n  effective priority: 9007199254740991 (MAX_SAFE_INTEGER = promoted)\n\nRecent high-priority (age 1s):\n  static priority: 100\n  effective priority: 100\n\n--- Starvation guard result ---\nStarved entry (priority=1) beats high-priority entry (priority=100): YES\n\n--- Lane configuration ---\n  Main: \"main\", Cron: \"cron\", CronNested: \"cron-nested\", Subagent: \"subagent\", Nested: \"nested\"\n\nStatus: PASS (starvation guard promotes old entries above static priority)\n```\n\nBehavior addressed: Low-priority commands could starve indefinitely when high-priority work continuously enqueued\nReal environment tested: macOS, OpenClaw v2026.5.25, Node 26, tsx import of production lanes.ts and command-queue.ts modules\nExact steps or command run after this patch: `npx tsx proof-starvation.mts` using real Date.now() timestamps (not fake timers) to demonstrate priority promotion after STARVATION_PROMOTION_MS\nEvidence after fix: Entry waiting 31s promoted to MAX_SAFE_INTEGER priority, beating priority-100 entry\nObserved result after fix: Starved entry wins scheduling over any static priority after 30s wait\nWhat was not tested: Live gateway with real concurrent command queue contention; tested priority calculation with production modules and real timestamps\n",
+        "branch": "feat/command-queue-priority",
+        "head_sha": "be70656837b93f74f6a4d4731aff3b8e1ab833d8",
+        "author": "sebtardif",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/process/command-queue.test.ts",
+            "additions": 37,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/command-queue.ts",
+            "additions": 50,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/lanes.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-75299",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-75299.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 163,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 30,
+            "SUCCESS": 127,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-fast-contracts-plugins-a:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-fast-contracts-plugins-a:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:75299:4529402926:2026-05-24T16:56:19Z:re_review",
+      "comment_id": "4529402926",
+      "comment_version_key": "4529402926:2026-05-24T16:56:19Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/75299#issuecomment-4529402926",
+      "repo": "openclaw/openclaw",
+      "issue_number": 75299,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-24T16:56:19Z",
+      "comment_updated_at": "2026-05-24T16:56:19Z",
       "status_comment_id": null,
       "trigger": "mention",
-      "command": "automerge",
-      "intent": "automerge",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -64,168 +167,635 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "write",
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(ci): scope PR merge diff checks to first parent",
-        "body": "## Summary\n- Fix PR diff-scope checks that mixed stale `pull_request.base.sha` values with GitHub synthetic merge commits.\n- Add explicit PR merge-head first-parent mode for CI changed-scope, changed-lanes, and OpenGrep PR diff scans.\n- Add synthetic merge regression coverage for stale-base false positives.\n\n## Verification\n- `node scripts/run-vitest.mjs src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/run-opengrep.test.ts`\n- `node scripts/run-vitest.mjs src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/run-opengrep.test.ts test/scripts/ci-workflow-guards.test.ts`\n- `node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/scripts/ci-changed-scope.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/changed-lanes.test.ts test/scripts/run-opengrep.test.ts scripts/ci-changed-scope.mjs scripts/changed-lanes.mjs`\n- `pnpm lint --threads=8`\n- `git diff --check`\n- `bash -n scripts/run-opengrep.sh`\n- `.agents/skills/autoreview/scripts/autoreview --mode local` -> clean, no accepted/actionable findings before initial push and after CI-fix follow-up\n\n## Real behavior proof\nBehavior addressed: PR diff-scoped CI checks could include files from base-branch movement when a stale PR payload base SHA was compared against GitHub's synthetic PR merge commit.\n\nReal environment tested: Local repo plus live GitHub refs for openclaw/openclaw#89456 (`refs/pull/89456/merge` and `refs/pull/89456/head`).\n\nExact steps or command run after this patch: Fetched #89456 PR refs, compared `git diff --name-only <payload-base> refs/pull/89456/merge` with `listChangedPaths(<payload-base>, <merge-ref>, cwd, true)`, and compared the fixed result to `<payload-base>...refs/pull/89456/head`.\n\nEvidence after fix: Old diff returned 399 paths including `src/infra/host-env-security.test.ts`; fixed first-parent mode returned 10 paths and exactly matched the real PR head diff.\n\nObserved result after fix: OpenGrep PR diff scope is limited to the actual PR files instead of scanning unrelated main-branch files.\n\nWhat was not tested: A full end-to-end rerun of #89456 with this patch applied to that PR branch; this PR's own CI is expected to cover the workflow wiring.\n",
-        "branch": "fix/opengrep-pr-diff-scope",
-        "head_sha": "08e401169b322c654f7e197c735ac58c275c1258",
-        "author": "hxy91819",
+        "title": "feat(process): add starvation guard to priority command queue",
+        "body": "## Problem\n\nUpstream added priority scheduling (foreground/normal/background) via insertion-sort at enqueue time (#82765). This works well for the common case but has no protection against indefinite starvation: a steady stream of foreground enqueues can keep background work queued forever.\n\nFor example, manual user turns are enqueued with `priority: \"foreground\"` (#82765). If a user sends messages faster than the agent processes them, any background maintenance work (cron, heartbeats, plugin updates) queued at normal or background priority would never execute.\n\n## Fix\n\nAdd a starvation guard that promotes entries waiting longer than `STARVATION_PROMOTION_MS` (30 seconds) above all standard priorities at dequeue time.\n\n- `lanes.ts`: Export `STARVATION_PROMOTION_MS` constant (30s)\n- `command-queue.ts`: Add `effectivePriority()` and `pickNextIndex()` functions. Replace `queue.shift()` with `splice(pickNextIndex())` in `drainLane()` so the dequeue considers starvation-promoted entries\n- `command-queue.test.ts`: Add starvation promotion regression test, FIFO order test, and sequence tie-breaker test\n\nThe insertion-sort enqueue order is preserved for the common case (no scanning overhead when no aged entries exist). The starvation scan only changes behavior when an entry has been waiting 30+ seconds.\n\n## Real behavior proof\n\n**Behavior addressed:** Command queue now prevents indefinite starvation of low-priority work when higher-priority commands continuously arrive. Items waiting longer than 30 seconds are promoted above all standard priorities at dequeue time.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `0ab6fa2e8e`\n\n**Exact steps or command run after this patch:**\n\n```\n$ OPENCLAW_TEST_FAST=1 pnpm test src/process/command-queue.test.ts -- --reporter=verbose\n```\n\n**Evidence after fix:** All 31 tests pass, including the starvation promotion contention test that exercises the actual `enqueueCommand` and `drainLane` functions with real `effectivePriority()` and `pickNextIndex()` calls:\n\n```\n ✓  preserves FIFO order within each priority (0ms)\n ✓  reports queueAhead after priority insertion (1ms)\n ✓  runs foreground work before already queued background work (0ms)\n ✓  waitForActiveTasks returns drained=false when timeout is zero and tasks are active (0ms)\n ✓  waitForActiveTasks returns drained=false on timeout (0ms)\n ✓  resetAllLanes drains queued work immediately after reset (0ms)\n ✓  resetCommandLane releases one stuck lane and drains its queued work (0ms)\n ✓  task timeout releases a stuck lane and drains queued work (1ms)\n ✓  keeps work queued while a lane has zero concurrency and drains after resume (0ms)\n ✓  keeps draining functional after synchronous onWait failure (0ms)\n ✓  resetAllLanes clears gateway draining flag and re-allows enqueue (0ms)\n ✓  migrates legacy queued entries missing priority and wait diagnostics (0ms)\n ✓  promotes aged background entry above steady foreground stream (0ms)\n ✓  shares lane state across distinct module instances (4ms)\n\n Test Files  1 passed (1)\n      Tests  31 passed (31)\n```\n\nThe key contention test (\"promotes aged background entry above steady foreground stream\") exercises the full starvation drain flow:\n\n1. Enqueue a blocker task on the main lane that holds the lane busy\n2. Enqueue a `priority: \"background\"` task while the blocker is active\n3. Advance fake timers past `STARVATION_PROMOTION_MS` (30s) so the background entry ages\n4. Enqueue a `priority: \"foreground\"` task (higher static priority than background)\n5. Release the blocker, allowing queued work to drain\n6. Assert execution order is `[\"background\", \"foreground\"]`, proving the aged background entry drained before the fresh foreground entry despite lower static priority\n\nThis demonstrates the core behavior: lower-priority work that has waited 30+ seconds is promoted above all standard priorities and drains first when a lane becomes available, even while higher-priority work continues arriving.\n\nSource confirmation of the starvation constants:\n\n```\n$ grep -n 'STARVATION_PROMOTION_MS' src/process/lanes.ts src/process/command-queue.ts\nsrc/process/lanes.ts:14:export const STARVATION_PROMOTION_MS = 30_000;\nsrc/process/command-queue.ts:8:import { CommandLane, STARVATION_PROMOTION_MS } from \"./lanes.js\";\nsrc/process/command-queue.ts:283:  if (Date.now() - entry.enqueuedAt >= STARVATION_PROMOTION_MS) {\n```\n\n**Observed result after fix:** The test confirms that when a background entry ages past the 30-second starvation threshold and a fresh foreground entry is enqueued, the drain order is `[\"background\", \"foreground\"]`. Without the starvation guard, the order would be `[\"foreground\", \"background\"]` since foreground has higher static priority.\n\n```\nnode -e proof (queue fairness on macOS, Node 26.0.0):\n\nExecution order (maxConsecutiveHigh=3):\n  [high] urgent-1\n  [high] urgent-2\n  [high] urgent-3\n  [normal] background-scan ← STARVATION GUARD\n  [high] urgent-4\n  [high] urgent-5\n  [high] urgent-6\n  [normal] cleanup-temp ← STARVATION GUARD\n\nWithout guard, normal tasks would only run after all 6 urgent tasks.\n```\n\n\n**What was not tested:** No live gateway session with real concurrent foreground/background commands under wall-clock timing. The test uses `vi.useFakeTimers()` to control time deterministically. The FIFO tie-breaker for same-millisecond entries and the sequence number ordering are covered by separate tests in the same suite.\n\n\n\n### Production runtime proof (OpenClaw v2026.5.25)\n\nBranch rebased onto latest upstream/main. 31/31 command queue tests pass.\n\nExercised production starvation guard via tsx import with real wall-clock timing:\n```\n=== OpenClaw starvation guard proof (real wall-clock) ===\nModule: src/process/command-queue.ts + src/process/lanes.ts\nSTARVATION_PROMOTION_MS: 30000ms\n\n--- Priority calculation ---\nRecent low-priority (age 5s):\n  static priority: 1\n  effective priority: 1\n\nStarved low-priority (age 31000ms):\n  static priority: 1\n  effective priority: 9007199254740991 (MAX_SAFE_INTEGER = promoted)\n\nRecent high-priority (age 1s):\n  static priority: 100\n  effective priority: 100\n\n--- Starvation guard result ---\nStarved entry (priority=1) beats high-priority entry (priority=100): YES\n\n--- Lane configuration ---\n  Main: \"main\", Cron: \"cron\", CronNested: \"cron-nested\", Subagent: \"subagent\", Nested: \"nested\"\n\nStatus: PASS (starvation guard promotes old entries above static priority)\n```\n\nBehavior addressed: Low-priority commands could starve indefinitely when high-priority work continuously enqueued\nReal environment tested: macOS, OpenClaw v2026.5.25, Node 26, tsx import of production lanes.ts and command-queue.ts modules\nExact steps or command run after this patch: `npx tsx proof-starvation.mts` using real Date.now() timestamps (not fake timers) to demonstrate priority promotion after STARVATION_PROMOTION_MS\nEvidence after fix: Entry waiting 31s promoted to MAX_SAFE_INTEGER priority, beating priority-100 entry\nObserved result after fix: Starved entry wins scheduling over any static priority after 30s wait\nWhat was not tested: Live gateway with real concurrent command queue contention; tested priority calculation with production modules and real timestamps\n",
+        "branch": "feat/command-queue-priority",
+        "head_sha": "be70656837b93f74f6a4d4731aff3b8e1ab833d8",
+        "author": "sebtardif",
         "labels": [
-          "security",
-          "scripts",
-          "maintainer",
-          "size: M",
-          "clawsweeper:automerge",
+          "size: S",
+          "proof: supplied",
           "proof: sufficient",
           "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 automation",
-          "status: 👀 ready for maintainer look"
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": ".github/workflows/ci.yml",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": ".github/workflows/opengrep-precise.yml",
-            "additions": 2,
+            "path": "src/process/command-queue.test.ts",
+            "additions": 37,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "scripts/changed-lanes.mjs",
-            "additions": 27,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/ci-changed-scope.d.mts",
-            "additions": 6,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/ci-changed-scope.mjs",
-            "additions": 27,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/lib/merge-head-diff-base.mjs",
-            "additions": 58,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scripts/run-opengrep.sh",
-            "additions": 41,
+            "path": "src/process/command-queue.ts",
+            "additions": 50,
             "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
-            "additions": 4,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/host-hook-runtime.ts",
-            "additions": 11,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/scripts/ci-changed-scope.test.ts",
-            "additions": 58,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/changed-lanes.test.ts",
-            "additions": 82,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/ci-workflow-guards.test.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/lint-suppressions.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/run-opengrep.test.ts",
-            "additions": 56,
+            "path": "src/process/lanes.ts",
+            "additions": 7,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
-        "cluster_id": "automerge-openclaw-openclaw-90287",
-        "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90287.md",
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90287",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90287.md",
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-75299",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-75299.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 167,
+          "total": 163,
           "counts": {
-            "SKIPPED": 31,
-            "SUCCESS": 134,
-            "FAILURE": 1,
+            "CANCELLED": 2,
+            "SKIPPED": 30,
+            "SUCCESS": 127,
+            "FAILURE": 3,
             "NEUTRAL": 1
           },
           "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-fast-contracts-plugins-a:FAILURE",
+            "check-lint:FAILURE",
             "check-additional-runtime-topology-architecture:FAILURE"
           ],
-          "pending": [
-            "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS"
-          ],
+          "pending": [],
           "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-fast-contracts-plugins-a:FAILURE",
+            "check-lint:FAILURE",
             "check-additional-runtime-topology-architecture:FAILURE"
           ]
         }
       },
-      "maintainer_authorized": true,
-      "author_readonly_authorized": false,
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:75299:4526268305:2026-05-23T18:59:51Z:re_review",
+      "comment_id": "4526268305",
+      "comment_version_key": "4526268305:2026-05-23T18:59:51Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/75299#issuecomment-4526268305",
+      "repo": "openclaw/openclaw",
+      "issue_number": 75299,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-23T18:59:51Z",
+      "comment_updated_at": "2026-05-23T18:59:51Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(process): add starvation guard to priority command queue",
+        "body": "## Problem\n\nUpstream added priority scheduling (foreground/normal/background) via insertion-sort at enqueue time (#82765). This works well for the common case but has no protection against indefinite starvation: a steady stream of foreground enqueues can keep background work queued forever.\n\nFor example, manual user turns are enqueued with `priority: \"foreground\"` (#82765). If a user sends messages faster than the agent processes them, any background maintenance work (cron, heartbeats, plugin updates) queued at normal or background priority would never execute.\n\n## Fix\n\nAdd a starvation guard that promotes entries waiting longer than `STARVATION_PROMOTION_MS` (30 seconds) above all standard priorities at dequeue time.\n\n- `lanes.ts`: Export `STARVATION_PROMOTION_MS` constant (30s)\n- `command-queue.ts`: Add `effectivePriority()` and `pickNextIndex()` functions. Replace `queue.shift()` with `splice(pickNextIndex())` in `drainLane()` so the dequeue considers starvation-promoted entries\n- `command-queue.test.ts`: Add starvation promotion regression test, FIFO order test, and sequence tie-breaker test\n\nThe insertion-sort enqueue order is preserved for the common case (no scanning overhead when no aged entries exist). The starvation scan only changes behavior when an entry has been waiting 30+ seconds.\n\n## Real behavior proof\n\n**Behavior addressed:** Command queue now prevents indefinite starvation of low-priority work when higher-priority commands continuously arrive. Items waiting longer than 30 seconds are promoted above all standard priorities at dequeue time.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `0ab6fa2e8e`\n\n**Exact steps or command run after this patch:**\n\n```\n$ OPENCLAW_TEST_FAST=1 pnpm test src/process/command-queue.test.ts -- --reporter=verbose\n```\n\n**Evidence after fix:** All 31 tests pass, including the starvation promotion contention test that exercises the actual `enqueueCommand` and `drainLane` functions with real `effectivePriority()` and `pickNextIndex()` calls:\n\n```\n ✓  preserves FIFO order within each priority (0ms)\n ✓  reports queueAhead after priority insertion (1ms)\n ✓  runs foreground work before already queued background work (0ms)\n ✓  waitForActiveTasks returns drained=false when timeout is zero and tasks are active (0ms)\n ✓  waitForActiveTasks returns drained=false on timeout (0ms)\n ✓  resetAllLanes drains queued work immediately after reset (0ms)\n ✓  resetCommandLane releases one stuck lane and drains its queued work (0ms)\n ✓  task timeout releases a stuck lane and drains queued work (1ms)\n ✓  keeps work queued while a lane has zero concurrency and drains after resume (0ms)\n ✓  keeps draining functional after synchronous onWait failure (0ms)\n ✓  resetAllLanes clears gateway draining flag and re-allows enqueue (0ms)\n ✓  migrates legacy queued entries missing priority and wait diagnostics (0ms)\n ✓  promotes aged background entry above steady foreground stream (0ms)\n ✓  shares lane state across distinct module instances (4ms)\n\n Test Files  1 passed (1)\n      Tests  31 passed (31)\n```\n\nThe key contention test (\"promotes aged background entry above steady foreground stream\") exercises the full starvation drain flow:\n\n1. Enqueue a blocker task on the main lane that holds the lane busy\n2. Enqueue a `priority: \"background\"` task while the blocker is active\n3. Advance fake timers past `STARVATION_PROMOTION_MS` (30s) so the background entry ages\n4. Enqueue a `priority: \"foreground\"` task (higher static priority than background)\n5. Release the blocker, allowing queued work to drain\n6. Assert execution order is `[\"background\", \"foreground\"]`, proving the aged background entry drained before the fresh foreground entry despite lower static priority\n\nThis demonstrates the core behavior: lower-priority work that has waited 30+ seconds is promoted above all standard priorities and drains first when a lane becomes available, even while higher-priority work continues arriving.\n\nSource confirmation of the starvation constants:\n\n```\n$ grep -n 'STARVATION_PROMOTION_MS' src/process/lanes.ts src/process/command-queue.ts\nsrc/process/lanes.ts:14:export const STARVATION_PROMOTION_MS = 30_000;\nsrc/process/command-queue.ts:8:import { CommandLane, STARVATION_PROMOTION_MS } from \"./lanes.js\";\nsrc/process/command-queue.ts:283:  if (Date.now() - entry.enqueuedAt >= STARVATION_PROMOTION_MS) {\n```\n\n**Observed result after fix:** The test confirms that when a background entry ages past the 30-second starvation threshold and a fresh foreground entry is enqueued, the drain order is `[\"background\", \"foreground\"]`. Without the starvation guard, the order would be `[\"foreground\", \"background\"]` since foreground has higher static priority.\n\n```\nnode -e proof (queue fairness on macOS, Node 26.0.0):\n\nExecution order (maxConsecutiveHigh=3):\n  [high] urgent-1\n  [high] urgent-2\n  [high] urgent-3\n  [normal] background-scan ← STARVATION GUARD\n  [high] urgent-4\n  [high] urgent-5\n  [high] urgent-6\n  [normal] cleanup-temp ← STARVATION GUARD\n\nWithout guard, normal tasks would only run after all 6 urgent tasks.\n```\n\n\n**What was not tested:** No live gateway session with real concurrent foreground/background commands under wall-clock timing. The test uses `vi.useFakeTimers()` to control time deterministically. The FIFO tie-breaker for same-millisecond entries and the sequence number ordering are covered by separate tests in the same suite.\n\n\n\n### Production runtime proof (OpenClaw v2026.5.25)\n\nBranch rebased onto latest upstream/main. 31/31 command queue tests pass.\n\nExercised production starvation guard via tsx import with real wall-clock timing:\n```\n=== OpenClaw starvation guard proof (real wall-clock) ===\nModule: src/process/command-queue.ts + src/process/lanes.ts\nSTARVATION_PROMOTION_MS: 30000ms\n\n--- Priority calculation ---\nRecent low-priority (age 5s):\n  static priority: 1\n  effective priority: 1\n\nStarved low-priority (age 31000ms):\n  static priority: 1\n  effective priority: 9007199254740991 (MAX_SAFE_INTEGER = promoted)\n\nRecent high-priority (age 1s):\n  static priority: 100\n  effective priority: 100\n\n--- Starvation guard result ---\nStarved entry (priority=1) beats high-priority entry (priority=100): YES\n\n--- Lane configuration ---\n  Main: \"main\", Cron: \"cron\", CronNested: \"cron-nested\", Subagent: \"subagent\", Nested: \"nested\"\n\nStatus: PASS (starvation guard promotes old entries above static priority)\n```\n\nBehavior addressed: Low-priority commands could starve indefinitely when high-priority work continuously enqueued\nReal environment tested: macOS, OpenClaw v2026.5.25, Node 26, tsx import of production lanes.ts and command-queue.ts modules\nExact steps or command run after this patch: `npx tsx proof-starvation.mts` using real Date.now() timestamps (not fake timers) to demonstrate priority promotion after STARVATION_PROMOTION_MS\nEvidence after fix: Entry waiting 31s promoted to MAX_SAFE_INTEGER priority, beating priority-100 entry\nObserved result after fix: Starved entry wins scheduling over any static priority after 30s wait\nWhat was not tested: Live gateway with real concurrent command queue contention; tested priority calculation with production modules and real timestamps\n",
+        "branch": "feat/command-queue-priority",
+        "head_sha": "be70656837b93f74f6a4d4731aff3b8e1ab833d8",
+        "author": "sebtardif",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/process/command-queue.test.ts",
+            "additions": 37,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/command-queue.ts",
+            "additions": 50,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/lanes.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-75299",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-75299.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 163,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 30,
+            "SUCCESS": 127,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-fast-contracts-plugins-a:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-fast-contracts-plugins-a:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:75299:4524285454:2026-05-23T05:32:14Z:re_review",
+      "comment_id": "4524285454",
+      "comment_version_key": "4524285454:2026-05-23T05:32:14Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/75299#issuecomment-4524285454",
+      "repo": "openclaw/openclaw",
+      "issue_number": 75299,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-23T05:32:14Z",
+      "comment_updated_at": "2026-05-23T05:32:14Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(process): add starvation guard to priority command queue",
+        "body": "## Problem\n\nUpstream added priority scheduling (foreground/normal/background) via insertion-sort at enqueue time (#82765). This works well for the common case but has no protection against indefinite starvation: a steady stream of foreground enqueues can keep background work queued forever.\n\nFor example, manual user turns are enqueued with `priority: \"foreground\"` (#82765). If a user sends messages faster than the agent processes them, any background maintenance work (cron, heartbeats, plugin updates) queued at normal or background priority would never execute.\n\n## Fix\n\nAdd a starvation guard that promotes entries waiting longer than `STARVATION_PROMOTION_MS` (30 seconds) above all standard priorities at dequeue time.\n\n- `lanes.ts`: Export `STARVATION_PROMOTION_MS` constant (30s)\n- `command-queue.ts`: Add `effectivePriority()` and `pickNextIndex()` functions. Replace `queue.shift()` with `splice(pickNextIndex())` in `drainLane()` so the dequeue considers starvation-promoted entries\n- `command-queue.test.ts`: Add starvation promotion regression test, FIFO order test, and sequence tie-breaker test\n\nThe insertion-sort enqueue order is preserved for the common case (no scanning overhead when no aged entries exist). The starvation scan only changes behavior when an entry has been waiting 30+ seconds.\n\n## Real behavior proof\n\n**Behavior addressed:** Command queue now prevents indefinite starvation of low-priority work when higher-priority commands continuously arrive. Items waiting longer than 30 seconds are promoted above all standard priorities at dequeue time.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `0ab6fa2e8e`\n\n**Exact steps or command run after this patch:**\n\n```\n$ OPENCLAW_TEST_FAST=1 pnpm test src/process/command-queue.test.ts -- --reporter=verbose\n```\n\n**Evidence after fix:** All 31 tests pass, including the starvation promotion contention test that exercises the actual `enqueueCommand` and `drainLane` functions with real `effectivePriority()` and `pickNextIndex()` calls:\n\n```\n ✓  preserves FIFO order within each priority (0ms)\n ✓  reports queueAhead after priority insertion (1ms)\n ✓  runs foreground work before already queued background work (0ms)\n ✓  waitForActiveTasks returns drained=false when timeout is zero and tasks are active (0ms)\n ✓  waitForActiveTasks returns drained=false on timeout (0ms)\n ✓  resetAllLanes drains queued work immediately after reset (0ms)\n ✓  resetCommandLane releases one stuck lane and drains its queued work (0ms)\n ✓  task timeout releases a stuck lane and drains queued work (1ms)\n ✓  keeps work queued while a lane has zero concurrency and drains after resume (0ms)\n ✓  keeps draining functional after synchronous onWait failure (0ms)\n ✓  resetAllLanes clears gateway draining flag and re-allows enqueue (0ms)\n ✓  migrates legacy queued entries missing priority and wait diagnostics (0ms)\n ✓  promotes aged background entry above steady foreground stream (0ms)\n ✓  shares lane state across distinct module instances (4ms)\n\n Test Files  1 passed (1)\n      Tests  31 passed (31)\n```\n\nThe key contention test (\"promotes aged background entry above steady foreground stream\") exercises the full starvation drain flow:\n\n1. Enqueue a blocker task on the main lane that holds the lane busy\n2. Enqueue a `priority: \"background\"` task while the blocker is active\n3. Advance fake timers past `STARVATION_PROMOTION_MS` (30s) so the background entry ages\n4. Enqueue a `priority: \"foreground\"` task (higher static priority than background)\n5. Release the blocker, allowing queued work to drain\n6. Assert execution order is `[\"background\", \"foreground\"]`, proving the aged background entry drained before the fresh foreground entry despite lower static priority\n\nThis demonstrates the core behavior: lower-priority work that has waited 30+ seconds is promoted above all standard priorities and drains first when a lane becomes available, even while higher-priority work continues arriving.\n\nSource confirmation of the starvation constants:\n\n```\n$ grep -n 'STARVATION_PROMOTION_MS' src/process/lanes.ts src/process/command-queue.ts\nsrc/process/lanes.ts:14:export const STARVATION_PROMOTION_MS = 30_000;\nsrc/process/command-queue.ts:8:import { CommandLane, STARVATION_PROMOTION_MS } from \"./lanes.js\";\nsrc/process/command-queue.ts:283:  if (Date.now() - entry.enqueuedAt >= STARVATION_PROMOTION_MS) {\n```\n\n**Observed result after fix:** The test confirms that when a background entry ages past the 30-second starvation threshold and a fresh foreground entry is enqueued, the drain order is `[\"background\", \"foreground\"]`. Without the starvation guard, the order would be `[\"foreground\", \"background\"]` since foreground has higher static priority.\n\n```\nnode -e proof (queue fairness on macOS, Node 26.0.0):\n\nExecution order (maxConsecutiveHigh=3):\n  [high] urgent-1\n  [high] urgent-2\n  [high] urgent-3\n  [normal] background-scan ← STARVATION GUARD\n  [high] urgent-4\n  [high] urgent-5\n  [high] urgent-6\n  [normal] cleanup-temp ← STARVATION GUARD\n\nWithout guard, normal tasks would only run after all 6 urgent tasks.\n```\n\n\n**What was not tested:** No live gateway session with real concurrent foreground/background commands under wall-clock timing. The test uses `vi.useFakeTimers()` to control time deterministically. The FIFO tie-breaker for same-millisecond entries and the sequence number ordering are covered by separate tests in the same suite.\n\n\n\n### Production runtime proof (OpenClaw v2026.5.25)\n\nBranch rebased onto latest upstream/main. 31/31 command queue tests pass.\n\nExercised production starvation guard via tsx import with real wall-clock timing:\n```\n=== OpenClaw starvation guard proof (real wall-clock) ===\nModule: src/process/command-queue.ts + src/process/lanes.ts\nSTARVATION_PROMOTION_MS: 30000ms\n\n--- Priority calculation ---\nRecent low-priority (age 5s):\n  static priority: 1\n  effective priority: 1\n\nStarved low-priority (age 31000ms):\n  static priority: 1\n  effective priority: 9007199254740991 (MAX_SAFE_INTEGER = promoted)\n\nRecent high-priority (age 1s):\n  static priority: 100\n  effective priority: 100\n\n--- Starvation guard result ---\nStarved entry (priority=1) beats high-priority entry (priority=100): YES\n\n--- Lane configuration ---\n  Main: \"main\", Cron: \"cron\", CronNested: \"cron-nested\", Subagent: \"subagent\", Nested: \"nested\"\n\nStatus: PASS (starvation guard promotes old entries above static priority)\n```\n\nBehavior addressed: Low-priority commands could starve indefinitely when high-priority work continuously enqueued\nReal environment tested: macOS, OpenClaw v2026.5.25, Node 26, tsx import of production lanes.ts and command-queue.ts modules\nExact steps or command run after this patch: `npx tsx proof-starvation.mts` using real Date.now() timestamps (not fake timers) to demonstrate priority promotion after STARVATION_PROMOTION_MS\nEvidence after fix: Entry waiting 31s promoted to MAX_SAFE_INTEGER priority, beating priority-100 entry\nObserved result after fix: Starved entry wins scheduling over any static priority after 30s wait\nWhat was not tested: Live gateway with real concurrent command queue contention; tested priority calculation with production modules and real timestamps\n",
+        "branch": "feat/command-queue-priority",
+        "head_sha": "be70656837b93f74f6a4d4731aff3b8e1ab833d8",
+        "author": "sebtardif",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/process/command-queue.test.ts",
+            "additions": 37,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/command-queue.ts",
+            "additions": 50,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/lanes.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-75299",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-75299.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 163,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 30,
+            "SUCCESS": 127,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-fast-contracts-plugins-a:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-fast-contracts-plugins-a:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:75299:4523282532:2026-05-22T23:12:27Z:re_review",
+      "comment_id": "4523282532",
+      "comment_version_key": "4523282532:2026-05-22T23:12:27Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/75299#issuecomment-4523282532",
+      "repo": "openclaw/openclaw",
+      "issue_number": 75299,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T23:12:27Z",
+      "comment_updated_at": "2026-05-22T23:12:27Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(process): add starvation guard to priority command queue",
+        "body": "## Problem\n\nUpstream added priority scheduling (foreground/normal/background) via insertion-sort at enqueue time (#82765). This works well for the common case but has no protection against indefinite starvation: a steady stream of foreground enqueues can keep background work queued forever.\n\nFor example, manual user turns are enqueued with `priority: \"foreground\"` (#82765). If a user sends messages faster than the agent processes them, any background maintenance work (cron, heartbeats, plugin updates) queued at normal or background priority would never execute.\n\n## Fix\n\nAdd a starvation guard that promotes entries waiting longer than `STARVATION_PROMOTION_MS` (30 seconds) above all standard priorities at dequeue time.\n\n- `lanes.ts`: Export `STARVATION_PROMOTION_MS` constant (30s)\n- `command-queue.ts`: Add `effectivePriority()` and `pickNextIndex()` functions. Replace `queue.shift()` with `splice(pickNextIndex())` in `drainLane()` so the dequeue considers starvation-promoted entries\n- `command-queue.test.ts`: Add starvation promotion regression test, FIFO order test, and sequence tie-breaker test\n\nThe insertion-sort enqueue order is preserved for the common case (no scanning overhead when no aged entries exist). The starvation scan only changes behavior when an entry has been waiting 30+ seconds.\n\n## Real behavior proof\n\n**Behavior addressed:** Command queue now prevents indefinite starvation of low-priority work when higher-priority commands continuously arrive. Items waiting longer than 30 seconds are promoted above all standard priorities at dequeue time.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `0ab6fa2e8e`\n\n**Exact steps or command run after this patch:**\n\n```\n$ OPENCLAW_TEST_FAST=1 pnpm test src/process/command-queue.test.ts -- --reporter=verbose\n```\n\n**Evidence after fix:** All 31 tests pass, including the starvation promotion contention test that exercises the actual `enqueueCommand` and `drainLane` functions with real `effectivePriority()` and `pickNextIndex()` calls:\n\n```\n ✓  preserves FIFO order within each priority (0ms)\n ✓  reports queueAhead after priority insertion (1ms)\n ✓  runs foreground work before already queued background work (0ms)\n ✓  waitForActiveTasks returns drained=false when timeout is zero and tasks are active (0ms)\n ✓  waitForActiveTasks returns drained=false on timeout (0ms)\n ✓  resetAllLanes drains queued work immediately after reset (0ms)\n ✓  resetCommandLane releases one stuck lane and drains its queued work (0ms)\n ✓  task timeout releases a stuck lane and drains queued work (1ms)\n ✓  keeps work queued while a lane has zero concurrency and drains after resume (0ms)\n ✓  keeps draining functional after synchronous onWait failure (0ms)\n ✓  resetAllLanes clears gateway draining flag and re-allows enqueue (0ms)\n ✓  migrates legacy queued entries missing priority and wait diagnostics (0ms)\n ✓  promotes aged background entry above steady foreground stream (0ms)\n ✓  shares lane state across distinct module instances (4ms)\n\n Test Files  1 passed (1)\n      Tests  31 passed (31)\n```\n\nThe key contention test (\"promotes aged background entry above steady foreground stream\") exercises the full starvation drain flow:\n\n1. Enqueue a blocker task on the main lane that holds the lane busy\n2. Enqueue a `priority: \"background\"` task while the blocker is active\n3. Advance fake timers past `STARVATION_PROMOTION_MS` (30s) so the background entry ages\n4. Enqueue a `priority: \"foreground\"` task (higher static priority than background)\n5. Release the blocker, allowing queued work to drain\n6. Assert execution order is `[\"background\", \"foreground\"]`, proving the aged background entry drained before the fresh foreground entry despite lower static priority\n\nThis demonstrates the core behavior: lower-priority work that has waited 30+ seconds is promoted above all standard priorities and drains first when a lane becomes available, even while higher-priority work continues arriving.\n\nSource confirmation of the starvation constants:\n\n```\n$ grep -n 'STARVATION_PROMOTION_MS' src/process/lanes.ts src/process/command-queue.ts\nsrc/process/lanes.ts:14:export const STARVATION_PROMOTION_MS = 30_000;\nsrc/process/command-queue.ts:8:import { CommandLane, STARVATION_PROMOTION_MS } from \"./lanes.js\";\nsrc/process/command-queue.ts:283:  if (Date.now() - entry.enqueuedAt >= STARVATION_PROMOTION_MS) {\n```\n\n**Observed result after fix:** The test confirms that when a background entry ages past the 30-second starvation threshold and a fresh foreground entry is enqueued, the drain order is `[\"background\", \"foreground\"]`. Without the starvation guard, the order would be `[\"foreground\", \"background\"]` since foreground has higher static priority.\n\n```\nnode -e proof (queue fairness on macOS, Node 26.0.0):\n\nExecution order (maxConsecutiveHigh=3):\n  [high] urgent-1\n  [high] urgent-2\n  [high] urgent-3\n  [normal] background-scan ← STARVATION GUARD\n  [high] urgent-4\n  [high] urgent-5\n  [high] urgent-6\n  [normal] cleanup-temp ← STARVATION GUARD\n\nWithout guard, normal tasks would only run after all 6 urgent tasks.\n```\n\n\n**What was not tested:** No live gateway session with real concurrent foreground/background commands under wall-clock timing. The test uses `vi.useFakeTimers()` to control time deterministically. The FIFO tie-breaker for same-millisecond entries and the sequence number ordering are covered by separate tests in the same suite.\n\n\n\n### Production runtime proof (OpenClaw v2026.5.25)\n\nBranch rebased onto latest upstream/main. 31/31 command queue tests pass.\n\nExercised production starvation guard via tsx import with real wall-clock timing:\n```\n=== OpenClaw starvation guard proof (real wall-clock) ===\nModule: src/process/command-queue.ts + src/process/lanes.ts\nSTARVATION_PROMOTION_MS: 30000ms\n\n--- Priority calculation ---\nRecent low-priority (age 5s):\n  static priority: 1\n  effective priority: 1\n\nStarved low-priority (age 31000ms):\n  static priority: 1\n  effective priority: 9007199254740991 (MAX_SAFE_INTEGER = promoted)\n\nRecent high-priority (age 1s):\n  static priority: 100\n  effective priority: 100\n\n--- Starvation guard result ---\nStarved entry (priority=1) beats high-priority entry (priority=100): YES\n\n--- Lane configuration ---\n  Main: \"main\", Cron: \"cron\", CronNested: \"cron-nested\", Subagent: \"subagent\", Nested: \"nested\"\n\nStatus: PASS (starvation guard promotes old entries above static priority)\n```\n\nBehavior addressed: Low-priority commands could starve indefinitely when high-priority work continuously enqueued\nReal environment tested: macOS, OpenClaw v2026.5.25, Node 26, tsx import of production lanes.ts and command-queue.ts modules\nExact steps or command run after this patch: `npx tsx proof-starvation.mts` using real Date.now() timestamps (not fake timers) to demonstrate priority promotion after STARVATION_PROMOTION_MS\nEvidence after fix: Entry waiting 31s promoted to MAX_SAFE_INTEGER priority, beating priority-100 entry\nObserved result after fix: Starved entry wins scheduling over any static priority after 30s wait\nWhat was not tested: Live gateway with real concurrent command queue contention; tested priority calculation with production modules and real timestamps\n",
+        "branch": "feat/command-queue-priority",
+        "head_sha": "be70656837b93f74f6a4d4731aff3b8e1ab833d8",
+        "author": "sebtardif",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/process/command-queue.test.ts",
+            "additions": 37,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/command-queue.ts",
+            "additions": 50,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/lanes.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-75299",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-75299.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 163,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 30,
+            "SUCCESS": 127,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-fast-contracts-plugins-a:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-fast-contracts-plugins-a:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:75299:4520247375:2026-05-22T15:53:26Z:re_review",
+      "comment_id": "4520247375",
+      "comment_version_key": "4520247375:2026-05-22T15:53:26Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/75299#issuecomment-4520247375",
+      "repo": "openclaw/openclaw",
+      "issue_number": 75299,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T15:53:26Z",
+      "comment_updated_at": "2026-05-22T15:53:26Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(process): add starvation guard to priority command queue",
+        "body": "## Problem\n\nUpstream added priority scheduling (foreground/normal/background) via insertion-sort at enqueue time (#82765). This works well for the common case but has no protection against indefinite starvation: a steady stream of foreground enqueues can keep background work queued forever.\n\nFor example, manual user turns are enqueued with `priority: \"foreground\"` (#82765). If a user sends messages faster than the agent processes them, any background maintenance work (cron, heartbeats, plugin updates) queued at normal or background priority would never execute.\n\n## Fix\n\nAdd a starvation guard that promotes entries waiting longer than `STARVATION_PROMOTION_MS` (30 seconds) above all standard priorities at dequeue time.\n\n- `lanes.ts`: Export `STARVATION_PROMOTION_MS` constant (30s)\n- `command-queue.ts`: Add `effectivePriority()` and `pickNextIndex()` functions. Replace `queue.shift()` with `splice(pickNextIndex())` in `drainLane()` so the dequeue considers starvation-promoted entries\n- `command-queue.test.ts`: Add starvation promotion regression test, FIFO order test, and sequence tie-breaker test\n\nThe insertion-sort enqueue order is preserved for the common case (no scanning overhead when no aged entries exist). The starvation scan only changes behavior when an entry has been waiting 30+ seconds.\n\n## Real behavior proof\n\n**Behavior addressed:** Command queue now prevents indefinite starvation of low-priority work when higher-priority commands continuously arrive. Items waiting longer than 30 seconds are promoted above all standard priorities at dequeue time.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `0ab6fa2e8e`\n\n**Exact steps or command run after this patch:**\n\n```\n$ OPENCLAW_TEST_FAST=1 pnpm test src/process/command-queue.test.ts -- --reporter=verbose\n```\n\n**Evidence after fix:** All 31 tests pass, including the starvation promotion contention test that exercises the actual `enqueueCommand` and `drainLane` functions with real `effectivePriority()` and `pickNextIndex()` calls:\n\n```\n ✓  preserves FIFO order within each priority (0ms)\n ✓  reports queueAhead after priority insertion (1ms)\n ✓  runs foreground work before already queued background work (0ms)\n ✓  waitForActiveTasks returns drained=false when timeout is zero and tasks are active (0ms)\n ✓  waitForActiveTasks returns drained=false on timeout (0ms)\n ✓  resetAllLanes drains queued work immediately after reset (0ms)\n ✓  resetCommandLane releases one stuck lane and drains its queued work (0ms)\n ✓  task timeout releases a stuck lane and drains queued work (1ms)\n ✓  keeps work queued while a lane has zero concurrency and drains after resume (0ms)\n ✓  keeps draining functional after synchronous onWait failure (0ms)\n ✓  resetAllLanes clears gateway draining flag and re-allows enqueue (0ms)\n ✓  migrates legacy queued entries missing priority and wait diagnostics (0ms)\n ✓  promotes aged background entry above steady foreground stream (0ms)\n ✓  shares lane state across distinct module instances (4ms)\n\n Test Files  1 passed (1)\n      Tests  31 passed (31)\n```\n\nThe key contention test (\"promotes aged background entry above steady foreground stream\") exercises the full starvation drain flow:\n\n1. Enqueue a blocker task on the main lane that holds the lane busy\n2. Enqueue a `priority: \"background\"` task while the blocker is active\n3. Advance fake timers past `STARVATION_PROMOTION_MS` (30s) so the background entry ages\n4. Enqueue a `priority: \"foreground\"` task (higher static priority than background)\n5. Release the blocker, allowing queued work to drain\n6. Assert execution order is `[\"background\", \"foreground\"]`, proving the aged background entry drained before the fresh foreground entry despite lower static priority\n\nThis demonstrates the core behavior: lower-priority work that has waited 30+ seconds is promoted above all standard priorities and drains first when a lane becomes available, even while higher-priority work continues arriving.\n\nSource confirmation of the starvation constants:\n\n```\n$ grep -n 'STARVATION_PROMOTION_MS' src/process/lanes.ts src/process/command-queue.ts\nsrc/process/lanes.ts:14:export const STARVATION_PROMOTION_MS = 30_000;\nsrc/process/command-queue.ts:8:import { CommandLane, STARVATION_PROMOTION_MS } from \"./lanes.js\";\nsrc/process/command-queue.ts:283:  if (Date.now() - entry.enqueuedAt >= STARVATION_PROMOTION_MS) {\n```\n\n**Observed result after fix:** The test confirms that when a background entry ages past the 30-second starvation threshold and a fresh foreground entry is enqueued, the drain order is `[\"background\", \"foreground\"]`. Without the starvation guard, the order would be `[\"foreground\", \"background\"]` since foreground has higher static priority.\n\n```\nnode -e proof (queue fairness on macOS, Node 26.0.0):\n\nExecution order (maxConsecutiveHigh=3):\n  [high] urgent-1\n  [high] urgent-2\n  [high] urgent-3\n  [normal] background-scan ← STARVATION GUARD\n  [high] urgent-4\n  [high] urgent-5\n  [high] urgent-6\n  [normal] cleanup-temp ← STARVATION GUARD\n\nWithout guard, normal tasks would only run after all 6 urgent tasks.\n```\n\n\n**What was not tested:** No live gateway session with real concurrent foreground/background commands under wall-clock timing. The test uses `vi.useFakeTimers()` to control time deterministically. The FIFO tie-breaker for same-millisecond entries and the sequence number ordering are covered by separate tests in the same suite.\n\n\n\n### Production runtime proof (OpenClaw v2026.5.25)\n\nBranch rebased onto latest upstream/main. 31/31 command queue tests pass.\n\nExercised production starvation guard via tsx import with real wall-clock timing:\n```\n=== OpenClaw starvation guard proof (real wall-clock) ===\nModule: src/process/command-queue.ts + src/process/lanes.ts\nSTARVATION_PROMOTION_MS: 30000ms\n\n--- Priority calculation ---\nRecent low-priority (age 5s):\n  static priority: 1\n  effective priority: 1\n\nStarved low-priority (age 31000ms):\n  static priority: 1\n  effective priority: 9007199254740991 (MAX_SAFE_INTEGER = promoted)\n\nRecent high-priority (age 1s):\n  static priority: 100\n  effective priority: 100\n\n--- Starvation guard result ---\nStarved entry (priority=1) beats high-priority entry (priority=100): YES\n\n--- Lane configuration ---\n  Main: \"main\", Cron: \"cron\", CronNested: \"cron-nested\", Subagent: \"subagent\", Nested: \"nested\"\n\nStatus: PASS (starvation guard promotes old entries above static priority)\n```\n\nBehavior addressed: Low-priority commands could starve indefinitely when high-priority work continuously enqueued\nReal environment tested: macOS, OpenClaw v2026.5.25, Node 26, tsx import of production lanes.ts and command-queue.ts modules\nExact steps or command run after this patch: `npx tsx proof-starvation.mts` using real Date.now() timestamps (not fake timers) to demonstrate priority promotion after STARVATION_PROMOTION_MS\nEvidence after fix: Entry waiting 31s promoted to MAX_SAFE_INTEGER priority, beating priority-100 entry\nObserved result after fix: Starved entry wins scheduling over any static priority after 30s wait\nWhat was not tested: Live gateway with real concurrent command queue contention; tested priority calculation with production modules and real timestamps\n",
+        "branch": "feat/command-queue-priority",
+        "head_sha": "be70656837b93f74f6a4d4731aff3b8e1ab833d8",
+        "author": "sebtardif",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/process/command-queue.test.ts",
+            "additions": 37,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/command-queue.ts",
+            "additions": 50,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/lanes.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-75299",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-75299.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 163,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 30,
+            "SUCCESS": 127,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-fast-contracts-plugins-a:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-fast-contracts-plugins-a:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:75299:4519347038:2026-05-22T13:58:01Z:re_review",
+      "comment_id": "4519347038",
+      "comment_version_key": "4519347038:2026-05-22T13:58:01Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/75299#issuecomment-4519347038",
+      "repo": "openclaw/openclaw",
+      "issue_number": 75299,
+      "author": "SebTardif",
+      "author_id": 1413412,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-22T13:58:01Z",
+      "comment_updated_at": "2026-05-22T13:58:01Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(process): add starvation guard to priority command queue",
+        "body": "## Problem\n\nUpstream added priority scheduling (foreground/normal/background) via insertion-sort at enqueue time (#82765). This works well for the common case but has no protection against indefinite starvation: a steady stream of foreground enqueues can keep background work queued forever.\n\nFor example, manual user turns are enqueued with `priority: \"foreground\"` (#82765). If a user sends messages faster than the agent processes them, any background maintenance work (cron, heartbeats, plugin updates) queued at normal or background priority would never execute.\n\n## Fix\n\nAdd a starvation guard that promotes entries waiting longer than `STARVATION_PROMOTION_MS` (30 seconds) above all standard priorities at dequeue time.\n\n- `lanes.ts`: Export `STARVATION_PROMOTION_MS` constant (30s)\n- `command-queue.ts`: Add `effectivePriority()` and `pickNextIndex()` functions. Replace `queue.shift()` with `splice(pickNextIndex())` in `drainLane()` so the dequeue considers starvation-promoted entries\n- `command-queue.test.ts`: Add starvation promotion regression test, FIFO order test, and sequence tie-breaker test\n\nThe insertion-sort enqueue order is preserved for the common case (no scanning overhead when no aged entries exist). The starvation scan only changes behavior when an entry has been waiting 30+ seconds.\n\n## Real behavior proof\n\n**Behavior addressed:** Command queue now prevents indefinite starvation of low-priority work when higher-priority commands continuously arrive. Items waiting longer than 30 seconds are promoted above all standard priorities at dequeue time.\n\n**Real environment tested:** macOS 15.5, Node 22.19, openclaw dev checkout at `0ab6fa2e8e`\n\n**Exact steps or command run after this patch:**\n\n```\n$ OPENCLAW_TEST_FAST=1 pnpm test src/process/command-queue.test.ts -- --reporter=verbose\n```\n\n**Evidence after fix:** All 31 tests pass, including the starvation promotion contention test that exercises the actual `enqueueCommand` and `drainLane` functions with real `effectivePriority()` and `pickNextIndex()` calls:\n\n```\n ✓  preserves FIFO order within each priority (0ms)\n ✓  reports queueAhead after priority insertion (1ms)\n ✓  runs foreground work before already queued background work (0ms)\n ✓  waitForActiveTasks returns drained=false when timeout is zero and tasks are active (0ms)\n ✓  waitForActiveTasks returns drained=false on timeout (0ms)\n ✓  resetAllLanes drains queued work immediately after reset (0ms)\n ✓  resetCommandLane releases one stuck lane and drains its queued work (0ms)\n ✓  task timeout releases a stuck lane and drains queued work (1ms)\n ✓  keeps work queued while a lane has zero concurrency and drains after resume (0ms)\n ✓  keeps draining functional after synchronous onWait failure (0ms)\n ✓  resetAllLanes clears gateway draining flag and re-allows enqueue (0ms)\n ✓  migrates legacy queued entries missing priority and wait diagnostics (0ms)\n ✓  promotes aged background entry above steady foreground stream (0ms)\n ✓  shares lane state across distinct module instances (4ms)\n\n Test Files  1 passed (1)\n      Tests  31 passed (31)\n```\n\nThe key contention test (\"promotes aged background entry above steady foreground stream\") exercises the full starvation drain flow:\n\n1. Enqueue a blocker task on the main lane that holds the lane busy\n2. Enqueue a `priority: \"background\"` task while the blocker is active\n3. Advance fake timers past `STARVATION_PROMOTION_MS` (30s) so the background entry ages\n4. Enqueue a `priority: \"foreground\"` task (higher static priority than background)\n5. Release the blocker, allowing queued work to drain\n6. Assert execution order is `[\"background\", \"foreground\"]`, proving the aged background entry drained before the fresh foreground entry despite lower static priority\n\nThis demonstrates the core behavior: lower-priority work that has waited 30+ seconds is promoted above all standard priorities and drains first when a lane becomes available, even while higher-priority work continues arriving.\n\nSource confirmation of the starvation constants:\n\n```\n$ grep -n 'STARVATION_PROMOTION_MS' src/process/lanes.ts src/process/command-queue.ts\nsrc/process/lanes.ts:14:export const STARVATION_PROMOTION_MS = 30_000;\nsrc/process/command-queue.ts:8:import { CommandLane, STARVATION_PROMOTION_MS } from \"./lanes.js\";\nsrc/process/command-queue.ts:283:  if (Date.now() - entry.enqueuedAt >= STARVATION_PROMOTION_MS) {\n```\n\n**Observed result after fix:** The test confirms that when a background entry ages past the 30-second starvation threshold and a fresh foreground entry is enqueued, the drain order is `[\"background\", \"foreground\"]`. Without the starvation guard, the order would be `[\"foreground\", \"background\"]` since foreground has higher static priority.\n\n```\nnode -e proof (queue fairness on macOS, Node 26.0.0):\n\nExecution order (maxConsecutiveHigh=3):\n  [high] urgent-1\n  [high] urgent-2\n  [high] urgent-3\n  [normal] background-scan ← STARVATION GUARD\n  [high] urgent-4\n  [high] urgent-5\n  [high] urgent-6\n  [normal] cleanup-temp ← STARVATION GUARD\n\nWithout guard, normal tasks would only run after all 6 urgent tasks.\n```\n\n\n**What was not tested:** No live gateway session with real concurrent foreground/background commands under wall-clock timing. The test uses `vi.useFakeTimers()` to control time deterministically. The FIFO tie-breaker for same-millisecond entries and the sequence number ordering are covered by separate tests in the same suite.\n\n\n\n### Production runtime proof (OpenClaw v2026.5.25)\n\nBranch rebased onto latest upstream/main. 31/31 command queue tests pass.\n\nExercised production starvation guard via tsx import with real wall-clock timing:\n```\n=== OpenClaw starvation guard proof (real wall-clock) ===\nModule: src/process/command-queue.ts + src/process/lanes.ts\nSTARVATION_PROMOTION_MS: 30000ms\n\n--- Priority calculation ---\nRecent low-priority (age 5s):\n  static priority: 1\n  effective priority: 1\n\nStarved low-priority (age 31000ms):\n  static priority: 1\n  effective priority: 9007199254740991 (MAX_SAFE_INTEGER = promoted)\n\nRecent high-priority (age 1s):\n  static priority: 100\n  effective priority: 100\n\n--- Starvation guard result ---\nStarved entry (priority=1) beats high-priority entry (priority=100): YES\n\n--- Lane configuration ---\n  Main: \"main\", Cron: \"cron\", CronNested: \"cron-nested\", Subagent: \"subagent\", Nested: \"nested\"\n\nStatus: PASS (starvation guard promotes old entries above static priority)\n```\n\nBehavior addressed: Low-priority commands could starve indefinitely when high-priority work continuously enqueued\nReal environment tested: macOS, OpenClaw v2026.5.25, Node 26, tsx import of production lanes.ts and command-queue.ts modules\nExact steps or command run after this patch: `npx tsx proof-starvation.mts` using real Date.now() timestamps (not fake timers) to demonstrate priority promotion after STARVATION_PROMOTION_MS\nEvidence after fix: Entry waiting 31s promoted to MAX_SAFE_INTEGER priority, beating priority-100 entry\nObserved result after fix: Starved entry wins scheduling over any static priority after 30s wait\nWhat was not tested: Live gateway with real concurrent command queue contention; tested priority calculation with production modules and real timestamps\n",
+        "branch": "feat/command-queue-priority",
+        "head_sha": "be70656837b93f74f6a4d4731aff3b8e1ab833d8",
+        "author": "sebtardif",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/process/command-queue.test.ts",
+            "additions": 37,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/command-queue.ts",
+            "additions": 50,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/lanes.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-75299",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-75299.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 163,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 30,
+            "SUCCESS": 127,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-fast-contracts-plugins-a:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-fast-contracts-plugins-a:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
       "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2888,
+    "total_ms": 3102,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 541
+        "ms": 470
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2135
+        "ms": 2295
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 5
       },
       {
         "name": "execute_commands",
-        "ms": 197
+        "ms": 307
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
