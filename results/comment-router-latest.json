@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-04T11:52:56.879Z",
-  "repo": "openclaw/gogcli",
+  "generated_at": "2026-06-04T11:53:07.075Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-04T08:52:56.661Z",
+  "since": "2026-06-04T08:53:03.227Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    690
+    90199
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4621873522
+  ],
+  "status_comment_id": 4621873857,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
-  "actionable": 0,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,30 +31,139 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:90199:4621873522:2026-06-04T11:52:23Z:re_review",
+      "comment_id": "4621873522",
+      "comment_version_key": "4621873522:2026-06-04T11:52:23Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90199#issuecomment-4621873522",
+      "repo": "openclaw/openclaw",
+      "issue_number": 90199,
+      "author": "dripsmvcp",
+      "author_id": 138900956,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-04T11:52:23Z",
+      "comment_updated_at": "2026-06-04T11:52:23Z",
+      "status_comment_id": 4621873857,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-04T11:53:08.159Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 90199
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-04T11:53:09.439Z",
+          "response_comment_id": "4621873857",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): defer bootstrap context-engine maintenance to background",
+        "body": "## Summary\n\n- Bootstrap/reconcile context-engine maintenance runs in **foreground**, where deferred compaction debt cannot execute (`allowDeferredCompactionExecution` is background-only) and no background follow-up is scheduled (only turns defer). So debt created when bootstrap imports tail messages past the leaf trigger is **stranded**, leaving sessions repeating `deferred compaction still needed` (issue #67716, Case 1).\n- Lets `reason=\"bootstrap\"` schedule the **same background debt consumer** turns already use, for engines that opt into background maintenance (`turnMaintenanceMode === \"background\"`).\n- Foreground bootstrap is unchanged for engines without background maintenance; the plugin-owned (Lossless-Claw) hot-cache sticky-debt path (Case 2) is intentionally **out of scope**.\n- Reviewers should focus on: deferring bootstrap is safe because turns already defer for these engines, the deferred run dedups/coalesces per session, and it runs in background mode (so it can actually pay the debt).\n\n## Linked context\n\nCloses #67716\n\nRelated #66820 — deferred-maintenance token budget (a different aspect of the same subsystem; not this scheduling gap).\n\nNot maintainer-requested; selected from the `clawsweeper:queueable-fix` backlog. ClawSweeper's review of #67716 recommended exactly this OpenClaw-scoped fix: \"extend the existing deferred-maintenance lifecycle so bootstrap/reconcile can schedule a valid background debt consumer,\" keeping plugin hot-cache/dedup policy out.\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: bootstrap/reconcile created deferred compaction debt that could not execute because bootstrap maintenance runs foreground (issue #67716 Case 1).\n- Real environment tested: Linux / Node 24, exercising the real production `runContextEngineMaintenance` lifecycle — the deferred background worker, the task registry/queue, and the session lane — not mocked.\n- Exact steps or command run after this patch: `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/context-engine-maintenance.test.ts`\n- Evidence after fix (screenshot, recording, terminal capture, console output, redacted runtime log, linked artifact, or copied live output): copied terminal output. The added regression fails on unfixed `main` (bootstrap ran foreground and returned a maintenance result) and passes after the fix (bootstrap defers and the background worker runs):\n\n```\nunfixed main: × defers bootstrap maintenance to a background debt consumer for background-mode engines\n              AssertionError: expected { Object (changed, bytesFreed, ...) } to be undefined\n\nwith the fix: Test Files  1 passed (1)\n              Tests       23 passed (23)\n```\n\n- Observed result after fix: for a background-mode engine, bootstrap maintenance schedules a background `context_engine_turn_maintenance` task instead of running inline, and the deferred worker runs `maintain()` with `allowDeferredCompactionExecution: true` (the debt can now be paid).\n- What was not tested: a live gateway bootstrap/reconcile overflow on a running OpenClaw deployment.\n- Proof limitations or environment constraints: this is unit/integration-level proof against the real lifecycle functions, which CONTRIBUTING.md treats as supplemental rather than a live-setup capture. I could not drive a live gateway into a bootstrap overflow in this environment (needs a full running OpenClaw + provider + forced overflow; the sandbox network also blocked a clean install and the `crabbox check:changed` gate). A maintainer with a live setup can confirm end-to-end, or apply `proof: override` for this logic-scoped scheduling fix.\n- Before evidence (optional but encouraged): the failing assertion above (`expected { ... } to be undefined`) is the before-state from unfixed `main`, where bootstrap ran foreground.\n\n<details>\n<summary>How to capture live behavior proof on a real setup (for a maintainer or the reporter)</summary>\n\nThis needs the background-maintenance context engine (the Lossless-Claw / \"LCM\" engine from the issue, which sets `turnMaintenanceMode: \"background\"` and emits the `LCM compaction leaf pass` lines) plus a real provider — neither of which I can run in CI/sandbox. Steps:\n\n1. Build this branch: `pnpm install && pnpm build`; run the gateway with the LCM-configured agent and tail logs (`./scripts/clawlog.sh`).\n2. Restart the gateway on a session whose reconcile tail-import pushes `rawTokensOutsideTail` past the leaf trigger (issue #67716 Case 1).\n3. Grep the bootstrap window (redact session keys/content):\n\n```\ngrep -E \"reconcileSessionTail|deferred turn maintenance (queued|resuming)|deferred compaction (debt pending|skipped|completed)|allowDeferredCompactionExecution|reason=compacted|compactLeafAsync\" <gateway-log>\n```\n\nBefore this fix the bootstrap window shows `deferred compaction debt pending ... allowDeferredCompactionExecution is disabled` → `deferred compaction skipped ... reason=deferred compaction still needed` (stranded). After this fix it shows the core line `[context-engine] deferred turn maintenance queued ... lane=context-engine-turn-maintenance:<key>` **during bootstrap** (emitted at `context-engine-maintenance.ts:619`; previously only on turns) followed by `compactLeafAsync start` → `LCM compaction leaf pass` → `deferred compaction completed ... reason=compacted` (paid). I will paste the redacted excerpt here once it is captured.\n\n</details>\n\n## Tests and validation\n\n- `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/context-engine-maintenance.test.ts` -> 23 passed (1 new).\n- Acceptance set (from the issue review, paths updated for the `embedded-agent-runner` rename): `attempt.spawn-workspace.context-engine.test.ts` -> 56 passed; `extensions/codex/src/app-server/run-attempt.context-engine.test.ts` -> 24 passed; `src/agents/harness/context-engine-lifecycle.test.ts` -> 9 passed.\n- `tsgo -p tsconfig.core.json` and core test types: no errors in the changed files (two unrelated pre-existing errors in `src/config/io.ts` and `src/secrets/config-io.ts` are present on `main`).\n- Regression coverage added: \"defers bootstrap maintenance to a background debt consumer for background-mode engines\" (fails first, passes after).\n\n## Risk checklist\n\n- Did user-visible behavior change? No — internal startup maintenance scheduling.\n- Did config, environment, or migration behavior change? No.\n- Did security, auth, secrets, network, or tool execution behavior change? No.\n- Highest-risk area: deferring bootstrap maintenance to background (session-state).\n- How is that risk mitigated? It only defers for engines that already opt into background turn maintenance (foreground is unchanged for all others); it reuses the existing per-session, dedup/coalesced deferred-maintenance lane that turns use; and it is covered by the new regression plus the existing 22 maintenance tests and the spawn-workspace / codex / lifecycle suites.\n\n## Current review state\n\n- Next action: maintainer / ClawSweeper review. The code itself is accepted by ClawSweeper (\"no narrow code repair is needed\"); the only open item is the real-behavior-proof gate (`status: 📣 needs proof`).\n- Scope: this addresses the OpenClaw-owned Case 1 only. Case 2 (hot-cache sticky debt / duplicate ledger) is plugin-owned (Lossless-Claw) per ClawSweeper's review and is intentionally excluded; the broader duplicate-transcript umbrella can stay open if maintainers prefer.\n- On proof: the change is verified at the unit/integration level against the real lifecycle functions, but the live-overflow capture requires the external Lossless-Claw engine + a provider, which I can't run here. The exact live-capture steps are in the \"How to capture live behavior proof\" block above; I will add the redacted excerpt as soon as anyone with a live LCM setup runs it. **Requesting a maintainer `proof: override`** for this logic-scoped core scheduling fix in the meantime — ClawSweeper offered that path for exactly this case.\n\n",
+        "branch": "fix/67716-bootstrap-deferred-compaction",
+        "head_sha": "b2dadefb5336e14e9756dfc54429f012843603ba",
+        "author": "dripsmvcp",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner/context-engine-maintenance.test.ts",
+            "additions": 61,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/context-engine-maintenance.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90199",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90199.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 131,
+            "SKIPPED": 29,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-fast-contracts-plugins-a:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-fast-contracts-plugins-a:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 415,
+    "total_ms": 6967,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 206
+        "ms": 590
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 3242
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 197
+        "ms": 3108
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
