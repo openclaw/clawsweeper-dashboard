@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-04T04:20:48.943Z",
+  "generated_at": "2026-06-04T04:21:30.166Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-04T01:20:45.635Z",
+  "since": "2026-06-04T01:21:29.667Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4618907714
   ],
-  "status_comment_id": 4618907968,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-04T04:20:07Z",
       "comment_updated_at": "2026-06-04T04:20:07Z",
-      "status_comment_id": 4618907968,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,171 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-04T04:20:49.987Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 86806
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-04T04:20:51.216Z",
-          "response_comment_id": "4618907968",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: recover crashed main sessions via lock-file detection fallback",
-        "body": "## Summary\n\nAfter an unclean gateway crash, `cleanStaleLockFiles()` may find lock files from the previous process. When `cleaned.length > 0`, the existing `markRestartAbortedMainSessionsFromLocks()` recovers those sessions. However, the previous version of this PR tried to handle the `cleaned.length === 0` case by inferring crash residue from remaining locks using mtime-based heuristics, which ClawSweeper correctly identified as unsafe (false `abortedLastRun` risk for young unknown-owner locks, and missing recovery for live/reused-PID locks).\n\nThis version drives the crash fallback from an explicit **safe-to-recover** lock classification emitted by the cleanup owner (`cleanStaleLockFiles`), instead of having Gateway infer crash residue from all non-cleaned locks.\n\n### What changed\n\n- `src/agents/session-write-lock.ts`: `cleanStaleLockFiles()` now returns a `safeToRecover` array containing stale locks with a dead/absent owner (`pidAlive === false`) and no report-only stale reasons (`too-old`, `hold-exceeded`), excluding orphan-payload locks protected by the grace window (`lockInspectionNeedsMtimeStaleFallback`). These are locks that cleanup chose not to remove but are provably ownerless crash residue.\n- `src/agents/main-session-restart-recovery.ts`: `markCrashedMainSessionsFromRemainingLocks()` now accepts `safeToRecoverLocks` instead of `remainingLocks` + `gatewayStartedAt`. The marker trusts the cleanup classification — no more mtime heuristics or `pidAlive` checks in the marker itself.\n- `src/gateway/server-startup-post-attach.ts`: `cleanupStaleSessionLocks()` passes `result.safeToRecover` to the crash marker when non-empty. Removed `gatewayStartedAt` parameter (no longer needed).\n- Tests: Updated all crash-fallback tests to use the new `safeToRecoverLocks` contract. Added regression coverage for young unknown-owner locks preserved by grace window, report-only stale reasons, and `removeStale: false` dead-PID classification.\n\n### Safety\n\n- The crash marker only acts on locks that `cleanStaleLockFiles` explicitly classified as safe to recover — no heuristic inference.\n- Young unknown-owner locks (missing-pid/invalid-createdAt within the 30s grace window) are excluded from `safeToRecover` by the `lockInspectionNeedsMtimeStaleFallback` check, so they can never be falsely marked as crash residue.\n- Live-owner locks (`pidAlive === true`) are never included in `safeToRecover` because they are not stale.\n- Report-only stale locks (`too-old`, `hold-exceeded`) are excluded because cleanup deliberately does not remove them — the owner may still be working.\n\n### ClawSweeper P1 resolution\n\n| P1 finding | Resolution |\n|---|---|\n| Drive crash fallback from real cleanup classifications | Marker now consumes `safeToRecover` from `cleanStaleLockFiles()` instead of inferring from `remainingLocks` + mtime |\n| Keep young unknown-owner locks out of recovery | `safeToRecover` excludes locks where `lockInspectionNeedsMtimeStaleFallback` returns true (grace-window-protected orphan locks) |\n| Replace simulated cleanup proof with real cleanup | Proof below uses the actual `cleanStaleLockFiles()` return contract |\n\n## Real Behavior Proof\n\n**Behavior addressed**: Gateway crash → `cleanStaleLockFiles()` finds lock files but classifies none as stale-removable → `cleaned.length === 0` → `abortedLastRun` never set via cleaned-lock path. When `safeToRecover.length > 0`, the crash fallback marks matching running sessions for recovery.\n\n**Real environment tested**: Linux (Ubuntu), Node.js 22.22, real OpenClaw checkout at `07 Open Source/02-projects/openclaw`, branch `fix/crash-session-recovery-80254`.\n\n**Exact steps or command run after this patch**:\n```bash\nOPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs \\\n  src/agents/main-session-restart-recovery.test.ts \\\n  src/agents/session-write-lock.test.ts \\\n  src/gateway/server-startup-post-attach.test.ts \\\n  --run --reporter=verbose\n```\n\n**Evidence after fix**:\n```\n src/agents/main-session-restart-recovery.test.ts\n  ✓ marks running sessions from safe-to-recover locks at post-crash startup\n  ✓ skips sessions whose lock path does not match safe-to-recover locks\n  ✓ trusts cleanup classification: live-owner locks never appear in safeToRecoverLocks\n  ✓ marks sessions from safe-to-recover dead-PID locks\n  ✓ skips locks with report-only stale reasons (too-old) not classified as safe-to-recover\n  ✓ only marks crash-residue sessions when safe-to-recover excludes live-owner locks\n  ✓ does not mark sessions when young unknown-owner lock is preserved by grace window\n\n src/agents/session-write-lock.test.ts\n  ✓ classifies dead-PID lock past grace window as cleaned (not safeToRecover)\n  ✓ classifies orphan lock past grace window as cleaned\n  ✓ does not classify young orphan locks as safeToRecover\n  ✓ includes dead-PID lock in safeToRecover when removeStale is false\n\n src/gateway/server-startup-post-attach.test.ts\n  ✓ calls crash marker with safeToRecover locks when cleanup finds non-removable dead-owner locks\n\n Test Files  3 passed (3)\n      Tests  180 passed (180)\n```\n\n**Observed result after fix**:\n- `cleanStaleLockFiles(removeStale: true)` with dead-PID lock → lock removed, enters `cleaned`, `safeToRecover` empty ✓\n- `cleanStaleLockFiles(removeStale: true)` with young orphan lock in grace window → lock preserved, both `cleaned` and `safeToRecover` empty ✓\n- `cleanStaleLockFiles(removeStale: false)` with dead-PID lock → lock preserved, enters `safeToRecover` ✓\n- `markCrashedMainSessionsFromRemainingLocks` with `safeToRecoverLocks` → marks matching running sessions ✓\n- `markCrashedMainSessionsFromRemainingLocks` with empty `safeToRecoverLocks` → no false marks ✓\n- `cleanupStaleSessionLocks` passes `safeToRecover` to crash marker when non-empty ✓\n\n**What was not tested**: Live Gateway crash/restart end-to-end on Windows. The `safeToRecover` classification contract is platform-independent because it derives from `cleanStaleLockFiles()` inspection logic (which handles OS-specific PID checks internally). The full Gateway crash → restart → session-restore flow was not tested in a live OpenClaw process.\n\nFixes #80254\n",
-        "branch": "fix/crash-session-recovery-80254",
-        "head_sha": "40c35f85936b8715bd0b3349ae38062bf466c32d",
-        "author": "tanshanshan",
-        "labels": [
-          "gateway",
-          "agents",
-          "size: M",
-          "proof: supplied",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/main-session-restart-recovery.test.ts",
-            "additions": 227,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/main-session-restart-recovery.ts",
-            "additions": 54,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/session-write-lock.test.ts",
-            "additions": 83,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/session-write-lock.ts",
-            "additions": 20,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-startup-post-attach.test.ts",
-            "additions": 50,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-startup-post-attach.ts",
-            "additions": 21,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86806",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86806.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 155,
-          "counts": {
-            "IN_PROGRESS": 19,
-            "SUCCESS": 113,
-            "SKIPPED": 22,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "checks-node-core-runtime-infra-storage-state:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
-            "checks-node-agentic-agents-embedded:IN_PROGRESS",
-            "checks-node-agentic-agents-support:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (plugin-trust-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "checks-node-core-runtime-infra-storage-state:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
-            "checks-node-agentic-agents-embedded:IN_PROGRESS",
-            "checks-node-agentic-agents-support:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 6252,
+    "total_ms": 1776,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 855
+        "ms": 484
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2441
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2934
+        "ms": 1277
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
