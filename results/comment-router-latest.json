@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-04T09:37:07.119Z",
+  "generated_at": "2026-06-04T09:37:11.771Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-04T06:37:05.117Z",
+  "since": "2026-06-04T06:37:09.707Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    90260
+    90234
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4620883183
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -31,95 +33,151 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:90260:4620573672:2026-06-04T09:37:01Z:clawsweeper_needs_human",
-      "comment_id": "4620573672",
-      "comment_version_key": "4620573672:2026-06-04T09:37:01Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/90260#issuecomment-4620573672",
+      "idempotency_key": "comment-router:openclaw/openclaw:90234:4620883183:2026-06-04T09:35:41Z:re_review",
+      "comment_id": "4620883183",
+      "comment_version_key": "4620883183:2026-06-04T09:35:41Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90234#issuecomment-4620883183",
       "repo": "openclaw/openclaw",
-      "issue_number": 90260,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 90234,
+      "author": "ferminquant",
+      "author_id": 14808645,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-04T08:54:13Z",
-      "comment_updated_at": "2026-06-04T09:37:01Z",
+      "comment_created_at": "2026-06-04T09:35:41Z",
+      "comment_updated_at": "2026-06-04T09:35:41Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] No repair lane is needed because review found no actionable patch defect; remaining work is routine maintainer landing judgment and CI completion.; Cleared: The diff only changes TypeScript stream-wrapper code and tests; it does not touch dependencies, workflows, package resolution, secrets, or code-execution setup. (sha=b4c77227c71cdcd4cc7f5841f8ecee260ed65e2e)",
-      "review_summary": "The PR changes the shared HTML-entity tool-call argument decoder to avoid re-decoding shared argument objects, removes xAI's duplicate decoder path, and adds focused core and xAI regression tests.\n\nPR surface: Source -134, Tests +77. Total -57 across 4 files.\n\nReproducibility: yes. Source inspection gives a high-confidence reproduction path: current main can run xAI's provider-local decoder plus the shared core decoder, and the core wrapper can also decode the same shared partial/message/result object more than once.",
-      "review_followup": "- [P2] No repair lane is needed because review found no actionable patch defect; remaining work is routine maintainer landing judgment and CI completion.",
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "b4c77227c71cdcd4cc7f5841f8ecee260ed65e2e",
+      "expected_head_sha": null,
       "finding_id": null,
       "status": "skipped",
       "actions": [],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): decode xai and venice tool-call arguments exactly once",
-        "body": "## Summary\n\nOn xAI (Grok) and Venice, a tool-call argument string that is meant to contain a literal HTML entity is silently **over-decoded** before the tool runs and before it is persisted to the transcript, so the wrong bytes are written to disk and replayed on the next turn. Writing `&amp;` into HTML/XML/Markdown becomes `&`; `&lt;`/`&gt;` collapse the same way.\n\nThese providers HTML-escape their output, so an intended literal `&amp;` arrives on the wire as `&amp;amp;`. Exactly **one** decode is correct (`&amp;amp;` to `&amp;`). The decoder runs more than once.\n\nRoot cause is in the shared html-entity decoder `src/agents/embedded-agent-runner/tool-call-argument-decoding.ts`. `wrapStreamMessageObjects` decodes `event.partial`, `event.message`, and again in the overridden `result()`. On the `done` event providers set `partial === message` and `result()` returns that **same** object, so one arguments object is decoded multiple times. `decodeHtmlEntities` is not idempotent (it unconditionally replaces `&amp;` with `&` each call), and `decodeHtmlEntitiesInObject` re-decodes whenever the string still matches an entity, so `&amp;amp;` to `&amp;` (correct) to `&` (corrupted).\n\nxAI made it strictly worse with a **duplicate** decode path. Every resolved xAI model gets `toolCallArgumentsEncoding: \"html-entities\"` from `applyXaiModelCompat` (`extensions/xai/model-compat.ts:25`, applied for every model via `normalizeResolvedModel` in `extensions/xai/index.ts:198`), which installs the **core** decoder in `attempt.ts` (`resolveToolCallArgumentsEncoding(model) === \"html-entities\"`). The xAI plugin **also** installed its own copy of the same decoder inside `wrapXaiProviderStream` (`extensions/xai/stream.ts`). The two wrappers stack end to end (plugin inner, core outer), so xAI arguments were decoded by two independent wrappers in addition to the within-wrapper triple-decode.\n\nThe fix makes the core decoder decode each shared arguments object exactly once and removes the redundant xAI copy so the core html-entities path is the single canonical decode for both providers:\n\n- **Core (`tool-call-argument-decoding.ts`).** A module-level `WeakSet` marks each already-decoded arguments object. `decodeToolCallArgumentsHtmlEntitiesInMessage` skips an object it has already decoded, so `partial`, `message`, and `result()` sharing one object decode it once. This fully fixes Venice, which uses only the core path.\n- **xAI plugin (`extensions/xai/stream.ts`).** Deletes the duplicate `createXaiToolCallArgumentDecodingWrapper` and its now-dead helpers (a local entity decoder, `visitContentBlocks`, `transformXaiStreamEvent`, `wrapStreamMessageObjects`). xAI keeps its compat flag, so it still decodes through the canonical core path, exactly once.\n\nPer `extensions/CLAUDE.md` (\"if two bundled providers share the same stream-wrapper chain, stop copying the logic, extract one shared helper and migrate both call sites\") this consolidates to the one path and deletes the duplicate. Net non-test code shrinks by ~134 lines.\n\n## Diff size\n\n```\n extensions/xai/stream.test.ts                              | 35 +++++\n extensions/xai/stream.ts                                   |  1 +, 144 ---\n src/agents/embedded-agent-runner/tool-call-argument-decoding.test.ts | 43 ++++-, 1 -\n src/agents/embedded-agent-runner/tool-call-argument-decoding.ts      | 12 ++-, 3 -\n 4 files changed, 91 insertions(+), 148 deletions(-)\n```\n\n## Verification\n\nLocal (Node 22.19.0):\n\n- `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/tool-call-argument-decoding.test.ts` — pass (incl. new \"decodes shared tool-call arguments exactly once across stream events and result()\").\n- `node scripts/run-vitest.mjs extensions/xai/stream.test.ts` — pass, 14 tests (incl. new \"leaves tool-call argument html entities untouched, delegating decode to the core path\").\n- `node scripts/run-vitest.mjs extensions/xai/index.test.ts extensions/xai/runtime-model-compat.test.ts` — pass (compat flag assertions, incl. `toolCallArgumentsEncoding === \"html-entities\"`, unaffected).\n- `tsgo:core` and `tsgo:extensions` — exit 0. `oxfmt --check` and `scripts/run-oxlint.mjs` on all four files — clean.\n- **Red-proof of the core test:** reverting only `tool-call-argument-decoding.ts` makes the new core test fail with `expected '&' to be '&amp;'`.\n- **Red-proof of the xAI test:** reverting only `extensions/xai/stream.ts` makes the new xAI test fail with `expected '&' to be '&amp;amp;'` (the plugin wrapper alone already over-decodes).\n\n## Real behavior proof\n\n- **Behavior addressed:** an xAI/Venice tool-call argument that still resolves to an HTML entity after one decode (e.g. writing the literal `&amp;` as the model emits `&amp;amp;`) is now decoded exactly once before tool execution and transcript persistence, instead of being over-decoded to the wrong bytes.\n- **Real environment tested:** the real production stream-wrapper composition in this checkout, assembled in the same order `attempt.ts` uses for an xAI Grok turn: the provider plugin wrapper `wrapXaiProviderStream({ streamFn, extraParams })` on the inside, then the core `createHtmlEntityToolCallArgumentDecodingWrapper` on the outside, driven through the iterator and `result()`. The base stream is a fake that emits the real event shape (a `toolcall_end` partial and a `done` message sharing one assistant object with a `toolCall` block whose `arguments.content` is `<p>Tom &amp;amp; Jerry</p>`). A live Grok API turn was not used (no xAI credentials in this environment); the bug lives entirely in the local wrapper chain, which is exercised exactly as production composes it.\n- **Exact steps or command run after this patch:** built the stacked chain above, iterated the wrapped stream to completion, called `result()`, and read `content[0].arguments.content` from the final assistant message. Ran the identical harness once with this branch and once with the two production files reverted to `origin/main`.\n- **Evidence after fix:** live output of the end-to-end chain, before (both production files at `origin/main`) and after (this branch):\n\n```\nINTENDED (decoded once): <p>Tom &amp; Jerry</p>\n\n# origin/main (plugin + core both decode)\nACTUAL   (end to end):   <p>Tom & Jerry</p>\n\n# this branch (single canonical decode)\nACTUAL   (end to end):   <p>Tom &amp; Jerry</p>\n```\n\n- **Observed result after fix:** the end-to-end chain returns `<p>Tom &amp; Jerry</p>` (the literal the model intended), decoded exactly once. On `origin/main` the identical chain returned `<p>Tom & Jerry</p>`, the `&amp;` corrupted to `&` before execution and persistence.\n- **What was not tested:** a fully live xAI Grok / Venice turn over the network against a real model (requires provider credentials not available here). The before/after above was exercised through the real `wrapXaiProviderStream` plugin wrapper and the real core `createHtmlEntityToolCallArgumentDecodingWrapper`, composed in the production order, over a stream emitting the real `done`/`partial` event shape.\n",
-        "branch": "fix/xai-venice-toolcall-arg-double-decode",
-        "head_sha": "b4c77227c71cdcd4cc7f5841f8ecee260ed65e2e",
-        "author": "yetval",
+        "title": "fix(agents): filter unresolved model registry rows",
+        "body": "## Summary\n\nFixes #66961.\n\n- Filter generated `models.json` provider rows before write so model-bearing providers only survive when they have a usable execution contract: `baseUrl` plus usable auth, or an explicit runtime-accepted no-key auth mode such as `aws-sdk` / `oauth`.\n- Keep resolved OAuth catalog rows only when the marker matches the provider, preserve supported local non-secret markers only on local/private endpoints, and drop stale remote/local/OAuth-looking markers.\n- Improve the session/model-selection error for catalog-visible models blocked by `agents.defaults.models`.\n\n## AI assistance disclosure\n\nI used AI assistance for implementation, review, and proof collection. I reviewed and understand the affected path: generated `models.json` planning/merge, local auth marker resolution, model allowlist diagnostics, and the Gateway `sessions.patch` behavior.\n\n## Real behavior proof\n\nBehavior addressed: unresolved generated custom providers are excluded from `models.json`, runtime-accepted OAuth/aws-sdk and supported local-marker exceptions still work, and a catalog-visible but disallowed Codex model reports the allowlist fix.\n\nReal environment tested: local OpenClaw checkout, isolated `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, fake local `CODEX_API_KEY`, explicit loopback Gateway port/token.\n\nExact steps or command run after this patch:\n\n```bash\ncorepack pnpm exec tsx .artifacts/issue-66961-proof/run-proof.ts\n```\n\nEvidence after fix:\n\n```text\n$ openclaw models list --all --provider codex --plain\ncodex/gpt-5.4\n\n$ ensureOpenClawModelsJson(loadConfig({pin:false}))\n{\"agentDir\":\"$PROOF_DIR/state/agents/main/agent\",\"wrote\":true}\n\n$ inspect generated models.json\n{\n  \"unresolvedPresent\": false,\n  \"oauthAuthPresent\": true,\n  \"oauthAuthHasApiKey\": false,\n  \"oauthLocalLookingMarkerPresent\": false,\n  \"amazonBedrockPresent\": false,\n  \"amazonBedrockHasApiKey\": false,\n  \"responsesLocalPreserved\": true,\n  \"ollamaDockerPreserved\": true,\n  \"lmstudioLocalPreserved\": true,\n  \"singleLabelCustomLocalMarkerPresent\": false,\n  \"remoteLocalMarkerPresent\": false,\n  \"codexModels\": [\n    \"gpt-5.4\"\n  ]\n}\n\n$ openclaw gateway run --bind loopback --auth token --allow-unconfigured\ngateway_ready: true\n\n$ backend callGateway sessions.patch {key, model}\n{\n  \"ok\": false,\n  \"name\": \"GatewayClientRequestError\",\n  \"message\": \"model not allowed: codex/gpt-5.4 (model is listed in the catalog, but not allowed by agents.defaults.models; add \\\"codex/gpt-5.4\\\" or \\\"codex/*\\\" to agents.defaults.models)\",\n  \"gatewayCode\": \"INVALID_REQUEST\"\n}\n```\n\nObserved result after fix: unresolved token and non-env SecretRef providers are not written, missing-key `oauth` and blank `aws-sdk` auth stay keyless under the current runtime contract, matching `oauth:chutes` is preserved, local `custom-local`/`ollama-local`/`lmstudio-local` rows are preserved only on supported local endpoints, unsafe single-label/remote local-marker rows are dropped, and `sessions.patch` reports the concrete allowlist change needed for `codex/gpt-5.4`.\n\nWhat was not tested: real provider calls, real OAuth refresh, real AWS SDK credential resolution, and remote provider network requests. The proof uses fake local credentials and exercises admission/model-selection behavior only.\n\n## Root Cause\n\nGenerated and merged `models.json` rows could keep model-bearing providers that were not executable by the runtime registry. A non-empty `apiKey` field was treated too broadly, so unresolved token auth, non-env SecretRef placeholders, stale OAuth markers, blank keys, and local no-auth markers attached to remote endpoints could survive into generated provider config.\n\nThe model registry requires model-bearing providers to have `baseUrl` and usable auth, except for explicit missing-key modes like `aws-sdk`. When invalid generated rows survived, they could poison catalog loading or produce confusing model-selection failures.\n\n## Dependency contract\n\nNo external dependency contract changed.\n\nInternal contracts checked:\n\n- `src/agents/sessions/model-registry.ts` validates model-bearing provider rows with `baseUrl` and `apiKey`/OAuth, and currently accepts missing-key `aws-sdk` and `oauth` auth modes.\n- `src/agents/models-config.providers.secrets.ts` can emit matching OAuth markers such as `oauth:chutes` after OAuth-backed provider auth is resolved.\n- `extensions/ollama/src/discovery-shared.ts` treats `ollama-local` as the documented synthetic local key for local Ollama endpoints.\n- `extensions/lmstudio/openclaw.plugin.json` declares `lmstudio-local` as a bundled non-secret local marker.\n\n## Regression Test Plan\n\n- Generated write path drops unresolved token, stale OAuth-looking, non-env SecretRef, unsafe local-marker, and remote-local-marker providers.\n- Generated write path preserves matching OAuth marker, missing-key `oauth`, `aws-sdk`, and supported local marker providers.\n- Merge path drops stale invalid existing provider rows and preserves only self-contained existing rows.\n- Runtime auth resolution normalizes supported local markers and rejects remote/non-local marker use.\n- Gateway/session and cron model-selection tests cover the improved catalog-visible allowlist message.\n\n## Security Impact\n\nPositive: unresolved or stale credential markers are no longer persisted as executable model provider rows.\n\nThe local marker rule is intentionally conservative. It accepts known non-secret local markers only on loopback/private/local endpoints, IPv6 local ranges, known host-backed local aliases, or the documented Ollama service alias. It rejects OAuth marker syntax and arbitrary single-label OpenAI-compatible hosts.\n\n## Human Verification\n\nI reviewed the generated models path, auth marker predicate, model registry admission contract, model-selection diagnostics, focused tests, autoreview findings, `codex review` findings, and isolated Gateway proof output.\n\n## CODEOWNERS / owner review\n\nTouched auth files match `.github/CODEOWNERS` entries for `@openclaw/openclaw-secops`:\n\n- `/src/agents/*auth*.ts`\n- `/src/agents/**/*auth*.ts`\n\nExpected owner review: `@openclaw/openclaw-secops`.\n\n## Changelog\n\nNo `CHANGELOG.md` edit. This is a contributor fix; release-note context is in this PR body.\n\n## Review conversations\n\n- Autoreview found an OAuth-marker over-admission issue for markers ending in `-local`; fixed by excluding colon marker syntaxes from local marker classification.\n- Autoreview found arbitrary single-label host over-admission; fixed by narrowing the exception to the documented `ollama` service alias.\n- ClawSweeper found a compatibility issue for existing missing-key `auth: \"oauth\"` rows; fixed by preserving the current runtime-accepted OAuth contract while still dropping stale OAuth marker strings.\n- `codex review --disable image_generation --base origin/main` previously found that matching OAuth markers must be preserved; fixed by accepting only `oauth:<providerId>` for the same provider.\n- Final autoreview: clean, no accepted/actionable findings.\n- Final `codex review --disable image_generation --base origin/main`: clean, no actionable correctness issues.\n\n## Risks\n\n- The local-marker predicate still needs maintainer judgment for future plugin-owned non-secret markers. The current rule is conservative and driven by bundled local provider contracts.\n\n## Behavior tradeoffs\n\n- Matching `oauth:<providerId>` is treated as usable generated auth evidence for that provider; missing-key `auth: \"oauth\"` rows are preserved to match the current runtime contract; stale or mismatched OAuth marker strings are dropped.\n- Arbitrary single-label OpenAI-compatible hosts are not treated as local no-auth endpoints. Users with non-standard hostnames can provide real credentials or use a supported local/private endpoint form.\n\n## Scope boundaries\n\n- Does not change `agents.defaults.models` allowlist semantics.\n- Does not add runtime compatibility for non-env SecretRefs in generated `models.json`.\n- Does not change the current missing-key OAuth runtime contract.\n- Does not change provider discovery, provider calls, OAuth refresh, AWS SDK auth, or plugin registry behavior.\n- Does not edit docs or changelog.\n\n## Validation\n\n```bash\nnode scripts/run-vitest.mjs src/agents/models-config.merge.test.ts src/agents/models-config.skips-writing-models-json-no-env-token.test.ts src/agents/model-selection.test.ts src/gateway/sessions-patch.test.ts src/cron/isolated-agent.model-formatting.test.ts src/agents/model-auth.test.ts src/agents/models-config.providers.normalize-keys.test.ts src/agents/models-config.runtime-source-snapshot.test.ts src/agents/model-selection-resolve.test.ts src/agents/openclaw-tools.subagents.sessions-spawn.model.test.ts src/agents/models-config.applies-config-env-vars.test.ts src/agents/models-config.uses-first-github-copilot-profile-env-tokens.test.ts\ncorepack pnpm tsgo:core && corepack pnpm tsgo:core:test\ncorepack pnpm exec oxfmt --check --threads=1 src/agents/model-auth-local.ts src/agents/model-auth.ts src/agents/model-auth.test.ts src/agents/model-selection-shared.ts src/agents/model-selection.test.ts src/agents/model-selection.ts src/agents/models-config.merge.test.ts src/agents/models-config.merge.ts src/agents/models-config.plan.ts src/agents/models-config.skips-writing-models-json-no-env-token.test.ts src/cron/isolated-agent.model-formatting.test.ts src/cron/isolated-agent/model-selection.ts src/gateway/sessions-patch.test.ts\ngit diff --check\n.agents/skills/autoreview/scripts/autoreview --mode local --base origin/main\ncodex review --disable image_generation --base origin/main\ncorepack pnpm exec tsx .artifacts/issue-66961-proof/run-proof.ts\n```\n",
+        "branch": "fix/66961-model-registry-admission-v2",
+        "head_sha": "a1634614c6e141c35d80a022954136448a6c1cb2",
+        "author": "ferminquant",
         "labels": [
+          "gateway",
           "agents",
-          "size: M",
+          "size: L",
           "proof: supplied",
           "proof: sufficient",
-          "extensions: xai",
           "P2",
-          "rating: 🦞 diamond lobster",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider",
           "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "extensions/xai/stream.test.ts",
-            "additions": 35,
+            "path": "src/agents/model-auth-local.ts",
+            "additions": 91,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/xai/stream.ts",
-            "additions": 1,
-            "deletions": 144,
+            "path": "src/agents/model-auth.test.ts",
+            "additions": 98,
+            "deletions": 25,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/tool-call-argument-decoding.test.ts",
-            "additions": 43,
+            "path": "src/agents/model-auth.ts",
+            "additions": 9,
+            "deletions": 40,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-selection-shared.ts",
+            "additions": 14,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/tool-call-argument-decoding.ts",
-            "additions": 12,
-            "deletions": 3,
+            "path": "src/agents/model-selection.test.ts",
+            "additions": 24,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-selection.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/models-config.merge.test.ts",
+            "additions": 199,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/models-config.merge.ts",
+            "additions": 106,
+            "deletions": 31,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/models-config.plan.ts",
+            "additions": 73,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/models-config.skips-writing-models-json-no-env-token.test.ts",
+            "additions": 127,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent.model-formatting.test.ts",
+            "additions": 30,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/isolated-agent/model-selection.ts",
+            "additions": 17,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/sessions-patch.test.ts",
+            "additions": 22,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90260",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90260.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90234",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90234.md",
         "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
         "review_decision": "",
         "checks": {
-          "total": 162,
+          "total": 15,
           "counts": {
-            "SUCCESS": 129,
-            "SKIPPED": 30,
-            "FAILURE": 2,
-            "NEUTRAL": 1
+            "SUCCESS": 2,
+            "SKIPPED": 12,
+            "CANCELLED": 1
           },
           "blockers": [
             "checks-fast-contracts-plugins-a:FAILURE",
@@ -133,21 +191,21 @@
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2204,
+    "total_ms": 2408,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 279
+        "ms": 721
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1707
+        "ms": 1327
       },
       {
         "name": "classify_commands",
@@ -155,7 +213,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 189
+        "ms": 345
       },
       {
         "name": "append_ledger",
