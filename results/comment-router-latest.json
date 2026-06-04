@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-04T19:22:43.833Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-04T19:23:38.514Z",
+  "repo": "openclaw/crabbox",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-04T16:22:40.800Z",
+  "since": "2026-06-04T16:23:36.760Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    90066
+    208
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4625389363
+  ],
+  "status_comment_id": 4625390166,
   "max_autoclose_targets": 8,
-  "scanned_comments": 11,
-  "commands_seen": 6,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,129 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:90066:4617744474:2026-06-04T19:22:36Z:clawsweeper_auto_repair",
-      "comment_id": "4617744474",
-      "comment_version_key": "4617744474:2026-06-04T19:22:36Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/90066#issuecomment-4617744474",
-      "repo": "openclaw/openclaw",
-      "issue_number": 90066,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-04T00:05:42Z",
-      "comment_updated_at": "2026-06-04T19:22:36Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=4bbf2465330eccbcec71965ed3d90ce9c35ebc92)",
-      "review_summary": "The PR changes outbound reconnect drain to return result counts, adds a result-bearing Plugin SDK helper, applies a 60s Telegram reconnect-drain cooldown when all matched entries are already in progress, and adds regression tests.\n\nPR surface: Source +46, Tests +335. Total +381 across 6 files.\n\nReproducibility: yes. for the source path: current main triggers reconnect drain on poll-success while live sends hold withActiveDeliveryClaim, and drain skips entries already in entriesInProgress. I did not run a live Telegram stall, so this is source-reproducible rather than fully reproduced.",
-      "review_followup": "- [P1] Human review and contributor follow-up are needed because automation cannot supply the missing live Telegram proof and the remaining blockers include fix-shape and SDK contract decisions.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "4bbf2465330eccbcec71965ed3d90ce9c35ebc92",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(telegram): suppress reconnect drain re-entry while delivery is in-flight",
-        "body": "## Summary\n\nWhen a live Telegram send stalls (e.g. 129 seconds as reported in #89953), every subsequent `poll-success` event triggers a reconnect drain that finds the same pending delivery already claimed by the in-flight send. The drain returns immediately, clears the `#deliveryDrainInFlight` guard, and the next poll re-triggers the cycle. This produces repeated \"already being recovered\" log entries every ~30 seconds until the stalled send completes.\n\n## Root cause\n\nTwo separate in-flight tracking mechanisms interact:\n\n1. `#deliveryDrainInFlight` in `TelegramPollingSession`: prevents concurrent drain calls, but resets as soon as the drain function returns.\n2. `entriesInProgress` in `delivery-queue-recovery.ts`: tracks individual entries claimed by live sends via `withActiveDeliveryClaim`.\n\nWhen the live send holds an entry via `withActiveDeliveryClaim` (in `deliver.ts`), the drain function quickly skips the entry (\"already being recovered\"), returns, and clears the session-level guard. The next poll success starts a fresh drain that again finds the same claimed entry.\n\n## Fix\n\n1. **`delivery-queue-recovery.ts`**: `drainPendingDeliveries` now returns a `ReconnectDrainResult` with `{ matched, drained, skippedInProgress }` counts instead of `void`.\n\n2. **`delivery-queue-runtime.ts` (Plugin SDK)**: The public `drainPendingDeliveries` export preserves its existing `Promise<void>` return contract. A new additive `drainPendingDeliveriesWithResult` function returns `Promise<ReconnectDrainResult>` for callers that need drain counts.\n\n3. **`polling-session.ts`**: Uses `drainPendingDeliveriesWithResult` to inspect drain results. When `skippedInProgress > 0 && drained === 0`, sets a 60-second cooldown (two Telegram long-poll intervals) before the next drain attempt. The wider cooldown ensures a delayed poll-success arriving after one normal 30s interval cannot re-enter the same drain.\n\nThis eliminates the repeated log noise and wasted I/O from futile drain attempts while preserving the ability to drain genuinely new entries as soon as the cooldown expires or in-flight sends complete.\n\n## Changed files\n\n| File | Change |\n|------|--------|\n| `src/infra/outbound/delivery-queue-recovery.ts` | Add `ReconnectDrainResult` type; track `skippedInProgress`/`drained` counters in `drainPendingDeliveries`; return the result |\n| `src/infra/outbound/delivery-queue.ts` | Re-export `ReconnectDrainResult` type |\n| `src/plugin-sdk/delivery-queue-runtime.ts` | Keep `drainPendingDeliveries` as `Promise<void>` (preserves SDK contract); add `drainPendingDeliveriesWithResult` returning `Promise<ReconnectDrainResult>` |\n| `extensions/telegram/src/polling-session.ts` | Import `drainPendingDeliveriesWithResult`; add 60s drain cooldown; check cooldown in `#drainPendingDeliveriesAfterReconnect`; set cooldown when all entries are in-progress |\n\n## Tests\n\n- 3 new tests in `delivery-queue.reconnect-drain.test.ts`: verify drain result reports `skippedInProgress` for claimed entries, `drained` for recovered entries, and empty result for no matches\n- 6 tests in `polling-session.test.ts` covering drain cooldown: re-entry suppressed when all in-progress, still suppressed after one long-poll interval (delayed poll-success regression at 35s), suppressed past full HTTP request timeout and expires after cooldown (delayed regression at 46s/61s), not suppressed when entries drained, not suppressed when some were drained (mixed result)\n- All 58 polling-session + 3 delivery-queue reconnect-drain tests pass\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Telegram reconnect drain re-enters on every poll-success (~30s interval) while a live send holds the pending delivery via `withActiveDeliveryClaim`, producing repeated \"already being recovered\" log messages and wasted I/O until the stall resolves (129s observed in #89953).\n- **Real environment tested:** macOS 15.5 (darwin 25.5.0), Node v26.0.0, OpenClaw main at commit 85df2e1f85 (rebased), pnpm 11.2.2.\n- **Exact steps or command run after this patch:**\n\n  Step 1. Built from the patched branch:\n  ```bash\n  pnpm install --frozen-lockfile\n  pnpm build\n  ```\n\n  Step 2. Verified cooldown, SDK contract preservation, and drain tracking in production bundle:\n  ```bash\n  grep -n \"DELIVERY_DRAIN_COOLDOWN_MS\\|deliveryDrainCooldownUntil\\|skippedInProgress\" dist/monitor-polling.runtime-DLFq4M1O.js\n  grep -n \"drainPendingDeliveries\\b\\|drainPendingDeliveriesWithResult\" dist/delivery-queue-runtime-Dv-0a9G_.js\n  ```\n\n  Step 3. Ran the polling session test suite to verify behavioral correctness:\n  ```bash\n  node scripts/run-vitest.mjs extensions/telegram/src/polling-session.test.ts --reporter=verbose\n  ```\n\n- **Evidence after fix:** terminal output from the patched build:\n\n  The 60-second cooldown guard is active in the production Telegram polling runtime:\n\n  ```console\n  $ grep -n \"DELIVERY_DRAIN_COOLDOWN_MS\\|deliveryDrainCooldownUntil\\|skippedInProgress\" dist/monitor-polling.runtime-DLFq4M1O.js\n  476:const DELIVERY_DRAIN_COOLDOWN_MS = 6e4;\n  552:#deliveryDrainCooldownUntil = 0;\n  618:if (Date.now() < this.#deliveryDrainCooldownUntil) return;\n  637:if (drainResult.skippedInProgress > 0 && drainResult.drained === 0) this.#deliveryDrainCooldownUntil = Date.now() + DELIVERY_DRAIN_COOLDOWN_MS;\n  ```\n\n  The public SDK preserves the `Promise<void>` contract via `drainPendingDeliveries`, while the new `drainPendingDeliveriesWithResult` (additive export) returns drain counts for internal callers:\n\n  ```console\n  $ grep -n \"drainPendingDeliveries\\b\\|drainPendingDeliveriesWithResult\" dist/delivery-queue-runtime-Dv-0a9G_.js\n  13:async function drainPendingDeliveries(opts) {\n  14:await drainPendingDeliveriesWithResult(opts);\n  22:async function drainPendingDeliveriesWithResult(opts) {\n  30:export { drainPendingDeliveriesWithResult as n, drainPendingDeliveries as t };\n  ```\n\n  The `@since` annotation documents `drainPendingDeliveriesWithResult` as additive:\n  ```console\n  $ grep -A2 \"Additive export\" dist/delivery-queue-runtime-Dv-0a9G_.js\n  20:* Additive export; the existing {@link drainPendingDeliveries} void contract is unchanged.\n  ```\n\n  Terminal confirms the behavioral change via the polling session test suite:\n\n  ```console\n  ✓ suppresses reconnect drain re-entry when all entries are already being recovered\n  ✓ still suppresses drain after one long-poll interval when entries remain in-flight\n  ✓ suppresses drain past the full HTTP request timeout and expires after the cooldown\n  ✓ does not suppress drain when entries were actually drained\n  ✓ does not suppress drain when some entries were successfully drained\n  ```\n\n  The delayed regression tests verify the 60s cooldown covers the worst case: the 35s test covers one normal long-poll interval, and the 46s test covers the full HTTP request timeout (45s). The 61s test verifies the cooldown correctly expires and allows new drains.\n\n- **Observed result after fix:** The compiled production code at `dist/monitor-polling.runtime-DLFq4M1O.js:476` uses a 60-second cooldown (6e4 ms), covering the full Telegram HTTP request timeout (45s) with 15s of margin. Line 618 short-circuits drain attempts during the cooldown window. Line 637 activates cooldown only when `skippedInProgress > 0 && drained === 0`, so normal drains that successfully recover entries are unaffected. The SDK contract at `dist/delivery-queue-runtime-Dv-0a9G_.js:13` preserves `drainPendingDeliveries` as `Promise<void>` for backward compatibility while exposing the additive result-bearing variant at line 22. The delayed regression test at 46s proves the cooldown survives past the HTTP request timeout, and the test at 61s proves the cooldown correctly expires.\n- **What was not tested:** Live Telegram send stall scenario requiring a real Telegram bot with network conditions that cause 129s+ stalls. The cooldown duration (60s) covers two long-poll intervals to handle delayed poll-success; production tuning may adjust it.\n\nCloses #89953\n\n",
-        "branch": "fix/telegram-reconnect-drain-reentry-89953",
-        "head_sha": "4bbf2465330eccbcec71965ed3d90ce9c35ebc92",
-        "author": "sebtardif",
-        "labels": [
-          "channel: telegram",
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/telegram/src/polling-session.test.ts",
-            "additions": 262,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/polling-session.ts",
-            "additions": 21,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/delivery-queue-recovery.ts",
-            "additions": 21,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/delivery-queue.reconnect-drain.test.ts",
-            "additions": 80,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/delivery-queue.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/delivery-queue-runtime.ts",
-            "additions": 14,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90066",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90066.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "SUCCESS": 137,
-            "SKIPPED": 24,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:90066:4625306504:2026-06-04T19:11:26Z:re_review",
-      "comment_id": "4625306504",
-      "comment_version_key": "4625306504:2026-06-04T19:11:26Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/90066#issuecomment-4625306504",
-      "repo": "openclaw/openclaw",
-      "issue_number": 90066,
-      "author": "SebTardif",
-      "author_id": 1413412,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-04T19:11:26Z",
-      "comment_updated_at": "2026-06-04T19:11:26Z",
-      "status_comment_id": null,
+      "idempotency_key": "comment-router:openclaw/crabbox:208:4625389363:2026-06-04T19:23:00Z:re_review",
+      "comment_id": "4625389363",
+      "comment_version_key": "4625389363:2026-06-04T19:23:00Z",
+      "comment_url": "https://github.com/openclaw/crabbox/pull/208#issuecomment-4625389363",
+      "repo": "openclaw/crabbox",
+      "issue_number": 208,
+      "author": "anagnorisis2peripeteia",
+      "author_id": 129746152,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-04T19:23:00Z",
+      "comment_updated_at": "2026-06-04T19:23:00Z",
+      "status_comment_id": 4625390166,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -170,60 +61,123 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-04T19:23:39.435Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 208
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-04T19:23:40.652Z",
+          "response_comment_id": "4625390166",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(telegram): suppress reconnect drain re-entry while delivery is in-flight",
-        "body": "## Summary\n\nWhen a live Telegram send stalls (e.g. 129 seconds as reported in #89953), every subsequent `poll-success` event triggers a reconnect drain that finds the same pending delivery already claimed by the in-flight send. The drain returns immediately, clears the `#deliveryDrainInFlight` guard, and the next poll re-triggers the cycle. This produces repeated \"already being recovered\" log entries every ~30 seconds until the stalled send completes.\n\n## Root cause\n\nTwo separate in-flight tracking mechanisms interact:\n\n1. `#deliveryDrainInFlight` in `TelegramPollingSession`: prevents concurrent drain calls, but resets as soon as the drain function returns.\n2. `entriesInProgress` in `delivery-queue-recovery.ts`: tracks individual entries claimed by live sends via `withActiveDeliveryClaim`.\n\nWhen the live send holds an entry via `withActiveDeliveryClaim` (in `deliver.ts`), the drain function quickly skips the entry (\"already being recovered\"), returns, and clears the session-level guard. The next poll success starts a fresh drain that again finds the same claimed entry.\n\n## Fix\n\n1. **`delivery-queue-recovery.ts`**: `drainPendingDeliveries` now returns a `ReconnectDrainResult` with `{ matched, drained, skippedInProgress }` counts instead of `void`.\n\n2. **`delivery-queue-runtime.ts` (Plugin SDK)**: The public `drainPendingDeliveries` export preserves its existing `Promise<void>` return contract. A new additive `drainPendingDeliveriesWithResult` function returns `Promise<ReconnectDrainResult>` for callers that need drain counts.\n\n3. **`polling-session.ts`**: Uses `drainPendingDeliveriesWithResult` to inspect drain results. When `skippedInProgress > 0 && drained === 0`, sets a 60-second cooldown (two Telegram long-poll intervals) before the next drain attempt. The wider cooldown ensures a delayed poll-success arriving after one normal 30s interval cannot re-enter the same drain.\n\nThis eliminates the repeated log noise and wasted I/O from futile drain attempts while preserving the ability to drain genuinely new entries as soon as the cooldown expires or in-flight sends complete.\n\n## Changed files\n\n| File | Change |\n|------|--------|\n| `src/infra/outbound/delivery-queue-recovery.ts` | Add `ReconnectDrainResult` type; track `skippedInProgress`/`drained` counters in `drainPendingDeliveries`; return the result |\n| `src/infra/outbound/delivery-queue.ts` | Re-export `ReconnectDrainResult` type |\n| `src/plugin-sdk/delivery-queue-runtime.ts` | Keep `drainPendingDeliveries` as `Promise<void>` (preserves SDK contract); add `drainPendingDeliveriesWithResult` returning `Promise<ReconnectDrainResult>` |\n| `extensions/telegram/src/polling-session.ts` | Import `drainPendingDeliveriesWithResult`; add 60s drain cooldown; check cooldown in `#drainPendingDeliveriesAfterReconnect`; set cooldown when all entries are in-progress |\n\n## Tests\n\n- 3 new tests in `delivery-queue.reconnect-drain.test.ts`: verify drain result reports `skippedInProgress` for claimed entries, `drained` for recovered entries, and empty result for no matches\n- 6 tests in `polling-session.test.ts` covering drain cooldown: re-entry suppressed when all in-progress, still suppressed after one long-poll interval (delayed poll-success regression at 35s), suppressed past full HTTP request timeout and expires after cooldown (delayed regression at 46s/61s), not suppressed when entries drained, not suppressed when some were drained (mixed result)\n- All 58 polling-session + 3 delivery-queue reconnect-drain tests pass\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Telegram reconnect drain re-enters on every poll-success (~30s interval) while a live send holds the pending delivery via `withActiveDeliveryClaim`, producing repeated \"already being recovered\" log messages and wasted I/O until the stall resolves (129s observed in #89953).\n- **Real environment tested:** macOS 15.5 (darwin 25.5.0), Node v26.0.0, OpenClaw main at commit 85df2e1f85 (rebased), pnpm 11.2.2.\n- **Exact steps or command run after this patch:**\n\n  Step 1. Built from the patched branch:\n  ```bash\n  pnpm install --frozen-lockfile\n  pnpm build\n  ```\n\n  Step 2. Verified cooldown, SDK contract preservation, and drain tracking in production bundle:\n  ```bash\n  grep -n \"DELIVERY_DRAIN_COOLDOWN_MS\\|deliveryDrainCooldownUntil\\|skippedInProgress\" dist/monitor-polling.runtime-DLFq4M1O.js\n  grep -n \"drainPendingDeliveries\\b\\|drainPendingDeliveriesWithResult\" dist/delivery-queue-runtime-Dv-0a9G_.js\n  ```\n\n  Step 3. Ran the polling session test suite to verify behavioral correctness:\n  ```bash\n  node scripts/run-vitest.mjs extensions/telegram/src/polling-session.test.ts --reporter=verbose\n  ```\n\n- **Evidence after fix:** terminal output from the patched build:\n\n  The 60-second cooldown guard is active in the production Telegram polling runtime:\n\n  ```console\n  $ grep -n \"DELIVERY_DRAIN_COOLDOWN_MS\\|deliveryDrainCooldownUntil\\|skippedInProgress\" dist/monitor-polling.runtime-DLFq4M1O.js\n  476:const DELIVERY_DRAIN_COOLDOWN_MS = 6e4;\n  552:#deliveryDrainCooldownUntil = 0;\n  618:if (Date.now() < this.#deliveryDrainCooldownUntil) return;\n  637:if (drainResult.skippedInProgress > 0 && drainResult.drained === 0) this.#deliveryDrainCooldownUntil = Date.now() + DELIVERY_DRAIN_COOLDOWN_MS;\n  ```\n\n  The public SDK preserves the `Promise<void>` contract via `drainPendingDeliveries`, while the new `drainPendingDeliveriesWithResult` (additive export) returns drain counts for internal callers:\n\n  ```console\n  $ grep -n \"drainPendingDeliveries\\b\\|drainPendingDeliveriesWithResult\" dist/delivery-queue-runtime-Dv-0a9G_.js\n  13:async function drainPendingDeliveries(opts) {\n  14:await drainPendingDeliveriesWithResult(opts);\n  22:async function drainPendingDeliveriesWithResult(opts) {\n  30:export { drainPendingDeliveriesWithResult as n, drainPendingDeliveries as t };\n  ```\n\n  The `@since` annotation documents `drainPendingDeliveriesWithResult` as additive:\n  ```console\n  $ grep -A2 \"Additive export\" dist/delivery-queue-runtime-Dv-0a9G_.js\n  20:* Additive export; the existing {@link drainPendingDeliveries} void contract is unchanged.\n  ```\n\n  Terminal confirms the behavioral change via the polling session test suite:\n\n  ```console\n  ✓ suppresses reconnect drain re-entry when all entries are already being recovered\n  ✓ still suppresses drain after one long-poll interval when entries remain in-flight\n  ✓ suppresses drain past the full HTTP request timeout and expires after the cooldown\n  ✓ does not suppress drain when entries were actually drained\n  ✓ does not suppress drain when some entries were successfully drained\n  ```\n\n  The delayed regression tests verify the 60s cooldown covers the worst case: the 35s test covers one normal long-poll interval, and the 46s test covers the full HTTP request timeout (45s). The 61s test verifies the cooldown correctly expires and allows new drains.\n\n- **Observed result after fix:** The compiled production code at `dist/monitor-polling.runtime-DLFq4M1O.js:476` uses a 60-second cooldown (6e4 ms), covering the full Telegram HTTP request timeout (45s) with 15s of margin. Line 618 short-circuits drain attempts during the cooldown window. Line 637 activates cooldown only when `skippedInProgress > 0 && drained === 0`, so normal drains that successfully recover entries are unaffected. The SDK contract at `dist/delivery-queue-runtime-Dv-0a9G_.js:13` preserves `drainPendingDeliveries` as `Promise<void>` for backward compatibility while exposing the additive result-bearing variant at line 22. The delayed regression test at 46s proves the cooldown survives past the HTTP request timeout, and the test at 61s proves the cooldown correctly expires.\n- **What was not tested:** Live Telegram send stall scenario requiring a real Telegram bot with network conditions that cause 129s+ stalls. The cooldown duration (60s) covers two long-poll intervals to handle delayed poll-success; production tuning may adjust it.\n\nCloses #89953\n\n",
-        "branch": "fix/telegram-reconnect-drain-reentry-89953",
-        "head_sha": "4bbf2465330eccbcec71965ed3d90ce9c35ebc92",
-        "author": "sebtardif",
+        "title": "feat(local-container): native checkpoint fork via docker run (follow-up to #206)",
+        "body": "## Summary\n\nFollow-up to #206. That PR lands docker-commit checkpoint **create / verify / delete** for the local-container provider but intentionally leaves **fork** unimplemented (ClawSweeper \"option 1\"). This PR adds the fork so `crabbox checkpoint fork <checkpoint>` launches a new local-container lease from the committed image instead of erroring on a missing provider hook.\n\n> **Stacked on #206** — please review/merge #206 first. Until it lands, this PR's diff also shows the #206 commit; it reduces to the fork-only change afterward.\n\n## How it works\n\n`checkpoint fork` already routes native checkpoint records through `NativeCheckpointForkProvider.ApplyNativeCheckpointForkConfig`. The local-container provider now implements it: it points `cfg.LocalContainer.Image` at the checkpoint's committed image (`Record.Resource`, falling back to `Record.ImageID`), and the existing local-container backend builds the new lease from `LocalContainer.Image`. Verify messaging for docker-commit checkpoints is restored from `delete_local` to `fork_or_delete_local` now that fork works.\n\nThis mirrors the other native providers' fork hooks (`aws` sets `cfg.AWSAMI`, `gcp` sets `cfg.GCPMachineImage`, etc.).\n\n## Files changed\n\n- `internal/providers/localcontainer/provider.go` — `ApplyNativeCheckpointForkConfig`\n- `internal/cli/checkpoint.go` — docker-commit verify `next_action`: `delete_local` -> `fork_or_delete_local`\n- `internal/providers/localcontainer/checkpoint_test.go` — unit tests (sets image, prefers Resource, rejects other kinds)\n- `internal/cli/checkpoint_dockercommit_proof_test.go` — `dockerproof` integration test now boots a container from the committed image (the fork) before deleting\n\n## Real Docker proof — create -> verify -> fork -> delete\n\n```\n$ go test -tags dockerproof -run TestDockerCommitCheckpointLifecycleProof -v ./internal/cli/\n=== RUN   TestDockerCommitCheckpointLifecycleProof\n    source container: c52031734d5b\n    CREATE: image=crabbox-checkpoint-proof id=62de16c36ffd state=available kind=docker-commit direct=true\n    VERIFY: image present (next_action -> fork_or_delete_local), id=62de16c36ffd\n    FORK:   booted container from checkpoint image -> forked-from-checkpoint\n    DELETE: Untagged: crabbox-checkpoint-proof:latest / Deleted sha256:62de16c36ffd...\n    CONFIRMED: crabbox-checkpoint-proof removed\n--- PASS: TestDockerCommitCheckpointLifecycleProof (1.82s)\nok      github.com/openclaw/crabbox/internal/cli\n```\n\nBuilt/tested in `golang:1.26` + static docker client against host Docker `29.0.1` over a mounted socket (Go is unavailable on the dev machine). `go build ./...`, `go vet`, and the checkpoint unit tests for both `internal/cli` and `internal/providers/localcontainer` pass.\n\n\n\n---\n\n## Update — addressed ClawSweeper review (rebased on the fixed #206)\n\n- **P1 — immutable image identity:** fixed in base #206 (create commits to an immutable digest, then applies a digest-unique tag `crabbox-checkpoint-<name>-<short-digest>`; verify/delete reference the recorded digest; a duplicate-name regression was added). This branch is rebased onto that fix, so the inherited mutable-tag blocker is gone.\n- **P2 — docker-socket fork could mask the saved workdir:** `ApplyNativeCheckpointForkConfig` now clears `LocalContainer.DockerSocket` for docker-commit forks, so the host work-root mount can't hide the committed image's workspace. Covered by `TestApplyNativeCheckpointForkConfigDisablesDockerSocket`.\n\n### Proof — create -> dup-name -> verify -> fork -> delete\n\n```\n$ go test -tags dockerproof -run TestDockerCommitCheckpointLifecycleProof -v ./internal/cli/\n    CREATE:    image=crabbox-checkpoint-proof-fd11fdb40841 id=fd11fdb40841 state=available kind=docker-commit direct=true\n    DUP-NAME:  second checkpoint is distinct -> image=crabbox-checkpoint-proof-126889069297 id=126889069297\n    VERIFY:    image present (next_action -> fork_or_delete_local), id=fd11fdb40841\n    FORK:      booted container from checkpoint image -> forked-from-checkpoint\n    DELETE:    Untagged + Deleted sha256:fd11fdb40841...\n    CONFIRMED: removed\n--- PASS: TestDockerCommitCheckpointLifecycleProof\n```\n\nFork unit tests (image set, Resource preference, kind rejection, docker-socket cleared) plus `go build ./...` and `go vet` all pass. Built/proven in `golang:1.26` + static docker client against host Docker `29.0.1`.\n",
+        "branch": "feat/local-container-checkpoint-fork",
+        "head_sha": "8220c15031f12f9a016871931c6db6943ddcb218",
+        "author": "anagnorisis2peripeteia",
         "labels": [
-          "channel: telegram",
-          "size: M",
-          "proof: supplied",
-          "P2",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
+          "P2",
+          "proof: sufficient",
+          "status: ⏳ waiting on author",
+          "merge-risk: 🚨 other",
+          "merge-risk: 🚨 session-state"
         ],
         "files": [
           {
-            "path": "extensions/telegram/src/polling-session.test.ts",
-            "additions": 262,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/polling-session.ts",
-            "additions": 21,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/delivery-queue-recovery.ts",
-            "additions": 21,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/delivery-queue.reconnect-drain.test.ts",
-            "additions": 80,
+            "path": "docs/features/checkpoints.md",
+            "additions": 7,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/infra/outbound/delivery-queue.ts",
+            "path": "docs/providers/local-container.md",
+            "additions": 12,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cli/checkpoint.go",
+            "additions": 132,
+            "deletions": 28,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cli/checkpoint_dockercommit_proof_test.go",
+            "additions": 109,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "internal/cli/checkpoint_native.go",
+            "additions": 68,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cli/checkpoint_test.go",
+            "additions": 142,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cli/config.go",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cli/provider_backend.go",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cli/provider_exports.go",
             "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/plugin-sdk/delivery-queue-runtime.ts",
-            "additions": 14,
+            "path": "internal/cli/providers_builtin_test.go",
+            "additions": 7,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/providers/localcontainer/backend.go",
+            "additions": 13,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/providers/localcontainer/backend_test.go",
+            "additions": 66,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/providers/localcontainer/checkpoint_test.go",
+            "additions": 138,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "internal/providers/localcontainer/provider.go",
+            "additions": 55,
             "deletions": 1,
             "changeType": "MODIFIED"
           }
@@ -231,18 +185,16 @@
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90066",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90066.md",
+        "automerge_cluster_id": "automerge-openclaw-crabbox-208",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-crabbox-208.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 162,
+          "total": 2,
           "counts": {
-            "SUCCESS": 137,
-            "SKIPPED": 24,
-            "NEUTRAL": 1
+            "SUCCESS": 2
           },
           "blockers": [],
           "pending": [],
@@ -250,477 +202,28 @@
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:90066:4624981399:2026-06-04T18:24:37Z:re_review",
-      "comment_id": "4624981399",
-      "comment_version_key": "4624981399:2026-06-04T18:24:37Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/90066#issuecomment-4624981399",
-      "repo": "openclaw/openclaw",
-      "issue_number": 90066,
-      "author": "SebTardif",
-      "author_id": 1413412,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-04T18:24:37Z",
-      "comment_updated_at": "2026-06-04T18:24:37Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(telegram): suppress reconnect drain re-entry while delivery is in-flight",
-        "body": "## Summary\n\nWhen a live Telegram send stalls (e.g. 129 seconds as reported in #89953), every subsequent `poll-success` event triggers a reconnect drain that finds the same pending delivery already claimed by the in-flight send. The drain returns immediately, clears the `#deliveryDrainInFlight` guard, and the next poll re-triggers the cycle. This produces repeated \"already being recovered\" log entries every ~30 seconds until the stalled send completes.\n\n## Root cause\n\nTwo separate in-flight tracking mechanisms interact:\n\n1. `#deliveryDrainInFlight` in `TelegramPollingSession`: prevents concurrent drain calls, but resets as soon as the drain function returns.\n2. `entriesInProgress` in `delivery-queue-recovery.ts`: tracks individual entries claimed by live sends via `withActiveDeliveryClaim`.\n\nWhen the live send holds an entry via `withActiveDeliveryClaim` (in `deliver.ts`), the drain function quickly skips the entry (\"already being recovered\"), returns, and clears the session-level guard. The next poll success starts a fresh drain that again finds the same claimed entry.\n\n## Fix\n\n1. **`delivery-queue-recovery.ts`**: `drainPendingDeliveries` now returns a `ReconnectDrainResult` with `{ matched, drained, skippedInProgress }` counts instead of `void`.\n\n2. **`delivery-queue-runtime.ts` (Plugin SDK)**: The public `drainPendingDeliveries` export preserves its existing `Promise<void>` return contract. A new additive `drainPendingDeliveriesWithResult` function returns `Promise<ReconnectDrainResult>` for callers that need drain counts.\n\n3. **`polling-session.ts`**: Uses `drainPendingDeliveriesWithResult` to inspect drain results. When `skippedInProgress > 0 && drained === 0`, sets a 60-second cooldown (two Telegram long-poll intervals) before the next drain attempt. The wider cooldown ensures a delayed poll-success arriving after one normal 30s interval cannot re-enter the same drain.\n\nThis eliminates the repeated log noise and wasted I/O from futile drain attempts while preserving the ability to drain genuinely new entries as soon as the cooldown expires or in-flight sends complete.\n\n## Changed files\n\n| File | Change |\n|------|--------|\n| `src/infra/outbound/delivery-queue-recovery.ts` | Add `ReconnectDrainResult` type; track `skippedInProgress`/`drained` counters in `drainPendingDeliveries`; return the result |\n| `src/infra/outbound/delivery-queue.ts` | Re-export `ReconnectDrainResult` type |\n| `src/plugin-sdk/delivery-queue-runtime.ts` | Keep `drainPendingDeliveries` as `Promise<void>` (preserves SDK contract); add `drainPendingDeliveriesWithResult` returning `Promise<ReconnectDrainResult>` |\n| `extensions/telegram/src/polling-session.ts` | Import `drainPendingDeliveriesWithResult`; add 60s drain cooldown; check cooldown in `#drainPendingDeliveriesAfterReconnect`; set cooldown when all entries are in-progress |\n\n## Tests\n\n- 3 new tests in `delivery-queue.reconnect-drain.test.ts`: verify drain result reports `skippedInProgress` for claimed entries, `drained` for recovered entries, and empty result for no matches\n- 6 tests in `polling-session.test.ts` covering drain cooldown: re-entry suppressed when all in-progress, still suppressed after one long-poll interval (delayed poll-success regression at 35s), suppressed past full HTTP request timeout and expires after cooldown (delayed regression at 46s/61s), not suppressed when entries drained, not suppressed when some were drained (mixed result)\n- All 58 polling-session + 3 delivery-queue reconnect-drain tests pass\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Telegram reconnect drain re-enters on every poll-success (~30s interval) while a live send holds the pending delivery via `withActiveDeliveryClaim`, producing repeated \"already being recovered\" log messages and wasted I/O until the stall resolves (129s observed in #89953).\n- **Real environment tested:** macOS 15.5 (darwin 25.5.0), Node v26.0.0, OpenClaw main at commit 85df2e1f85 (rebased), pnpm 11.2.2.\n- **Exact steps or command run after this patch:**\n\n  Step 1. Built from the patched branch:\n  ```bash\n  pnpm install --frozen-lockfile\n  pnpm build\n  ```\n\n  Step 2. Verified cooldown, SDK contract preservation, and drain tracking in production bundle:\n  ```bash\n  grep -n \"DELIVERY_DRAIN_COOLDOWN_MS\\|deliveryDrainCooldownUntil\\|skippedInProgress\" dist/monitor-polling.runtime-DLFq4M1O.js\n  grep -n \"drainPendingDeliveries\\b\\|drainPendingDeliveriesWithResult\" dist/delivery-queue-runtime-Dv-0a9G_.js\n  ```\n\n  Step 3. Ran the polling session test suite to verify behavioral correctness:\n  ```bash\n  node scripts/run-vitest.mjs extensions/telegram/src/polling-session.test.ts --reporter=verbose\n  ```\n\n- **Evidence after fix:** terminal output from the patched build:\n\n  The 60-second cooldown guard is active in the production Telegram polling runtime:\n\n  ```console\n  $ grep -n \"DELIVERY_DRAIN_COOLDOWN_MS\\|deliveryDrainCooldownUntil\\|skippedInProgress\" dist/monitor-polling.runtime-DLFq4M1O.js\n  476:const DELIVERY_DRAIN_COOLDOWN_MS = 6e4;\n  552:#deliveryDrainCooldownUntil = 0;\n  618:if (Date.now() < this.#deliveryDrainCooldownUntil) return;\n  637:if (drainResult.skippedInProgress > 0 && drainResult.drained === 0) this.#deliveryDrainCooldownUntil = Date.now() + DELIVERY_DRAIN_COOLDOWN_MS;\n  ```\n\n  The public SDK preserves the `Promise<void>` contract via `drainPendingDeliveries`, while the new `drainPendingDeliveriesWithResult` (additive export) returns drain counts for internal callers:\n\n  ```console\n  $ grep -n \"drainPendingDeliveries\\b\\|drainPendingDeliveriesWithResult\" dist/delivery-queue-runtime-Dv-0a9G_.js\n  13:async function drainPendingDeliveries(opts) {\n  14:await drainPendingDeliveriesWithResult(opts);\n  22:async function drainPendingDeliveriesWithResult(opts) {\n  30:export { drainPendingDeliveriesWithResult as n, drainPendingDeliveries as t };\n  ```\n\n  The `@since` annotation documents `drainPendingDeliveriesWithResult` as additive:\n  ```console\n  $ grep -A2 \"Additive export\" dist/delivery-queue-runtime-Dv-0a9G_.js\n  20:* Additive export; the existing {@link drainPendingDeliveries} void contract is unchanged.\n  ```\n\n  Terminal confirms the behavioral change via the polling session test suite:\n\n  ```console\n  ✓ suppresses reconnect drain re-entry when all entries are already being recovered\n  ✓ still suppresses drain after one long-poll interval when entries remain in-flight\n  ✓ suppresses drain past the full HTTP request timeout and expires after the cooldown\n  ✓ does not suppress drain when entries were actually drained\n  ✓ does not suppress drain when some entries were successfully drained\n  ```\n\n  The delayed regression tests verify the 60s cooldown covers the worst case: the 35s test covers one normal long-poll interval, and the 46s test covers the full HTTP request timeout (45s). The 61s test verifies the cooldown correctly expires and allows new drains.\n\n- **Observed result after fix:** The compiled production code at `dist/monitor-polling.runtime-DLFq4M1O.js:476` uses a 60-second cooldown (6e4 ms), covering the full Telegram HTTP request timeout (45s) with 15s of margin. Line 618 short-circuits drain attempts during the cooldown window. Line 637 activates cooldown only when `skippedInProgress > 0 && drained === 0`, so normal drains that successfully recover entries are unaffected. The SDK contract at `dist/delivery-queue-runtime-Dv-0a9G_.js:13` preserves `drainPendingDeliveries` as `Promise<void>` for backward compatibility while exposing the additive result-bearing variant at line 22. The delayed regression test at 46s proves the cooldown survives past the HTTP request timeout, and the test at 61s proves the cooldown correctly expires.\n- **What was not tested:** Live Telegram send stall scenario requiring a real Telegram bot with network conditions that cause 129s+ stalls. The cooldown duration (60s) covers two long-poll intervals to handle delayed poll-success; production tuning may adjust it.\n\nCloses #89953\n\n",
-        "branch": "fix/telegram-reconnect-drain-reentry-89953",
-        "head_sha": "4bbf2465330eccbcec71965ed3d90ce9c35ebc92",
-        "author": "sebtardif",
-        "labels": [
-          "channel: telegram",
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/telegram/src/polling-session.test.ts",
-            "additions": 262,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/polling-session.ts",
-            "additions": 21,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/delivery-queue-recovery.ts",
-            "additions": 21,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/delivery-queue.reconnect-drain.test.ts",
-            "additions": 80,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/delivery-queue.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/delivery-queue-runtime.ts",
-            "additions": 14,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90066",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90066.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "SUCCESS": 137,
-            "SKIPPED": 24,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:90066:4624817273:2026-06-04T17:59:52Z:re_review",
-      "comment_id": "4624817273",
-      "comment_version_key": "4624817273:2026-06-04T17:59:52Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/90066#issuecomment-4624817273",
-      "repo": "openclaw/openclaw",
-      "issue_number": 90066,
-      "author": "SebTardif",
-      "author_id": 1413412,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-04T17:59:52Z",
-      "comment_updated_at": "2026-06-04T17:59:52Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(telegram): suppress reconnect drain re-entry while delivery is in-flight",
-        "body": "## Summary\n\nWhen a live Telegram send stalls (e.g. 129 seconds as reported in #89953), every subsequent `poll-success` event triggers a reconnect drain that finds the same pending delivery already claimed by the in-flight send. The drain returns immediately, clears the `#deliveryDrainInFlight` guard, and the next poll re-triggers the cycle. This produces repeated \"already being recovered\" log entries every ~30 seconds until the stalled send completes.\n\n## Root cause\n\nTwo separate in-flight tracking mechanisms interact:\n\n1. `#deliveryDrainInFlight` in `TelegramPollingSession`: prevents concurrent drain calls, but resets as soon as the drain function returns.\n2. `entriesInProgress` in `delivery-queue-recovery.ts`: tracks individual entries claimed by live sends via `withActiveDeliveryClaim`.\n\nWhen the live send holds an entry via `withActiveDeliveryClaim` (in `deliver.ts`), the drain function quickly skips the entry (\"already being recovered\"), returns, and clears the session-level guard. The next poll success starts a fresh drain that again finds the same claimed entry.\n\n## Fix\n\n1. **`delivery-queue-recovery.ts`**: `drainPendingDeliveries` now returns a `ReconnectDrainResult` with `{ matched, drained, skippedInProgress }` counts instead of `void`.\n\n2. **`delivery-queue-runtime.ts` (Plugin SDK)**: The public `drainPendingDeliveries` export preserves its existing `Promise<void>` return contract. A new additive `drainPendingDeliveriesWithResult` function returns `Promise<ReconnectDrainResult>` for callers that need drain counts.\n\n3. **`polling-session.ts`**: Uses `drainPendingDeliveriesWithResult` to inspect drain results. When `skippedInProgress > 0 && drained === 0`, sets a 60-second cooldown (two Telegram long-poll intervals) before the next drain attempt. The wider cooldown ensures a delayed poll-success arriving after one normal 30s interval cannot re-enter the same drain.\n\nThis eliminates the repeated log noise and wasted I/O from futile drain attempts while preserving the ability to drain genuinely new entries as soon as the cooldown expires or in-flight sends complete.\n\n## Changed files\n\n| File | Change |\n|------|--------|\n| `src/infra/outbound/delivery-queue-recovery.ts` | Add `ReconnectDrainResult` type; track `skippedInProgress`/`drained` counters in `drainPendingDeliveries`; return the result |\n| `src/infra/outbound/delivery-queue.ts` | Re-export `ReconnectDrainResult` type |\n| `src/plugin-sdk/delivery-queue-runtime.ts` | Keep `drainPendingDeliveries` as `Promise<void>` (preserves SDK contract); add `drainPendingDeliveriesWithResult` returning `Promise<ReconnectDrainResult>` |\n| `extensions/telegram/src/polling-session.ts` | Import `drainPendingDeliveriesWithResult`; add 60s drain cooldown; check cooldown in `#drainPendingDeliveriesAfterReconnect`; set cooldown when all entries are in-progress |\n\n## Tests\n\n- 3 new tests in `delivery-queue.reconnect-drain.test.ts`: verify drain result reports `skippedInProgress` for claimed entries, `drained` for recovered entries, and empty result for no matches\n- 6 tests in `polling-session.test.ts` covering drain cooldown: re-entry suppressed when all in-progress, still suppressed after one long-poll interval (delayed poll-success regression at 35s), suppressed past full HTTP request timeout and expires after cooldown (delayed regression at 46s/61s), not suppressed when entries drained, not suppressed when some were drained (mixed result)\n- All 58 polling-session + 3 delivery-queue reconnect-drain tests pass\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Telegram reconnect drain re-enters on every poll-success (~30s interval) while a live send holds the pending delivery via `withActiveDeliveryClaim`, producing repeated \"already being recovered\" log messages and wasted I/O until the stall resolves (129s observed in #89953).\n- **Real environment tested:** macOS 15.5 (darwin 25.5.0), Node v26.0.0, OpenClaw main at commit 85df2e1f85 (rebased), pnpm 11.2.2.\n- **Exact steps or command run after this patch:**\n\n  Step 1. Built from the patched branch:\n  ```bash\n  pnpm install --frozen-lockfile\n  pnpm build\n  ```\n\n  Step 2. Verified cooldown, SDK contract preservation, and drain tracking in production bundle:\n  ```bash\n  grep -n \"DELIVERY_DRAIN_COOLDOWN_MS\\|deliveryDrainCooldownUntil\\|skippedInProgress\" dist/monitor-polling.runtime-DLFq4M1O.js\n  grep -n \"drainPendingDeliveries\\b\\|drainPendingDeliveriesWithResult\" dist/delivery-queue-runtime-Dv-0a9G_.js\n  ```\n\n  Step 3. Ran the polling session test suite to verify behavioral correctness:\n  ```bash\n  node scripts/run-vitest.mjs extensions/telegram/src/polling-session.test.ts --reporter=verbose\n  ```\n\n- **Evidence after fix:** terminal output from the patched build:\n\n  The 60-second cooldown guard is active in the production Telegram polling runtime:\n\n  ```console\n  $ grep -n \"DELIVERY_DRAIN_COOLDOWN_MS\\|deliveryDrainCooldownUntil\\|skippedInProgress\" dist/monitor-polling.runtime-DLFq4M1O.js\n  476:const DELIVERY_DRAIN_COOLDOWN_MS = 6e4;\n  552:#deliveryDrainCooldownUntil = 0;\n  618:if (Date.now() < this.#deliveryDrainCooldownUntil) return;\n  637:if (drainResult.skippedInProgress > 0 && drainResult.drained === 0) this.#deliveryDrainCooldownUntil = Date.now() + DELIVERY_DRAIN_COOLDOWN_MS;\n  ```\n\n  The public SDK preserves the `Promise<void>` contract via `drainPendingDeliveries`, while the new `drainPendingDeliveriesWithResult` (additive export) returns drain counts for internal callers:\n\n  ```console\n  $ grep -n \"drainPendingDeliveries\\b\\|drainPendingDeliveriesWithResult\" dist/delivery-queue-runtime-Dv-0a9G_.js\n  13:async function drainPendingDeliveries(opts) {\n  14:await drainPendingDeliveriesWithResult(opts);\n  22:async function drainPendingDeliveriesWithResult(opts) {\n  30:export { drainPendingDeliveriesWithResult as n, drainPendingDeliveries as t };\n  ```\n\n  The `@since` annotation documents `drainPendingDeliveriesWithResult` as additive:\n  ```console\n  $ grep -A2 \"Additive export\" dist/delivery-queue-runtime-Dv-0a9G_.js\n  20:* Additive export; the existing {@link drainPendingDeliveries} void contract is unchanged.\n  ```\n\n  Terminal confirms the behavioral change via the polling session test suite:\n\n  ```console\n  ✓ suppresses reconnect drain re-entry when all entries are already being recovered\n  ✓ still suppresses drain after one long-poll interval when entries remain in-flight\n  ✓ suppresses drain past the full HTTP request timeout and expires after the cooldown\n  ✓ does not suppress drain when entries were actually drained\n  ✓ does not suppress drain when some entries were successfully drained\n  ```\n\n  The delayed regression tests verify the 60s cooldown covers the worst case: the 35s test covers one normal long-poll interval, and the 46s test covers the full HTTP request timeout (45s). The 61s test verifies the cooldown correctly expires and allows new drains.\n\n- **Observed result after fix:** The compiled production code at `dist/monitor-polling.runtime-DLFq4M1O.js:476` uses a 60-second cooldown (6e4 ms), covering the full Telegram HTTP request timeout (45s) with 15s of margin. Line 618 short-circuits drain attempts during the cooldown window. Line 637 activates cooldown only when `skippedInProgress > 0 && drained === 0`, so normal drains that successfully recover entries are unaffected. The SDK contract at `dist/delivery-queue-runtime-Dv-0a9G_.js:13` preserves `drainPendingDeliveries` as `Promise<void>` for backward compatibility while exposing the additive result-bearing variant at line 22. The delayed regression test at 46s proves the cooldown survives past the HTTP request timeout, and the test at 61s proves the cooldown correctly expires.\n- **What was not tested:** Live Telegram send stall scenario requiring a real Telegram bot with network conditions that cause 129s+ stalls. The cooldown duration (60s) covers two long-poll intervals to handle delayed poll-success; production tuning may adjust it.\n\nCloses #89953\n\n",
-        "branch": "fix/telegram-reconnect-drain-reentry-89953",
-        "head_sha": "4bbf2465330eccbcec71965ed3d90ce9c35ebc92",
-        "author": "sebtardif",
-        "labels": [
-          "channel: telegram",
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/telegram/src/polling-session.test.ts",
-            "additions": 262,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/polling-session.ts",
-            "additions": 21,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/delivery-queue-recovery.ts",
-            "additions": 21,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/delivery-queue.reconnect-drain.test.ts",
-            "additions": 80,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/delivery-queue.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/delivery-queue-runtime.ts",
-            "additions": 14,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90066",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90066.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "SUCCESS": 137,
-            "SKIPPED": 24,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:90066:4624620683:2026-06-04T17:30:49Z:re_review",
-      "comment_id": "4624620683",
-      "comment_version_key": "4624620683:2026-06-04T17:30:49Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/90066#issuecomment-4624620683",
-      "repo": "openclaw/openclaw",
-      "issue_number": 90066,
-      "author": "SebTardif",
-      "author_id": 1413412,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-04T17:30:49Z",
-      "comment_updated_at": "2026-06-04T17:30:49Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(telegram): suppress reconnect drain re-entry while delivery is in-flight",
-        "body": "## Summary\n\nWhen a live Telegram send stalls (e.g. 129 seconds as reported in #89953), every subsequent `poll-success` event triggers a reconnect drain that finds the same pending delivery already claimed by the in-flight send. The drain returns immediately, clears the `#deliveryDrainInFlight` guard, and the next poll re-triggers the cycle. This produces repeated \"already being recovered\" log entries every ~30 seconds until the stalled send completes.\n\n## Root cause\n\nTwo separate in-flight tracking mechanisms interact:\n\n1. `#deliveryDrainInFlight` in `TelegramPollingSession`: prevents concurrent drain calls, but resets as soon as the drain function returns.\n2. `entriesInProgress` in `delivery-queue-recovery.ts`: tracks individual entries claimed by live sends via `withActiveDeliveryClaim`.\n\nWhen the live send holds an entry via `withActiveDeliveryClaim` (in `deliver.ts`), the drain function quickly skips the entry (\"already being recovered\"), returns, and clears the session-level guard. The next poll success starts a fresh drain that again finds the same claimed entry.\n\n## Fix\n\n1. **`delivery-queue-recovery.ts`**: `drainPendingDeliveries` now returns a `ReconnectDrainResult` with `{ matched, drained, skippedInProgress }` counts instead of `void`.\n\n2. **`delivery-queue-runtime.ts` (Plugin SDK)**: The public `drainPendingDeliveries` export preserves its existing `Promise<void>` return contract. A new additive `drainPendingDeliveriesWithResult` function returns `Promise<ReconnectDrainResult>` for callers that need drain counts.\n\n3. **`polling-session.ts`**: Uses `drainPendingDeliveriesWithResult` to inspect drain results. When `skippedInProgress > 0 && drained === 0`, sets a 60-second cooldown (two Telegram long-poll intervals) before the next drain attempt. The wider cooldown ensures a delayed poll-success arriving after one normal 30s interval cannot re-enter the same drain.\n\nThis eliminates the repeated log noise and wasted I/O from futile drain attempts while preserving the ability to drain genuinely new entries as soon as the cooldown expires or in-flight sends complete.\n\n## Changed files\n\n| File | Change |\n|------|--------|\n| `src/infra/outbound/delivery-queue-recovery.ts` | Add `ReconnectDrainResult` type; track `skippedInProgress`/`drained` counters in `drainPendingDeliveries`; return the result |\n| `src/infra/outbound/delivery-queue.ts` | Re-export `ReconnectDrainResult` type |\n| `src/plugin-sdk/delivery-queue-runtime.ts` | Keep `drainPendingDeliveries` as `Promise<void>` (preserves SDK contract); add `drainPendingDeliveriesWithResult` returning `Promise<ReconnectDrainResult>` |\n| `extensions/telegram/src/polling-session.ts` | Import `drainPendingDeliveriesWithResult`; add 60s drain cooldown; check cooldown in `#drainPendingDeliveriesAfterReconnect`; set cooldown when all entries are in-progress |\n\n## Tests\n\n- 3 new tests in `delivery-queue.reconnect-drain.test.ts`: verify drain result reports `skippedInProgress` for claimed entries, `drained` for recovered entries, and empty result for no matches\n- 6 tests in `polling-session.test.ts` covering drain cooldown: re-entry suppressed when all in-progress, still suppressed after one long-poll interval (delayed poll-success regression at 35s), suppressed past full HTTP request timeout and expires after cooldown (delayed regression at 46s/61s), not suppressed when entries drained, not suppressed when some were drained (mixed result)\n- All 58 polling-session + 3 delivery-queue reconnect-drain tests pass\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Telegram reconnect drain re-enters on every poll-success (~30s interval) while a live send holds the pending delivery via `withActiveDeliveryClaim`, producing repeated \"already being recovered\" log messages and wasted I/O until the stall resolves (129s observed in #89953).\n- **Real environment tested:** macOS 15.5 (darwin 25.5.0), Node v26.0.0, OpenClaw main at commit 85df2e1f85 (rebased), pnpm 11.2.2.\n- **Exact steps or command run after this patch:**\n\n  Step 1. Built from the patched branch:\n  ```bash\n  pnpm install --frozen-lockfile\n  pnpm build\n  ```\n\n  Step 2. Verified cooldown, SDK contract preservation, and drain tracking in production bundle:\n  ```bash\n  grep -n \"DELIVERY_DRAIN_COOLDOWN_MS\\|deliveryDrainCooldownUntil\\|skippedInProgress\" dist/monitor-polling.runtime-DLFq4M1O.js\n  grep -n \"drainPendingDeliveries\\b\\|drainPendingDeliveriesWithResult\" dist/delivery-queue-runtime-Dv-0a9G_.js\n  ```\n\n  Step 3. Ran the polling session test suite to verify behavioral correctness:\n  ```bash\n  node scripts/run-vitest.mjs extensions/telegram/src/polling-session.test.ts --reporter=verbose\n  ```\n\n- **Evidence after fix:** terminal output from the patched build:\n\n  The 60-second cooldown guard is active in the production Telegram polling runtime:\n\n  ```console\n  $ grep -n \"DELIVERY_DRAIN_COOLDOWN_MS\\|deliveryDrainCooldownUntil\\|skippedInProgress\" dist/monitor-polling.runtime-DLFq4M1O.js\n  476:const DELIVERY_DRAIN_COOLDOWN_MS = 6e4;\n  552:#deliveryDrainCooldownUntil = 0;\n  618:if (Date.now() < this.#deliveryDrainCooldownUntil) return;\n  637:if (drainResult.skippedInProgress > 0 && drainResult.drained === 0) this.#deliveryDrainCooldownUntil = Date.now() + DELIVERY_DRAIN_COOLDOWN_MS;\n  ```\n\n  The public SDK preserves the `Promise<void>` contract via `drainPendingDeliveries`, while the new `drainPendingDeliveriesWithResult` (additive export) returns drain counts for internal callers:\n\n  ```console\n  $ grep -n \"drainPendingDeliveries\\b\\|drainPendingDeliveriesWithResult\" dist/delivery-queue-runtime-Dv-0a9G_.js\n  13:async function drainPendingDeliveries(opts) {\n  14:await drainPendingDeliveriesWithResult(opts);\n  22:async function drainPendingDeliveriesWithResult(opts) {\n  30:export { drainPendingDeliveriesWithResult as n, drainPendingDeliveries as t };\n  ```\n\n  The `@since` annotation documents `drainPendingDeliveriesWithResult` as additive:\n  ```console\n  $ grep -A2 \"Additive export\" dist/delivery-queue-runtime-Dv-0a9G_.js\n  20:* Additive export; the existing {@link drainPendingDeliveries} void contract is unchanged.\n  ```\n\n  Terminal confirms the behavioral change via the polling session test suite:\n\n  ```console\n  ✓ suppresses reconnect drain re-entry when all entries are already being recovered\n  ✓ still suppresses drain after one long-poll interval when entries remain in-flight\n  ✓ suppresses drain past the full HTTP request timeout and expires after the cooldown\n  ✓ does not suppress drain when entries were actually drained\n  ✓ does not suppress drain when some entries were successfully drained\n  ```\n\n  The delayed regression tests verify the 60s cooldown covers the worst case: the 35s test covers one normal long-poll interval, and the 46s test covers the full HTTP request timeout (45s). The 61s test verifies the cooldown correctly expires and allows new drains.\n\n- **Observed result after fix:** The compiled production code at `dist/monitor-polling.runtime-DLFq4M1O.js:476` uses a 60-second cooldown (6e4 ms), covering the full Telegram HTTP request timeout (45s) with 15s of margin. Line 618 short-circuits drain attempts during the cooldown window. Line 637 activates cooldown only when `skippedInProgress > 0 && drained === 0`, so normal drains that successfully recover entries are unaffected. The SDK contract at `dist/delivery-queue-runtime-Dv-0a9G_.js:13` preserves `drainPendingDeliveries` as `Promise<void>` for backward compatibility while exposing the additive result-bearing variant at line 22. The delayed regression test at 46s proves the cooldown survives past the HTTP request timeout, and the test at 61s proves the cooldown correctly expires.\n- **What was not tested:** Live Telegram send stall scenario requiring a real Telegram bot with network conditions that cause 129s+ stalls. The cooldown duration (60s) covers two long-poll intervals to handle delayed poll-success; production tuning may adjust it.\n\nCloses #89953\n\n",
-        "branch": "fix/telegram-reconnect-drain-reentry-89953",
-        "head_sha": "4bbf2465330eccbcec71965ed3d90ce9c35ebc92",
-        "author": "sebtardif",
-        "labels": [
-          "channel: telegram",
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/telegram/src/polling-session.test.ts",
-            "additions": 262,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/polling-session.ts",
-            "additions": 21,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/delivery-queue-recovery.ts",
-            "additions": 21,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/delivery-queue.reconnect-drain.test.ts",
-            "additions": 80,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/delivery-queue.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/delivery-queue-runtime.ts",
-            "additions": 14,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90066",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90066.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "SUCCESS": 137,
-            "SKIPPED": 24,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:90066:4618384883:2026-06-04T02:18:52Z:re_review",
-      "comment_id": "4618384883",
-      "comment_version_key": "4618384883:2026-06-04T02:18:52Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/90066#issuecomment-4618384883",
-      "repo": "openclaw/openclaw",
-      "issue_number": 90066,
-      "author": "SebTardif",
-      "author_id": 1413412,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-04T02:18:52Z",
-      "comment_updated_at": "2026-06-04T02:18:52Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(telegram): suppress reconnect drain re-entry while delivery is in-flight",
-        "body": "## Summary\n\nWhen a live Telegram send stalls (e.g. 129 seconds as reported in #89953), every subsequent `poll-success` event triggers a reconnect drain that finds the same pending delivery already claimed by the in-flight send. The drain returns immediately, clears the `#deliveryDrainInFlight` guard, and the next poll re-triggers the cycle. This produces repeated \"already being recovered\" log entries every ~30 seconds until the stalled send completes.\n\n## Root cause\n\nTwo separate in-flight tracking mechanisms interact:\n\n1. `#deliveryDrainInFlight` in `TelegramPollingSession`: prevents concurrent drain calls, but resets as soon as the drain function returns.\n2. `entriesInProgress` in `delivery-queue-recovery.ts`: tracks individual entries claimed by live sends via `withActiveDeliveryClaim`.\n\nWhen the live send holds an entry via `withActiveDeliveryClaim` (in `deliver.ts`), the drain function quickly skips the entry (\"already being recovered\"), returns, and clears the session-level guard. The next poll success starts a fresh drain that again finds the same claimed entry.\n\n## Fix\n\n1. **`delivery-queue-recovery.ts`**: `drainPendingDeliveries` now returns a `ReconnectDrainResult` with `{ matched, drained, skippedInProgress }` counts instead of `void`.\n\n2. **`delivery-queue-runtime.ts` (Plugin SDK)**: The public `drainPendingDeliveries` export preserves its existing `Promise<void>` return contract. A new additive `drainPendingDeliveriesWithResult` function returns `Promise<ReconnectDrainResult>` for callers that need drain counts.\n\n3. **`polling-session.ts`**: Uses `drainPendingDeliveriesWithResult` to inspect drain results. When `skippedInProgress > 0 && drained === 0`, sets a 60-second cooldown (two Telegram long-poll intervals) before the next drain attempt. The wider cooldown ensures a delayed poll-success arriving after one normal 30s interval cannot re-enter the same drain.\n\nThis eliminates the repeated log noise and wasted I/O from futile drain attempts while preserving the ability to drain genuinely new entries as soon as the cooldown expires or in-flight sends complete.\n\n## Changed files\n\n| File | Change |\n|------|--------|\n| `src/infra/outbound/delivery-queue-recovery.ts` | Add `ReconnectDrainResult` type; track `skippedInProgress`/`drained` counters in `drainPendingDeliveries`; return the result |\n| `src/infra/outbound/delivery-queue.ts` | Re-export `ReconnectDrainResult` type |\n| `src/plugin-sdk/delivery-queue-runtime.ts` | Keep `drainPendingDeliveries` as `Promise<void>` (preserves SDK contract); add `drainPendingDeliveriesWithResult` returning `Promise<ReconnectDrainResult>` |\n| `extensions/telegram/src/polling-session.ts` | Import `drainPendingDeliveriesWithResult`; add 60s drain cooldown; check cooldown in `#drainPendingDeliveriesAfterReconnect`; set cooldown when all entries are in-progress |\n\n## Tests\n\n- 3 new tests in `delivery-queue.reconnect-drain.test.ts`: verify drain result reports `skippedInProgress` for claimed entries, `drained` for recovered entries, and empty result for no matches\n- 6 tests in `polling-session.test.ts` covering drain cooldown: re-entry suppressed when all in-progress, still suppressed after one long-poll interval (delayed poll-success regression at 35s), suppressed past full HTTP request timeout and expires after cooldown (delayed regression at 46s/61s), not suppressed when entries drained, not suppressed when some were drained (mixed result)\n- All 58 polling-session + 3 delivery-queue reconnect-drain tests pass\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Telegram reconnect drain re-enters on every poll-success (~30s interval) while a live send holds the pending delivery via `withActiveDeliveryClaim`, producing repeated \"already being recovered\" log messages and wasted I/O until the stall resolves (129s observed in #89953).\n- **Real environment tested:** macOS 15.5 (darwin 25.5.0), Node v26.0.0, OpenClaw main at commit 85df2e1f85 (rebased), pnpm 11.2.2.\n- **Exact steps or command run after this patch:**\n\n  Step 1. Built from the patched branch:\n  ```bash\n  pnpm install --frozen-lockfile\n  pnpm build\n  ```\n\n  Step 2. Verified cooldown, SDK contract preservation, and drain tracking in production bundle:\n  ```bash\n  grep -n \"DELIVERY_DRAIN_COOLDOWN_MS\\|deliveryDrainCooldownUntil\\|skippedInProgress\" dist/monitor-polling.runtime-DLFq4M1O.js\n  grep -n \"drainPendingDeliveries\\b\\|drainPendingDeliveriesWithResult\" dist/delivery-queue-runtime-Dv-0a9G_.js\n  ```\n\n  Step 3. Ran the polling session test suite to verify behavioral correctness:\n  ```bash\n  node scripts/run-vitest.mjs extensions/telegram/src/polling-session.test.ts --reporter=verbose\n  ```\n\n- **Evidence after fix:** terminal output from the patched build:\n\n  The 60-second cooldown guard is active in the production Telegram polling runtime:\n\n  ```console\n  $ grep -n \"DELIVERY_DRAIN_COOLDOWN_MS\\|deliveryDrainCooldownUntil\\|skippedInProgress\" dist/monitor-polling.runtime-DLFq4M1O.js\n  476:const DELIVERY_DRAIN_COOLDOWN_MS = 6e4;\n  552:#deliveryDrainCooldownUntil = 0;\n  618:if (Date.now() < this.#deliveryDrainCooldownUntil) return;\n  637:if (drainResult.skippedInProgress > 0 && drainResult.drained === 0) this.#deliveryDrainCooldownUntil = Date.now() + DELIVERY_DRAIN_COOLDOWN_MS;\n  ```\n\n  The public SDK preserves the `Promise<void>` contract via `drainPendingDeliveries`, while the new `drainPendingDeliveriesWithResult` (additive export) returns drain counts for internal callers:\n\n  ```console\n  $ grep -n \"drainPendingDeliveries\\b\\|drainPendingDeliveriesWithResult\" dist/delivery-queue-runtime-Dv-0a9G_.js\n  13:async function drainPendingDeliveries(opts) {\n  14:await drainPendingDeliveriesWithResult(opts);\n  22:async function drainPendingDeliveriesWithResult(opts) {\n  30:export { drainPendingDeliveriesWithResult as n, drainPendingDeliveries as t };\n  ```\n\n  The `@since` annotation documents `drainPendingDeliveriesWithResult` as additive:\n  ```console\n  $ grep -A2 \"Additive export\" dist/delivery-queue-runtime-Dv-0a9G_.js\n  20:* Additive export; the existing {@link drainPendingDeliveries} void contract is unchanged.\n  ```\n\n  Terminal confirms the behavioral change via the polling session test suite:\n\n  ```console\n  ✓ suppresses reconnect drain re-entry when all entries are already being recovered\n  ✓ still suppresses drain after one long-poll interval when entries remain in-flight\n  ✓ suppresses drain past the full HTTP request timeout and expires after the cooldown\n  ✓ does not suppress drain when entries were actually drained\n  ✓ does not suppress drain when some entries were successfully drained\n  ```\n\n  The delayed regression tests verify the 60s cooldown covers the worst case: the 35s test covers one normal long-poll interval, and the 46s test covers the full HTTP request timeout (45s). The 61s test verifies the cooldown correctly expires and allows new drains.\n\n- **Observed result after fix:** The compiled production code at `dist/monitor-polling.runtime-DLFq4M1O.js:476` uses a 60-second cooldown (6e4 ms), covering the full Telegram HTTP request timeout (45s) with 15s of margin. Line 618 short-circuits drain attempts during the cooldown window. Line 637 activates cooldown only when `skippedInProgress > 0 && drained === 0`, so normal drains that successfully recover entries are unaffected. The SDK contract at `dist/delivery-queue-runtime-Dv-0a9G_.js:13` preserves `drainPendingDeliveries` as `Promise<void>` for backward compatibility while exposing the additive result-bearing variant at line 22. The delayed regression test at 46s proves the cooldown survives past the HTTP request timeout, and the test at 61s proves the cooldown correctly expires.\n- **What was not tested:** Live Telegram send stall scenario requiring a real Telegram bot with network conditions that cause 129s+ stalls. The cooldown duration (60s) covers two long-poll intervals to handle delayed poll-success; production tuning may adjust it.\n\nCloses #89953\n\n",
-        "branch": "fix/telegram-reconnect-drain-reentry-89953",
-        "head_sha": "4bbf2465330eccbcec71965ed3d90ce9c35ebc92",
-        "author": "sebtardif",
-        "labels": [
-          "channel: telegram",
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/telegram/src/polling-session.test.ts",
-            "additions": 262,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/polling-session.ts",
-            "additions": 21,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/delivery-queue-recovery.ts",
-            "additions": 21,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/delivery-queue.reconnect-drain.test.ts",
-            "additions": 80,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/delivery-queue.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/delivery-queue-runtime.ts",
-            "additions": 14,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90066",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90066.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "SUCCESS": 137,
-            "SKIPPED": 24,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3358,
+    "total_ms": 4578,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 422
+        "ms": 545
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2593
+        "ms": 1193
       },
       {
         "name": "classify_commands",
-        "ms": 5
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 313
+        "ms": 2812
       },
       {
         "name": "append_ledger",
