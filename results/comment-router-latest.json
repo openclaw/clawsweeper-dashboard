@@ -1,19 +1,17 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-04T03:41:42.306Z",
+  "generated_at": "2026-06-04T03:42:04.206Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-04T00:41:40.303Z",
+  "since": "2026-06-04T00:42:02.036Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    85254
+    90144
   ],
-  "comment_ids": [
-    4561768130
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -33,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:85254:4515769820:2026-06-04T03:41:24Z:clawsweeper_auto_repair",
-      "comment_id": "4515769820",
-      "comment_version_key": "4515769820:2026-06-04T03:41:24Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/85254#issuecomment-4515769820",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:90144:4618695969:2026-06-04T03:41:59Z:clawsweeper_auto_repair",
+      "comment_id": "4618695969",
+      "comment_version_key": "4618695969:2026-06-04T03:41:59Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90144#issuecomment-4618695969",
       "repo": "openclaw/openclaw",
-      "issue_number": 85254,
+      "issue_number": 90144,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-22T06:27:22Z",
-      "comment_updated_at": "2026-06-04T03:41:24Z",
+      "comment_created_at": "2026-06-04T03:32:36Z",
+      "comment_updated_at": "2026-06-04T03:41:59Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -54,41 +52,123 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=84c6b84d1ccfe8456bf110f968aa489339d9fed2)",
-      "review_summary": "The PR forwards prepared `manifestPlugins` through the runtime provider model-id normalization chain, adds focused unit coverage, and adds a standalone proof script.\n\nPR surface: Source +5, Tests +32, Other +271. Total +308 across 5 files.\n\nReproducibility: yes. by source inspection: current main drops `manifestPlugins` before the runtime normalizer, and the added proof script watches `<stateDir>/plugins` even though current installed-plugin-index reads use SQLite. I did not run tests because this is a read-only review.",
-      "review_followup": "- [P1] Not a repair-lane candidate because the remaining blocker is corrected contributor real-behavior proof for an external PR branch.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=006d0a33c32e21b593b03036d48d6e4f9aee6959)",
+      "review_summary": "The PR routes direct-pending subagent completion announcements into the requester system-event queue, adds a `durable_queue` delivery path, and updates harness/Codex durability tests.\n\nPR surface: Source +57, Tests +299. Total +356 across 6 files.\n\nReproducibility: yes. at source level: current main returns `completion_handoff_pending` for the non-terminal direct announce path after a non-streaming requester, and the PR adds deterministic tests for that path. I did not run tests because this review is read-only.",
+      "review_followup": "- [P1] A maintainer or contributor needs to revise the wake semantics and add real behavior proof; automation should not claim the external contributor's environment proof for them.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "84c6b84d1ccfe8456bf110f968aa489339d9fed2",
+      "expected_head_sha": "006d0a33c32e21b593b03036d48d6e4f9aee6959",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(announce): durable in-process queue fallback for direct-pending handoffs",
+        "body": "## Summary\n\nWhen `deliverSubagentAnnouncement` direct-dispatch returns a non-terminal status (`accepted`/`started`/`in_flight`) and the requester parent is not actively streaming (yielded, queued, compaction-prep, or tool-result truncated), today's behaviour returns\n\n```ts\n{ delivered: false, reason: \"completion_handoff_pending\", error: \"completion agent handoff is still pending\" }\n```\n\n— which surfaces as the dominant signature in `openclaw tasks audit --json` `delivery_failed` findings: the requester parent never receives a child-completion event that already arrived in the gateway. From inside the requester, the symptom is a subagent that appears `active (waiting on N children)` with `pendingDescendants > 0` indefinitely after the envelope's `endedAt` already fired, because the completion event can't deliver back.\n\nThis PR routes those cases into the requester's existing **in-process durable system-event inbox** instead, keyed by the announce idempotency key. The inbox is the same primitive used today by jobs, hooks, restart sentinels, ACP child spawns, monitor events, and the group/channel completion path in task-registry. It is idempotent on `(text, contextKey, deliveryContext)`, bounded at 20 events per session, and drained on the parent's next turn-start.\n\n## What changed\n\n- **`SubagentDeliveryPath` union** in `subagent-announce-dispatch.ts` extended with a new `\"durable_queue\"` literal (with doc comment).\n- **`subagent-announce-delivery.ts`**: the `directAnnounceStillPending` give-up branch (when `expectsCompletionMessage && expectedMediaUrls.length === 0 && !requiresMessageToolDelivery`) now calls `enqueueSystemEvent` with `contextKey: \"subagent-announce:${params.directIdempotencyKey}\"` and `deliveryContext: requesterSessionOrigin ?? completionExternalFallbackOrigin ?? directOrigin`, returning `{ delivered: true, path: \"durable_queue\" }`. Existing `directIdempotencyKey` is reused — no new param threading.\n- **Safety net**: if `enqueueSystemEvent` itself throws, the original give-up payload (`{ delivered: false, path: \"direct\", reason: \"completion_handoff_pending\", error: ... }`) is returned so today's retry/give-up bookkeeping remains the floor.\n- **`isDurableAgentHarnessCompletionDelivery`** in `plugin-sdk/agent-harness-task-runtime.ts` now treats `\"durable_queue\"` as durable, preventing the Codex native-subagent monitor from looping retry against an inbox that already idempotently holds the event.\n\n## Tail-risk: `SubagentDeliveryPath` consumers\n\nThree real consumers; all safe:\n\n| Consumer | Site | Disposition |\n|---|---|---|\n| `subagent-registry-lifecycle.ts` | `if (delivery.path === \"none\")` gated on `!delivered` | Safe — `durable_queue` returns `delivered:true` |\n| `subagent-announce.ts` | `if (!delivery.delivered && delivery.path === \"direct\" && delivery.error)` | Safe — gated on `!delivered` |\n| `plugin-sdk/agent-harness-task-runtime.ts` (`isDurableAgentHarnessCompletionDelivery`) | Returned `false` for any non-`steered`/`direct` path | **Fixed** — extended + new test |\n\n## Tests\n\n- **5 unit tests** in `subagent-announce-delivery.test.ts` — covers the new branch firing, idempotency on duplicate fires, no-fallback-on-active-stream (steered path wins), no-fallback-with-media (existing direct/media path preserved), and the result-envelope shape downstream consumers see.\n- **1 integration test** in `embedded-agent-runner/sessions-yield.orchestration.test.ts` — reproduces the failure class end-to-end: yielded parent → `runEmbeddedAgent` returns `stopReason:\"end_turn\"` → `isEmbeddedAgentRunActive(parentSessionId)` returns `false` → `deliverSubagentAnnouncement` with stubbed `callGateway` returning `accepted` → asserts `path:\"durable_queue\"`, inbox holds the trigger, `drainSystemEvents` returns it, post-drain inbox empty.\n- **1 unit test** in `agent-harness-task-runtime.test.ts` — asserts `durable_queue` is treated as durable and that `delivered:false` still fails fast.\n\n**Targeted suite (5 files): 150/150 pass.**\n\n```\nsrc/agents/subagent-announce-delivery.test.ts          97/97  (92 baseline + 5 new)\nsrc/agents/subagent-announce-dispatch.test.ts          11/11  (no regression)\nsrc/agents/subagent-registry-lifecycle.test.ts         30/30  (no regression)\nsrc/agents/embedded-agent-runner/sessions-yield.orchestration.test.ts\n                                                         5/5  (4 baseline + 1 new integration)\nsrc/plugin-sdk/agent-harness-task-runtime.test.ts        7/7  (6 baseline + 1 new)\n```\n\n**Full unit lane (`pnpm test:unit`)**: 10071 passed across 1055 files. The 5 failures observed are in `src/commands/status.summary.runtime.test.ts` (3) and `src/agents/tools/subagents-tool.test.ts` (2) — both of which fail identically on a clean unpatched main HEAD (verified via stash + re-run). Cause appears to be a test-isolation issue where those tests load the host's `~/.openclaw/openclaw.json` rather than a sandboxed config; not related to this patch.\n\n`pnpm tsgo:core`, `pnpm tsgo:test:src`, `pnpm exec oxfmt --check` (6 files), `pnpm exec oxlint` (6 files): all clean.\n\n## Not run\n\n- `pnpm test:e2e`, `pnpm test:live`, `pnpm test:docker:*` — require live provider credentials and/or docker daemon access. The `not_streaming` failure class is exercised deterministically by the integration repro; patch surface is one branch in one direct-dispatch function plus one downstream consumer. Happy to run any of these on request from a maintainer who has the live secrets.\n\n## Out of scope (deliberate)\n\n- The \"recovery pointer\" enrichment for `delivery_failed` audit findings (so the Brad-side watchdog could attempt automated retry) is held for a follow-up PR after this core fix lands. Filed mentally; not in this diff.\n\n## Origin / context\n\nI wrote and operated a Brad-side audit watchdog (alert-only, 3-minute cadence) that has been catching every fresh `delivery_failed` incident on this side over the past day. The watchdog will stay alert-only and be retired after this fix is deployed and proven stable across multiple subagent flows. This PR is the upstream-side root-cause fix corresponding to the watchdog's mitigation surface.\n",
+        "branch": "morpheus/announce-durable-queue-fallback-v2",
+        "head_sha": "006d0a33c32e21b593b03036d48d6e4f9aee6959",
+        "author": "bradfreels",
+        "labels": [
+          "agents",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner/sessions-yield.orchestration.test.ts",
+            "additions": 124,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce-delivery.test.ts",
+            "additions": 156,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce-delivery.ts",
+            "additions": 41,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce-dispatch.ts",
+            "additions": 14,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/agent-harness-task-runtime.test.ts",
+            "additions": 21,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/agent-harness-task-runtime.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90144",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90144.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 28,
+            "SUCCESS": 131,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2855,
+    "total_ms": 2378,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1988
+        "ms": 217
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1940
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 853
+        "ms": 193
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
