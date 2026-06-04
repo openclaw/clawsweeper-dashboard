@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-04T20:07:32.002Z",
+  "generated_at": "2026-06-04T20:07:32.927Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-04T17:07:29.165Z",
+  "since": "2026-06-04T17:07:32.292Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
@@ -42,8 +42,8 @@
       "author": "SebTardif",
       "author_id": 1413412,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-04T20:06:04Z",
-      "comment_updated_at": "2026-06-04T20:06:04Z",
+      "comment_created_at": "2026-06-04T20:06:03Z",
+      "comment_updated_at": "2026-06-04T20:06:03Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -63,112 +63,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(telegram): suppress reconnect drain re-entry while delivery is in-flight",
-        "body": "## Summary\n\nWhen a live Telegram send stalls (e.g. 129 seconds as reported in #89953), every subsequent `poll-success` event triggers a reconnect drain that finds the same pending delivery already claimed by the in-flight send. The drain returns immediately, clears the `#deliveryDrainInFlight` guard, and the next poll re-triggers the cycle. This produces repeated \"already being recovered\" log entries every ~30 seconds until the stalled send completes.\n\n## Root cause\n\nTwo separate in-flight tracking mechanisms interact:\n\n1. `#deliveryDrainInFlight` in `TelegramPollingSession`: prevents concurrent drain calls, but resets as soon as the drain function returns.\n2. `entriesInProgress` in `delivery-queue-recovery.ts`: tracks individual entries claimed by live sends via `withActiveDeliveryClaim`.\n\nWhen the live send holds an entry via `withActiveDeliveryClaim` (in `deliver.ts`), the drain function quickly skips the entry (\"already being recovered\"), returns, and clears the session-level guard. The next poll success starts a fresh drain that again finds the same claimed entry.\n\n## Fix\n\nTies reconnect drain suppression to the active delivery claim lifecycle instead of a time-based cooldown:\n\n1. **`delivery-queue-recovery.ts`**: `drainPendingDeliveries` now returns `skippedEntryIds` in the `ReconnectDrainResult` so callers know exactly which entries were skipped due to active claims. New `isRecoveryEntryInProgress(entryId)` export lets callers check whether a specific entry's claim is still held.\n\n2. **`delivery-queue.ts` / `delivery-queue-runtime.ts`**: Re-exports `isRecoveryEntryInProgress` through the barrel and plugin SDK.\n\n3. **`polling-session.ts`**: Replaces the time-based `#deliveryDrainCooldownUntil` with `#deliveryDrainSkippedEntryIds`. When drain returns all-skipped, stores the skipped entry IDs. On each subsequent `poll-success`, checks if any of those entries are still in-progress via `isRecoveryEntryInProgress`. Drain stays suppressed as long as every skipped entry's claim is still held, and resumes immediately once any claim is released (delivery completes or fails).\n\nThis eliminates the 60s/129s timing gap entirely: suppression is active exactly as long as the stall lasts, regardless of duration. No time-based constant to tune.\n\n## Changed files\n\n| File | Change |\n|------|--------|\n| `src/infra/outbound/delivery-queue-recovery.ts` | Add `isRecoveryEntryInProgress`; add `skippedEntryIds` to `ReconnectDrainResult`; track skipped IDs in drain loop |\n| `src/infra/outbound/delivery-queue.ts` | Re-export `isRecoveryEntryInProgress` |\n| `src/plugin-sdk/delivery-queue-runtime.ts` | Re-export `isRecoveryEntryInProgress` from plugin SDK |\n| `extensions/telegram/src/polling-session.ts` | Import `isRecoveryEntryInProgress`; replace time-based cooldown with claim-based suppression |\n\n## Tests\n\n- `delivery-queue.reconnect-drain.test.ts`: updated test verifies `skippedEntryIds` contains the correct IDs and `isRecoveryEntryInProgress` reflects claim state (true while held, false after released)\n- `polling-session.test.ts` (3 updated tests):\n  - Suppresses drain while claims are active (mocks `isRecoveryEntryInProgress` returning true)\n  - Suppresses across long-poll intervals as long as claims persist\n  - **Resumes drain immediately once claim is released** (mocks `isRecoveryEntryInProgress` switching from true to false, verifies second drain fires)\n  - Does not suppress when entries were actually drained\n- All 19 reconnect drain tests and 58 polling session tests pass\n\n## Real behavior proof\n\n- **Behavior addressed:** Telegram reconnect drain re-enters on every poll-success (~30s interval) while a live send holds the pending delivery via `withActiveDeliveryClaim`, producing repeated \"already being recovered\" log messages and wasted I/O until the stall resolves (129s observed in #89953). The fix ties suppression to the delivery claim lifecycle so drain is suppressed for exactly as long as the stall lasts.\n- **Real environment tested:** macOS 15.5 (darwin 25.5.0), Node v26.0.0, pnpm 11.2.2, OpenClaw main rebased at dca200ade5.\n- **Exact steps or command run after this patch:**\n\n  Step 1. Ran the full delivery queue reconnect drain test suite:\n  ```bash\n  npx vitest run src/infra/outbound/delivery-queue.reconnect-drain.test.ts --reporter=verbose\n  ```\n\n  Step 2. Ran the telegram polling session test suite:\n  ```bash\n  npx vitest run extensions/telegram/src/polling-session.test.ts --reporter=verbose\n  ```\n\n  Step 3. Verified the claim-based suppression replaces the time-based cooldown in the source:\n  ```bash\n  grep -n \"deliveryDrainSkippedEntryIds\\|isRecoveryEntryInProgress\\|deliveryDrainCooldownUntil\\|DELIVERY_DRAIN_COOLDOWN_MS\" extensions/telegram/src/polling-session.ts\n  ```\n\n- **Evidence after fix:**\n\n  The delivery queue reconnect drain tests verify that `skippedEntryIds` is populated with the correct IDs and that `isRecoveryEntryInProgress` transitions from true (while claimed) to false (after release):\n\n  ```console\n  $ npx vitest run src/infra/outbound/delivery-queue.reconnect-drain.test.ts\n   ✓ 19 tests passed\n  ```\n\n  The polling session tests verify end-to-end claim-based suppression behavior:\n\n  ```console\n  $ npx vitest run extensions/telegram/src/polling-session.test.ts\n   ✓ 58 tests passed\n  ```\n\n  The source confirms the time-based cooldown is replaced by claim-based tracking:\n\n  ```console\n  $ grep -n \"deliveryDrainSkippedEntryIds\\|isRecoveryEntryInProgress\\|deliveryDrainCooldownUntil\\|DELIVERY_DRAIN_COOLDOWN_MS\" extensions/telegram/src/polling-session.ts\n  5:  isRecoveryEntryInProgress,\n  309:  #deliveryDrainSkippedEntryIds: string[] = [];\n  422:    this.#deliveryDrainSkippedEntryIds.length > 0 &&\n  423:    this.#deliveryDrainSkippedEntryIds.every(isRecoveryEntryInProgress)\n  427:    this.#deliveryDrainSkippedEntryIds = [];\n  450:      this.#deliveryDrainSkippedEntryIds = drainResult.skippedEntryIds;\n  ```\n\n  No `DELIVERY_DRAIN_COOLDOWN_MS` or `deliveryDrainCooldownUntil` remain in the polling session.\n\n- **Observed result after fix:** Suppression is now deterministic and stall-duration-independent. When a 129s stall occurs, drain is suppressed for exactly 129 seconds (until `isRecoveryEntryInProgress` returns false for the stalled entry). When a 10s stall occurs, suppression lasts exactly 10 seconds. The test \"resumes drain once the active delivery claim is released\" proves this: it mocks `isRecoveryEntryInProgress` transitioning from true to false and verifies the second drain fires on the next poll-success.\n- **What was not tested:** Production Telegram reconnect with a live stalled send. The stall scenario is modeled through unit tests with mocked claim state transitions, which exercise the exact code path that runs in production.\n\nCloses #89953",
-        "branch": "fix/telegram-reconnect-drain-reentry-89953",
-        "head_sha": "19206f497b39ea7e1ca74262094dadd1033d1a41",
-        "author": "sebtardif",
-        "labels": [
-          "channel: telegram",
-          "size: M",
-          "triage: mock-only-proof",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/telegram/src/polling-session.test.ts",
-            "additions": 278,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/polling-session.ts",
-            "additions": 29,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/delivery-queue-recovery.ts",
-            "additions": 35,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/delivery-queue.reconnect-drain.test.ts",
-            "additions": 88,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/outbound/delivery-queue.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/delivery-queue-runtime.ts",
-            "additions": 17,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90066",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90066.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 137,
-            "SKIPPED": 25,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3146,
+    "total_ms": 2786,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 646
+        "ms": 621
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2176
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 310
+        "ms": 2151
       },
       {
         "name": "append_ledger",
