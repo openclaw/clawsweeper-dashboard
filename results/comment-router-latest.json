@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-04T05:05:10.981Z",
+  "generated_at": "2026-06-04T05:05:06.276Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-04T02:05:09.179Z",
+  "since": "2026-06-04T02:05:05.973Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    64832
+    63216
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 6,
-  "commands_seen": 1,
+  "scanned_comments": 11,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,156 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:64832:4323776895:2026-06-04T05:05:02Z:clawsweeper_needs_human",
-      "comment_id": "4323776895",
-      "comment_version_key": "4323776895:2026-06-04T05:05:02Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/64832#issuecomment-4323776895",
-      "repo": "openclaw/openclaw",
-      "issue_number": 64832,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-27T02:26:14Z",
-      "comment_updated_at": "2026-06-04T05:05:02Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=1b4012f73154c2bb1df6648ca5d42f02dd00ccff)",
-      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +152, Tests +684. Total +836 across 8 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
-      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "1b4012f73154c2bb1df6648ca5d42f02dd00ccff",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): archive orphaned isolated-session transcripts after rotation",
-        "body": "## Summary\n\nComplement to #65203. That PR cleared `sessionFile` on rotation so each `isolatedSession: true` run writes to a fresh path — but the *prior* transcript file at the old path is now orphaned: nothing in the store references it, and `cleanupArchivedSessionTranscripts` only scans for the `.reset.<ts>` suffix. Orphans accumulate forever.\n\nThis PR renames each prior transcript to `<file>.reset.<ts>` as part of the same rotation transaction, so it re-enters the retention window.\n\n## Change\n\nTwo helpers in `src/cron/isolated-agent/session.ts`:\n\n- `capturePriorIsolatedEntryForArchival` — snapshot prior `(sessionId, sessionFile)` before persist.\n- `archivePriorIsolatedEntryAfterRotation` — rename to `<file>.reset.<ts>` after persist, with `reason: \"reset\"` (honors `maintenance.resetArchiveRetentionMs`). Uses the existing `archiveRemovedSessionTranscripts` primitive.\n\nWired into both `forceNew: true` call sites:\n\n- **`src/infra/heartbeat-runner.ts`** — heartbeat rotation path. Also splits the existing `:heartbeat:heartbeat` suffix-collapse archival into its own call with `reason: \"deleted\"` so the two archival paths get their correct retention classes (`pruneAfterMs` vs `resetArchiveRetentionMs`).\n- **`src/cron/isolated-agent/run-session-state.ts`** — cron `createPersistCronSessionEntry` closure with a once-flag (persist is called multiple times per run: pre-run, skills refresh, finalize). Covers the `cron:` prefix case (`runSessionKey = ...:run:<id>`), where the session-reaper only archives the run-key entry on retention — not the prior agentSessionKey transcript. Without this path the cron orphan is never archived.\n\nTests lock in: capture timing (BEFORE persist), once-flag, cron-run-key path, archival failure handling, and a heartbeat-runner sandbox test that seeds a real prior transcript and asserts the rename.\n\n## Forensic evidence\n\nxlab.now deployment running `clankertron:2026.4.10` (pre-#65203) with a manual `sessionFile` clear as workaround: five heartbeat runs over seven hours each wrote to a fresh transcript, but five orphaned transcripts accumulated on disk (300 KB – 1.3 MB each). `cleanupArchivedSessionTranscripts` cannot see them — they don't carry the `.reset.*` suffix. At ~4 runs/hour × ~400 KB this is roughly 38 MB/day of unsweepable growth per deployment. This PR closes that gap at the rotation boundary.\n\n## Scope boundary\n\n- No changes to `archiveRemovedSessionTranscripts`, `cleanupArchivedSessionTranscripts`, or any archival primitive — reuses existing machinery from a new call site.\n- No new retention knobs.\n- No changes to the pure-reuse (`!isNewSession`) path.\n- `restrictToStoreDir: true` preserved throughout.\n\n## Safety\n\n- Archival is wrapped in `try/catch` at each call site; failure logs a warning but does not fail the run.\n- The `referencedSessionIds` safety guard inside `archiveRemovedSessionTranscripts` prevents archiving any sessionId still pointed at by another store entry. Callers compute this set from the *post-update* store.\n\n## Prior state of this PR\n\nOriginally scoped as the root-cause fix for `sessionFile` persistence. #65203 landed that root-cause fix independently on 2026-04-12 (the `sessionFile: undefined` line in `resolveCronSession`). This PR has been rebased on top of #65203 and narrowed to the archival flow only — the diff no longer contains the `sessionFile: undefined` change, only the orphan-cleanup machinery that neither #65203 nor any current code path provides.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
-        "branch": "fix/isolated-session-transcript-rotation",
-        "head_sha": "1b4012f73154c2bb1df6648ca5d42f02dd00ccff",
-        "author": "alexander-applyinnovations",
-        "labels": [
-          "stale",
-          "size: L",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🌊 off-meta tidepool",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state"
-        ],
-        "files": [
-          {
-            "path": "src/cron/isolated-agent/run-session-state.test.ts",
-            "additions": 345,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run-session-state.ts",
-            "additions": 42,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run.test-harness.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/session.test.ts",
-            "additions": 225,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/session.ts",
-            "additions": 65,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/heartbeat-runner.isolated-key-stability.test.ts",
-            "additions": 115,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/heartbeat-runner.ts",
-            "additions": 42,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-64832",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-64832.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 53,
-          "counts": {
-            "FAILURE": 2,
-            "CANCELLED": 1,
-            "SKIPPED": 13,
-            "SUCCESS": 37
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "security-fast:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "security-fast:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1727,
+    "total_ms": 513,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 345
+        "ms": 292
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1442
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 199
+        "ms": 210
       },
       {
         "name": "append_ledger",
