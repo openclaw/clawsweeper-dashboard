@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-04T06:33:58.916Z",
+  "generated_at": "2026-06-04T06:34:36.648Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-04T03:33:56.119Z",
+  "since": "2026-06-04T03:34:36.110Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4619627514
   ],
-  "status_comment_id": 4619627791,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-04T06:33:18Z",
       "comment_updated_at": "2026-06-04T06:33:18Z",
-      "status_comment_id": 4619627791,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,135 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-04T06:34:00.131Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 86806
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-04T06:34:01.540Z",
-          "response_comment_id": "4619514906",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: recover crashed main sessions via lock-file detection fallback",
-        "body": "## Summary\n\nAfter an unclean gateway crash, `cleanStaleLockFiles()` may find lock files from the previous process but classify them as non-stale (e.g. the orphan-payload grace window has not elapsed). When `cleaned.length === 0`, the existing `markRestartAbortedMainSessionsFromLocks()` never runs, leaving `status: \"running\"` sessions unrecovered on restart.\n\nThis PR drives the crash fallback from an explicit **safe-to-recover** lock classification emitted by the cleanup owner, instead of having Gateway infer crash residue from remaining locks with mtime heuristics.\n\n### What changed\n\n- `src/agents/session-write-lock.ts`: `cleanStaleLockFiles()` now returns a `safeToRecover` array and accepts a `startupMode` parameter. In startup mode, stale locks with a dead/absent owner and no report-only stale reasons are classified as safe to recover, **including** orphan-payload locks within the grace window — at Gateway startup no live owner can be writing metadata, so these are crash residue. Outside startup mode, grace-window-protected orphan locks are excluded to avoid false positives during runtime.\n- `src/agents/main-session-restart-recovery.ts`: `markCrashedMainSessionsFromRemainingLocks()` accepts `safeToRecoverLocks` instead of `remainingLocks` + `gatewayStartedAt`. The marker trusts the cleanup classification — no mtime heuristics or `pidAlive` checks.\n- `src/gateway/server-startup-post-attach.ts`: `cleanupStaleSessionLocks()` calls `cleanStaleLockFiles` with `startupMode: true` and passes `result.safeToRecover` to the crash marker when non-empty. Removed `gatewayStartedAt` parameter.\n- Tests: Regression coverage for startup-mode classification, grace window exclusion outside startup mode, report-only stale reasons, and `removeStale: false` dead-PID classification.\n\n### Safety\n\n- The crash marker only acts on locks that `cleanStaleLockFiles` explicitly classified as safe to recover — no heuristic inference.\n- Young unknown-owner locks within the grace window are only classified as `safeToRecover` in `startupMode`, where no live owner can exist. Outside startup mode, they are excluded.\n- Live-owner locks (`pidAlive === true`) are never included because they are not stale.\n- Report-only stale locks (`too-old`, `hold-exceeded`) are excluded because the owner may still be working.\n\n### ClawSweeper P1 resolution\n\n| P1 finding | Resolution |\n|---|---|\n| Drive crash fallback from real cleanup classifications | Marker consumes `safeToRecover` from `cleanStaleLockFiles()` with `startupMode: true` — no mtime heuristics |\n| Keep young unknown-owner locks out of recovery | `safeToRecover` excludes grace-window orphan locks outside `startupMode`; in startup mode, no live owner can exist so they are correctly classified as crash residue |\n| Replace simulated cleanup proof | Proof below uses real `cleanStaleLockFiles()` + `markCrashedMainSessionsFromRemainingLocks()` through the production startup contract |\n| Make crash fallback reachable from startup cleanup | `startupMode: true` is passed in `cleanupStaleSessionLocks`, so `safeToRecover` is non-empty when orphan locks exist in the grace window |\n\n## Real Behavior Proof\n\n**Behavior addressed**: Gateway crash → `cleanStaleLockFiles(startupMode: true)` finds orphan-payload lock files within the grace window → `cleaned.length === 0` but `safeToRecover.length > 0` → crash fallback marks matching running sessions for recovery.\n\n**Real environment tested**: Linux (Ubuntu), Node.js 22.22, real OpenClaw checkout, branch `fix/crash-session-recovery-80254`.\n\n**Exact steps or command run after this patch**:\n```bash\n# Real cleanup/startup path proof using actual cleanStaleLockFiles + marker\nnode --import tsx scripts/crash-recovery-proof.mjs\n```\n\n**Evidence after fix**:\n```\n=== Crash Recovery Proof ===\n\n1. Setting up pre-crash state: running session + lock file\n   Lock: /tmp/openclaw-crash-proof-.../crash-test-session.jsonl.lock (orphan, 5s old, within grace window)\n   Session: agent:main:main (status: running)\n\n2. cleanStaleLockFiles(startupMode: undefined) — runtime behavior\n   cleaned: 0\n   safeToRecover: 0\n   Lock still exists: true\n   → Runtime correctly preserves orphan lock in grace window, safeToRecover empty\n\n3. cleanStaleLockFiles(startupMode: true) — startup behavior\n   cleaned: 0\n   safeToRecover: 1\n   safeToRecover[0]: pidAlive=false, stale=true, reasons=missing-pid,invalid-createdAt\n\n4b. markCrashedMainSessionsFromRemainingLocks (safeToRecover path)\n   marked: 1\n   skipped: 0\n\n5. Verify session store after recovery\n   agent:main:main: status=running, abortedLastRun=true\n\n✓ PASS: Orphan lock in grace window → safeToRecover → abortedLastRun=true via startup crash fallback\n\n6. Lock file preserved (not deleted): true\n```\n\n**Vitest regression suite**:\n```bash\nOPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs \\\n  src/agents/main-session-restart-recovery.test.ts \\\n  src/agents/session-write-lock.test.ts \\\n  src/gateway/server-startup-post-attach.test.ts \\\n  --run --reporter=verbose\n```\n\n```\n src/agents/session-write-lock.test.ts\n  ✓ classifies dead-PID lock past grace window as cleaned (not safeToRecover)\n  ✓ classifies orphan lock past grace window as cleaned\n  ✓ does not classify young orphan locks as safeToRecover outside startup mode\n  ✓ classifies young orphan locks as safeToRecover in startup mode\n  ✓ includes dead-PID lock in safeToRecover when removeStale is false\n\n src/agents/main-session-restart-recovery.test.ts\n  ✓ marks running sessions from safe-to-recover locks at post-crash startup\n  ✓ trusts cleanup classification: live-owner locks never appear in safeToRecoverLocks\n  ✓ does not mark sessions when young unknown-owner lock is preserved by grace window\n\n src/gateway/server-startup-post-attach.test.ts\n  ✓ calls crash marker with safeToRecover locks when cleanup finds non-removable dead-owner locks\n  ✓ cleanStaleLockFiles called with startupMode: true\n\n Test Files  3 passed (3)\n      Tests  182 passed (182)\n```\n\n**Observed result after fix**:\n- `cleanStaleLockFiles(removeStale: true, startupMode: true)` with orphan lock in grace window → `safeToRecover` contains lock → crash fallback marks `abortedLastRun=true` ✓\n- `cleanStaleLockFiles(removeStale: true)` without startupMode with orphan lock → `safeToRecover` empty → no false marks ✓\n- `cleanStaleLockFiles(removeStale: true)` with dead-PID lock → lock removed, enters `cleaned`, `safeToRecover` empty ✓\n- `cleanupStaleSessionLocks` passes `startupMode: true` to `cleanStaleLockFiles` ✓\n- Real helper proof: orphan lock → `safeToRecover` → `markCrashedMainSessionsFromRemainingLocks` → `abortedLastRun=true` ✓\n\n**What was not tested**: Live Gateway crash/restart end-to-end (starting `node dist/index.js gateway`, killing it, and restarting). The proof script exercises the actual cleanup + marker functions through the real production code path with `startupMode: true`, which is the same path `cleanupStaleSessionLocks` calls during Gateway startup.\n\nFixes #80254\n",
-        "branch": "fix/crash-session-recovery-80254",
-        "head_sha": "a51a508d7ceefc4132dcb451d02ad22fc61fd4b9",
-        "author": "tanshanshan",
-        "labels": [
-          "gateway",
-          "agents",
-          "size: L",
-          "proof: supplied",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/main-session-restart-recovery.test.ts",
-            "additions": 227,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/main-session-restart-recovery.ts",
-            "additions": 54,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/session-write-lock.test.ts",
-            "additions": 104,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/session-write-lock.ts",
-            "additions": 23,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-startup-post-attach.test.ts",
-            "additions": 53,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-startup-post-attach.ts",
-            "additions": 22,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86806",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86806.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "SUCCESS": 132,
-            "SKIPPED": 28,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-fast-contracts-plugins-a:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-fast-contracts-plugins-a:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 6183,
+    "total_ms": 2060,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 624
+        "ms": 524
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2158
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 3371
+        "ms": 1522
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
