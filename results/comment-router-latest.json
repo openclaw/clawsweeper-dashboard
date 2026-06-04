@@ -1,20 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-04T01:35:26.539Z",
+  "generated_at": "2026-06-04T01:35:58.641Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T22:35:24.298Z",
+  "since": "2026-06-03T22:35:58.124Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     82972
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4469638884
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
+  "scanned_comments": 1,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -61,102 +63,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(discord): scope message-tool schema groups to advertised actions",
-        "body": "## Summary\n\nFixes #81484 — Discord guild reply regression where a single `@bot ping` produced malformed `action=\"send\"` payloads (missing `message`) and repeated outbound replies.\n\nThe message-tool schema previously merged every action group's properties (routing, send, reaction, fetch, poll, channel target, sticker, thread, event, moderation, gateway, channel-management, presence) into a single permissive object whenever the active action list contained more than just `send`. Discord guild allowlist setups advertise `send` alongside `read`, `react`, `edit`, `delete`, `thread-*`, etc., so models received a schema in which `action=\"send\"` accepted unrelated channel-management/presence/moderation fields (`topic`, `rateLimitPerUser`, `activityName`, `clearParent`, `status`, etc.). LLMs (notably grok-4.1-fast and minimax-m2.7) emitted send payloads populated with those stray fields and no `message`, the runner rejected them with `send requires text or media`, and retries produced the duplicate/looping replies the reporter observed.\n\nThis change gates each optional schema group on the actions that actually consume it. Groups whose actions are absent from the active list are skipped, so a Discord guild reply tool no longer advertises channel-management/presence/moderation/event/poll/sticker fields unless those actions are actually enabled. The existing send-only and broad fallbacks remain for callers that pass exactly `[\"send\"]` or an empty action list.\n\nScope: source-level schema fix. The duplicate-reply behavior reported by `@GreyWolfRon` is driven primarily by retries against the malformed send rejection; tightening the schema removes the trigger. Independent loop hardening (bot-pair guards in `4785a073d6c0`) already exists on main and remains in place.\n\n## Verification\n\n- `node scripts/run-vitest.mjs src/agents/tools/message-tool.test.ts` — 98 passed (includes new regression test).\n- `node scripts/run-vitest.mjs src/infra/outbound/message-action-runner.send-validation.test.ts` — 10 passed.\n- New regression test `excludes unrelated action-group properties when discord exposes send plus moderation/channel actions (#81484)` asserts the exact field set the reporter observed (`topic`, `rateLimitPerUser`, `activityName`, `clearParent`, `status`) is absent from the generated schema when Discord advertises `send` + reaction/thread/read/upload-file actions.\n\nCloses #81484\n\n## Real behavior proof\n\nBehavior addressed: A single `@bot` mention in a Discord guild channel produced an `action=\"send\"` tool call carrying `topic` / `rateLimitPerUser` / `activityName` / `clearParent` / `status` instead of `message`, the runner rejected it as `send requires text or media`, and the retry path issued duplicate outbound replies. Root cause: when Discord advertised `send` together with `read`/`react`/`edit`/`delete`/`thread-*`/`upload-file`, `buildMessageToolSchemaFromActions` in `src/agents/tools/message-tool.ts` fell out of the send-only branch and spread every optional action-group schema into the same object, so `action=\"send\"` advertised unrelated channel-management, presence, moderation, event, poll, and sticker properties.\n\nReal environment tested: branch `fix/81484-discord-guild-reply-payloads` at HEAD `04db2f0731` checked out against this OpenClaw working copy. Drove the new `buildScopedMessageToolSchemaProps` action-group gating with the exact Discord allowlist from the issue and compared the resulting property set to the unconditionally-merged property set from `origin/main` (HEAD `aef93881af`).\n\nExact steps or command run after this patch:\n```\n$ node node_modules/.bin/tsx demo-81484.mjs\n```\n\nThe demo encodes each `SCOPED_ACTION_GROUPS` entry as data — action set + property set — exactly as shipped in this PR, then runs the gating loop from `buildScopedMessageToolSchemaProps` for `[\"send\",\"read\",\"react\",\"edit\",\"delete\",\"thread-create\",\"thread-reply\",\"upload-file\"]` (the Discord allowlist observed in the report).\n\nEvidence after fix: live `node` stdout against the on-branch action-group mapping:\n```\nActive Discord allowlist actions: [\"send\",\"read\",\"react\",\"edit\",\"delete\",\"thread-create\",\"thread-reply\",\"upload-file\"]\n\nPre-fix schema property count (origin/main): 61\nPost-fix schema property count (this branch): 35\n\nProperties removed by the fix (no longer offered for action='send'):\n  - activityName\n  - activityState\n  - activityType\n  - activityUrl\n  - categoryId\n  - channelType\n  - clearParent\n  - desc\n  - durationMin\n  - endTime\n  - eventName\n  - image\n  - location\n  - name\n  - nsfw\n  - parentId\n  - pollId\n  - pollOptionId\n  - pollOptionIds\n  - pollOptionIndex\n  - pollOptionIndexes\n  - position\n  - rateLimitPerUser\n  - startTime\n  - status\n  - topic\n\nReporter-cited stray fields now absent from the send schema:\n  topic: absent (fixed)\n  rateLimitPerUser: absent (fixed)\n  activityName: absent (fixed)\n  clearParent: absent (fixed)\n  status: absent (fixed)\n  pollId: absent (fixed)\n  eventName: absent (fixed)\n```\n\nObserved result after fix: The five fields `@GreyWolfRon` reported as the contents of the malformed send payload — `topic`, `rateLimitPerUser`, `activityName`, `clearParent`, `status` — are no longer in the schema offered to the model for a Discord guild allowlist that mixes `send` with `read`/`react`/`edit`/`delete`/`thread-*`/`upload-file`. The model can no longer emit a syntactically-valid `action=\"send\"` populated entirely with those fields, which removes the `send requires text or media` rejection path that drove the duplicate-reply retry loop.\n\nWhat was not tested: live Discord guild round trip with a real bot account. The schema-gating fix is exact and data-driven (action set → property set); the live round trip is what `@GreyWolfRon` offered to run against the candidate branch in the issue thread.\n",
-        "branch": "fix/81484-discord-guild-reply-payloads",
-        "head_sha": "5741c772c3a9d6833b3444bdb09dc4531d50bf79",
-        "author": "lonexreb",
-        "labels": [
-          "agents",
-          "size: M",
-          "proof: supplied",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/tools/message-tool.test.ts",
-            "additions": 107,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/message-tool.ts",
-            "additions": 163,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-82972",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82972.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 156,
-          "counts": {
-            "SUCCESS": 125,
-            "SKIPPED": 23,
-            "FAILURE": 7,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "check-guards:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-channels:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "check-guards:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-channels:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2452,
+    "total_ms": 1008,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 257
+        "ms": 502
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1968
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 199
+        "ms": 492
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
