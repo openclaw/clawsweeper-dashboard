@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-04T11:54:32.786Z",
-  "repo": "openclaw/gogcli",
+  "generated_at": "2026-06-04T11:54:44.280Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-04T08:54:32.382Z",
+  "since": "2026-06-04T08:54:42.330Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    691
+    90308
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,138 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:90308:4621852325:2026-06-04T11:54:39Z:clawsweeper_auto_repair",
+      "comment_id": "4621852325",
+      "comment_version_key": "4621852325:2026-06-04T11:54:39Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90308#issuecomment-4621852325",
+      "repo": "openclaw/openclaw",
+      "issue_number": 90308,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-04T11:49:05Z",
+      "comment_updated_at": "2026-06-04T11:54:39Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=53012068e63a395f53831fb71a08aa9b0afd58c4)",
+      "review_summary": "Adds idle zombie embedded-run detection to the diagnostic heartbeat, plus focused tests for reclaiming leaked ACTIVE_EMBEDDED_RUNS entries.\n\nPR surface: Source +26, Tests +104. Total +130 across 3 files.\n\nReproducibility: yes. at source level: with default timing, an idle queueDepth=0 zombie is neither recent activity nor open work by the time stuckSessionAbortMs is reached, so the heartbeat returns before scanning it. I did not run tests because this review is read-only.",
+      "review_followup": "- [P2] A narrow automated repair can adjust the heartbeat scan gate and add a targeted default-threshold regression test without a product decision.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "53012068e63a395f53831fb71a08aa9b0afd58c4",
+      "finding_id": "review-feedback",
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(diagnostics): reclaim zombie embedded-run counters left idle by handle-mismatch clears",
+        "body": "### Summary\n\n- **Problem**: After rapid back-to-back turns, a zombie entry persists in `ACTIVE_EMBEDDED_RUNS` and `activity.activeEmbeddedRuns`, keeping `getActiveEmbeddedRunCount()` at 1 for 24+ minutes despite no active run. All subsequent inbound messages queue as follow-ups to a non-existent run; the session silently stalls until manual gateway restart.\n- **Root cause**: When turn N+1's `setActiveEmbeddedRun` overwrites turn N's handle before turn N clears, turn N's `clearActiveEmbeddedRun` is skipped via handle mismatch, leaving a stale zombie in both `ACTIVE_EMBEDDED_RUNS` and `activity.activeEmbeddedRuns`. After the dispatch completes, `dispatch-from-config.ts` calls `markIdle()`, setting diagnostic state to \"idle\" with `queueDepth=0`. The heartbeat's two recovery conditions both require either `state === \"processing\"` or `queueDepth > 0` — neither fires. The zombie is completely invisible to the existing stuck-session recovery system; the counter stays pinned and new messages keep entering the follow-up queue forever.\n- **Fix**: Add `isIdleZombieEmbeddedRunStall` to the heartbeat's per-session loop. When a session is idle with no queue depth but `hasActiveEmbeddedRun=true` persists past `stuckSessionAbortMs` (~6 min default), it signals a zombie counter left behind by a handle-mismatch clear. The existing `isStalledEmbeddedRunRecoveryEligible` path fires with `allowActiveAbort:true`, routing recovery through `abortAndDrainEmbeddedAgentRun` + `forceClearEmbeddedAgentRun` to clear the stale handle. Uses `stuckSessionAbortMs` (not `stuckSessionWarnMs`) as the detection gate to avoid false positives on legitimately long-running turns whose tool/model activity markers keep `lastProgressAgeMs` fresh.\n- **What changed**:\n  - `src/logging/diagnostic.ts` — add `isIdleZombieEmbeddedRunStall`; include it in the heartbeat condition alongside `idleQueuedRecoverableStall`; use `lastProgressAgeMs` as `attentionAgeMs` when it fires.\n  - `src/logging/diagnostic.test.ts` — two new cases under `stuck session diagnostics threshold`: zombie detection fires at `stuckSessionAbortMs` with `allowActiveAbort:true/expectedState:\"idle\"`; no recovery when the run ended cleanly.\n  - `src/logging/diagnostic-stuck-session-recovery.integration.test.ts` — new case: `recoverStuckDiagnosticSession` with `allowActiveAbort:true/expectedState:\"idle\"` force-clears a zombie `ACTIVE_EMBEDDED_RUNS` entry and confirms `isEmbeddedAgentRunHandleActive` returns false after recovery.\n- **What did NOT change (scope boundary)**:\n  - The existing `idleQueuedRecoverableStall` path, the generation guard in `applyRecoveryOutcomeToDiagnosticState`, and the `clearDiagnosticEmbeddedRunActivityForSession` teardown are unchanged.\n  - `isActiveRunProgressStale` and the `queueDepth > 0` gate inside it are unchanged.\n  - Config surface unchanged (no schema, defaults, doctor migrations, or `docs/reference/config`).\n  - Plugin surface unchanged (no plugin SDK, manifest, `extensions/*` api/runtime-api, registry/loader).\n  - Gateway protocol unchanged.\n\n### Reproduction\n\n1. Start a Slack DM session on `anthropic/claude-opus-4-7`.\n2. Send a prompt that produces a single very large assistant turn (~48k output tokens, 9 min wall clock).\n3. Immediately send a follow-up message so turn N+1 starts within the same second turn N ends — two rapid back-to-back turns.\n4. Send further messages ~10 minutes later.\n5. Run `openclaw gateway restart` and observe the drain banner at SIGTERM.\n\n**Before this PR**: drain banner reports `1 active embedded run(s)` even though the last `model.completed` fired ~24 min earlier; all messages sent during the silent window are accepted by Slack but produce no model turn. Only a manual restart unblocks the session.\n\n**After this PR**: at `stuckSessionAbortMs` (~6 min default) after the last diagnostic progress event, the heartbeat's `isIdleZombieEmbeddedRunStall` fires, recovery force-clears the stale counter, and the next inbound message dispatches normally.\n\n### Real behavior proof\n\n**Behavior addressed (Fixes #90240)**: the zombie counter in `ACTIVE_EMBEDDED_RUNS` and `activity.activeEmbeddedRuns` is reclaimed by the heartbeat after `stuckSessionAbortMs` of no progress; subsequent messages dispatch without a gateway restart.\n\n**Real environment tested (Linux, Node 22 — Vitest against the production heartbeat, diagnostic-run-activity store, and recovery coordinator; stuck-session integration suite against the real `ACTIVE_EMBEDDED_RUNS` registry and `recoverStuckDiagnosticSession` runtime)**: deterministic zombie state constructed via `setActiveEmbeddedRun` + `logSessionStateChange(\"idle\")` without calling `clearActiveEmbeddedRun`; recovery dispatched through the real `abortAndDrainEmbeddedAgentRun` → `forceClearEmbeddedAgentRun` path.\n\n**Exact steps or command run after this patch**: `pnpm test src/logging/diagnostic.test.ts src/logging/diagnostic-stuck-session-recovery.integration.test.ts`; `pnpm exec oxfmt --check` and `node scripts/run-oxlint.mjs` on changed files.\n\n**Evidence after fix**:\n\n```\n diagnostic.test.ts                                      75 passed (75)\n diagnostic-stuck-session-recovery.integration.test.ts   5 passed (5)\n```\n\n**Observed result after fix**: `recovers a zombie embedded-run counter when the session is idle with no queued work` — heartbeat fires `recoverStuckSession` with `{ allowActiveAbort: true, expectedState: \"idle\", queueDepth: 0 }` at `stuckSessionAbortMs + 30_000`. `force-clears a zombie ACTIVE_EMBEDDED_RUNS entry when recovery runs with allowActiveAbort on an idle session` — `isEmbeddedAgentRunHandleActive(sessionId)` is `true` before recovery and `false` after; `outcome.status === \"aborted\"`. Negative case: `does not trigger zombie-counter recovery when the embedded run ended cleanly` — clean `markDiagnosticEmbeddedRunEnded` suppresses the path entirely; `recoverStuckSession` not called.\n\n**What was not tested**: live Slack DM session with actual rapid back-to-back 48k-token turns. The exact race timing is non-deterministic in production. The zombie detection and force-clear are exercised deterministically against the production functions; a full gateway round-trip on the reporter's hardware was not driven.\n\n**Repro confirmation**: the zombie detection test fails on main (no `isIdleZombieEmbeddedRunStall` predicate) and passes with the fix; the negative test passes on both, confirming the gate fires only for the leaked-counter case.\n\n### Risk / Mitigation\n\n- **Risk**: False positive — a legitimately long-running turn with no queued work gets aborted. **Mitigation**: `lastProgressAgeMs > stuckSessionAbortMs` (≥6 min default) is far above any normal tool/model streaming cadence; a live run emits tool-start/end, model-call, and stream-progress events that keep `lastProgressAgeMs` low.\n- **Risk**: Recovery coordinator state machine inconsistency on idle path. **Mitigation**: `applyRecoveryOutcomeToDiagnosticState` already handles `expectedState: \"idle\"` with its lenient `+0/+1` generation check; existing coordinator tests cover this path unchanged.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Diagnostics / logging\n- [x] Gateway / session runtime\n\n### Linked Issue/PR\n\nFixes #90240",
+        "branch": "fix/90240-idle-zombie-embedded-run-recovery",
+        "head_sha": "53012068e63a395f53831fb71a08aa9b0afd58c4",
+        "author": "openperf",
+        "labels": [
+          "size: S",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/logging/diagnostic-stuck-session-recovery.integration.test.ts",
+            "additions": 42,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/logging/diagnostic.test.ts",
+            "additions": 62,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/logging/diagnostic.ts",
+            "additions": 30,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90308",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90308.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "CANCELLED": 1,
+            "SUCCESS": 125,
+            "SKIPPED": 30,
+            "IN_PROGRESS": 2,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ],
+          "pending": [
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-fast-contracts-plugins-a:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 728,
+    "total_ms": 2138,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 393
+        "ms": 254
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1680
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 323
+        "ms": 174
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
