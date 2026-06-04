@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-04T01:27:47.005Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-04T01:28:01.451Z",
+  "repo": "steipete/CodexBar",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T22:27:42.644Z",
+  "since": "2026-06-03T22:28:00.021Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    89323
+    1293
   ],
-  "comment_ids": [
-    4618149324
-  ],
-  "status_comment_id": 4618149532,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 3,
+  "commands_seen": 2,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,18 +31,113 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:89323:4618149324:2026-06-04T01:27:01Z:re_review",
-      "comment_id": "4618149324",
-      "comment_version_key": "4618149324:2026-06-04T01:27:01Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89323#issuecomment-4618149324",
-      "repo": "openclaw/openclaw",
-      "issue_number": 89323,
-      "author": "giodl73-repo",
-      "author_id": 235387111,
+      "idempotency_key": "clawsweeper-repair:steipete/CodexBar:1293:4617974732:2026-06-04T01:27:58Z:clawsweeper_auto_repair",
+      "comment_id": "4617974732",
+      "comment_version_key": "4617974732:2026-06-04T01:27:58Z",
+      "comment_url": "https://github.com/steipete/CodexBar/pull/1293#issuecomment-4617974732",
+      "repo": "steipete/CodexBar",
+      "issue_number": 1293,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-04T00:50:58Z",
+      "comment_updated_at": "2026-06-04T01:27:58Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=0c9c526427c8cd4e732f24b9942ecd52ad97863e)",
+      "review_summary": "The PR adds a closed-menu content-signature cache to skip redundant invisible-menu `populateMenu` prewarms and adds coalescing regression tests.\n\nReproducibility: yes. from source and PR evidence: current main invalidates closed menus on observation churn and reaches `populateMenu` when `menuNeedsRefresh` is true; the PR body adds production sample output plus controlled test evidence. I did not run AppKit tests in this read-only review.",
+      "review_followup": "- [P2] A narrow automated repair can preserve and restore the previous test rendering flag without changing the production implementation.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "0c9c526427c8cd4e732f24b9942ecd52ad97863e",
+      "finding_id": "review-feedback",
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "Skip redundant closed-menu rebuilds when displayed content is unchanged",
+        "body": "## Problem\n\nCodexBar pre-warms closed (invisible) persistent menus so they open instantly. `observeStoreChanges` fires `invalidateMenus()` on every change of `store.menuObservationToken`, and for closed menus that runs `prepareAttachedClosedMenusIfNeeded()` → a full main-thread `populateMenu()` for **every** attached menu (status item, merged, fallback, each provider menu).\n\n`menuObservationToken` is a signature over ~25 store properties (probe logs, in-flight refresh flags, revision counters, fetch metadata, dashboard timestamps…). Many of these change frequently — e.g. while you're actively using codex/claude and CodexBar is observing their data — but **don't change what the menu displays**. So the whole SwiftUI menu hierarchy rebuilds on the main thread continuously with no visible change.\n\nObserved on a real 0.32.4 install during active use: sustained ~12% \"idle\" CPU, with `sample` showing `rebuildClosedMenuIfNeeded → populateMenu` as the dominant main-thread stack, worsening over time as usage history grows. It's independent of refresh-interval and token-cost settings (confirmed by changing both with no effect), since it's driven by store observation, not the refresh timer.\n\n## Fix\n\nGate the closed-menu rebuild on a content signature (the existing `menuAdjunctReadinessSignature` plus the per-provider usage snapshot). When the displayed content is unchanged since the menu was last pre-warmed, skip the expensive `populateMenu` and leave the menu marked stale so `menuWillOpen` still rebuilds it fresh.\n\nSafe by construction: the open path (`refreshMenuForOpenIfNeeded`) is untouched and always rebuilds on `menuWillOpen`, so an incomplete signature can only skip a pre-warm — never show stale content to the user.\n\nA `.debug` signpost (`closed-menu prewarm skipped/performed`) makes the behavior observable: set the log level to debug to watch it.\n\n## Runtime evidence\n\n**Before — real 0.32.4 install, `sample` during active use (redacted):** the closed-menu rebuild is the dominant main-thread stack behind the ~12% idle CPU:\n\n```\n1056  closure #1 in StatusItemController.rebuildClosedMenuIfNeeded(_:)  (in CodexBar)\n 761    StatusItemController.populateMenu(_:provider:)\n 646      closure #1 in StatusItemController.updateMenuContentPreservingSwitcher(_:context:)\n 463        StatusItemController.addOverviewRows(...) -> MenuCardItemHostingView.measuredHeight(width:)\n 462          NSHostingController.sizeThatFits(in:) -> ViewGraph.sizeThatFits(...)\n```\n\n**After (controlled) — new test, exercising the real `invalidateMenus` path:** with the gate removed, unchanged-content observation churn produces **39** full closed-menu rebuilds; with the gate it **converges to ≤2 and stops** (20+ further ticks add none). A genuine content change still rebuilds.\n\n**After (live) — adhoc release build, debug logging, ~150s real session:** the new signpost shows the gate skipping redundant rebuilds in a real running build:\n\n```\n[..Z] [DEBUG] com.steipete.codexbar.app: closed-menu prewarm performed (content changed) provider=codex\n[..Z] [DEBUG] com.steipete.codexbar.app: closed-menu prewarm skipped (content unchanged) provider=codex\n...\nskipped: 5   performed: 5\n```\n\nEach `skipped` is a full closed-menu rebuild that was prevented. The skip ratio scales with churn intensity: this window had only refresh-paced churn (~50% prevented); under the heavy non-display churn that produces the storm (the controlled test above), the gate eliminates ~95%.\n\n**Note on an idle before/after:** a freshly launched idle build does not reproduce the storm — it requires live store churn from active codex/claude usage that CodexBar observes — so an idle CPU A/B reads ~0% either way. The evidence above (production sample + controlled test + live signpost) is used instead of an idle CPU delta.\n\n## Tests added\n\n- `closed menu rebuild converges when displayed content is unchanged`\n- `closed menu rebuilds again when displayed content changes`\n- `invalidateMenus does not storm a closed attached menu on unchanged content`\n\nFull test suite green (3241 tests).\n",
+        "branch": "perf/skip-redundant-closed-menu-rebuilds",
+        "head_sha": "0c9c526427c8cd4e732f24b9942ecd52ad97863e",
+        "author": "devyrpauli",
+        "labels": [
+          "P2",
+          "proof: sufficient",
+          "status: ⏳ waiting on author",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 automation"
+        ],
+        "files": [
+          {
+            "path": "Sources/CodexBar/StatusItemController+MenuTracking.swift",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Sources/CodexBar/StatusItemController.swift",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Tests/CodexBarTests/StatusMenuClosedRebuildCoalesceTests.swift",
+            "additions": 183,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-steipete-codexbar-1293",
+        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1293.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 4,
+          "counts": {
+            "IN_PROGRESS": 2,
+            "SUCCESS": 2
+          },
+          "blockers": [
+            "lint-build-test:IN_PROGRESS",
+            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS"
+          ],
+          "pending": [
+            "lint-build-test:IN_PROGRESS",
+            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:steipete/CodexBar:1293:4618126107:2026-06-04T01:21:58Z:re_review",
+      "comment_id": "4618126107",
+      "comment_version_key": "4618126107:2026-06-04T01:21:58Z",
+      "comment_url": "https://github.com/steipete/CodexBar/pull/1293#issuecomment-4618126107",
+      "repo": "steipete/CodexBar",
+      "issue_number": 1293,
+      "author": "devYRPauli",
+      "author_id": 55940078,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-04T01:27:01Z",
-      "comment_updated_at": "2026-06-04T01:27:01Z",
-      "status_comment_id": 4618149532,
+      "comment_created_at": "2026-06-04T01:21:58Z",
+      "comment_updated_at": "2026-06-04T01:21:58Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,195 +154,22 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-04T01:27:48.091Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 89323
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-04T01:27:49.327Z",
-          "response_comment_id": "4618149532",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "write",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(web-ui): skip hidden subagent picker pages",
-        "body": "Fixes #89249.\n\nSummary:\n- Advance the chat session picker through raw `sessions.list` pages that add no visible rows after hidden spawn-child subagent filtering.\n- Stop showing raw total counts when the picker is filtering out loaded rows, avoiding misleading states like `1 / 177`.\n- Add regression coverage for a hidden-only page followed by a visible session page.\n\nSurface area:\n- No public config schema/options changes.\n- No plugin API/contract changes.\n- No new CLI flags, env vars, migrations, or setup surface.\n\nValidation:\n- `OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs ui/src/ui/views/chat.test.ts -t \"chat session picker\" --reporter=dot` -> 1 file, 6 passed, 89 skipped.\n- `node_modules/oxfmt/bin/oxfmt --check ui/src/ui/chat/session-controls.ts ui/src/ui/views/chat.test.ts` -> passed.\n- `node_modules/oxlint/bin/oxlint --tsconfig config/tsconfig/oxlint.json ui/src/ui/chat/session-controls.ts ui/src/ui/views/chat.test.ts` -> 0 warnings/errors.\n- `node scripts/run-oxlint-shards.mjs --threads=8` -> core/extensions/scripts shards passed, 0 warnings/errors.\n- `git diff --check origin/main...HEAD` -> passed.\n\nBehavior proof:\n- The new unit coverage starts with one visible direct session plus one hidden spawn-child row.\n- Clicking Load More first receives an all-hidden spawn-child page at offset `2`, then automatically requests offset `4`.\n- The picker ends with visible labels `Main chat` and `Main work`, count `2`, and no dead-end Load More button.\n\nCurrent head:\n- Rebased onto current `origin/main`.\n- Signed head: `3959889710`.",
-        "branch": "fix-89249-chat-picker-subagent-pages",
-        "head_sha": "39598897108bcf3336afd64b4b669140a37568f3",
-        "author": "giodl73-repo",
-        "labels": [
-          "app: web-ui",
-          "maintainer",
-          "size: S",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "ui/src/ui/chat/session-controls.ts",
-            "additions": 36,
-            "deletions": 15,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/ui/views/chat.test.ts",
-            "additions": 104,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89323",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89323.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 130,
-          "counts": {
-            "SUCCESS": 70,
-            "SKIPPED": 9,
-            "IN_PROGRESS": 51
-          },
-          "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "checks-node-core-support:IN_PROGRESS",
-            "checks-node-core-runtime-infra-cli-ui:IN_PROGRESS",
-            "checks-node-core-runtime-infra-env-auth:IN_PROGRESS",
-            "checks-node-core-runtime-infra-events-runtime:IN_PROGRESS",
-            "checks-node-core-runtime-infra-file-safety:IN_PROGRESS",
-            "checks-node-core-runtime-infra-gateway-lock-argv:IN_PROGRESS",
-            "checks-node-core-runtime-infra-gateway-watch:IN_PROGRESS",
-            "checks-node-core-runtime-infra-heartbeat-runner:IN_PROGRESS",
-            "checks-node-core-runtime-infra-misc-dedupe-disk:IN_PROGRESS",
-            "checks-node-core-runtime-infra-net-install:IN_PROGRESS",
-            "checks-node-core-runtime-infra-network-platform:IN_PROGRESS",
-            "checks-node-core-runtime-infra-provider-push:IN_PROGRESS",
-            "checks-node-core-runtime-infra-repo-tooling:IN_PROGRESS",
-            "checks-node-core-runtime-infra-storage-state:IN_PROGRESS",
-            "checks-node-core-runtime-secrets:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-shared:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-cron:IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-config:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-command-support:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-plugins-tools:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-sessions-cron:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-workspace:IN_PROGRESS",
-            "checks-node-agentic-agents-core-auth:IN_PROGRESS",
-            "checks-node-agentic-agents-core-models:IN_PROGRESS",
-            "checks-node-agentic-agents-core-tools:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runtime:IN_PROGRESS",
-            "checks-node-agentic-agents-embedded:IN_PROGRESS",
-            "checks-node-agentic-agents-support:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-session:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "checks-node-core-support:IN_PROGRESS",
-            "checks-node-core-runtime-infra-cli-ui:IN_PROGRESS",
-            "checks-node-core-runtime-infra-env-auth:IN_PROGRESS",
-            "checks-node-core-runtime-infra-events-runtime:IN_PROGRESS",
-            "checks-node-core-runtime-infra-file-safety:IN_PROGRESS",
-            "checks-node-core-runtime-infra-gateway-lock-argv:IN_PROGRESS",
-            "checks-node-core-runtime-infra-gateway-watch:IN_PROGRESS",
-            "checks-node-core-runtime-infra-heartbeat-runner:IN_PROGRESS",
-            "checks-node-core-runtime-infra-misc-dedupe-disk:IN_PROGRESS",
-            "checks-node-core-runtime-infra-net-install:IN_PROGRESS",
-            "checks-node-core-runtime-infra-network-platform:IN_PROGRESS",
-            "checks-node-core-runtime-infra-provider-push:IN_PROGRESS",
-            "checks-node-core-runtime-infra-repo-tooling:IN_PROGRESS",
-            "checks-node-core-runtime-infra-storage-state:IN_PROGRESS",
-            "checks-node-core-runtime-secrets:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-shared:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-cron:IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-config:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-command-support:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-plugins-tools:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-sessions-cron:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-workspace:IN_PROGRESS",
-            "checks-node-agentic-agents-core-auth:IN_PROGRESS",
-            "checks-node-agentic-agents-core-models:IN_PROGRESS",
-            "checks-node-agentic-agents-core-tools:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runtime:IN_PROGRESS",
-            "checks-node-agentic-agents-embedded:IN_PROGRESS",
-            "checks-node-agentic-agents-support:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-session:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": true,
-      "author_readonly_authorized": false
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 7448,
+    "total_ms": 3009,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2530
+        "ms": 389
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1817
+        "ms": 1025
       },
       {
         "name": "classify_commands",
@@ -257,7 +177,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3075
+        "ms": 1567
       },
       {
         "name": "append_ledger",
