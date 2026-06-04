@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-04T00:07:13.171Z",
+  "generated_at": "2026-06-04T00:07:16.918Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T21:07:10.199Z",
+  "since": "2026-06-03T21:07:16.360Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     90065
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4617745157
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -40,12 +42,12 @@
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-04T00:01:05Z",
-      "comment_updated_at": "2026-06-04T00:07:06Z",
+      "comment_created_at": "2026-06-04T00:05:51Z",
+      "comment_updated_at": "2026-06-04T00:05:51Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -61,90 +63,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): bound abort-path session lock release; force-release on unsettled retained writes",
-        "body": "## Problem\n\nA turn timeout aborts the embedded run, but the abort-path session-lock release is unbounded. On a deployment running a release that already contains #87278 (release lock on timeout abort), every embedded-run timeout still turned into 5–30 minutes of total unresponsiveness: each subsequent turn failed instantly with `SessionWriteLockTimeoutError` (\"Something went wrong while processing your request\"), until the `maxHoldMs` watchdog finally reclaimed the session `.jsonl` lock. Starting a fresh session only helped until that session hit its own timeout.\n\nRepresentative trace:\n\n```text\n[agent/embedded] embedded run timeout: runId=… sessionId=… timeoutMs=120000\n[agent/embedded] embedded abort settle timed out: runId=… timeoutMs=2000\n[diagnostic] lane task error: lane=main durationMs=61545\n  error=\"SessionWriteLockTimeoutError: session file locked (timeout 60000ms): pid=… .../sessions/…jsonl.lock\"\nEmbedded agent failed before reply: session file locked (timeout 60000ms)\n```\n\nThe trigger was a flaky provider endpoint that accepts the connection and then hangs the stream (`streamGenerateContent` that never settles even after `runAbortController.abort()`), but any provider hang reproduces it.\n\n## The gap #87278 left\n\n`releaseHeldLockForAbort` delegates to the graceful fence release, whose `waitForRetainedLockIdle` is **unbounded**. A retained-lock transcript write pinned behind a hung provider stream keeps the retained-use count nonzero forever, so the abort release never reaches `lock.release()`. #87278 / #88623 / #89811 all release on aborts that *settle*; nothing covered an abort that a hung provider call never lets settle.\n\n## Fix\n\n`releaseHeldLockForAbort` now runs a bounded variant:\n\n- Drain acquisition and the retained-idle wait are each raced against the abort settle bound (`OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS`, default 2s / 250ms under `OPENCLAW_TEST_FAST`), overridable per controller via `abortReleaseTimeoutMs`.\n- Retained writes that settle within the bound keep the existing graceful fence semantics — fence stays active, no behavior change (covered by the existing #86816 tests).\n- When the bound expires, the underlying file lock is **force-released** and the controller is poisoned via `takeoverDetected`, so the aborted run cannot perform torn writes after losing ownership: its later `withSessionWriteLock` throws `EmbeddedAttemptSessionTakeoverError` and cleanup degrades to the noop lock — the same posture as a real takeover.\n- If another release path owns the drain and is itself stuck, the abort path takes release ownership directly and hands the eventually-acquired drain straight back (no `heldLockDraining` leak; `dispose()` stays unblocked).\n\n## Relationship to #89673\n\nComplementary, not overlapping. #89673 is the cross-process, contender-side `maxHoldMs` reclaim in `session-write-lock.ts` (let a contender reclaim a lock past the holder's own recorded `maxHoldMs`). This PR is the in-process abort path in `attempt.session-lock.ts`: it bounds the damage window at the source so the holder releases promptly on abort, rather than relying on a contender or the watchdog to reclaim minutes later. Both can land; together they close the live-but-stuck-holder hole from both sides.\n\nAbort *propagation* (cancelling the provider fetch/stream itself) is the other complementary half; the signal plumbing already exists in `fetch-guard.ts`. This PR bounds the damage window regardless of provider behavior — the chokepoint fix.\n\n## Tests\n\nHuman-run on my own setup (`OPENCLAW_TEST_FAST=1 pnpm vitest run src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts`):\n\n- `force-releases the held lock when a retained write never settles` — the repro: never-settling retained write, bounded abort release, lock released once, controller poisoned.\n- `abort release stays graceful when retained writes settle within the bound` — no poisoning on the happy path.\n- Full `attempt.session-lock.test.ts` suite: **90/90**.\n- tsgo typecheck (`node scripts/run-tsgo.mjs -p tsconfig.json --noEmit`): clean.\n\nAI-assisted (Claude Code). The tests above and the typecheck were run locally against my own OpenClaw instance.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
-        "branch": "issue-227-upstream-lock-release",
-        "head_sha": "817dcd6cc73c3010de2ce7e46a3979c4eeefd464",
-        "author": "matin",
-        "labels": [
-          "agents",
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts",
-            "additions": 67,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.ts",
-            "additions": 95,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90065",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90065.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 30,
-            "SUCCESS": 128,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-core-runtime-infra-net-install:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-core-runtime-infra-net-install:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3229,
+    "total_ms": 2095,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 622
+        "ms": 545
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2332
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 245
+        "ms": 1537
       },
       {
         "name": "append_ledger",
