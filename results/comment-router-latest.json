@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-04T00:30:13.311Z",
+  "generated_at": "2026-06-04T00:30:54.337Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T21:30:11.199Z",
+  "since": "2026-06-03T21:30:53.679Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4617861127
   ],
-  "status_comment_id": 4617861376,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "NONE",
       "comment_created_at": "2026-06-04T00:29:38Z",
       "comment_updated_at": "2026-06-04T00:29:38Z",
-      "status_comment_id": 4617861376,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,249 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-04T00:30:14.037Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 90019
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-04T00:30:15.049Z",
-          "response_comment_id": "4617861376",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(memory-search): default periodic sync fallback",
-        "body": "## What changed\n\n- Default `memorySearch.sync.intervalMinutes` to `30` when neither agent overrides nor defaults configure it.\n- Preserve explicit `intervalMinutes` values from agent overrides or defaults, including `intervalMinutes: 0` as the opt-out.\n- Make the interval sync fallback mark memory dirty before the interval sync runs, so the timer path rescans memory files even when watcher events were missed and `dirty` was previously false.\n- Document the 30-minute default and `0` opt-out in the config type/schema help surface, public memory config reference, and static config label surface.\n- Add regression coverage for both the resolved default and the manager-level interval timer path.\n\nFixes #40088.\n\n## Why\n\nIssue #40088 reports that the chokidar memory watcher can silently stop delivering events, leaving `memory_search` backed by a stale SQLite index. The original PR only armed a periodic interval by default. Review showed that was incomplete because the interval callback called `sync({ reason: \"interval\" })` while `dirty` could still be false, making the timer a no-op for memory files after a silent watcher failure.\n\nThis update makes the interval tick force the lightweight dirty/hash rescan path before calling sync, while preserving the explicit `intervalMinutes: 0` opt-out.\n\n## Exact setup\n\nRepository:\n\n```text\ngit clone https://github.com/openclaw/openclaw\ngit checkout origin/main\ngit checkout -b tui-40088-memory-watcher-fallback\n```\n\nFastino Code was launched through the normal coding harness path against this worktree with DeepSeek V4 Flash and XML tool calling enabled.\n\n## Behavior proof\n\nBefore this review update, the default interval was armed, but the interval callback still called sync without marking memory dirty:\n\n```diff\n-      runDetachedMemorySync(() => this.sync({ reason: \"interval\" }), \"interval\");\n```\n\nIn the watcher-silent failure mode, `dirty` can remain false, so the interval tick can skip memory-file sync work.\n\nAfter this review update, the interval callback marks memory dirty before sync:\n\n```diff\n+      runDetachedMemorySync(async () => {\n+        this.dirty = true;\n+        return this.sync({ reason: \"interval\" });\n+      }, \"interval\");\n```\n\nThe new manager-level timer test proves the interval path sets `dirty=true` and calls sync when the interval fires:\n\n```text\nsets dirty=true and calls sync when interval fires\n```\n\nThe config regression test still proves unconfigured agents resolve `intervalMinutes: 30`.\n\nPublic config/help surface added after review:\n\n```text\ndocs/reference/memory-config.md\n- Added sync.intervalMinutes as a ParamField.\n- Documents default = 30.\n- Documents intervalMinutes: 0 as the opt-out.\n- Explains it is a fallback for missed filesystem watcher events.\n\nsrc/config/schema.labels.ts\n- Added agents.defaults.memorySearch.sync.intervalMinutes:\n  \"Periodic Sync Interval (min)\"\n```\n\n## Validation\n\n```text\n$ node scripts/test-projects.mjs src/agents/memory-search.test.ts extensions/memory-core/src/memory/manager-sync-ops.interval.test.ts\n[test] starting test/vitest/vitest.unit-fast.config.ts\nTest Files  1 passed (1)\nTests  33 passed (33)\n[test] starting test/vitest/vitest.extension-memory.config.ts\nTest Files  1 passed (1)\nTests  3 passed (3)\n[test] passed 2 Vitest shards in 4.75s\n```\n\n```text\n$ pnpm exec oxfmt --check --threads=1 extensions/memory-core/src/memory/manager-sync-ops.ts extensions/memory-core/src/memory/manager-sync-ops.interval.test.ts src/config/types.tools.ts src/config/zod-schema.agent-runtime.ts src/agents/memory-search.ts src/agents/memory-search.test.ts\nChecking formatting...\nAll matched files use the correct format.\nFinished in 7ms on 6 files using 1 threads.\n```\n\n```text\n$ git diff --check\n# no output\n```\n\n```text\n$ rg \"as any\" extensions/memory-core/src/memory/manager-sync-ops.interval.test.ts src/config/types.tools.ts src/config/zod-schema.agent-runtime.ts extensions/memory-core/src/memory/manager-sync-ops.ts src/agents/memory-search.ts src/agents/memory-search.test.ts\n# no output\n```\n\nReview-comment docs/help repair:\n\n```text\n$ pnpm exec oxfmt --check --threads=1 docs/reference/memory-config.md src/config/schema.labels.ts\nChecking formatting...\n\nAll matched files use the correct format.\nFinished in 106ms on 2 files using 1 threads.\n\n$ git diff --check\n# no output\n```\n\n## Platform tested\n\n```text\nOS: Darwin 25.5.0 arm64\nNode: v26.0.0\npnpm: 11.2.2\n```\n\n## Limitations\n\n- I did not run a multi-hour live gateway/chokidar failure reproduction.\n- I confirmed `openclaw memory search` exists locally, but this PR's proof is still source/runtime-test backed rather than a live gateway memory_search session showing the fallback refreshing stale content after a real watcher outage.\n",
-        "branch": "tui-40088-memory-watcher-fallback",
-        "head_sha": "4eb772c097ef8beadade5086170648b57e7309c5",
-        "author": "sahibzada-allahyar",
-        "labels": [
-          "docs",
-          "extensions: memory-core",
-          "agents",
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "docs/reference/memory-config.md",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager-sync-ops.interval.test.ts",
-            "additions": 21,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager-sync-ops.ts",
-            "additions": 10,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/memory-search.test.ts",
-            "additions": 38,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/memory-search.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/schema.labels.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/types.tools.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/zod-schema.agent-runtime.ts",
-            "additions": 8,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90019",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90019.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 165,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 87,
-            "IN_PROGRESS": 50,
-            "SKIPPED": 26,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "Scan changed paths (precise):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "checks-node-core-runtime-infra-core-utils:IN_PROGRESS",
-            "checks-node-core-runtime-infra-file-safety:IN_PROGRESS",
-            "checks-node-core-runtime-infra-misc-values:IN_PROGRESS",
-            "checks-node-core-runtime-infra-network-node:IN_PROGRESS",
-            "checks-node-core-runtime-infra-outbound-core:IN_PROGRESS",
-            "checks-node-core-runtime-infra-repo-tooling:IN_PROGRESS",
-            "checks-node-core-runtime-infra-storage-state:IN_PROGRESS",
-            "checks-node-core-runtime-secrets:IN_PROGRESS",
-            "checks-node-core-runtime-infra-process:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-config:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-events:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-network:IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-auth:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-platform:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runtime:IN_PROGRESS",
-            "checks-node-agentic-agents-embedded:IN_PROGRESS",
-            "checks-node-agentic-agents-support:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
-            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "checks-windows-node-test:IN_PROGRESS",
-            "macos-swift:IN_PROGRESS",
-            "android-test-play:IN_PROGRESS",
-            "android-test-third-party:IN_PROGRESS",
-            "android-build-play:IN_PROGRESS"
-          ],
-          "pending": [
-            "Scan changed paths (precise):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "checks-node-core-runtime-infra-core-utils:IN_PROGRESS",
-            "checks-node-core-runtime-infra-file-safety:IN_PROGRESS",
-            "checks-node-core-runtime-infra-misc-values:IN_PROGRESS",
-            "checks-node-core-runtime-infra-network-node:IN_PROGRESS",
-            "checks-node-core-runtime-infra-outbound-core:IN_PROGRESS",
-            "checks-node-core-runtime-infra-repo-tooling:IN_PROGRESS",
-            "checks-node-core-runtime-infra-storage-state:IN_PROGRESS",
-            "checks-node-core-runtime-secrets:IN_PROGRESS",
-            "checks-node-core-runtime-infra-process:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-config:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-events:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-network:IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-auth:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-platform:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runtime:IN_PROGRESS",
-            "checks-node-agentic-agents-embedded:IN_PROGRESS",
-            "checks-node-agentic-agents-support:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
-            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "checks-windows-node-test:IN_PROGRESS",
-            "macos-swift:IN_PROGRESS",
-            "android-test-play:IN_PROGRESS",
-            "android-test-third-party:IN_PROGRESS",
-            "android-build-play:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4423,
+    "total_ms": 2423,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 521
+        "ms": 645
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1574
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2299
+        "ms": 1765
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
