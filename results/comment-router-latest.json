@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-04T11:46:54.800Z",
+  "generated_at": "2026-06-04T11:47:12.391Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-04T08:46:52.915Z",
+  "since": "2026-06-04T08:47:12.142Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    90305
+    90306
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,124 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:90305:4621796354:2026-06-04T11:46:49Z:clawsweeper_auto_repair",
-      "comment_id": "4621796354",
-      "comment_version_key": "4621796354:2026-06-04T11:46:49Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/90305#issuecomment-4621796354",
-      "repo": "openclaw/openclaw",
-      "issue_number": 90305,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-04T11:40:34Z",
-      "comment_updated_at": "2026-06-04T11:46:49Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=a0ecd7b8acb260c6863943fb126e0c905c4a5c39)",
-      "review_summary": "The PR changes generated systemd gateway units from `TimeoutStopSec=30`/`KillMode=control-group` to `TimeoutStopSec=330`/`KillMode=mixed` and updates daemon tests.\n\nPR surface: Source 0, Tests 0. Total 0 across 3 files.\n\nReproducibility: yes. by source inspection, but not by a live repro in this review. Current main combines a 300000 ms gateway restart drain with a generated systemd unit that gives only 30 seconds and uses cgroup-wide stop signaling, and Codex stdio clients surface a close-before-completion error when the client closes mid-turn.",
-      "review_followup": "- [P1] Needs human/contributor follow-up because the remaining blockers are upgrade behavior and real systemd proof, not a safe autonomous repair-only path.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "a0ecd7b8acb260c6863943fb126e0c905c4a5c39",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "[codex] Preserve gateway drain during systemd restarts",
-        "body": "## Summary\n\n- Change generated systemd gateway units from `KillMode=control-group` to `KillMode=mixed`.\n- Increase generated `TimeoutStopSec` from `30` to `330` so the service manager budget covers the gateway's 300s restart drain window plus shutdown reserve.\n- Update daemon tests so the generated unit and service audit contract explicitly accept `mixed` as a cgroup-cleaning mode.\n\n## Root Cause / Evidence\n\nThis fixes a narrow restart lifecycle mismatch observed on a real systemd-user OpenClaw gateway while applying a Telegram agent config change.\n\nObserved timeline from the user service journal:\n\n- `2026-06-03 15:46:22 UTC`: gateway detected config changes for `agents.list`, bindings, and the new Telegram group.\n- `2026-06-03 15:46:23 UTC`: channel reload was deferred because `4 operation(s), 2 reply(ies), 2 embedded run(s)` were still active.\n- `2026-06-03 15:49:13 UTC`: the gateway tool requested a restart to apply the Clawtributor agent config.\n- `2026-06-03 15:51:08 UTC`: systemd delivered `SIGTERM`; the gateway logged that it was draining `4 active task(s)` and `2 active embedded run(s)` with timeout `300000ms`.\n- `2026-06-03 15:51:08 UTC`: active Codex app-server stdio clients closed before turn completion, surfacing `codex app-server client closed before turn completed`.\n- `2026-06-03 15:51:15 UTC`: the gateway finished draining and exited cleanly for a full supervisor restart.\n- `2026-06-03 15:51:26 UTC`: the replacement gateway was listening again.\n\nCode evidence:\n\n- `src/cli/gateway-cli/run-loop.ts` already gives normal restarts a 300s active-work drain budget.\n- `src/agents/embedded-agent-runner/runs.ts` waits for active embedded runs to release session locks during restarts.\n- `extensions/codex/src/app-server/run-attempt.ts` converts a closed app-server client before terminal turn notification into the exact prompt error seen in the journal.\n- Upstream Codex app-server stdio is single-client style: `--listen stdio://` is the default transport, EOF closes the connection, and app-server exits its accept loop when no stdio connections remain.\n- The generated OpenClaw unit previously used `KillMode=control-group` and `TimeoutStopSec=30`, so systemd could signal all child app-server processes in the gateway cgroup while the gateway itself was trying to drain them.\n\n`KillMode=mixed` preserves cgroup cleanup: systemd sends `SIGTERM` to the main process first, then still uses final cgroup cleanup if the stop timeout expires. That matches the gateway's drain ownership better than sending the initial stop signal to every child process.\n\n## Real behavior proof\n\nBehavior addressed: planned systemd gateway restarts can interrupt active child-process stdio runtimes before the gateway's own restart drain completes.\n\nReal environment tested: Linux systemd-user OpenClaw gateway running from this checkout with `openclaw-gateway.service`, active child `codex app-server --listen stdio://` processes in the gateway cgroup, and the live incident journal described above.\n\nExact steps or command run after this patch:\n\n```sh\nnode --import tsx -e \"import { buildSystemdUnit } from './src/daemon/systemd-unit.ts'; const unit = buildSystemdUnit({ description: 'OpenClaw Gateway', programArguments: ['/usr/bin/node', '/repo/dist/index.js', 'gateway'], environment: {} }); console.log(unit.match(/^(TimeoutStopSec|KillMode)=.*$/gm).join('\\\\n'));\"\nnode scripts/run-vitest.mjs src/daemon/systemd-unit.test.ts src/daemon/service-audit.test.ts\ngit diff --check\n.agents/skills/autoreview/scripts/autoreview --mode local\n```\n\nEvidence after fix:\n\n```text\nTimeoutStopSec=330\nKillMode=mixed\n```\n\nTargeted tests passed:\n\n```text\nTest Files  1 passed (1)\nTests  4 passed (4)\nTest Files  1 passed (1)\nTests  45 passed (45)\n```\n\nObserved result after fix: the generated systemd unit now gives the gateway enough stop budget for the existing 300s restart drain and sends the initial stop signal to the gateway main process before child-process cgroup cleanup.\n\nWhat was not tested: I did not reinstall this patched unit on the live gateway or trigger a new live restart while active Codex turns were running. This draft intentionally keeps the code change narrow and includes the production timeline so maintainers can decide whether they want a broader E2E restart proof before review-ready status.\n\n## Verification\n\n- `node --import tsx -e \"...buildSystemdUnit...\"`\n- `node scripts/run-vitest.mjs src/daemon/systemd-unit.test.ts src/daemon/service-audit.test.ts`\n- `git diff --check`\n- `.agents/skills/autoreview/scripts/autoreview --mode local` - clean, no accepted/actionable findings\n\n## AI Assistance\n\nThis PR is AI-assisted. I checked the generated unit, the daemon tests, the real systemd journal timeline, and the relevant Codex app-server stdio behavior before opening the draft.\n",
-        "branch": "codex/systemd-gateway-restart-drain",
-        "head_sha": "a0ecd7b8acb260c6863943fb126e0c905c4a5c39",
-        "author": "glucksberg",
-        "labels": [
-          "gateway",
-          "size: XS",
-          "proof: supplied",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/daemon/service-audit.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/systemd-unit.test.ts",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/systemd-unit.ts",
-            "additions": 4,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90305",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90305.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 47,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 42,
-            "SUCCESS": 3
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2080,
+    "total_ms": 427,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 312
+        "ms": 238
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1559
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 184
+        "ms": 178
       },
       {
         "name": "append_ledger",
