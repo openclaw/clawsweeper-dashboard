@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-04T06:22:06.272Z",
+  "generated_at": "2026-06-04T06:22:51.993Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-04T03:22:05.777Z",
+  "since": "2026-06-04T03:22:49.743Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    88992
+    86806
   ],
-  "comment_ids": [
-    4619551021
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 21,
+  "commands_seen": 10,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,30 +29,1125 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86806:4541801602:2026-06-04T06:22:46Z:clawsweeper_auto_repair",
+      "comment_id": "4541801602",
+      "comment_version_key": "4541801602:2026-06-04T06:22:46Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86806#issuecomment-4541801602",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86806,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-26T07:54:28Z",
+      "comment_updated_at": "2026-06-04T06:22:46Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=a51a508d7ceefc4132dcb451d02ad22fc61fd4b9)",
+      "review_summary": "The PR adds a `safeToRecover` result to session lock cleanup, wires Gateway startup to mark crashed main sessions from that classification, and adds focused regression tests.\n\nPR surface: Source +88, Tests +374. Total +462 across 6 files.\n\nReproducibility: yes. Source inspection shows channels start before the session-lock cleanup task, while the PR passes `startupMode: true` in that later cleanup and bypasses the young orphan-payload lock guard.",
+      "review_followup": "- [P1] Needs author or maintainer repair plus live proof; automation cannot supply the contributor's real behavior proof or choose the startup sequencing boundary safely.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "a51a508d7ceefc4132dcb451d02ad22fc61fd4b9",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: recover crashed main sessions via lock-file detection fallback",
+        "body": "## Summary\n\nAfter an unclean gateway crash, `cleanStaleLockFiles()` may find lock files from the previous process but classify them as non-stale (e.g. the PID was reused and passes the liveness check, or the orphan-payload grace window has not elapsed). When `cleaned.length === 0`, the existing `markRestartAbortedMainSessionsFromLocks()` never runs, leaving `status: \"running\"` sessions unrecovered on restart.\n\nThis PR drives the crash fallback from an explicit **safe-to-recover** lock classification emitted by the cleanup owner, instead of having Gateway infer crash residue from remaining locks with mtime heuristics.\n\n### What changed\n\n- `src/agents/session-write-lock.ts`: `cleanStaleLockFiles()` now returns a `safeToRecover` array and accepts a `startupMode` parameter. In startup mode, stale locks with a dead/absent owner and no report-only stale reasons are classified as safe to recover, **including** orphan-payload locks within the grace window — at Gateway startup no live owner can be writing metadata, so these are crash residue. Outside startup mode, grace-window-protected orphan locks are excluded to avoid false positives during runtime.\n- `src/agents/main-session-restart-recovery.ts`: `markCrashedMainSessionsFromRemainingLocks()` accepts `safeToRecoverLocks` instead of `remainingLocks` + `gatewayStartedAt`. The marker trusts the cleanup classification — no mtime heuristics or `pidAlive` checks.\n- `src/gateway/server-startup-post-attach.ts`: `cleanupStaleSessionLocks()` calls `cleanStaleLockFiles` with `startupMode: true` and passes `result.safeToRecover` to the crash marker when non-empty. Removed `gatewayStartedAt` parameter.\n- Tests: Regression coverage for startup-mode classification, grace window exclusion outside startup mode, report-only stale reasons, and `removeStale: false` dead-PID classification.\n\n### Safety\n\n- The crash marker only acts on locks that `cleanStaleLockFiles` explicitly classified as safe to recover — no heuristic inference.\n- Young unknown-owner locks within the grace window are only classified as `safeToRecover` in `startupMode`, where no live owner can exist. Outside startup mode, they are excluded.\n- Live-owner locks (`pidAlive === true`) are never included because they are not stale.\n- Report-only stale locks (`too-old`, `hold-exceeded`) are excluded because the owner may still be working.\n\n### ClawSweeper P1 resolution\n\n| P1 finding | Resolution |\n|---|---|\n| Drive crash fallback from real cleanup classifications | Marker consumes `safeToRecover` from `cleanStaleLockFiles()` with `startupMode: true` — no mtime heuristics |\n| Keep young unknown-owner locks out of recovery | `safeToRecover` excludes grace-window orphan locks outside `startupMode`; in startup mode, no live owner can exist so they are correctly classified as crash residue |\n| Replace simulated cleanup proof | Proof below uses the actual `cleanStaleLockFiles()` return contract with `startupMode: true` through the production startup path |\n| Make crash fallback reachable from startup cleanup | `startupMode: true` is passed in `cleanupStaleSessionLocks`, so `safeToRecover` is non-empty when orphan locks exist in the grace window |\n\n## Real Behavior Proof\n\n**Behavior addressed**: Gateway crash → `cleanStaleLockFiles(startupMode: true)` finds orphan-payload lock files within the grace window → `cleaned.length === 0` but `safeToRecover.length > 0` → crash fallback marks matching running sessions for recovery.\n\n**Real environment tested**: Linux (Ubuntu), Node.js 22.22, real OpenClaw checkout, branch `fix/crash-session-recovery-80254`.\n\n**Exact steps or command run after this patch**:\n```bash\nOPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs \\\n  src/agents/main-session-restart-recovery.test.ts \\\n  src/agents/session-write-lock.test.ts \\\n  src/gateway/server-startup-post-attach.test.ts \\\n  --run --reporter=verbose\n```\n\n**Evidence after fix**:\n```\n src/agents/main-session-restart-recovery.test.ts\n  ✓ marks running sessions from safe-to-recover locks at post-crash startup\n  ✓ skips sessions whose lock path does not match safe-to-recover locks\n  ✓ trusts cleanup classification: live-owner locks never appear in safeToRecoverLocks\n  ✓ marks sessions from safe-to-recover dead-PID locks\n  ✓ skips locks with report-only stale reasons (too-old) not classified as safe-to-recover\n  ✓ only marks crash-residue sessions when safe-to-recover excludes live-owner locks\n  ✓ does not mark sessions when young unknown-owner lock is preserved by grace window\n\n src/agents/session-write-lock.test.ts\n  ✓ classifies dead-PID lock past grace window as cleaned (not safeToRecover)\n  ✓ classifies orphan lock past grace window as cleaned\n  ✓ does not classify young orphan locks as safeToRecover outside startup mode\n  ✓ classifies young orphan locks as safeToRecover in startup mode\n  ✓ includes dead-PID lock in safeToRecover when removeStale is false\n\n src/gateway/server-startup-post-attach.test.ts\n  ✓ calls crash marker with safeToRecover locks when cleanup finds non-removable dead-owner locks\n  ✓ cleanStaleLockFiles called with startupMode: true\n\n Test Files  3 passed (3)\n      Tests  182 passed (182)\n```\n\n**Observed result after fix**:\n- `cleanStaleLockFiles(removeStale: true, startupMode: true)` with young orphan lock in grace window → lock preserved, `safeToRecover` contains it ✓\n- `cleanStaleLockFiles(removeStale: true)` without startupMode with young orphan lock → lock preserved, `safeToRecover` empty ✓\n- `cleanStaleLockFiles(removeStale: true)` with dead-PID lock → lock removed, enters `cleaned`, `safeToRecover` empty ✓\n- `markCrashedMainSessionsFromRemainingLocks` with `safeToRecoverLocks` → marks matching running sessions ✓\n- `cleanupStaleSessionLocks` calls `cleanStaleLockFiles` with `startupMode: true` and passes `safeToRecover` to crash marker ✓\n\n**What was not tested**: Live Gateway crash/restart end-to-end on Windows. The `safeToRecover` classification contract is platform-independent because it derives from `cleanStaleLockFiles()` inspection logic. The full Gateway crash → restart → session-restore flow was not tested in a live OpenClaw process.\n\nFixes #80254\n",
+        "branch": "fix/crash-session-recovery-80254",
+        "head_sha": "a51a508d7ceefc4132dcb451d02ad22fc61fd4b9",
+        "author": "tanshanshan",
+        "labels": [
+          "gateway",
+          "agents",
+          "size: L",
+          "proof: supplied",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/main-session-restart-recovery.test.ts",
+            "additions": 227,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/main-session-restart-recovery.ts",
+            "additions": 54,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-write-lock.test.ts",
+            "additions": 104,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-write-lock.ts",
+            "additions": 23,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.test.ts",
+            "additions": 53,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.ts",
+            "additions": 22,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86806",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86806.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 132,
+            "SKIPPED": 28,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-fast-contracts-plugins-a:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-fast-contracts-plugins-a:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86806:4619514551:2026-06-04T06:15:36Z:re_review",
+      "comment_id": "4619514551",
+      "comment_version_key": "4619514551:2026-06-04T06:15:36Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86806#issuecomment-4619514551",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86806,
+      "author": "tanshanshan",
+      "author_id": 22539261,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-04T06:15:36Z",
+      "comment_updated_at": "2026-06-04T06:15:36Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: recover crashed main sessions via lock-file detection fallback",
+        "body": "## Summary\n\nAfter an unclean gateway crash, `cleanStaleLockFiles()` may find lock files from the previous process but classify them as non-stale (e.g. the PID was reused and passes the liveness check, or the orphan-payload grace window has not elapsed). When `cleaned.length === 0`, the existing `markRestartAbortedMainSessionsFromLocks()` never runs, leaving `status: \"running\"` sessions unrecovered on restart.\n\nThis PR drives the crash fallback from an explicit **safe-to-recover** lock classification emitted by the cleanup owner, instead of having Gateway infer crash residue from remaining locks with mtime heuristics.\n\n### What changed\n\n- `src/agents/session-write-lock.ts`: `cleanStaleLockFiles()` now returns a `safeToRecover` array and accepts a `startupMode` parameter. In startup mode, stale locks with a dead/absent owner and no report-only stale reasons are classified as safe to recover, **including** orphan-payload locks within the grace window — at Gateway startup no live owner can be writing metadata, so these are crash residue. Outside startup mode, grace-window-protected orphan locks are excluded to avoid false positives during runtime.\n- `src/agents/main-session-restart-recovery.ts`: `markCrashedMainSessionsFromRemainingLocks()` accepts `safeToRecoverLocks` instead of `remainingLocks` + `gatewayStartedAt`. The marker trusts the cleanup classification — no mtime heuristics or `pidAlive` checks.\n- `src/gateway/server-startup-post-attach.ts`: `cleanupStaleSessionLocks()` calls `cleanStaleLockFiles` with `startupMode: true` and passes `result.safeToRecover` to the crash marker when non-empty. Removed `gatewayStartedAt` parameter.\n- Tests: Regression coverage for startup-mode classification, grace window exclusion outside startup mode, report-only stale reasons, and `removeStale: false` dead-PID classification.\n\n### Safety\n\n- The crash marker only acts on locks that `cleanStaleLockFiles` explicitly classified as safe to recover — no heuristic inference.\n- Young unknown-owner locks within the grace window are only classified as `safeToRecover` in `startupMode`, where no live owner can exist. Outside startup mode, they are excluded.\n- Live-owner locks (`pidAlive === true`) are never included because they are not stale.\n- Report-only stale locks (`too-old`, `hold-exceeded`) are excluded because the owner may still be working.\n\n### ClawSweeper P1 resolution\n\n| P1 finding | Resolution |\n|---|---|\n| Drive crash fallback from real cleanup classifications | Marker consumes `safeToRecover` from `cleanStaleLockFiles()` with `startupMode: true` — no mtime heuristics |\n| Keep young unknown-owner locks out of recovery | `safeToRecover` excludes grace-window orphan locks outside `startupMode`; in startup mode, no live owner can exist so they are correctly classified as crash residue |\n| Replace simulated cleanup proof | Proof below uses the actual `cleanStaleLockFiles()` return contract with `startupMode: true` through the production startup path |\n| Make crash fallback reachable from startup cleanup | `startupMode: true` is passed in `cleanupStaleSessionLocks`, so `safeToRecover` is non-empty when orphan locks exist in the grace window |\n\n## Real Behavior Proof\n\n**Behavior addressed**: Gateway crash → `cleanStaleLockFiles(startupMode: true)` finds orphan-payload lock files within the grace window → `cleaned.length === 0` but `safeToRecover.length > 0` → crash fallback marks matching running sessions for recovery.\n\n**Real environment tested**: Linux (Ubuntu), Node.js 22.22, real OpenClaw checkout, branch `fix/crash-session-recovery-80254`.\n\n**Exact steps or command run after this patch**:\n```bash\nOPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs \\\n  src/agents/main-session-restart-recovery.test.ts \\\n  src/agents/session-write-lock.test.ts \\\n  src/gateway/server-startup-post-attach.test.ts \\\n  --run --reporter=verbose\n```\n\n**Evidence after fix**:\n```\n src/agents/main-session-restart-recovery.test.ts\n  ✓ marks running sessions from safe-to-recover locks at post-crash startup\n  ✓ skips sessions whose lock path does not match safe-to-recover locks\n  ✓ trusts cleanup classification: live-owner locks never appear in safeToRecoverLocks\n  ✓ marks sessions from safe-to-recover dead-PID locks\n  ✓ skips locks with report-only stale reasons (too-old) not classified as safe-to-recover\n  ✓ only marks crash-residue sessions when safe-to-recover excludes live-owner locks\n  ✓ does not mark sessions when young unknown-owner lock is preserved by grace window\n\n src/agents/session-write-lock.test.ts\n  ✓ classifies dead-PID lock past grace window as cleaned (not safeToRecover)\n  ✓ classifies orphan lock past grace window as cleaned\n  ✓ does not classify young orphan locks as safeToRecover outside startup mode\n  ✓ classifies young orphan locks as safeToRecover in startup mode\n  ✓ includes dead-PID lock in safeToRecover when removeStale is false\n\n src/gateway/server-startup-post-attach.test.ts\n  ✓ calls crash marker with safeToRecover locks when cleanup finds non-removable dead-owner locks\n  ✓ cleanStaleLockFiles called with startupMode: true\n\n Test Files  3 passed (3)\n      Tests  182 passed (182)\n```\n\n**Observed result after fix**:\n- `cleanStaleLockFiles(removeStale: true, startupMode: true)` with young orphan lock in grace window → lock preserved, `safeToRecover` contains it ✓\n- `cleanStaleLockFiles(removeStale: true)` without startupMode with young orphan lock → lock preserved, `safeToRecover` empty ✓\n- `cleanStaleLockFiles(removeStale: true)` with dead-PID lock → lock removed, enters `cleaned`, `safeToRecover` empty ✓\n- `markCrashedMainSessionsFromRemainingLocks` with `safeToRecoverLocks` → marks matching running sessions ✓\n- `cleanupStaleSessionLocks` calls `cleanStaleLockFiles` with `startupMode: true` and passes `safeToRecover` to crash marker ✓\n\n**What was not tested**: Live Gateway crash/restart end-to-end on Windows. The `safeToRecover` classification contract is platform-independent because it derives from `cleanStaleLockFiles()` inspection logic. The full Gateway crash → restart → session-restore flow was not tested in a live OpenClaw process.\n\nFixes #80254\n",
+        "branch": "fix/crash-session-recovery-80254",
+        "head_sha": "a51a508d7ceefc4132dcb451d02ad22fc61fd4b9",
+        "author": "tanshanshan",
+        "labels": [
+          "gateway",
+          "agents",
+          "size: L",
+          "proof: supplied",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/main-session-restart-recovery.test.ts",
+            "additions": 227,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/main-session-restart-recovery.ts",
+            "additions": 54,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-write-lock.test.ts",
+            "additions": 104,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-write-lock.ts",
+            "additions": 23,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.test.ts",
+            "additions": 53,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.ts",
+            "additions": 22,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86806",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86806.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 132,
+            "SKIPPED": 28,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-fast-contracts-plugins-a:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-fast-contracts-plugins-a:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86806:4618907714:2026-06-04T04:20:07Z:re_review",
+      "comment_id": "4618907714",
+      "comment_version_key": "4618907714:2026-06-04T04:20:07Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86806#issuecomment-4618907714",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86806,
+      "author": "tanshanshan",
+      "author_id": 22539261,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-04T04:20:07Z",
+      "comment_updated_at": "2026-06-04T04:20:07Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86806:4618658145:2026-06-04T03:23:08Z:re_review",
+      "comment_id": "4618658145",
+      "comment_version_key": "4618658145:2026-06-04T03:23:08Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86806#issuecomment-4618658145",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86806,
+      "author": "tanshanshan",
+      "author_id": 22539261,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-04T03:23:08Z",
+      "comment_updated_at": "2026-06-04T03:23:08Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: recover crashed main sessions via lock-file detection fallback",
+        "body": "## Summary\n\nAfter an unclean gateway crash, `cleanStaleLockFiles()` may find lock files from the previous process but classify them as non-stale (e.g. the PID was reused and passes the liveness check, or the orphan-payload grace window has not elapsed). When `cleaned.length === 0`, the existing `markRestartAbortedMainSessionsFromLocks()` never runs, leaving `status: \"running\"` sessions unrecovered on restart.\n\nThis PR drives the crash fallback from an explicit **safe-to-recover** lock classification emitted by the cleanup owner, instead of having Gateway infer crash residue from remaining locks with mtime heuristics.\n\n### What changed\n\n- `src/agents/session-write-lock.ts`: `cleanStaleLockFiles()` now returns a `safeToRecover` array and accepts a `startupMode` parameter. In startup mode, stale locks with a dead/absent owner and no report-only stale reasons are classified as safe to recover, **including** orphan-payload locks within the grace window — at Gateway startup no live owner can be writing metadata, so these are crash residue. Outside startup mode, grace-window-protected orphan locks are excluded to avoid false positives during runtime.\n- `src/agents/main-session-restart-recovery.ts`: `markCrashedMainSessionsFromRemainingLocks()` accepts `safeToRecoverLocks` instead of `remainingLocks` + `gatewayStartedAt`. The marker trusts the cleanup classification — no mtime heuristics or `pidAlive` checks.\n- `src/gateway/server-startup-post-attach.ts`: `cleanupStaleSessionLocks()` calls `cleanStaleLockFiles` with `startupMode: true` and passes `result.safeToRecover` to the crash marker when non-empty. Removed `gatewayStartedAt` parameter.\n- Tests: Regression coverage for startup-mode classification, grace window exclusion outside startup mode, report-only stale reasons, and `removeStale: false` dead-PID classification.\n\n### Safety\n\n- The crash marker only acts on locks that `cleanStaleLockFiles` explicitly classified as safe to recover — no heuristic inference.\n- Young unknown-owner locks within the grace window are only classified as `safeToRecover` in `startupMode`, where no live owner can exist. Outside startup mode, they are excluded.\n- Live-owner locks (`pidAlive === true`) are never included because they are not stale.\n- Report-only stale locks (`too-old`, `hold-exceeded`) are excluded because the owner may still be working.\n\n### ClawSweeper P1 resolution\n\n| P1 finding | Resolution |\n|---|---|\n| Drive crash fallback from real cleanup classifications | Marker consumes `safeToRecover` from `cleanStaleLockFiles()` with `startupMode: true` — no mtime heuristics |\n| Keep young unknown-owner locks out of recovery | `safeToRecover` excludes grace-window orphan locks outside `startupMode`; in startup mode, no live owner can exist so they are correctly classified as crash residue |\n| Replace simulated cleanup proof | Proof below uses the actual `cleanStaleLockFiles()` return contract with `startupMode: true` through the production startup path |\n| Make crash fallback reachable from startup cleanup | `startupMode: true` is passed in `cleanupStaleSessionLocks`, so `safeToRecover` is non-empty when orphan locks exist in the grace window |\n\n## Real Behavior Proof\n\n**Behavior addressed**: Gateway crash → `cleanStaleLockFiles(startupMode: true)` finds orphan-payload lock files within the grace window → `cleaned.length === 0` but `safeToRecover.length > 0` → crash fallback marks matching running sessions for recovery.\n\n**Real environment tested**: Linux (Ubuntu), Node.js 22.22, real OpenClaw checkout, branch `fix/crash-session-recovery-80254`.\n\n**Exact steps or command run after this patch**:\n```bash\nOPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs \\\n  src/agents/main-session-restart-recovery.test.ts \\\n  src/agents/session-write-lock.test.ts \\\n  src/gateway/server-startup-post-attach.test.ts \\\n  --run --reporter=verbose\n```\n\n**Evidence after fix**:\n```\n src/agents/main-session-restart-recovery.test.ts\n  ✓ marks running sessions from safe-to-recover locks at post-crash startup\n  ✓ skips sessions whose lock path does not match safe-to-recover locks\n  ✓ trusts cleanup classification: live-owner locks never appear in safeToRecoverLocks\n  ✓ marks sessions from safe-to-recover dead-PID locks\n  ✓ skips locks with report-only stale reasons (too-old) not classified as safe-to-recover\n  ✓ only marks crash-residue sessions when safe-to-recover excludes live-owner locks\n  ✓ does not mark sessions when young unknown-owner lock is preserved by grace window\n\n src/agents/session-write-lock.test.ts\n  ✓ classifies dead-PID lock past grace window as cleaned (not safeToRecover)\n  ✓ classifies orphan lock past grace window as cleaned\n  ✓ does not classify young orphan locks as safeToRecover outside startup mode\n  ✓ classifies young orphan locks as safeToRecover in startup mode\n  ✓ includes dead-PID lock in safeToRecover when removeStale is false\n\n src/gateway/server-startup-post-attach.test.ts\n  ✓ calls crash marker with safeToRecover locks when cleanup finds non-removable dead-owner locks\n  ✓ cleanStaleLockFiles called with startupMode: true\n\n Test Files  3 passed (3)\n      Tests  182 passed (182)\n```\n\n**Observed result after fix**:\n- `cleanStaleLockFiles(removeStale: true, startupMode: true)` with young orphan lock in grace window → lock preserved, `safeToRecover` contains it ✓\n- `cleanStaleLockFiles(removeStale: true)` without startupMode with young orphan lock → lock preserved, `safeToRecover` empty ✓\n- `cleanStaleLockFiles(removeStale: true)` with dead-PID lock → lock removed, enters `cleaned`, `safeToRecover` empty ✓\n- `markCrashedMainSessionsFromRemainingLocks` with `safeToRecoverLocks` → marks matching running sessions ✓\n- `cleanupStaleSessionLocks` calls `cleanStaleLockFiles` with `startupMode: true` and passes `safeToRecover` to crash marker ✓\n\n**What was not tested**: Live Gateway crash/restart end-to-end on Windows. The `safeToRecover` classification contract is platform-independent because it derives from `cleanStaleLockFiles()` inspection logic. The full Gateway crash → restart → session-restore flow was not tested in a live OpenClaw process.\n\nFixes #80254\n",
+        "branch": "fix/crash-session-recovery-80254",
+        "head_sha": "a51a508d7ceefc4132dcb451d02ad22fc61fd4b9",
+        "author": "tanshanshan",
+        "labels": [
+          "gateway",
+          "agents",
+          "size: L",
+          "proof: supplied",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/main-session-restart-recovery.test.ts",
+            "additions": 227,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/main-session-restart-recovery.ts",
+            "additions": 54,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-write-lock.test.ts",
+            "additions": 104,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-write-lock.ts",
+            "additions": 23,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.test.ts",
+            "additions": 53,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.ts",
+            "additions": 22,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86806",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86806.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 132,
+            "SKIPPED": 28,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-fast-contracts-plugins-a:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-fast-contracts-plugins-a:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86806:4618456558:2026-06-04T02:35:14Z:re_review",
+      "comment_id": "4618456558",
+      "comment_version_key": "4618456558:2026-06-04T02:35:14Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86806#issuecomment-4618456558",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86806,
+      "author": "tanshanshan",
+      "author_id": 22539261,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-04T02:35:14Z",
+      "comment_updated_at": "2026-06-04T02:35:14Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: recover crashed main sessions via lock-file detection fallback",
+        "body": "## Summary\n\nAfter an unclean gateway crash, `cleanStaleLockFiles()` may find lock files from the previous process but classify them as non-stale (e.g. the PID was reused and passes the liveness check, or the orphan-payload grace window has not elapsed). When `cleaned.length === 0`, the existing `markRestartAbortedMainSessionsFromLocks()` never runs, leaving `status: \"running\"` sessions unrecovered on restart.\n\nThis PR drives the crash fallback from an explicit **safe-to-recover** lock classification emitted by the cleanup owner, instead of having Gateway infer crash residue from remaining locks with mtime heuristics.\n\n### What changed\n\n- `src/agents/session-write-lock.ts`: `cleanStaleLockFiles()` now returns a `safeToRecover` array and accepts a `startupMode` parameter. In startup mode, stale locks with a dead/absent owner and no report-only stale reasons are classified as safe to recover, **including** orphan-payload locks within the grace window — at Gateway startup no live owner can be writing metadata, so these are crash residue. Outside startup mode, grace-window-protected orphan locks are excluded to avoid false positives during runtime.\n- `src/agents/main-session-restart-recovery.ts`: `markCrashedMainSessionsFromRemainingLocks()` accepts `safeToRecoverLocks` instead of `remainingLocks` + `gatewayStartedAt`. The marker trusts the cleanup classification — no mtime heuristics or `pidAlive` checks.\n- `src/gateway/server-startup-post-attach.ts`: `cleanupStaleSessionLocks()` calls `cleanStaleLockFiles` with `startupMode: true` and passes `result.safeToRecover` to the crash marker when non-empty. Removed `gatewayStartedAt` parameter.\n- Tests: Regression coverage for startup-mode classification, grace window exclusion outside startup mode, report-only stale reasons, and `removeStale: false` dead-PID classification.\n\n### Safety\n\n- The crash marker only acts on locks that `cleanStaleLockFiles` explicitly classified as safe to recover — no heuristic inference.\n- Young unknown-owner locks within the grace window are only classified as `safeToRecover` in `startupMode`, where no live owner can exist. Outside startup mode, they are excluded.\n- Live-owner locks (`pidAlive === true`) are never included because they are not stale.\n- Report-only stale locks (`too-old`, `hold-exceeded`) are excluded because the owner may still be working.\n\n### ClawSweeper P1 resolution\n\n| P1 finding | Resolution |\n|---|---|\n| Drive crash fallback from real cleanup classifications | Marker consumes `safeToRecover` from `cleanStaleLockFiles()` with `startupMode: true` — no mtime heuristics |\n| Keep young unknown-owner locks out of recovery | `safeToRecover` excludes grace-window orphan locks outside `startupMode`; in startup mode, no live owner can exist so they are correctly classified as crash residue |\n| Replace simulated cleanup proof | Proof below uses the actual `cleanStaleLockFiles()` return contract with `startupMode: true` through the production startup path |\n| Make crash fallback reachable from startup cleanup | `startupMode: true` is passed in `cleanupStaleSessionLocks`, so `safeToRecover` is non-empty when orphan locks exist in the grace window |\n\n## Real Behavior Proof\n\n**Behavior addressed**: Gateway crash → `cleanStaleLockFiles(startupMode: true)` finds orphan-payload lock files within the grace window → `cleaned.length === 0` but `safeToRecover.length > 0` → crash fallback marks matching running sessions for recovery.\n\n**Real environment tested**: Linux (Ubuntu), Node.js 22.22, real OpenClaw checkout, branch `fix/crash-session-recovery-80254`.\n\n**Exact steps or command run after this patch**:\n```bash\nOPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs \\\n  src/agents/main-session-restart-recovery.test.ts \\\n  src/agents/session-write-lock.test.ts \\\n  src/gateway/server-startup-post-attach.test.ts \\\n  --run --reporter=verbose\n```\n\n**Evidence after fix**:\n```\n src/agents/main-session-restart-recovery.test.ts\n  ✓ marks running sessions from safe-to-recover locks at post-crash startup\n  ✓ skips sessions whose lock path does not match safe-to-recover locks\n  ✓ trusts cleanup classification: live-owner locks never appear in safeToRecoverLocks\n  ✓ marks sessions from safe-to-recover dead-PID locks\n  ✓ skips locks with report-only stale reasons (too-old) not classified as safe-to-recover\n  ✓ only marks crash-residue sessions when safe-to-recover excludes live-owner locks\n  ✓ does not mark sessions when young unknown-owner lock is preserved by grace window\n\n src/agents/session-write-lock.test.ts\n  ✓ classifies dead-PID lock past grace window as cleaned (not safeToRecover)\n  ✓ classifies orphan lock past grace window as cleaned\n  ✓ does not classify young orphan locks as safeToRecover outside startup mode\n  ✓ classifies young orphan locks as safeToRecover in startup mode\n  ✓ includes dead-PID lock in safeToRecover when removeStale is false\n\n src/gateway/server-startup-post-attach.test.ts\n  ✓ calls crash marker with safeToRecover locks when cleanup finds non-removable dead-owner locks\n  ✓ cleanStaleLockFiles called with startupMode: true\n\n Test Files  3 passed (3)\n      Tests  182 passed (182)\n```\n\n**Observed result after fix**:\n- `cleanStaleLockFiles(removeStale: true, startupMode: true)` with young orphan lock in grace window → lock preserved, `safeToRecover` contains it ✓\n- `cleanStaleLockFiles(removeStale: true)` without startupMode with young orphan lock → lock preserved, `safeToRecover` empty ✓\n- `cleanStaleLockFiles(removeStale: true)` with dead-PID lock → lock removed, enters `cleaned`, `safeToRecover` empty ✓\n- `markCrashedMainSessionsFromRemainingLocks` with `safeToRecoverLocks` → marks matching running sessions ✓\n- `cleanupStaleSessionLocks` calls `cleanStaleLockFiles` with `startupMode: true` and passes `safeToRecover` to crash marker ✓\n\n**What was not tested**: Live Gateway crash/restart end-to-end on Windows. The `safeToRecover` classification contract is platform-independent because it derives from `cleanStaleLockFiles()` inspection logic. The full Gateway crash → restart → session-restore flow was not tested in a live OpenClaw process.\n\nFixes #80254\n",
+        "branch": "fix/crash-session-recovery-80254",
+        "head_sha": "a51a508d7ceefc4132dcb451d02ad22fc61fd4b9",
+        "author": "tanshanshan",
+        "labels": [
+          "gateway",
+          "agents",
+          "size: L",
+          "proof: supplied",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/main-session-restart-recovery.test.ts",
+            "additions": 227,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/main-session-restart-recovery.ts",
+            "additions": 54,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-write-lock.test.ts",
+            "additions": 104,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-write-lock.ts",
+            "additions": 23,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.test.ts",
+            "additions": 53,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.ts",
+            "additions": 22,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86806",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86806.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 132,
+            "SKIPPED": 28,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-fast-contracts-plugins-a:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-fast-contracts-plugins-a:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86806:4608584274:2026-06-03T02:28:56Z:re_review",
+      "comment_id": "4608584274",
+      "comment_version_key": "4608584274:2026-06-03T02:28:56Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86806#issuecomment-4608584274",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86806,
+      "author": "tanshanshan",
+      "author_id": 22539261,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-03T02:28:56Z",
+      "comment_updated_at": "2026-06-03T02:28:56Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: recover crashed main sessions via lock-file detection fallback",
+        "body": "## Summary\n\nAfter an unclean gateway crash, `cleanStaleLockFiles()` may find lock files from the previous process but classify them as non-stale (e.g. the PID was reused and passes the liveness check, or the orphan-payload grace window has not elapsed). When `cleaned.length === 0`, the existing `markRestartAbortedMainSessionsFromLocks()` never runs, leaving `status: \"running\"` sessions unrecovered on restart.\n\nThis PR drives the crash fallback from an explicit **safe-to-recover** lock classification emitted by the cleanup owner, instead of having Gateway infer crash residue from remaining locks with mtime heuristics.\n\n### What changed\n\n- `src/agents/session-write-lock.ts`: `cleanStaleLockFiles()` now returns a `safeToRecover` array and accepts a `startupMode` parameter. In startup mode, stale locks with a dead/absent owner and no report-only stale reasons are classified as safe to recover, **including** orphan-payload locks within the grace window — at Gateway startup no live owner can be writing metadata, so these are crash residue. Outside startup mode, grace-window-protected orphan locks are excluded to avoid false positives during runtime.\n- `src/agents/main-session-restart-recovery.ts`: `markCrashedMainSessionsFromRemainingLocks()` accepts `safeToRecoverLocks` instead of `remainingLocks` + `gatewayStartedAt`. The marker trusts the cleanup classification — no mtime heuristics or `pidAlive` checks.\n- `src/gateway/server-startup-post-attach.ts`: `cleanupStaleSessionLocks()` calls `cleanStaleLockFiles` with `startupMode: true` and passes `result.safeToRecover` to the crash marker when non-empty. Removed `gatewayStartedAt` parameter.\n- Tests: Regression coverage for startup-mode classification, grace window exclusion outside startup mode, report-only stale reasons, and `removeStale: false` dead-PID classification.\n\n### Safety\n\n- The crash marker only acts on locks that `cleanStaleLockFiles` explicitly classified as safe to recover — no heuristic inference.\n- Young unknown-owner locks within the grace window are only classified as `safeToRecover` in `startupMode`, where no live owner can exist. Outside startup mode, they are excluded.\n- Live-owner locks (`pidAlive === true`) are never included because they are not stale.\n- Report-only stale locks (`too-old`, `hold-exceeded`) are excluded because the owner may still be working.\n\n### ClawSweeper P1 resolution\n\n| P1 finding | Resolution |\n|---|---|\n| Drive crash fallback from real cleanup classifications | Marker consumes `safeToRecover` from `cleanStaleLockFiles()` with `startupMode: true` — no mtime heuristics |\n| Keep young unknown-owner locks out of recovery | `safeToRecover` excludes grace-window orphan locks outside `startupMode`; in startup mode, no live owner can exist so they are correctly classified as crash residue |\n| Replace simulated cleanup proof | Proof below uses the actual `cleanStaleLockFiles()` return contract with `startupMode: true` through the production startup path |\n| Make crash fallback reachable from startup cleanup | `startupMode: true` is passed in `cleanupStaleSessionLocks`, so `safeToRecover` is non-empty when orphan locks exist in the grace window |\n\n## Real Behavior Proof\n\n**Behavior addressed**: Gateway crash → `cleanStaleLockFiles(startupMode: true)` finds orphan-payload lock files within the grace window → `cleaned.length === 0` but `safeToRecover.length > 0` → crash fallback marks matching running sessions for recovery.\n\n**Real environment tested**: Linux (Ubuntu), Node.js 22.22, real OpenClaw checkout, branch `fix/crash-session-recovery-80254`.\n\n**Exact steps or command run after this patch**:\n```bash\nOPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs \\\n  src/agents/main-session-restart-recovery.test.ts \\\n  src/agents/session-write-lock.test.ts \\\n  src/gateway/server-startup-post-attach.test.ts \\\n  --run --reporter=verbose\n```\n\n**Evidence after fix**:\n```\n src/agents/main-session-restart-recovery.test.ts\n  ✓ marks running sessions from safe-to-recover locks at post-crash startup\n  ✓ skips sessions whose lock path does not match safe-to-recover locks\n  ✓ trusts cleanup classification: live-owner locks never appear in safeToRecoverLocks\n  ✓ marks sessions from safe-to-recover dead-PID locks\n  ✓ skips locks with report-only stale reasons (too-old) not classified as safe-to-recover\n  ✓ only marks crash-residue sessions when safe-to-recover excludes live-owner locks\n  ✓ does not mark sessions when young unknown-owner lock is preserved by grace window\n\n src/agents/session-write-lock.test.ts\n  ✓ classifies dead-PID lock past grace window as cleaned (not safeToRecover)\n  ✓ classifies orphan lock past grace window as cleaned\n  ✓ does not classify young orphan locks as safeToRecover outside startup mode\n  ✓ classifies young orphan locks as safeToRecover in startup mode\n  ✓ includes dead-PID lock in safeToRecover when removeStale is false\n\n src/gateway/server-startup-post-attach.test.ts\n  ✓ calls crash marker with safeToRecover locks when cleanup finds non-removable dead-owner locks\n  ✓ cleanStaleLockFiles called with startupMode: true\n\n Test Files  3 passed (3)\n      Tests  182 passed (182)\n```\n\n**Observed result after fix**:\n- `cleanStaleLockFiles(removeStale: true, startupMode: true)` with young orphan lock in grace window → lock preserved, `safeToRecover` contains it ✓\n- `cleanStaleLockFiles(removeStale: true)` without startupMode with young orphan lock → lock preserved, `safeToRecover` empty ✓\n- `cleanStaleLockFiles(removeStale: true)` with dead-PID lock → lock removed, enters `cleaned`, `safeToRecover` empty ✓\n- `markCrashedMainSessionsFromRemainingLocks` with `safeToRecoverLocks` → marks matching running sessions ✓\n- `cleanupStaleSessionLocks` calls `cleanStaleLockFiles` with `startupMode: true` and passes `safeToRecover` to crash marker ✓\n\n**What was not tested**: Live Gateway crash/restart end-to-end on Windows. The `safeToRecover` classification contract is platform-independent because it derives from `cleanStaleLockFiles()` inspection logic. The full Gateway crash → restart → session-restore flow was not tested in a live OpenClaw process.\n\nFixes #80254\n",
+        "branch": "fix/crash-session-recovery-80254",
+        "head_sha": "a51a508d7ceefc4132dcb451d02ad22fc61fd4b9",
+        "author": "tanshanshan",
+        "labels": [
+          "gateway",
+          "agents",
+          "size: L",
+          "proof: supplied",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/main-session-restart-recovery.test.ts",
+            "additions": 227,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/main-session-restart-recovery.ts",
+            "additions": 54,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-write-lock.test.ts",
+            "additions": 104,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-write-lock.ts",
+            "additions": 23,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.test.ts",
+            "additions": 53,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.ts",
+            "additions": 22,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86806",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86806.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 132,
+            "SKIPPED": 28,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-fast-contracts-plugins-a:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-fast-contracts-plugins-a:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86806:4550690844:2026-05-27T02:22:50Z:re_review",
+      "comment_id": "4550690844",
+      "comment_version_key": "4550690844:2026-05-27T02:22:50Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86806#issuecomment-4550690844",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86806,
+      "author": "tanshanshan",
+      "author_id": 22539261,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-27T02:22:50Z",
+      "comment_updated_at": "2026-05-27T02:22:50Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: recover crashed main sessions via lock-file detection fallback",
+        "body": "## Summary\n\nAfter an unclean gateway crash, `cleanStaleLockFiles()` may find lock files from the previous process but classify them as non-stale (e.g. the PID was reused and passes the liveness check, or the orphan-payload grace window has not elapsed). When `cleaned.length === 0`, the existing `markRestartAbortedMainSessionsFromLocks()` never runs, leaving `status: \"running\"` sessions unrecovered on restart.\n\nThis PR drives the crash fallback from an explicit **safe-to-recover** lock classification emitted by the cleanup owner, instead of having Gateway infer crash residue from remaining locks with mtime heuristics.\n\n### What changed\n\n- `src/agents/session-write-lock.ts`: `cleanStaleLockFiles()` now returns a `safeToRecover` array and accepts a `startupMode` parameter. In startup mode, stale locks with a dead/absent owner and no report-only stale reasons are classified as safe to recover, **including** orphan-payload locks within the grace window — at Gateway startup no live owner can be writing metadata, so these are crash residue. Outside startup mode, grace-window-protected orphan locks are excluded to avoid false positives during runtime.\n- `src/agents/main-session-restart-recovery.ts`: `markCrashedMainSessionsFromRemainingLocks()` accepts `safeToRecoverLocks` instead of `remainingLocks` + `gatewayStartedAt`. The marker trusts the cleanup classification — no mtime heuristics or `pidAlive` checks.\n- `src/gateway/server-startup-post-attach.ts`: `cleanupStaleSessionLocks()` calls `cleanStaleLockFiles` with `startupMode: true` and passes `result.safeToRecover` to the crash marker when non-empty. Removed `gatewayStartedAt` parameter.\n- Tests: Regression coverage for startup-mode classification, grace window exclusion outside startup mode, report-only stale reasons, and `removeStale: false` dead-PID classification.\n\n### Safety\n\n- The crash marker only acts on locks that `cleanStaleLockFiles` explicitly classified as safe to recover — no heuristic inference.\n- Young unknown-owner locks within the grace window are only classified as `safeToRecover` in `startupMode`, where no live owner can exist. Outside startup mode, they are excluded.\n- Live-owner locks (`pidAlive === true`) are never included because they are not stale.\n- Report-only stale locks (`too-old`, `hold-exceeded`) are excluded because the owner may still be working.\n\n### ClawSweeper P1 resolution\n\n| P1 finding | Resolution |\n|---|---|\n| Drive crash fallback from real cleanup classifications | Marker consumes `safeToRecover` from `cleanStaleLockFiles()` with `startupMode: true` — no mtime heuristics |\n| Keep young unknown-owner locks out of recovery | `safeToRecover` excludes grace-window orphan locks outside `startupMode`; in startup mode, no live owner can exist so they are correctly classified as crash residue |\n| Replace simulated cleanup proof | Proof below uses the actual `cleanStaleLockFiles()` return contract with `startupMode: true` through the production startup path |\n| Make crash fallback reachable from startup cleanup | `startupMode: true` is passed in `cleanupStaleSessionLocks`, so `safeToRecover` is non-empty when orphan locks exist in the grace window |\n\n## Real Behavior Proof\n\n**Behavior addressed**: Gateway crash → `cleanStaleLockFiles(startupMode: true)` finds orphan-payload lock files within the grace window → `cleaned.length === 0` but `safeToRecover.length > 0` → crash fallback marks matching running sessions for recovery.\n\n**Real environment tested**: Linux (Ubuntu), Node.js 22.22, real OpenClaw checkout, branch `fix/crash-session-recovery-80254`.\n\n**Exact steps or command run after this patch**:\n```bash\nOPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs \\\n  src/agents/main-session-restart-recovery.test.ts \\\n  src/agents/session-write-lock.test.ts \\\n  src/gateway/server-startup-post-attach.test.ts \\\n  --run --reporter=verbose\n```\n\n**Evidence after fix**:\n```\n src/agents/main-session-restart-recovery.test.ts\n  ✓ marks running sessions from safe-to-recover locks at post-crash startup\n  ✓ skips sessions whose lock path does not match safe-to-recover locks\n  ✓ trusts cleanup classification: live-owner locks never appear in safeToRecoverLocks\n  ✓ marks sessions from safe-to-recover dead-PID locks\n  ✓ skips locks with report-only stale reasons (too-old) not classified as safe-to-recover\n  ✓ only marks crash-residue sessions when safe-to-recover excludes live-owner locks\n  ✓ does not mark sessions when young unknown-owner lock is preserved by grace window\n\n src/agents/session-write-lock.test.ts\n  ✓ classifies dead-PID lock past grace window as cleaned (not safeToRecover)\n  ✓ classifies orphan lock past grace window as cleaned\n  ✓ does not classify young orphan locks as safeToRecover outside startup mode\n  ✓ classifies young orphan locks as safeToRecover in startup mode\n  ✓ includes dead-PID lock in safeToRecover when removeStale is false\n\n src/gateway/server-startup-post-attach.test.ts\n  ✓ calls crash marker with safeToRecover locks when cleanup finds non-removable dead-owner locks\n  ✓ cleanStaleLockFiles called with startupMode: true\n\n Test Files  3 passed (3)\n      Tests  182 passed (182)\n```\n\n**Observed result after fix**:\n- `cleanStaleLockFiles(removeStale: true, startupMode: true)` with young orphan lock in grace window → lock preserved, `safeToRecover` contains it ✓\n- `cleanStaleLockFiles(removeStale: true)` without startupMode with young orphan lock → lock preserved, `safeToRecover` empty ✓\n- `cleanStaleLockFiles(removeStale: true)` with dead-PID lock → lock removed, enters `cleaned`, `safeToRecover` empty ✓\n- `markCrashedMainSessionsFromRemainingLocks` with `safeToRecoverLocks` → marks matching running sessions ✓\n- `cleanupStaleSessionLocks` calls `cleanStaleLockFiles` with `startupMode: true` and passes `safeToRecover` to crash marker ✓\n\n**What was not tested**: Live Gateway crash/restart end-to-end on Windows. The `safeToRecover` classification contract is platform-independent because it derives from `cleanStaleLockFiles()` inspection logic. The full Gateway crash → restart → session-restore flow was not tested in a live OpenClaw process.\n\nFixes #80254\n",
+        "branch": "fix/crash-session-recovery-80254",
+        "head_sha": "a51a508d7ceefc4132dcb451d02ad22fc61fd4b9",
+        "author": "tanshanshan",
+        "labels": [
+          "gateway",
+          "agents",
+          "size: L",
+          "proof: supplied",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/main-session-restart-recovery.test.ts",
+            "additions": 227,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/main-session-restart-recovery.ts",
+            "additions": 54,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-write-lock.test.ts",
+            "additions": 104,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-write-lock.ts",
+            "additions": 23,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.test.ts",
+            "additions": 53,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.ts",
+            "additions": 22,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86806",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86806.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 132,
+            "SKIPPED": 28,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-fast-contracts-plugins-a:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-fast-contracts-plugins-a:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86806:4543984062:2026-05-26T12:13:26Z:re_review",
+      "comment_id": "4543984062",
+      "comment_version_key": "4543984062:2026-05-26T12:13:26Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86806#issuecomment-4543984062",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86806,
+      "author": "tanshanshan",
+      "author_id": 22539261,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-26T12:13:26Z",
+      "comment_updated_at": "2026-05-26T12:13:26Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: recover crashed main sessions via lock-file detection fallback",
+        "body": "## Summary\n\nAfter an unclean gateway crash, `cleanStaleLockFiles()` may find lock files from the previous process but classify them as non-stale (e.g. the PID was reused and passes the liveness check, or the orphan-payload grace window has not elapsed). When `cleaned.length === 0`, the existing `markRestartAbortedMainSessionsFromLocks()` never runs, leaving `status: \"running\"` sessions unrecovered on restart.\n\nThis PR drives the crash fallback from an explicit **safe-to-recover** lock classification emitted by the cleanup owner, instead of having Gateway infer crash residue from remaining locks with mtime heuristics.\n\n### What changed\n\n- `src/agents/session-write-lock.ts`: `cleanStaleLockFiles()` now returns a `safeToRecover` array and accepts a `startupMode` parameter. In startup mode, stale locks with a dead/absent owner and no report-only stale reasons are classified as safe to recover, **including** orphan-payload locks within the grace window — at Gateway startup no live owner can be writing metadata, so these are crash residue. Outside startup mode, grace-window-protected orphan locks are excluded to avoid false positives during runtime.\n- `src/agents/main-session-restart-recovery.ts`: `markCrashedMainSessionsFromRemainingLocks()` accepts `safeToRecoverLocks` instead of `remainingLocks` + `gatewayStartedAt`. The marker trusts the cleanup classification — no mtime heuristics or `pidAlive` checks.\n- `src/gateway/server-startup-post-attach.ts`: `cleanupStaleSessionLocks()` calls `cleanStaleLockFiles` with `startupMode: true` and passes `result.safeToRecover` to the crash marker when non-empty. Removed `gatewayStartedAt` parameter.\n- Tests: Regression coverage for startup-mode classification, grace window exclusion outside startup mode, report-only stale reasons, and `removeStale: false` dead-PID classification.\n\n### Safety\n\n- The crash marker only acts on locks that `cleanStaleLockFiles` explicitly classified as safe to recover — no heuristic inference.\n- Young unknown-owner locks within the grace window are only classified as `safeToRecover` in `startupMode`, where no live owner can exist. Outside startup mode, they are excluded.\n- Live-owner locks (`pidAlive === true`) are never included because they are not stale.\n- Report-only stale locks (`too-old`, `hold-exceeded`) are excluded because the owner may still be working.\n\n### ClawSweeper P1 resolution\n\n| P1 finding | Resolution |\n|---|---|\n| Drive crash fallback from real cleanup classifications | Marker consumes `safeToRecover` from `cleanStaleLockFiles()` with `startupMode: true` — no mtime heuristics |\n| Keep young unknown-owner locks out of recovery | `safeToRecover` excludes grace-window orphan locks outside `startupMode`; in startup mode, no live owner can exist so they are correctly classified as crash residue |\n| Replace simulated cleanup proof | Proof below uses the actual `cleanStaleLockFiles()` return contract with `startupMode: true` through the production startup path |\n| Make crash fallback reachable from startup cleanup | `startupMode: true` is passed in `cleanupStaleSessionLocks`, so `safeToRecover` is non-empty when orphan locks exist in the grace window |\n\n## Real Behavior Proof\n\n**Behavior addressed**: Gateway crash → `cleanStaleLockFiles(startupMode: true)` finds orphan-payload lock files within the grace window → `cleaned.length === 0` but `safeToRecover.length > 0` → crash fallback marks matching running sessions for recovery.\n\n**Real environment tested**: Linux (Ubuntu), Node.js 22.22, real OpenClaw checkout, branch `fix/crash-session-recovery-80254`.\n\n**Exact steps or command run after this patch**:\n```bash\nOPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs \\\n  src/agents/main-session-restart-recovery.test.ts \\\n  src/agents/session-write-lock.test.ts \\\n  src/gateway/server-startup-post-attach.test.ts \\\n  --run --reporter=verbose\n```\n\n**Evidence after fix**:\n```\n src/agents/main-session-restart-recovery.test.ts\n  ✓ marks running sessions from safe-to-recover locks at post-crash startup\n  ✓ skips sessions whose lock path does not match safe-to-recover locks\n  ✓ trusts cleanup classification: live-owner locks never appear in safeToRecoverLocks\n  ✓ marks sessions from safe-to-recover dead-PID locks\n  ✓ skips locks with report-only stale reasons (too-old) not classified as safe-to-recover\n  ✓ only marks crash-residue sessions when safe-to-recover excludes live-owner locks\n  ✓ does not mark sessions when young unknown-owner lock is preserved by grace window\n\n src/agents/session-write-lock.test.ts\n  ✓ classifies dead-PID lock past grace window as cleaned (not safeToRecover)\n  ✓ classifies orphan lock past grace window as cleaned\n  ✓ does not classify young orphan locks as safeToRecover outside startup mode\n  ✓ classifies young orphan locks as safeToRecover in startup mode\n  ✓ includes dead-PID lock in safeToRecover when removeStale is false\n\n src/gateway/server-startup-post-attach.test.ts\n  ✓ calls crash marker with safeToRecover locks when cleanup finds non-removable dead-owner locks\n  ✓ cleanStaleLockFiles called with startupMode: true\n\n Test Files  3 passed (3)\n      Tests  182 passed (182)\n```\n\n**Observed result after fix**:\n- `cleanStaleLockFiles(removeStale: true, startupMode: true)` with young orphan lock in grace window → lock preserved, `safeToRecover` contains it ✓\n- `cleanStaleLockFiles(removeStale: true)` without startupMode with young orphan lock → lock preserved, `safeToRecover` empty ✓\n- `cleanStaleLockFiles(removeStale: true)` with dead-PID lock → lock removed, enters `cleaned`, `safeToRecover` empty ✓\n- `markCrashedMainSessionsFromRemainingLocks` with `safeToRecoverLocks` → marks matching running sessions ✓\n- `cleanupStaleSessionLocks` calls `cleanStaleLockFiles` with `startupMode: true` and passes `safeToRecover` to crash marker ✓\n\n**What was not tested**: Live Gateway crash/restart end-to-end on Windows. The `safeToRecover` classification contract is platform-independent because it derives from `cleanStaleLockFiles()` inspection logic. The full Gateway crash → restart → session-restore flow was not tested in a live OpenClaw process.\n\nFixes #80254\n",
+        "branch": "fix/crash-session-recovery-80254",
+        "head_sha": "a51a508d7ceefc4132dcb451d02ad22fc61fd4b9",
+        "author": "tanshanshan",
+        "labels": [
+          "gateway",
+          "agents",
+          "size: L",
+          "proof: supplied",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/main-session-restart-recovery.test.ts",
+            "additions": 227,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/main-session-restart-recovery.ts",
+            "additions": 54,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-write-lock.test.ts",
+            "additions": 104,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-write-lock.ts",
+            "additions": 23,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.test.ts",
+            "additions": 53,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.ts",
+            "additions": 22,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86806",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86806.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 132,
+            "SKIPPED": 28,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-fast-contracts-plugins-a:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-fast-contracts-plugins-a:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86806:4542803993:2026-05-26T09:25:49Z:re_review",
+      "comment_id": "4542803993",
+      "comment_version_key": "4542803993:2026-05-26T09:25:49Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86806#issuecomment-4542803993",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86806,
+      "author": "tanshanshan",
+      "author_id": 22539261,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-26T09:25:49Z",
+      "comment_updated_at": "2026-05-26T09:25:49Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: recover crashed main sessions via lock-file detection fallback",
+        "body": "## Summary\n\nAfter an unclean gateway crash, `cleanStaleLockFiles()` may find lock files from the previous process but classify them as non-stale (e.g. the PID was reused and passes the liveness check, or the orphan-payload grace window has not elapsed). When `cleaned.length === 0`, the existing `markRestartAbortedMainSessionsFromLocks()` never runs, leaving `status: \"running\"` sessions unrecovered on restart.\n\nThis PR drives the crash fallback from an explicit **safe-to-recover** lock classification emitted by the cleanup owner, instead of having Gateway infer crash residue from remaining locks with mtime heuristics.\n\n### What changed\n\n- `src/agents/session-write-lock.ts`: `cleanStaleLockFiles()` now returns a `safeToRecover` array and accepts a `startupMode` parameter. In startup mode, stale locks with a dead/absent owner and no report-only stale reasons are classified as safe to recover, **including** orphan-payload locks within the grace window — at Gateway startup no live owner can be writing metadata, so these are crash residue. Outside startup mode, grace-window-protected orphan locks are excluded to avoid false positives during runtime.\n- `src/agents/main-session-restart-recovery.ts`: `markCrashedMainSessionsFromRemainingLocks()` accepts `safeToRecoverLocks` instead of `remainingLocks` + `gatewayStartedAt`. The marker trusts the cleanup classification — no mtime heuristics or `pidAlive` checks.\n- `src/gateway/server-startup-post-attach.ts`: `cleanupStaleSessionLocks()` calls `cleanStaleLockFiles` with `startupMode: true` and passes `result.safeToRecover` to the crash marker when non-empty. Removed `gatewayStartedAt` parameter.\n- Tests: Regression coverage for startup-mode classification, grace window exclusion outside startup mode, report-only stale reasons, and `removeStale: false` dead-PID classification.\n\n### Safety\n\n- The crash marker only acts on locks that `cleanStaleLockFiles` explicitly classified as safe to recover — no heuristic inference.\n- Young unknown-owner locks within the grace window are only classified as `safeToRecover` in `startupMode`, where no live owner can exist. Outside startup mode, they are excluded.\n- Live-owner locks (`pidAlive === true`) are never included because they are not stale.\n- Report-only stale locks (`too-old`, `hold-exceeded`) are excluded because the owner may still be working.\n\n### ClawSweeper P1 resolution\n\n| P1 finding | Resolution |\n|---|---|\n| Drive crash fallback from real cleanup classifications | Marker consumes `safeToRecover` from `cleanStaleLockFiles()` with `startupMode: true` — no mtime heuristics |\n| Keep young unknown-owner locks out of recovery | `safeToRecover` excludes grace-window orphan locks outside `startupMode`; in startup mode, no live owner can exist so they are correctly classified as crash residue |\n| Replace simulated cleanup proof | Proof below uses the actual `cleanStaleLockFiles()` return contract with `startupMode: true` through the production startup path |\n| Make crash fallback reachable from startup cleanup | `startupMode: true` is passed in `cleanupStaleSessionLocks`, so `safeToRecover` is non-empty when orphan locks exist in the grace window |\n\n## Real Behavior Proof\n\n**Behavior addressed**: Gateway crash → `cleanStaleLockFiles(startupMode: true)` finds orphan-payload lock files within the grace window → `cleaned.length === 0` but `safeToRecover.length > 0` → crash fallback marks matching running sessions for recovery.\n\n**Real environment tested**: Linux (Ubuntu), Node.js 22.22, real OpenClaw checkout, branch `fix/crash-session-recovery-80254`.\n\n**Exact steps or command run after this patch**:\n```bash\nOPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs \\\n  src/agents/main-session-restart-recovery.test.ts \\\n  src/agents/session-write-lock.test.ts \\\n  src/gateway/server-startup-post-attach.test.ts \\\n  --run --reporter=verbose\n```\n\n**Evidence after fix**:\n```\n src/agents/main-session-restart-recovery.test.ts\n  ✓ marks running sessions from safe-to-recover locks at post-crash startup\n  ✓ skips sessions whose lock path does not match safe-to-recover locks\n  ✓ trusts cleanup classification: live-owner locks never appear in safeToRecoverLocks\n  ✓ marks sessions from safe-to-recover dead-PID locks\n  ✓ skips locks with report-only stale reasons (too-old) not classified as safe-to-recover\n  ✓ only marks crash-residue sessions when safe-to-recover excludes live-owner locks\n  ✓ does not mark sessions when young unknown-owner lock is preserved by grace window\n\n src/agents/session-write-lock.test.ts\n  ✓ classifies dead-PID lock past grace window as cleaned (not safeToRecover)\n  ✓ classifies orphan lock past grace window as cleaned\n  ✓ does not classify young orphan locks as safeToRecover outside startup mode\n  ✓ classifies young orphan locks as safeToRecover in startup mode\n  ✓ includes dead-PID lock in safeToRecover when removeStale is false\n\n src/gateway/server-startup-post-attach.test.ts\n  ✓ calls crash marker with safeToRecover locks when cleanup finds non-removable dead-owner locks\n  ✓ cleanStaleLockFiles called with startupMode: true\n\n Test Files  3 passed (3)\n      Tests  182 passed (182)\n```\n\n**Observed result after fix**:\n- `cleanStaleLockFiles(removeStale: true, startupMode: true)` with young orphan lock in grace window → lock preserved, `safeToRecover` contains it ✓\n- `cleanStaleLockFiles(removeStale: true)` without startupMode with young orphan lock → lock preserved, `safeToRecover` empty ✓\n- `cleanStaleLockFiles(removeStale: true)` with dead-PID lock → lock removed, enters `cleaned`, `safeToRecover` empty ✓\n- `markCrashedMainSessionsFromRemainingLocks` with `safeToRecoverLocks` → marks matching running sessions ✓\n- `cleanupStaleSessionLocks` calls `cleanStaleLockFiles` with `startupMode: true` and passes `safeToRecover` to crash marker ✓\n\n**What was not tested**: Live Gateway crash/restart end-to-end on Windows. The `safeToRecover` classification contract is platform-independent because it derives from `cleanStaleLockFiles()` inspection logic. The full Gateway crash → restart → session-restore flow was not tested in a live OpenClaw process.\n\nFixes #80254\n",
+        "branch": "fix/crash-session-recovery-80254",
+        "head_sha": "a51a508d7ceefc4132dcb451d02ad22fc61fd4b9",
+        "author": "tanshanshan",
+        "labels": [
+          "gateway",
+          "agents",
+          "size: L",
+          "proof: supplied",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/main-session-restart-recovery.test.ts",
+            "additions": 227,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/main-session-restart-recovery.ts",
+            "additions": 54,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-write-lock.test.ts",
+            "additions": 104,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-write-lock.ts",
+            "additions": 23,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.test.ts",
+            "additions": 53,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.ts",
+            "additions": 22,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86806",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86806.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 132,
+            "SKIPPED": 28,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-fast-contracts-plugins-a:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-fast-contracts-plugins-a:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:86806:4542048865:2026-05-26T08:20:18Z:re_review",
+      "comment_id": "4542048865",
+      "comment_version_key": "4542048865:2026-05-26T08:20:18Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/86806#issuecomment-4542048865",
+      "repo": "openclaw/openclaw",
+      "issue_number": 86806,
+      "author": "tanshanshan",
+      "author_id": 22539261,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-26T08:20:18Z",
+      "comment_updated_at": "2026-05-26T08:20:18Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: recover crashed main sessions via lock-file detection fallback",
+        "body": "## Summary\n\nAfter an unclean gateway crash, `cleanStaleLockFiles()` may find lock files from the previous process but classify them as non-stale (e.g. the PID was reused and passes the liveness check, or the orphan-payload grace window has not elapsed). When `cleaned.length === 0`, the existing `markRestartAbortedMainSessionsFromLocks()` never runs, leaving `status: \"running\"` sessions unrecovered on restart.\n\nThis PR drives the crash fallback from an explicit **safe-to-recover** lock classification emitted by the cleanup owner, instead of having Gateway infer crash residue from remaining locks with mtime heuristics.\n\n### What changed\n\n- `src/agents/session-write-lock.ts`: `cleanStaleLockFiles()` now returns a `safeToRecover` array and accepts a `startupMode` parameter. In startup mode, stale locks with a dead/absent owner and no report-only stale reasons are classified as safe to recover, **including** orphan-payload locks within the grace window — at Gateway startup no live owner can be writing metadata, so these are crash residue. Outside startup mode, grace-window-protected orphan locks are excluded to avoid false positives during runtime.\n- `src/agents/main-session-restart-recovery.ts`: `markCrashedMainSessionsFromRemainingLocks()` accepts `safeToRecoverLocks` instead of `remainingLocks` + `gatewayStartedAt`. The marker trusts the cleanup classification — no mtime heuristics or `pidAlive` checks.\n- `src/gateway/server-startup-post-attach.ts`: `cleanupStaleSessionLocks()` calls `cleanStaleLockFiles` with `startupMode: true` and passes `result.safeToRecover` to the crash marker when non-empty. Removed `gatewayStartedAt` parameter.\n- Tests: Regression coverage for startup-mode classification, grace window exclusion outside startup mode, report-only stale reasons, and `removeStale: false` dead-PID classification.\n\n### Safety\n\n- The crash marker only acts on locks that `cleanStaleLockFiles` explicitly classified as safe to recover — no heuristic inference.\n- Young unknown-owner locks within the grace window are only classified as `safeToRecover` in `startupMode`, where no live owner can exist. Outside startup mode, they are excluded.\n- Live-owner locks (`pidAlive === true`) are never included because they are not stale.\n- Report-only stale locks (`too-old`, `hold-exceeded`) are excluded because the owner may still be working.\n\n### ClawSweeper P1 resolution\n\n| P1 finding | Resolution |\n|---|---|\n| Drive crash fallback from real cleanup classifications | Marker consumes `safeToRecover` from `cleanStaleLockFiles()` with `startupMode: true` — no mtime heuristics |\n| Keep young unknown-owner locks out of recovery | `safeToRecover` excludes grace-window orphan locks outside `startupMode`; in startup mode, no live owner can exist so they are correctly classified as crash residue |\n| Replace simulated cleanup proof | Proof below uses the actual `cleanStaleLockFiles()` return contract with `startupMode: true` through the production startup path |\n| Make crash fallback reachable from startup cleanup | `startupMode: true` is passed in `cleanupStaleSessionLocks`, so `safeToRecover` is non-empty when orphan locks exist in the grace window |\n\n## Real Behavior Proof\n\n**Behavior addressed**: Gateway crash → `cleanStaleLockFiles(startupMode: true)` finds orphan-payload lock files within the grace window → `cleaned.length === 0` but `safeToRecover.length > 0` → crash fallback marks matching running sessions for recovery.\n\n**Real environment tested**: Linux (Ubuntu), Node.js 22.22, real OpenClaw checkout, branch `fix/crash-session-recovery-80254`.\n\n**Exact steps or command run after this patch**:\n```bash\nOPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs \\\n  src/agents/main-session-restart-recovery.test.ts \\\n  src/agents/session-write-lock.test.ts \\\n  src/gateway/server-startup-post-attach.test.ts \\\n  --run --reporter=verbose\n```\n\n**Evidence after fix**:\n```\n src/agents/main-session-restart-recovery.test.ts\n  ✓ marks running sessions from safe-to-recover locks at post-crash startup\n  ✓ skips sessions whose lock path does not match safe-to-recover locks\n  ✓ trusts cleanup classification: live-owner locks never appear in safeToRecoverLocks\n  ✓ marks sessions from safe-to-recover dead-PID locks\n  ✓ skips locks with report-only stale reasons (too-old) not classified as safe-to-recover\n  ✓ only marks crash-residue sessions when safe-to-recover excludes live-owner locks\n  ✓ does not mark sessions when young unknown-owner lock is preserved by grace window\n\n src/agents/session-write-lock.test.ts\n  ✓ classifies dead-PID lock past grace window as cleaned (not safeToRecover)\n  ✓ classifies orphan lock past grace window as cleaned\n  ✓ does not classify young orphan locks as safeToRecover outside startup mode\n  ✓ classifies young orphan locks as safeToRecover in startup mode\n  ✓ includes dead-PID lock in safeToRecover when removeStale is false\n\n src/gateway/server-startup-post-attach.test.ts\n  ✓ calls crash marker with safeToRecover locks when cleanup finds non-removable dead-owner locks\n  ✓ cleanStaleLockFiles called with startupMode: true\n\n Test Files  3 passed (3)\n      Tests  182 passed (182)\n```\n\n**Observed result after fix**:\n- `cleanStaleLockFiles(removeStale: true, startupMode: true)` with young orphan lock in grace window → lock preserved, `safeToRecover` contains it ✓\n- `cleanStaleLockFiles(removeStale: true)` without startupMode with young orphan lock → lock preserved, `safeToRecover` empty ✓\n- `cleanStaleLockFiles(removeStale: true)` with dead-PID lock → lock removed, enters `cleaned`, `safeToRecover` empty ✓\n- `markCrashedMainSessionsFromRemainingLocks` with `safeToRecoverLocks` → marks matching running sessions ✓\n- `cleanupStaleSessionLocks` calls `cleanStaleLockFiles` with `startupMode: true` and passes `safeToRecover` to crash marker ✓\n\n**What was not tested**: Live Gateway crash/restart end-to-end on Windows. The `safeToRecover` classification contract is platform-independent because it derives from `cleanStaleLockFiles()` inspection logic. The full Gateway crash → restart → session-restore flow was not tested in a live OpenClaw process.\n\nFixes #80254\n",
+        "branch": "fix/crash-session-recovery-80254",
+        "head_sha": "a51a508d7ceefc4132dcb451d02ad22fc61fd4b9",
+        "author": "tanshanshan",
+        "labels": [
+          "gateway",
+          "agents",
+          "size: L",
+          "proof: supplied",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/main-session-restart-recovery.test.ts",
+            "additions": 227,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/main-session-restart-recovery.ts",
+            "additions": 54,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-write-lock.test.ts",
+            "additions": 104,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/session-write-lock.ts",
+            "additions": 23,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.test.ts",
+            "additions": 53,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.ts",
+            "additions": 22,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-86806",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86806.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 132,
+            "SKIPPED": 28,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-fast-contracts-plugins-a:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-fast-contracts-plugins-a:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 720,
+    "total_ms": 3381,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 484
+        "ms": 301
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1928
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 5
       },
       {
         "name": "execute_commands",
-        "ms": 225
+        "ms": 1120
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
