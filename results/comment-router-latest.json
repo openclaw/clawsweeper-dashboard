@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-04T01:22:31.519Z",
-  "repo": "steipete/CodexBar",
+  "generated_at": "2026-06-04T01:22:50.198Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-03T22:22:30.284Z",
+  "since": "2026-06-03T22:22:49.802Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    1293
+    90098
   ],
-  "comment_ids": [
-    4618126107
-  ],
-  "status_comment_id": 4618126312,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,143 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:steipete/CodexBar:1293:4618126107:2026-06-04T01:21:58Z:re_review",
-      "comment_id": "4618126107",
-      "comment_version_key": "4618126107:2026-06-04T01:21:58Z",
-      "comment_url": "https://github.com/steipete/CodexBar/pull/1293#issuecomment-4618126107",
-      "repo": "steipete/CodexBar",
-      "issue_number": 1293,
-      "author": "devYRPauli",
-      "author_id": 55940078,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-04T01:21:58Z",
-      "comment_updated_at": "2026-06-04T01:21:58Z",
-      "status_comment_id": 4618126312,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-04T01:22:32.125Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 1293
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-04T01:22:33.015Z",
-          "response_comment_id": "4618126312",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "Skip redundant closed-menu rebuilds when displayed content is unchanged",
-        "body": "## Problem\n\nCodexBar pre-warms closed (invisible) persistent menus so they open instantly. `observeStoreChanges` fires `invalidateMenus()` on every change of `store.menuObservationToken`, and for closed menus that runs `prepareAttachedClosedMenusIfNeeded()` → a full main-thread `populateMenu()` for **every** attached menu (status item, merged, fallback, each provider menu).\n\n`menuObservationToken` is a signature over ~25 store properties (probe logs, in-flight refresh flags, revision counters, fetch metadata, dashboard timestamps…). Many of these change frequently — e.g. while you're actively using codex/claude and CodexBar is observing their data — but **don't change what the menu displays**. So the whole SwiftUI menu hierarchy rebuilds on the main thread continuously with no visible change.\n\nObserved on a real 0.32.4 install during active use: sustained ~12% \"idle\" CPU, with `sample` showing `rebuildClosedMenuIfNeeded → populateMenu` as the dominant main-thread stack, worsening over time as usage history grows. It's independent of refresh-interval and token-cost settings (confirmed by changing both with no effect), since it's driven by store observation, not the refresh timer.\n\n## Fix\n\nGate the closed-menu rebuild on a content signature (the existing `menuAdjunctReadinessSignature` plus the per-provider usage snapshot). When the displayed content is unchanged since the menu was last pre-warmed, skip the expensive `populateMenu` and leave the menu marked stale so `menuWillOpen` still rebuilds it fresh.\n\nSafe by construction: the open path (`refreshMenuForOpenIfNeeded`) is untouched and always rebuilds on `menuWillOpen`, so an incomplete signature can only skip a pre-warm — never show stale content to the user.\n\nA `.debug` signpost (`closed-menu prewarm skipped/performed`) makes the behavior observable: set the log level to debug to watch it.\n\n## Runtime evidence\n\n**Before — real 0.32.4 install, `sample` during active use (redacted):** the closed-menu rebuild is the dominant main-thread stack behind the ~12% idle CPU:\n\n```\n1056  closure #1 in StatusItemController.rebuildClosedMenuIfNeeded(_:)  (in CodexBar)\n 761    StatusItemController.populateMenu(_:provider:)\n 646      closure #1 in StatusItemController.updateMenuContentPreservingSwitcher(_:context:)\n 463        StatusItemController.addOverviewRows(...) -> MenuCardItemHostingView.measuredHeight(width:)\n 462          NSHostingController.sizeThatFits(in:) -> ViewGraph.sizeThatFits(...)\n```\n\n**After (controlled) — new test, exercising the real `invalidateMenus` path:** with the gate removed, unchanged-content observation churn produces **39** full closed-menu rebuilds; with the gate it **converges to ≤2 and stops** (20+ further ticks add none). A genuine content change still rebuilds.\n\n**After (live) — adhoc release build, debug logging, ~150s real session:** the new signpost shows the gate skipping redundant rebuilds in a real running build:\n\n```\n[..Z] [DEBUG] com.steipete.codexbar.app: closed-menu prewarm performed (content changed) provider=codex\n[..Z] [DEBUG] com.steipete.codexbar.app: closed-menu prewarm skipped (content unchanged) provider=codex\n...\nskipped: 5   performed: 5\n```\n\nEach `skipped` is a full closed-menu rebuild that was prevented. The skip ratio scales with churn intensity: this window had only refresh-paced churn (~50% prevented); under the heavy non-display churn that produces the storm (the controlled test above), the gate eliminates ~95%.\n\n**Note on an idle before/after:** a freshly launched idle build does not reproduce the storm — it requires live store churn from active codex/claude usage that CodexBar observes — so an idle CPU A/B reads ~0% either way. The evidence above (production sample + controlled test + live signpost) is used instead of an idle CPU delta.\n\n## Tests added\n\n- `closed menu rebuild converges when displayed content is unchanged`\n- `closed menu rebuilds again when displayed content changes`\n- `invalidateMenus does not storm a closed attached menu on unchanged content`\n\nFull test suite green (3241 tests).\n",
-        "branch": "perf/skip-redundant-closed-menu-rebuilds",
-        "head_sha": "0c9c526427c8cd4e732f24b9942ecd52ad97863e",
-        "author": "devyrpauli",
-        "labels": [
-          "status: 📣 needs proof",
-          "rating: 🦪 silver shellfish",
-          "P2"
-        ],
-        "files": [
-          {
-            "path": "Sources/CodexBar/StatusItemController+MenuTracking.swift",
-            "additions": 48,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Sources/CodexBar/StatusItemController.swift",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Tests/CodexBarTests/StatusMenuClosedRebuildCoalesceTests.swift",
-            "additions": 183,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-steipete-codexbar-1293",
-        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1293.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 4,
-          "counts": {
-            "IN_PROGRESS": 3,
-            "SUCCESS": 1
-          },
-          "blockers": [
-            "lint-build-test:IN_PROGRESS",
-            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
-            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
-          ],
-          "pending": [
-            "lint-build-test:IN_PROGRESS",
-            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
-            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
-          ],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3193,
+    "total_ms": 739,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 595
+        "ms": 386
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 624
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 1941
+        "ms": 344
       },
       {
         "name": "append_ledger",
-        "ms": 2
+        "ms": 0
       }
     ]
   }
