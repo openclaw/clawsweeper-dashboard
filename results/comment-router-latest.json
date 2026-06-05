@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-05T14:16:05.554Z",
+  "generated_at": "2026-06-05T14:16:51.013Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-05T11:16:03.421Z",
+  "since": "2026-06-05T11:16:50.404Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     90680
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4632186754
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -61,83 +63,32 @@
       "finding_id": "review-feedback",
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(skills): replace per-file chokidar FDs with fs.watchFile polling for SKILL.md",
-        "body": "### Summary\n\n- **Problem**: Issue #90578 reports that a gateway serving many agents or a skill tree with many subdirectories exhausts inotify watch descriptors (Linux: `fs.inotify.max_user_watches`, default 8192) or kqueue FDs (macOS). FD count scales linearly with skill count × agent count instead of with distinct watch root count.\n- **Root Cause**: `shouldIgnoreSkillsWatchPath` returned `false` for `SKILL.md` files. Chokidar therefore created one inotify watch descriptor (or kqueue FD on macOS) per `SKILL.md` across every watched skill directory. A gateway with 100 agents each watching a shared skill root containing 50 skills accumulates ~5000 file-level FDs for that one watcher, independent of the shared-watcher optimisation added for cross-workspace FD inflation.\n- **Fix**: Mark all regular files ignored in `shouldIgnoreSkillsWatchPath` so chokidar holds FDs only for directories and symlinks. Supplement with `fs.watchFile` polling (stat-based, `persistent: false`, no inotify FD) so SKILL.md content changes are still detected.\n  - `scanExistingSkillFiles` bootstraps `fs.watchFile` polls at watcher creation time for skill directories that exist before the gateway starts, since chokidar's `ignoreInitial: true` skips pre-existing paths.\n  - `addDir`/`unlinkDir` handlers register/deregister polls for dynamically added or removed skill directories.\n  - Listener references are stored in `Map<path, listener>` (not a `Set`) so `fs.unwatchFile(path, listener)` removes only this state's callback; calling it without a listener would silently remove sibling watchers' listeners for the same path.\n- **What changed**:\n  - `src/skills/runtime/refresh.ts` — updated `shouldIgnoreSkillsWatchPath` to return `true` for all regular files when stats are available; added `polledSkillFiles: Map<string, listener>`, `watchSkillFile`, `unwatchSkillFile`, and `scanExistingSkillFiles` to `createSkillsPathWatcher`; updated `teardownSkillsPathWatcher` and `resetSkillsRefreshForTest` to drain polls with the scoped listener reference.\n  - `src/skills/runtime/refresh.test.ts` — mocked `node:fs` sync methods (`readdirSync`, `watchFile`, `unwatchFile`) to isolate mock-chokidar tests from the real filesystem; added assertions that `addDir` registers a `fs.watchFile` poll, `unlinkDir` deregisters it, the stored listener propagates a `SkillsChangeEvent` through the debounce, and `scanExistingSkillFiles` registers polls for pre-existing skill directories.\n- **What did NOT change (scope boundary)**:\n  - The shared-watcher deduplication logic (`subscribeWorkspaceToPath`, `pathWatchers`) is unchanged.\n  - The `addDir`/`unlinkDir` schedule call and the chokidar watcher configuration (`ignoreInitial`, `followSymlinks`, `depth`) are unchanged.\n  - Config surface unchanged (no schema, defaults, doctor migrations, or `docs/reference/config`).\n  - Plugin surface unchanged (no plugin SDK, manifest, `extensions/*` api/runtime-api, registry/loader).\n  - Gateway protocol unchanged.\n\n### Reproduction\n\n1. Start a gateway serving a workspace whose skill tree contains many skill subdirectories (e.g. 50+ skills), or run multiple agents against the same shared skill root.\n2. On Linux, check `cat /proc/sys/fs/inotify/max_user_watches` (default 8192) and monitor with `lsof | grep inotify | wc -l` as the agent count grows.\n3. With enough agents and skills, `inotify_add_watch` fails with `ENOSPC` and chokidar silently stops delivering events; skill snapshot refreshes cease.\n4. **Before this PR**: each `SKILL.md` path returned `false` from `shouldIgnoreSkillsWatchPath`, so chokidar opened one watch descriptor per file; FD count = O(skills × watchers).\n5. **After this PR**: all regular files are ignored by chokidar; `fs.watchFile` polling covers SKILL.md content changes without holding any inotify FD; FD count = O(distinct watch root directories).\n\n### Real behavior proof\n\n**Behavior addressed (#90578)**: `shouldIgnoreSkillsWatchPath` at `src/skills/runtime/refresh.ts` returned `false` for `SKILL.md` paths, causing chokidar to accumulate one inotify/kqueue FD per `SKILL.md` file across all watched skill directories. After this fix, chokidar holds FDs only for directories; SKILL.md content changes are detected via `fs.watchFile` polling with no persistent FD.\n\n**Real environment tested (Linux, Node 22 — Vitest against the production watcher factory, `shouldIgnoreSkillsWatchPath`, `scanExistingSkillFiles`, and the `fs.watchFile` poll lifecycle using mocked `node:fs` sync primitives)**: `createSkillsPathWatcher` driving the real ignored-filter, `addDir`/`unlinkDir` handler wiring, `fs.watchFile`/`fs.unwatchFile` call assertions, and an end-to-end listener-to-`SkillsChangeEvent` propagation test.\n\n**Exact steps or command run after this patch**: `pnpm test src/skills/runtime/refresh.test.ts`; `node scripts/run-oxlint.mjs src/skills/runtime/refresh.ts`; `pnpm tsgo` on the changed files.\n\n**Evidence after fix**:\n\n```\n refresh.test.ts   Tests  31 passed (31)\n```\n\nNew test cases: `shouldIgnoreSkillsWatchPath` returns `true` for SKILL.md (with stats); `fsWatchFileMock` called with `persistent: false` on `addDir`; `fsUnwatchFileMock` called with the scoped listener on `unlinkDir`; stored listener callback propagates a `SkillsChangeEvent` after the debounce; `scanExistingSkillFiles` registers a poll for a pre-existing skill directory, and invoking the stored listener emits a `SkillsChangeEvent`.\n\n**Observed result after fix**: per-skill-file inotify FD accumulation eliminated. FD count now scales with distinct watch root directories, not with skill count or agent count. SKILL.md content edits (via poll), directory additions (`addDir` → `watchSkillFile`), and directory removals (`unlinkDir` → `unwatchSkillFile`) all trigger snapshot refresh correctly.\n\n**What was not tested**: live gateway measurement of inotify FD count before and after on a deployment with many agents and a large skill tree.\n\n**Repro confirmation**: the `addDir`/`unlinkDir` poll-registration assertions fail when `watchSkillFile`/`unwatchSkillFile` are no-ops, and the listener E2E test fails when the listener closure does not call `schedule`, confirming the tests cover the production wiring.\n\n### Risk / Mitigation\n\n- **Risk**: SKILL.md content changes are now polled at `max(500ms, debounceMs)` instead of being event-driven. **Mitigation**: skill instruction edits are a low-frequency, non-latency-sensitive operation; the ~0.5–2s detection delay is acceptable and far better than FD exhaustion silently stopping all watcher events.\n- **Risk**: `fs.unwatchFile(path)` without a listener removes all listeners for that path globally, breaking sibling watchers. **Mitigation**: fixed by storing the listener reference per entry in a `Map<path, listener>` and passing it to `fs.unwatchFile(path, listener)`.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Core gateway\n\n### Linked Issue/PR\n\nFixes #90578",
-        "branch": "fix/90578-skill-watcher-fd-leak",
-        "head_sha": "108a1e50e52d5b5e8cfb2e426231dd79a59895fc",
-        "author": "openperf",
-        "labels": [
-          "size: M",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/skills/runtime/refresh.test.ts",
-            "additions": 123,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/skills/runtime/refresh.ts",
-            "additions": 78,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90680",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90680.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 156,
-          "counts": {
-            "SUCCESS": 131,
-            "SKIPPED": 24,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2371,
+    "total_ms": 1457,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 301
+        "ms": 597
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1817
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 225
+        "ms": 848
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
