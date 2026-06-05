@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-05T10:10:03.653Z",
+  "generated_at": "2026-06-05T10:10:10.368Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-05T07:10:00.969Z",
+  "since": "2026-06-05T07:10:09.731Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     78035
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4630439004
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 4,
@@ -40,12 +42,12 @@
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-05T19:30:37Z",
-      "comment_updated_at": "2026-06-05T10:09:56Z",
+      "comment_created_at": "2026-06-05T10:08:46Z",
+      "comment_updated_at": "2026-06-05T10:08:46Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -61,101 +63,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(memory-core): preserve sibling supplement results when one search rejects (#77897)",
-        "body": "## Summary\n\nFixes #77897. `searchMemoryCorpusSupplements` (extensions/memory-core/src/tools.shared.ts) used `Promise.all` to fan out to every registered corpus supplement (`memory-wiki`, third-party plugin supplements, etc.). `Promise.all` is fail-fast: a single rejection discards every sibling's already-resolved results.\n\nThis patch swaps `Promise.all` → `Promise.allSettled`, then re-flattens the fulfilled values. Rejections are logged once per offender with the registering plugin id so operators can correlate to the responsible supplement.\n\n## Behavior contract (mathematical guarantee)\n\nLet `S` be the set of registered corpus supplements at call time. Let `S_ok ⊆ S` be those whose `search(params)` fulfills, and `S_err = S \\ S_ok` those that reject. The function now satisfies:\n\n```\nresult = sort_score_desc_then_path(⋃_{s ∈ S_ok} s.search(params)).slice(0, max(1, maxResults ?? 10))\n```\n\nIn particular:\n- `|S_err| ≥ 1` does not collapse `result` to `[]`. Sibling results survive.\n- `|S_err| = |S|` returns `[]` (graceful degradation, not throw).\n- `|S_err| = 0` is byte-identical to the prior behavior — same merge, same sort, same `maxResults` clamp.\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** A single misbehaving memory corpus supplement plugin causes `memory_search corpus=all` to return `[]` instead of preserving sibling supplement hits. The user-visible symptom is silent retrieval loss with no trace of the offending plugin in logs.\n- **Real environment tested:** Local OpenClaw checkout at commit `0cc7b938ba6b7acfac935591bcd51ddddb46c5c1` on Node 22 / Darwin 25.2.0, exercising the production `memory_search` tool path through the live `openclaw/plugin-sdk/memory-core-host-runtime-core` SDK boundary. Two real corpus supplements (`healthy-wiki`, `broken-wiki`) registered through the public `registerMemoryCorpusSupplement(...)` SDK export — no mocks of the function under test, no mocks of the supplement registry, no stubs of `searchMemoryCorpusSupplements`.\n- **Exact steps or command run after this patch:** `node scripts/test-projects.mjs extensions/memory-core/src/tools.citations.test.ts -- --reporter=verbose -t \"preserves sibling\"` from the repository root, which compiles the production source via tsgo and drives `createMemorySearchToolOrThrow().execute(...)` against the registered live supplements.\n- **Evidence after fix:** Captured terminal output from the `node` invocation above; the fenced console output below shows the integration test exercising the production tool path with one resolving and one rejecting supplement, and capturing both the surviving wiki hit and the warn line that names the offender:\n\n  ```\n   RUN  v4.1.5 /Users/shubh-trips/Documents/personal-project/open-source/openclaw\n\n   ✓ |extension-memory| extensions/memory-core/src/tools.citations.test.ts > memory tools > preserves sibling supplement results when one corpus=all supplement rejects (#77897) 6ms\n\n   Test Files  1 passed (1)\n        Tests  1 passed | 15 skipped (16)\n     Start at  03:25:56\n     Duration  1.05s\n\n  [test] passed 1 Vitest shard in 2.97s\n  ```\n\n  The runtime assertions captured by this `node` run (full source: `extensions/memory-core/src/tools.citations.test.ts:386`) are:\n\n  - `details.results` from the production `createMemorySearchToolOrThrow().execute(...)` envelope contains `[\"wiki\", \"entities/healthy.md\"]` from the resolving `healthy-wiki` supplement\n  - `details.results` simultaneously contains `[\"memory\", \"MEMORY.md\"]` from the local memory backend\n  - `console.warn` was invoked exactly once with a runtime log line of the shape `memory-core: corpus supplement \"broken-wiki\" search failed; sibling results preserved (corpus backend unavailable).`\n- **Observed result after fix:** The surviving healthy supplement hit `wiki/entities/healthy.md` is delivered to the agent alongside the local `memory/MEMORY.md` result, and the runtime log emits the named-offender warn line `corpus supplement \"broken-wiki\" search failed; sibling results preserved (corpus backend unavailable).` exactly once — no `[]` collapse and no rethrow. Pre-fix on the same setup with current `Promise.all`-based main, the resolving supplement's `entities/healthy.md` hit is discarded and the user-facing `details.results` returns empty alongside an unhandled rejection bubbling through the supplement fanout.\n- **What was not tested:** Cross-process supplement registration (the public SDK supplement registry is currently a single-process in-memory map; no IPC supplement adapter exists today, so cross-process degradation behavior is out of scope for this bug).\n\n## Changelog\n\nEntry added under `## Unreleased` → `### Fixes`:\n\n> Memory/search: keep results from healthy memory corpus supplements when one rejects, so a single misbehaving plugin no longer empties `memory_search corpus=all`; failures are warn-logged with the offending plugin id instead of poisoning sibling results. Fixes #77897. Thanks @lonexreb.\n\n## Why this matters\n\nMemory search is on the agent's hot read path. Before this fix, a single misbehaving wiki/corpus plugin could cause all `memory_search(corpus=\"all\")` calls to look empty — the agent silently loses retrieval signal, and the bad plugin is hard to identify because results just disappear. After this fix, the failing plugin is named in the runtime warn log and sibling retrieval continues to work, so a noisy supplement degrades gracefully instead of poisoning the whole memory subsystem.\n\n## Risk\n\n- **Surface**: one function in one bundled extension. Get-by-lookup is unchanged (it iterates synchronously and returns the first hit, so a single throw was already isolated).\n- **Compat**: `Promise.allSettled` is supported in Node 22+ (the repo's stated runtime).\n- **Logging**: one `console.warn` per failing supplement per call; matches existing `memory-core:` log prefix used in `dreaming-narrative.ts`.\n\nCloses #77897\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
-        "branch": "fix/77897-corpus-supplement-allsettled",
-        "head_sha": "27854d9b2f00f671bc61a47b23b9015c36ce527e",
-        "author": "lonexreb",
-        "labels": [
-          "extensions: memory-core",
-          "size: M",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 security-boundary",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/memory-core/src/tools.citations.test.ts",
-            "additions": 48,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/tools.shared.test.ts",
-            "additions": 220,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/memory-core/src/tools.shared.ts",
-            "additions": 85,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-78035",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-78035.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 154,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 30,
-            "SUCCESS": 120,
-            "FAILURE": 2
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "check-lint:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "check-lint:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3052,
+    "total_ms": 2880,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 486
+        "ms": 624
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2182
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 358
+        "ms": 2243
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
