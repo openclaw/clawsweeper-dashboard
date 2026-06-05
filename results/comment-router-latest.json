@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-05T13:56:10.747Z",
+  "generated_at": "2026-06-05T13:56:23.552Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-05T10:56:08.157Z",
+  "since": "2026-06-05T10:56:22.856Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     90622
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4565897930
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
-  "commands_seen": 3,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -61,178 +63,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(ports): batch macOS lsof listener inspection to one spawn per cycle",
-        "body": "## Summary\n\nRefs #90548. This is a partial mitigation and intentionally does not close the issue.\n\nThis changes Unix listener inspection from one `lsof` spawn per inspected port to one LISTEN snapshot per same-cycle multi-port inspection, then filters the snapshot back into the existing per-port `PortUsage` shape.\n\nFollow-up repair on current head restores the pre-existing single-port `inspectPortUsage(port)` command shape so one-port callers stay scoped to `lsof -nP -iTCP:<port> -sTCP:LISTEN -FpFcn`; the all-LISTEN snapshot is now reserved for explicit multi-port `inspectPortUsages([...])` calls.\n\n## Affected Surface\n\n- `src/infra/ports-inspect.ts`\n  - `readUnixListenersFromLsof`\n  - `readUnixListenerSnapshot`\n  - `inspectPortUsages`\n  - `recordsForPort`\n- `src/infra/ports.ts`\n  - exports `inspectPortUsages`\n- `src/cli/daemon-cli/status.gather.ts`\n  - batches daemon/CLI port status inspection when the two ports differ\n\n## Scope\n\nChanged:\n\n- Unix LISTEN inspection now supports a shared snapshot command for explicit batch calls:\n  - `lsof -nP -iTCP -sTCP:LISTEN -FpFcn`\n- Single-port Unix LISTEN inspection remains targeted:\n  - `lsof -nP -iTCP:<port> -sTCP:LISTEN -FpFcn`\n- The snapshot parser preserves pid, command, address, and per-port filtered detail.\n- `inspectDaemonPortStatuses` uses the batch helper for daemon/CLI same-cycle checks.\n- `checkPortInUse` still runs per port when no matching listener is found.\n\nIntentionally not changed:\n\n- Windows netstat inspection remains separate.\n- Linux `ss` fallback remains separate and per-port when lsof fails.\n- `inspectPortConnections` / ESTABLISHED connection inspection is untouched.\n- The public per-port `PortUsage` result shape is preserved.\n- Per-port `detail` does not include unrelated sockets from the all-port lsof snapshot.\n- Restart-health polling remains outside this PR, so #90548 should stay open for that remaining surface.\n\n## Real Behavior Proof\n\n### behavior\n\nmacOS Unix listener inspection previously spawned `lsof` once per inspected port. The patched multi-port helper should inspect multiple same-cycle listener ports with one all-LISTEN `lsof` snapshot and still return filtered per-port `PortUsage` results. The follow-up repair keeps existing single-port callers targeted to the requested port, so restart-health and other one-port diagnostics do not inherit the all-listener scan. `gateway status` wiring is covered separately by the status collector regression test that calls `inspectPortUsages([daemonPort, cliPort])` when daemon and CLI ports differ.\n\n### environment\n\n- Machine: local Mac mini4 development machine\n- Platform: `darwin`\n- Checkout branch: `wolf/ports-inspect-batch-lsof-listeners`\n- Head tested: `18ece86a5710379df29cd9cf18843cf763e8d8b6`\n- Live listeners: two temporary local TCP listeners bound to `127.0.0.1` on ephemeral ports.\n- No secrets, production services, or private traffic were used.\n\n### steps\n\n```sh\n# Live macOS behavior proof: start two local TCP listeners, call the real branch helpers,\n# and verify both single-port and batch APIs return busy listener details.\nnode --import tsx --input-type=module\n\n# Focused regression tests and checks on the same head.\nnode scripts/run-vitest.mjs run src/infra/ports.test.ts src/cli/daemon-cli/status.gather.test.ts src/cli/daemon-cli/restart-health.test.ts\n./node_modules/.bin/oxfmt --check --threads=1 src/infra/ports-inspect.ts src/infra/ports.ts src/infra/ports.test.ts src/cli/daemon-cli/status.gather.ts src/cli/daemon-cli/status.gather.test.ts\ngit diff --check origin/main..HEAD\ngitleaks git --redact --log-opts origin/main..HEAD\n```\n\n### evidence\n\nLive macOS proof output:\n\n```json\n{\n  \"platform\": \"darwin\",\n  \"head\": \"18ece86a5710\",\n  \"ports\": [50464, 50465],\n  \"single\": {\n    \"port\": 50464,\n    \"status\": \"busy\",\n    \"listenerCount\": 1,\n    \"detailMentionsRequestedPort\": true,\n    \"errors\": []\n  },\n  \"batch\": [\n    {\n      \"port\": 50464,\n      \"status\": \"busy\",\n      \"listenerCount\": 1,\n      \"detailMentionsRequestedPort\": true,\n      \"errors\": []\n    },\n    {\n      \"port\": 50465,\n      \"status\": \"busy\",\n      \"listenerCount\": 1,\n      \"detailMentionsRequestedPort\": true,\n      \"errors\": []\n    }\n  ]\n}\n```\n\nFocused validation:\n\n- RED proof before the repair: the new single-port command-shape test failed because current PR head used `-iTCP` instead of `-iTCP:18789`.\n- GREEN proof after the repair: `src/infra/ports.test.ts`: 15/15 passed.\n- `src/cli/daemon-cli/status.gather.test.ts` + `src/cli/daemon-cli/restart-health.test.ts`: 79/79 passed.\n- Combined targeted run: 3 test files passed, 94/94 tests passed.\n- Targeted `oxfmt --check`: all 5 matched files use correct format.\n- `git diff --check origin/main..HEAD`: passed.\n- `gitleaks protect --staged --redact`: no leaks found.\n- `gitleaks git --redact --log-opts origin/main..HEAD`: no leaks found.\n\nCommand-shape regression coverage:\n\n- `inspectPortUsage(18789)` now asserts exactly one mocked `lsof` invocation with args `-nP -iTCP:18789 -sTCP:LISTEN -FpFcn`.\n- `inspectPortUsages([18789, 19001])` still asserts exactly one mocked `lsof` invocation with args `-nP -iTCP -sTCP:LISTEN -FpFcn` and verifies per-port filtering excludes an unrelated port `3000` listener from requested-port details.\n- The status collector regression verifies daemon/CLI port status inspection calls `inspectPortUsages([19001, 18789])` and does not call the per-port `inspectPortUsage` path when the ports differ.\n\n### observedResult\n\nOn the live macOS proof run, both `inspectPortUsage(50464)` and `inspectPortUsages([50464, 50465])` returned `busy` listener results for real local TCP listeners, with each per-port detail mentioning the requested listener port and no errors. Focused tests confirmed the command boundary: single-port checks stay scoped to `-iTCP:<port>`, while explicit multi-port inspection still uses one shared all-LISTEN snapshot.\n\n### notTested\n\n- I did not reproduce launchservicesd / WindowServer saturation. That scenario is disruptive and risks destabilizing the desktop session.\n- I did not start or mutate a real OpenClaw LaunchAgent service.\n- I did not cover restart-health batching in this PR. Restart-health now keeps its existing targeted single-port lsof behavior; because the remaining repeated health-loop surface is still open, this PR uses `Refs #90548` rather than a closing reference.\n\n## De-duplication Evidence\n\nImmediately before the original push, these five independent open-PR searches returned no results:\n\n- `Fixes #90548`\n- `#90548`\n- `ports-inspect lsof iTCP`\n- `inspectPortUsage readUnixListeners`\n- `launchservicesd lsof port`\n\n## Narrow Fix Definition\n\n1. This is a shared helper/default-policy gap: the Unix port-inspection helper owned a per-port process-spawn strategy.\n2. Fixing only one visible caller would leave adjacent status/diagnostic paths able to repeat the same per-port lsof pattern, so the fix is helper-level plus batch-aware status caller wiring.\n3. Maintainers should expect a canonical shared helper fix rather than a local status-only patch because the bug is process-spawn strategy, not output formatting.\n4. Supersession risk is lower with this shared boundary: a narrower macOS-app-only or status-only patch would be more likely to be replaced.\n",
-        "branch": "wolf/ports-inspect-batch-lsof-listeners",
-        "head_sha": "18ece86a5710031f43f5c234ff3e6f6c23c7e4d7",
-        "author": "luoyanglang",
-        "labels": [
-          "cli",
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 availability",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/cli/daemon-cli/status.gather.test.ts",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/daemon-cli/status.gather.ts",
-            "additions": 13,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/ports-inspect.ts",
-            "additions": 207,
-            "deletions": 25,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/ports.test.ts",
-            "additions": 121,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/ports.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90622",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90622.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 31,
-            "SUCCESS": 129,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-agentic-cli:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-agentic-cli:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:90622:4632195035:2026-06-05T13:47:11Z:re_review",
-      "comment_id": "4632195035",
-      "comment_version_key": "4632195035:2026-06-05T13:47:11Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/90622#issuecomment-4632195035",
-      "repo": "openclaw/openclaw",
-      "issue_number": 90622,
-      "author": "luoyanglang",
-      "author_id": 238804951,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-05T13:47:11Z",
-      "comment_updated_at": "2026-06-05T13:47:11Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:90622:4631863232:2026-06-05T13:15:14Z:re_review",
-      "comment_id": "4631863232",
-      "comment_version_key": "4631863232:2026-06-05T13:15:14Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/90622#issuecomment-4631863232",
-      "repo": "openclaw/openclaw",
-      "issue_number": 90622,
-      "author": "luoyanglang",
-      "author_id": 238804951,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-05T13:15:14Z",
-      "comment_updated_at": "2026-06-05T13:15:14Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
       "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4855,
+    "total_ms": 1608,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 346
+        "ms": 684
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2223
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2252
+        "ms": 912
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
