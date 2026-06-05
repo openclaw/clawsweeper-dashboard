@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-05T23:08:45.766Z",
+  "generated_at": "2026-06-05T23:09:24.795Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-05T20:08:43.865Z",
+  "since": "2026-06-05T20:09:24.536Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    90490
+    90777
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 10,
-  "commands_seen": 5,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,474 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:90490:4627094496:2026-06-05T23:08:39Z:clawsweeper_needs_human",
-      "comment_id": "4627094496",
-      "comment_version_key": "4627094496:2026-06-05T23:08:39Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/90490#issuecomment-4627094496",
-      "repo": "openclaw/openclaw",
-      "issue_number": 90490,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-05T00:25:14Z",
-      "comment_updated_at": "2026-06-05T23:08:39Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] No repair lane is needed; the remaining action is maintainer acceptance of the queue-level proof and the long-lived message-delivery retry behavior.; Cleared: The diff changes gateway timers, mutable runtime handles, shutdown wiring, and tests only; I found no dependency, workflow, secret, permission, or supply-chain change. (sha=809d2bea999fd52092fa0c46413b3d6782f3ca32)",
-      "review_summary": "Adds a 60s gateway session-delivery recovery interval with a shutdown stop handle and regression tests for restart-continuation retry cutoffs.\n\nPR surface: Source +44, Tests +91. Total +135 across 6 files.\n\nReproducibility: yes. Source inspection shows current main performs only one delayed startup recovery, and the PR body gives a deterministic queue probe that seeds a failed session-delivery entry, invokes the new periodic retry, and observes the queue empty afterward.",
-      "review_followup": "- [P2] No repair lane is needed; the remaining action is maintainer acceptance of the queue-level proof and the long-lived message-delivery retry behavior.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "809d2bea999fd52092fa0c46413b3d6782f3ca32",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): retry restart continuation recovery",
-        "body": "## What changed\n\n- Added periodic restart/session-delivery recovery so entries deferred by retry backoff are retried after startup.\n- Added a focused gateway lifecycle regression test that proves the first startup recovery and later 60s retry both call restart-continuation recovery.\n\nFixes #76087\n\n## Real behavior proof\n\n- Behavior or issue addressed: Restart/session delivery recovery now runs the startup drain and then continues retrying deferred restart-continuation deliveries while the gateway process is alive. Before this PR, `recoverPendingSessionDeliveries()` scheduled one startup recovery after `1_250ms`; after this PR, it also schedules a `60_000ms` periodic retry. This proof seeds a failed queued restart-continuation entry, waits past the first retry backoff, then invokes the registered gateway periodic retry callback and verifies the entry is acknowledged.\n- Real environment tested: Local OpenClaw source checkout on Darwin 25.5.0 arm64, Node v26.0.0, pnpm 11.2.2, branch `fastino-76087-restart-continuation-retry`.\n- Exact steps or command run after this patch:\n  1. Ran an isolated source-checkout behavior probe with a temporary `OPENCLAW_STATE_DIR`.\n  2. The probe enqueued a restart-sentinel session-delivery entry, marked it failed with retry metadata, activated `activateGatewayScheduledServices()`, confirmed the `60000` ms periodic retry interval was registered, waited past the first `5000` ms backoff, invoked that periodic callback, and checked the queue again.\n  3. Ran `pnpm test src/gateway/server-runtime-services.test.ts src/infra/session-delivery-queue.recovery.test.ts src/gateway/server-restart-sentinel.test.ts`.\n  4. Ran `git diff --check HEAD~1..HEAD`.\n- Evidence after fix: Terminal transcript from the failed-entry periodic retry probe:\n\n  ```text\n  $ tmpdir=$(mktemp -d /tmp/openclaw-90490-periodic-proof-XXXXXX); OPENCLAW_STATE_DIR=\"$tmpdir\" pnpm exec tsx --eval '\n  (async () => {\n  const realSetTimeout = globalThis.setTimeout.bind(globalThis);\n  const intervals = [];\n  globalThis.setTimeout = ((fn, delay) => ({ unref() {}, __fn: fn, __delay: delay })) as never;\n  globalThis.setInterval = ((fn, delay) => { intervals.push({ fn, delay: Number(delay) }); return { unref() {} }; }) as never;\n  globalThis.clearTimeout = (() => undefined) as never;\n  globalThis.clearInterval = (() => undefined) as never;\n  const { enqueueSessionDelivery, failSessionDelivery, loadPendingSessionDeliveries } = await import(\"./src/infra/session-delivery-queue.ts\");\n  const { activateGatewayScheduledServices } = await import(\"./src/gateway/server-runtime-services.ts\");\n  const id = await enqueueSessionDelivery({ kind: \"systemEvent\", sessionKey: \"agent:main:main\", text: \"restart continuation after transient send failure\", idempotencyKey: \"restart-sentinel:agent:main:main:systemEvent:90490-periodic\" });\n  await failSessionDelivery(id, \"Network request for sendMessage failed!\");\n  console.log(\"stateDir\", process.env.OPENCLAW_STATE_DIR);\n  console.log(\"failedQueuedEntry\", JSON.stringify(await loadPendingSessionDeliveries()));\n  activateGatewayScheduledServices({ minimalTestGateway: false, cfgAtStart: { models: { pricing: { enabled: false } } }, deps: {}, sessionDeliveryRecoveryMaxEnqueuedAt: Date.now(), cron: { start: async () => undefined }, logCron: { error: (message) => console.log(\"cronError\", message) }, log: { child: (name) => ({ info: (message) => console.log(name + \":info\", message), warn: (message) => console.log(name + \":warn\", message), error: (message) => console.log(name + \":error\", message) }), error: (message) => console.log(\"error\", message), warn: (message) => console.log(\"warn\", message), info: (message) => console.log(\"info\", message), debug: () => undefined } });\n  console.log(\"registeredIntervals\", JSON.stringify(intervals.map(({ delay }) => delay)));\n  const periodic = intervals.find((item) => item.delay === 60000);\n  if (!periodic) throw new Error(\"missing 60000ms session-delivery retry interval\");\n  console.log(\"beforeBackoffElapsed\", JSON.stringify(await loadPendingSessionDeliveries()));\n  await new Promise((resolve) => realSetTimeout(resolve, 5100));\n  periodic.fn();\n  await new Promise((resolve) => realSetTimeout(resolve, 1000));\n  console.log(\"afterPeriodicRetry\", JSON.stringify(await loadPendingSessionDeliveries()));\n  })().catch((err) => { console.error(err); process.exit(1); });\n  '\n  stateDir /tmp/openclaw-90490-periodic-proof-mQy1Eo\n  failedQueuedEntry [{\"kind\":\"systemEvent\",\"sessionKey\":\"agent:main:main\",\"text\":\"restart continuation after transient send failure\",\"idempotencyKey\":\"restart-sentinel:agent:main:main:systemEvent:90490-periodic\",\"id\":\"07ab21da0fb6f145c33fb4e60eba23ffb46c99b608381765282d6903a6925379\",\"enqueuedAt\":1780655248585,\"retryCount\":1,\"lastAttemptAt\":1780655248588,\"lastError\":\"Network request for sendMessage failed!\"}]\n  [heartbeat] started\n  registeredIntervals [1800000,60000]\n  beforeBackoffElapsed [{\"kind\":\"systemEvent\",\"sessionKey\":\"agent:main:main\",\"text\":\"restart continuation after transient send failure\",\"idempotencyKey\":\"restart-sentinel:agent:main:main:systemEvent:90490-periodic\",\"id\":\"07ab21da0fb6f145c33fb4e60eba23ffb46c99b608381765282d6903a6925379\",\"enqueuedAt\":1780655248585,\"retryCount\":1,\"lastAttemptAt\":1780655248588,\"lastError\":\"Network request for sendMessage failed!\"}]\n  session-delivery-recovery:info Recovered session delivery 07ab21da0fb6f145c33fb4e60eba23ffb46c99b608381765282d6903a6925379\n  afterPeriodicRetry []\n  ```\n\n  Supplemental focused test output:\n\n  ```text\n  Test Files  4 passed (4)\n  Tests  74 passed (74)\n\n  Test Files  1 passed (1)\n  Tests  6 passed (6)\n\n  [test] passed 2 Vitest shards in 12.49s\n  ```\n- Observed result after fix: A failed pending restart-continuation session-delivery entry (`retryCount: 1`, `lastError: \"Network request for sendMessage failed!\"`) remained queued before the first backoff elapsed. After the branch-registered `60000` ms session-delivery periodic retry callback ran past the `5000` ms backoff, OpenClaw logged `Recovered session delivery ...` and the pending queue became `[]`.\n- What was not tested: No live Telegram network outage or production gateway credential flow. No permanent Telegram API failure path; this proof exercises the gateway scheduler retry path and the durable session-delivery queue recovery path with an isolated local state directory.\n",
-        "branch": "fastino-76087-restart-continuation-retry",
-        "head_sha": "809d2bea999fd52092fa0c46413b3d6782f3ca32",
-        "author": "sahibzada-allahyar",
-        "labels": [
-          "gateway",
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦞 diamond lobster",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/gateway/server-close.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-runtime-handles.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-runtime-services.test.ts",
-            "additions": 92,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-runtime-services.ts",
-            "additions": 41,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-runtime-startup-services.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.impl.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90490",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90490.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 163,
-          "counts": {
-            "CANCELLED": 2,
-            "IN_PROGRESS": 2,
-            "SKIPPED": 30,
-            "SUCCESS": 127,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS",
-            "check-lint:FAILURE"
-          ],
-          "pending": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "check-lint:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:90490:4630567122:2026-06-05T10:28:52Z:re_review",
-      "comment_id": "4630567122",
-      "comment_version_key": "4630567122:2026-06-05T10:28:52Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/90490#issuecomment-4630567122",
-      "repo": "openclaw/openclaw",
-      "issue_number": 90490,
-      "author": "sahibzada-allahyar",
-      "author_id": 94376830,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-05T10:28:52Z",
-      "comment_updated_at": "2026-06-05T10:28:52Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:90490:4627538934:2026-06-05T02:15:38Z:re_review",
-      "comment_id": "4627538934",
-      "comment_version_key": "4627538934:2026-06-05T02:15:38Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/90490#issuecomment-4627538934",
-      "repo": "openclaw/openclaw",
-      "issue_number": 90490,
-      "author": "sahibzada-allahyar",
-      "author_id": 94376830,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-05T02:15:38Z",
-      "comment_updated_at": "2026-06-05T02:15:38Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:90490:4627422603:2026-06-05T01:47:40Z:re_review",
-      "comment_id": "4627422603",
-      "comment_version_key": "4627422603:2026-06-05T01:47:40Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/90490#issuecomment-4627422603",
-      "repo": "openclaw/openclaw",
-      "issue_number": 90490,
-      "author": "sahibzada-allahyar",
-      "author_id": 94376830,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-05T01:47:40Z",
-      "comment_updated_at": "2026-06-05T01:47:40Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): retry restart continuation recovery",
-        "body": "## What changed\n\n- Added periodic restart/session-delivery recovery so entries deferred by retry backoff are retried after startup.\n- Added a focused gateway lifecycle regression test that proves the first startup recovery and later 60s retry both call restart-continuation recovery.\n\nFixes #76087\n\n## Real behavior proof\n\n- Behavior or issue addressed: Restart/session delivery recovery now runs the startup drain and then continues retrying deferred restart-continuation deliveries while the gateway process is alive. Before this PR, `recoverPendingSessionDeliveries()` scheduled one startup recovery after `1_250ms`; after this PR, it also schedules a `60_000ms` periodic retry. This proof seeds a failed queued restart-continuation entry, waits past the first retry backoff, then invokes the registered gateway periodic retry callback and verifies the entry is acknowledged.\n- Real environment tested: Local OpenClaw source checkout on Darwin 25.5.0 arm64, Node v26.0.0, pnpm 11.2.2, branch `fastino-76087-restart-continuation-retry`.\n- Exact steps or command run after this patch:\n  1. Ran an isolated source-checkout behavior probe with a temporary `OPENCLAW_STATE_DIR`.\n  2. The probe enqueued a restart-sentinel session-delivery entry, marked it failed with retry metadata, activated `activateGatewayScheduledServices()`, confirmed the `60000` ms periodic retry interval was registered, waited past the first `5000` ms backoff, invoked that periodic callback, and checked the queue again.\n  3. Ran `pnpm test src/gateway/server-runtime-services.test.ts src/infra/session-delivery-queue.recovery.test.ts src/gateway/server-restart-sentinel.test.ts`.\n  4. Ran `git diff --check HEAD~1..HEAD`.\n- Evidence after fix: Terminal transcript from the failed-entry periodic retry probe:\n\n  ```text\n  $ tmpdir=$(mktemp -d /tmp/openclaw-90490-periodic-proof-XXXXXX); OPENCLAW_STATE_DIR=\"$tmpdir\" pnpm exec tsx --eval '\n  (async () => {\n  const realSetTimeout = globalThis.setTimeout.bind(globalThis);\n  const intervals = [];\n  globalThis.setTimeout = ((fn, delay) => ({ unref() {}, __fn: fn, __delay: delay })) as never;\n  globalThis.setInterval = ((fn, delay) => { intervals.push({ fn, delay: Number(delay) }); return { unref() {} }; }) as never;\n  globalThis.clearTimeout = (() => undefined) as never;\n  globalThis.clearInterval = (() => undefined) as never;\n  const { enqueueSessionDelivery, failSessionDelivery, loadPendingSessionDeliveries } = await import(\"./src/infra/session-delivery-queue.ts\");\n  const { activateGatewayScheduledServices } = await import(\"./src/gateway/server-runtime-services.ts\");\n  const id = await enqueueSessionDelivery({ kind: \"systemEvent\", sessionKey: \"agent:main:main\", text: \"restart continuation after transient send failure\", idempotencyKey: \"restart-sentinel:agent:main:main:systemEvent:90490-periodic\" });\n  await failSessionDelivery(id, \"Network request for sendMessage failed!\");\n  console.log(\"stateDir\", process.env.OPENCLAW_STATE_DIR);\n  console.log(\"failedQueuedEntry\", JSON.stringify(await loadPendingSessionDeliveries()));\n  activateGatewayScheduledServices({ minimalTestGateway: false, cfgAtStart: { models: { pricing: { enabled: false } } }, deps: {}, sessionDeliveryRecoveryMaxEnqueuedAt: Date.now(), cron: { start: async () => undefined }, logCron: { error: (message) => console.log(\"cronError\", message) }, log: { child: (name) => ({ info: (message) => console.log(name + \":info\", message), warn: (message) => console.log(name + \":warn\", message), error: (message) => console.log(name + \":error\", message) }), error: (message) => console.log(\"error\", message), warn: (message) => console.log(\"warn\", message), info: (message) => console.log(\"info\", message), debug: () => undefined } });\n  console.log(\"registeredIntervals\", JSON.stringify(intervals.map(({ delay }) => delay)));\n  const periodic = intervals.find((item) => item.delay === 60000);\n  if (!periodic) throw new Error(\"missing 60000ms session-delivery retry interval\");\n  console.log(\"beforeBackoffElapsed\", JSON.stringify(await loadPendingSessionDeliveries()));\n  await new Promise((resolve) => realSetTimeout(resolve, 5100));\n  periodic.fn();\n  await new Promise((resolve) => realSetTimeout(resolve, 1000));\n  console.log(\"afterPeriodicRetry\", JSON.stringify(await loadPendingSessionDeliveries()));\n  })().catch((err) => { console.error(err); process.exit(1); });\n  '\n  stateDir /tmp/openclaw-90490-periodic-proof-mQy1Eo\n  failedQueuedEntry [{\"kind\":\"systemEvent\",\"sessionKey\":\"agent:main:main\",\"text\":\"restart continuation after transient send failure\",\"idempotencyKey\":\"restart-sentinel:agent:main:main:systemEvent:90490-periodic\",\"id\":\"07ab21da0fb6f145c33fb4e60eba23ffb46c99b608381765282d6903a6925379\",\"enqueuedAt\":1780655248585,\"retryCount\":1,\"lastAttemptAt\":1780655248588,\"lastError\":\"Network request for sendMessage failed!\"}]\n  [heartbeat] started\n  registeredIntervals [1800000,60000]\n  beforeBackoffElapsed [{\"kind\":\"systemEvent\",\"sessionKey\":\"agent:main:main\",\"text\":\"restart continuation after transient send failure\",\"idempotencyKey\":\"restart-sentinel:agent:main:main:systemEvent:90490-periodic\",\"id\":\"07ab21da0fb6f145c33fb4e60eba23ffb46c99b608381765282d6903a6925379\",\"enqueuedAt\":1780655248585,\"retryCount\":1,\"lastAttemptAt\":1780655248588,\"lastError\":\"Network request for sendMessage failed!\"}]\n  session-delivery-recovery:info Recovered session delivery 07ab21da0fb6f145c33fb4e60eba23ffb46c99b608381765282d6903a6925379\n  afterPeriodicRetry []\n  ```\n\n  Supplemental focused test output:\n\n  ```text\n  Test Files  4 passed (4)\n  Tests  74 passed (74)\n\n  Test Files  1 passed (1)\n  Tests  6 passed (6)\n\n  [test] passed 2 Vitest shards in 12.49s\n  ```\n- Observed result after fix: A failed pending restart-continuation session-delivery entry (`retryCount: 1`, `lastError: \"Network request for sendMessage failed!\"`) remained queued before the first backoff elapsed. After the branch-registered `60000` ms session-delivery periodic retry callback ran past the `5000` ms backoff, OpenClaw logged `Recovered session delivery ...` and the pending queue became `[]`.\n- What was not tested: No live Telegram network outage or production gateway credential flow. No permanent Telegram API failure path; this proof exercises the gateway scheduler retry path and the durable session-delivery queue recovery path with an isolated local state directory.\n",
-        "branch": "fastino-76087-restart-continuation-retry",
-        "head_sha": "809d2bea999fd52092fa0c46413b3d6782f3ca32",
-        "author": "sahibzada-allahyar",
-        "labels": [
-          "gateway",
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦞 diamond lobster",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/gateway/server-close.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-runtime-handles.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-runtime-services.test.ts",
-            "additions": 92,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-runtime-services.ts",
-            "additions": 41,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-runtime-startup-services.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.impl.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90490",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90490.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 163,
-          "counts": {
-            "CANCELLED": 2,
-            "IN_PROGRESS": 2,
-            "SKIPPED": 30,
-            "SUCCESS": 127,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS",
-            "check-lint:FAILURE"
-          ],
-          "pending": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "check-lint:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:90490:4627132434:2026-06-05T00:34:28Z:re_review",
-      "comment_id": "4627132434",
-      "comment_version_key": "4627132434:2026-06-05T00:34:28Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/90490#issuecomment-4627132434",
-      "repo": "openclaw/openclaw",
-      "issue_number": 90490,
-      "author": "sahibzada-allahyar",
-      "author_id": 94376830,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-05T00:34:28Z",
-      "comment_updated_at": "2026-06-05T00:34:28Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): retry restart continuation recovery",
-        "body": "## What changed\n\n- Added periodic restart/session-delivery recovery so entries deferred by retry backoff are retried after startup.\n- Added a focused gateway lifecycle regression test that proves the first startup recovery and later 60s retry both call restart-continuation recovery.\n\nFixes #76087\n\n## Real behavior proof\n\n- Behavior or issue addressed: Restart/session delivery recovery now runs the startup drain and then continues retrying deferred restart-continuation deliveries while the gateway process is alive. Before this PR, `recoverPendingSessionDeliveries()` scheduled one startup recovery after `1_250ms`; after this PR, it also schedules a `60_000ms` periodic retry. This proof seeds a failed queued restart-continuation entry, waits past the first retry backoff, then invokes the registered gateway periodic retry callback and verifies the entry is acknowledged.\n- Real environment tested: Local OpenClaw source checkout on Darwin 25.5.0 arm64, Node v26.0.0, pnpm 11.2.2, branch `fastino-76087-restart-continuation-retry`.\n- Exact steps or command run after this patch:\n  1. Ran an isolated source-checkout behavior probe with a temporary `OPENCLAW_STATE_DIR`.\n  2. The probe enqueued a restart-sentinel session-delivery entry, marked it failed with retry metadata, activated `activateGatewayScheduledServices()`, confirmed the `60000` ms periodic retry interval was registered, waited past the first `5000` ms backoff, invoked that periodic callback, and checked the queue again.\n  3. Ran `pnpm test src/gateway/server-runtime-services.test.ts src/infra/session-delivery-queue.recovery.test.ts src/gateway/server-restart-sentinel.test.ts`.\n  4. Ran `git diff --check HEAD~1..HEAD`.\n- Evidence after fix: Terminal transcript from the failed-entry periodic retry probe:\n\n  ```text\n  $ tmpdir=$(mktemp -d /tmp/openclaw-90490-periodic-proof-XXXXXX); OPENCLAW_STATE_DIR=\"$tmpdir\" pnpm exec tsx --eval '\n  (async () => {\n  const realSetTimeout = globalThis.setTimeout.bind(globalThis);\n  const intervals = [];\n  globalThis.setTimeout = ((fn, delay) => ({ unref() {}, __fn: fn, __delay: delay })) as never;\n  globalThis.setInterval = ((fn, delay) => { intervals.push({ fn, delay: Number(delay) }); return { unref() {} }; }) as never;\n  globalThis.clearTimeout = (() => undefined) as never;\n  globalThis.clearInterval = (() => undefined) as never;\n  const { enqueueSessionDelivery, failSessionDelivery, loadPendingSessionDeliveries } = await import(\"./src/infra/session-delivery-queue.ts\");\n  const { activateGatewayScheduledServices } = await import(\"./src/gateway/server-runtime-services.ts\");\n  const id = await enqueueSessionDelivery({ kind: \"systemEvent\", sessionKey: \"agent:main:main\", text: \"restart continuation after transient send failure\", idempotencyKey: \"restart-sentinel:agent:main:main:systemEvent:90490-periodic\" });\n  await failSessionDelivery(id, \"Network request for sendMessage failed!\");\n  console.log(\"stateDir\", process.env.OPENCLAW_STATE_DIR);\n  console.log(\"failedQueuedEntry\", JSON.stringify(await loadPendingSessionDeliveries()));\n  activateGatewayScheduledServices({ minimalTestGateway: false, cfgAtStart: { models: { pricing: { enabled: false } } }, deps: {}, sessionDeliveryRecoveryMaxEnqueuedAt: Date.now(), cron: { start: async () => undefined }, logCron: { error: (message) => console.log(\"cronError\", message) }, log: { child: (name) => ({ info: (message) => console.log(name + \":info\", message), warn: (message) => console.log(name + \":warn\", message), error: (message) => console.log(name + \":error\", message) }), error: (message) => console.log(\"error\", message), warn: (message) => console.log(\"warn\", message), info: (message) => console.log(\"info\", message), debug: () => undefined } });\n  console.log(\"registeredIntervals\", JSON.stringify(intervals.map(({ delay }) => delay)));\n  const periodic = intervals.find((item) => item.delay === 60000);\n  if (!periodic) throw new Error(\"missing 60000ms session-delivery retry interval\");\n  console.log(\"beforeBackoffElapsed\", JSON.stringify(await loadPendingSessionDeliveries()));\n  await new Promise((resolve) => realSetTimeout(resolve, 5100));\n  periodic.fn();\n  await new Promise((resolve) => realSetTimeout(resolve, 1000));\n  console.log(\"afterPeriodicRetry\", JSON.stringify(await loadPendingSessionDeliveries()));\n  })().catch((err) => { console.error(err); process.exit(1); });\n  '\n  stateDir /tmp/openclaw-90490-periodic-proof-mQy1Eo\n  failedQueuedEntry [{\"kind\":\"systemEvent\",\"sessionKey\":\"agent:main:main\",\"text\":\"restart continuation after transient send failure\",\"idempotencyKey\":\"restart-sentinel:agent:main:main:systemEvent:90490-periodic\",\"id\":\"07ab21da0fb6f145c33fb4e60eba23ffb46c99b608381765282d6903a6925379\",\"enqueuedAt\":1780655248585,\"retryCount\":1,\"lastAttemptAt\":1780655248588,\"lastError\":\"Network request for sendMessage failed!\"}]\n  [heartbeat] started\n  registeredIntervals [1800000,60000]\n  beforeBackoffElapsed [{\"kind\":\"systemEvent\",\"sessionKey\":\"agent:main:main\",\"text\":\"restart continuation after transient send failure\",\"idempotencyKey\":\"restart-sentinel:agent:main:main:systemEvent:90490-periodic\",\"id\":\"07ab21da0fb6f145c33fb4e60eba23ffb46c99b608381765282d6903a6925379\",\"enqueuedAt\":1780655248585,\"retryCount\":1,\"lastAttemptAt\":1780655248588,\"lastError\":\"Network request for sendMessage failed!\"}]\n  session-delivery-recovery:info Recovered session delivery 07ab21da0fb6f145c33fb4e60eba23ffb46c99b608381765282d6903a6925379\n  afterPeriodicRetry []\n  ```\n\n  Supplemental focused test output:\n\n  ```text\n  Test Files  4 passed (4)\n  Tests  74 passed (74)\n\n  Test Files  1 passed (1)\n  Tests  6 passed (6)\n\n  [test] passed 2 Vitest shards in 12.49s\n  ```\n- Observed result after fix: A failed pending restart-continuation session-delivery entry (`retryCount: 1`, `lastError: \"Network request for sendMessage failed!\"`) remained queued before the first backoff elapsed. After the branch-registered `60000` ms session-delivery periodic retry callback ran past the `5000` ms backoff, OpenClaw logged `Recovered session delivery ...` and the pending queue became `[]`.\n- What was not tested: No live Telegram network outage or production gateway credential flow. No permanent Telegram API failure path; this proof exercises the gateway scheduler retry path and the durable session-delivery queue recovery path with an isolated local state directory.\n",
-        "branch": "fastino-76087-restart-continuation-retry",
-        "head_sha": "809d2bea999fd52092fa0c46413b3d6782f3ca32",
-        "author": "sahibzada-allahyar",
-        "labels": [
-          "gateway",
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦞 diamond lobster",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/gateway/server-close.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-runtime-handles.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-runtime-services.test.ts",
-            "additions": 92,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-runtime-services.ts",
-            "additions": 41,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-runtime-startup-services.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.impl.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90490",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90490.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 163,
-          "counts": {
-            "CANCELLED": 2,
-            "IN_PROGRESS": 2,
-            "SKIPPED": 30,
-            "SUCCESS": 127,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS",
-            "check-lint:FAILURE"
-          ],
-          "pending": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "check-lint:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3531,
+    "total_ms": 435,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 281
+        "ms": 246
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1603
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 1617
+        "ms": 176
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
