@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-05T20:58:45.461Z",
-  "repo": "steipete/CodexBar",
+  "generated_at": "2026-06-05T20:59:12.900Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-05T17:58:45.178Z",
+  "since": "2026-06-05T17:59:10.969Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    1321
+    90750
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +29,147 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:90750:4635422441:2026-06-05T20:59:08Z:clawsweeper_auto_repair",
+      "comment_id": "4635422441",
+      "comment_version_key": "4635422441:2026-06-05T20:59:08Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90750#issuecomment-4635422441",
+      "repo": "openclaw/openclaw",
+      "issue_number": 90750,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-05T20:49:15Z",
+      "comment_updated_at": "2026-06-05T20:59:08Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=e6318d4ee066f784988575fd0f7688c36b8fe139)",
+      "review_summary": "The PR changes diagnostic run-activity teardown to evict orphaned tool/model markers when the last embedded owner ends, adds a `session.activity.evicted` diagnostic event with stability recording, and documents/tests the behavior.\n\nPR surface: Source +56, Tests +144, Docs +8. Total +208 across 6 files.\n\nReproducibility: yes. from source inspection: current main's reply-run cleanup calls `markDiagnosticEmbeddedRunEnded` with `clearRunActivity: false`, which can leave active tool/model markers that later classify as `blocked_tool_call`.",
+      "review_followup": "- [P1] Human follow-up is required because the external PR lacks real behavior proof and the OTEL exporter/docs mismatch needs an author or maintainer update before merge.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "e6318d4ee066f784988575fd0f7688c36b8fe139",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(diagnostics): evict orphaned tool/model activity on owner-less run end",
+        "body": "## Summary\n\nStale native `tool_call` diagnostic activity could survive a clean run teardown and re-block later turns on the same `sessionKey` as `blocked_tool_call` (#87310).\n\n`markDiagnosticEmbeddedRunEnded({ clearRunActivity: false })` — used by the reply-run wrapper so it does not clobber a still-draining inner embedded run — removed only the embedded-run marker and left tool/model markers untouched. When a native tool never emitted its matching `tool.execution.completed` event (e.g. the embedded Codex app-server tool whose owner is torn down first), that marker leaked into the per-session activity (keyed by `sessionKey`). A later turn then saw `activeWorkKind=tool_call` with a very large `activeToolAgeMs`, was classified `blocked_tool_call`, and produced repeated `session.stalled` diagnostics — and recovery could even abort the fresh, healthy run.\n\n### Fix\n\n- `src/logging/diagnostic-run-activity.ts`: when an embedded/reply run ends and **no embedded-run owner remains** for the session, leftover tool/model markers are now evicted (they can never report completion). A still-active inner run keeps its markers, preserving the original reason `clearRunActivity: false` existed.\n- Eviction emits a new structured `session.activity.evicted` event (`reason=orphaned_no_owner`, `evictedTools`/`evictedModelCalls`) so operators can distinguish recovered stale state from a real active tool (issue items 3 & 5).\n- `src/logging/diagnostic-stability.ts`: record the new event in the stability ring buffer.\n- Docs updated in `docs/gateway/opentelemetry.md`.\n\nRecovery-driven cleanup (`clearDiagnosticEmbeddedRunActivityForSession`) is unchanged and remains observable via the existing `session.recovery.completed` event; this change targets the non-recovery clean-teardown path that previously evicted nothing and leaked silently.\n\n## Verification\n\n`Behavior addressed`: Orphaned native `tool_call` (and `model_call`) diagnostic activity surviving a clean run end and re-blocking later turns as `blocked_tool_call`.\n\n`Real environment tested`: Vitest reproduction + regression (Node 22.22.2, macOS). Not exercised against a live gateway/Slack runtime.\n\n`Exact steps or command run after this patch`:\n```\nnode scripts/run-vitest.mjs \\\n  src/logging/diagnostic.test.ts \\\n  src/auto-reply/reply/reply-run-registry.test.ts \\\n  src/logging/diagnostic-stability.test.ts \\\n  src/logging/diagnostic-stuck-session-recovery.runtime.test.ts \\\n  src/logging/diagnostic-stuck-session-recovery.integration.test.ts \\\n  src/logging/diagnostic-session-attention.test.ts\nnode scripts/run-tsgo.mjs -p tsconfig.core.json\nnode scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json\n```\n\n`Evidence after fix`: A pre-fix probe asserting the leak failed on `origin/main` (`expected 'tool_call' to be undefined` → received `\"tool_call\"` after `op.complete()`). With the fix, the new regression tests pass:\n- `reply-run-registry`: \"evicts an orphaned native tool when a reply run completes without its completion\".\n- `diagnostic`: \"evicts orphaned tool/model markers when the last owner ends without clearing run activity\" and \"keeps tool markers when an inner embedded run is still active\".\n\n`Observed result after fix`: All listed suites green; `tsgo` core + core-test clean. The orphaned marker is evicted, `activeWorkKind` returns to `undefined`, and a single `session.activity.evicted` event is emitted.\n\n`What was not tested`: Live gateway/systemd + Slack end-to-end reproduction; OpenTelemetry/Prometheus exporter wiring for the new event type (the metric pipeline maps diagnostic events generically).\n\nCloses #87310\n",
+        "branch": "fix/87310-diagnostic-stale-tool-activity",
+        "head_sha": "e6318d4ee066f784988575fd0f7688c36b8fe139",
+        "author": "849261680",
+        "labels": [
+          "docs",
+          "gateway",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "docs/gateway/opentelemetry.md",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/reply-run-registry.test.ts",
+            "additions": 46,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/diagnostic-events.ts",
+            "additions": 19,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/logging/diagnostic-run-activity.ts",
+            "additions": 35,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/logging/diagnostic-stability.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/logging/diagnostic.test.ts",
+            "additions": 98,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90750",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90750.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 28,
+            "SUCCESS": 129,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 523,
+    "total_ms": 2142,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 272
+        "ms": 231
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1685
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 240
+        "ms": 196
       },
       {
         "name": "append_ledger",
