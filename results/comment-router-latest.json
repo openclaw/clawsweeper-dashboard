@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-05T10:37:40.519Z",
+  "generated_at": "2026-06-05T10:39:22.744Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-05T07:37:39.472Z",
+  "since": "2026-06-05T07:39:22.537Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    83538
+    90630
   ],
-  "comment_ids": [
-    4630614538
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,78 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:83538:4630614538:2026-06-05T10:36:53Z:re_review",
-      "comment_id": "4630614538",
-      "comment_version_key": "4630614538:2026-06-05T10:36:53Z",
-      "comment_url": "https://github.com/openclaw/openclaw/issues/83538#issuecomment-4630614538",
-      "repo": "openclaw/openclaw",
-      "issue_number": 83538,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-05T10:36:53Z",
-      "comment_updated_at": "2026-06-05T10:36:53Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "ignored",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "issue",
-        "state": "open",
-        "locked": false,
-        "title": "cron: deleteAfterRun fires on manual run even when no run executes (silent data loss)",
-        "body": "## Summary\n\nA cron job with `deleteAfterRun: true` is deleted from the scheduler\nwhen a manual `cron run <jobId>` call is issued, even when the manual\nrun never executes: no entry appears in `cron runs <jobId>` history,\nno `lastRunAtMs` is updated, no run output is produced. The job\ndefinition is destroyed silently, taking the future scheduled fire\nwith it. This is destructive data loss with no `dryRun` guard, no\nwarning, and no run record proving any work was done in exchange for\nthe deletion.\n\n## Reproduction (observed 2026-05-18)\n\n1. Cron job existed with:\n   - `enabled: true`\n   - `deleteAfterRun: true`\n   - `schedule: {kind: \"at\", at: \"2026-07-11T06:00:00.000Z\"}`\n   - Never fired before (no entries in `cron runs`).\n\n2. Issued `cron run <jobId>` to manually trigger.\n   Response: `{ok: true, enqueued: true, runId: \"manual:...:5\"}`.\n\n3. ~2 minutes later: `cron runs <jobId>` returned `{entries: [], total: 0}`.\n   No run history.\n\n4. ~6 minutes later: `cron get <jobId>` still showed the job present\n   with `nextRunAtMs` pointing at the original 2026-07-11 future fire.\n   Appeared safe.\n\n5. ~16 minutes later: `cron get <jobId>` returned\n   `{status: \"error\", error: \"cron job not found\"}`. Job deleted.\n\n6. Scheduled 2026-07-11 fire destroyed. No run record proving any\n   work happened. The manual fire was likely queued behind another\n   long-running cron (~5 min) and dropped silently rather than executed.\n\nA separate `deleteAfterRun: true` job in the same session was also\nmanually fired, completed its run successfully (~5 min duration, run\nentry produced, output delivered to Telegram), and was likewise\ndestroyed. Both completion paths (no-execution and successful-execution)\nend in silent job deletion. The destruction is unconditional once\n`cron run` is issued against a `deleteAfterRun: true` job.\n\n## Expected behavior\n\nAny of, in order of preference:\n\n- **A** (preferred): `deleteAfterRun: true` only fires on actual\n  scheduled run completion, not on manual `cron run` invocations.\n  Manual fires are explicitly verification/debugging tools and should\n  not consume the one-shot guarantee.\n- **B**: `cron run` against a `deleteAfterRun: true` job is rejected\n  unless an explicit override flag is passed (e.g., `--allow-delete`).\n- **C** (minimum): The deletion is logged with an explicit reason\n  (\"deleted via manual fire\", \"deleted via expiry without execution\")\n  and surfaced in run-history.\n\nCurrent behavior allows silent destruction of scheduled future fires.\n\n## Impact\n\n- Silent loss of two scheduled future fires in a single verification\n  session.\n- Recovery required re-creating each cron from cached payload in a\n  prior `cron list` response. Without that cache, the definitions\n  would have been unrecoverable.\n- Cannot manual-fire any `deleteAfterRun: true` cron for verification\n  without destroying it.\n\n## Current workaround\n\nBefore manual-firing any `deleteAfterRun: true` job:\n1. Either remove the flag via `cron update`, manual-fire, then re-add.\n2. Or skip manual-fire entirely and accept the verification gap until\n   natural fire.\n3. Or recreate the job after-the-fact from cached `cron list` JSON if\n   deletion happens.\n\n---\n\n## Filer-side note (process gap, included for upstream context only)\n\nThis is **not** part of the upstream defect. Included because it\ncontributed to discovering the bug and may inform whether the upstream\nfix should be paired with documentation changes.\n\nThe agent's pre-batch cron audit table did not flag `deleteAfterRun:\ntrue` as a property worth surfacing before manual-fire. Verified\nagainst the original `cron list` JSON: the flag was explicitly present\non the destroyed jobs from the start; the audit was incomplete, not\nthe flag implicit. A more careful audit would have gated the\nmanual-fire decision and avoided the accident.\n\nThis is being addressed agent-side (executed-vs-instructed audit\ncontrols in the model-routing buildable plan) and is mentioned here\nonly because the upstream fix might consider whether `cron list`\noutput should make `deleteAfterRun: true` more visually prominent, or\nwhether `cron get` should include a \"destructive-action warnings\"\nfield.\n\n---\n\n## Environment\n\n- OpenClaw: gateway with cron scheduler\n- macOS (Darwin 25.5.0 arm64)\n- Sessions: `agent:main`\n- Observed via: `openclaw cron` MCP tool (run, runs, get actions)\n",
-        "author": "swildcat10",
-        "labels": [],
-        "cluster_id": null,
-        "job_path": null,
-        "open_prs": [],
-        "issue_implementation_cluster_id": "issue-openclaw-openclaw-83538",
-        "issue_implementation_job_path": "jobs/openclaw/inbox/issue-openclaw-openclaw-83538.md",
-        "mode": "autonomous"
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "author association CONTRIBUTOR and repository permission read are not allowed"
-    }
-  ],
+  "commands": [],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 1299,
+    "total_ms": 342,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 497
+        "ms": 195
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 400
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 137
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 253
+        "ms": 135
       },
       {
         "name": "append_ledger",
