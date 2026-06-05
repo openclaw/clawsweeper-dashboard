@@ -1,19 +1,17 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-05T19:00:01.110Z",
+  "generated_at": "2026-06-05T19:00:43.293Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-05T16:00:00.448Z",
+  "since": "2026-06-05T16:00:40.866Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    86544
+    90740
   ],
-  "comment_ids": [
-    4634576648
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -33,58 +31,142 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:86544:4634576648:2026-06-05T18:58:38Z:re_review",
-      "comment_id": "4634576648",
-      "comment_version_key": "4634576648:2026-06-05T18:58:38Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86544#issuecomment-4634576648",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:90740:4634545123:2026-06-05T19:00:38Z:clawsweeper_auto_repair",
+      "comment_id": "4634545123",
+      "comment_version_key": "4634545123:2026-06-05T19:00:38Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90740#issuecomment-4634545123",
       "repo": "openclaw/openclaw",
-      "issue_number": 86544,
-      "author": "giodl73-repo",
-      "author_id": 235387111,
+      "issue_number": 90740,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-05T18:58:38Z",
-      "comment_updated_at": "2026-06-05T18:58:38Z",
+      "comment_created_at": "2026-06-05T18:54:08Z",
+      "comment_updated_at": "2026-06-05T19:00:38Z",
       "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=c9dc427a65c8677c2fe88f5643449ce26ba85e16)",
+      "review_summary": "This PR adds a `durable_queue` subagent completion fallback that enqueues pending direct handoffs into system events and updates task-runtime durability tests.\n\nPR surface: Source +57, Tests +299. Total +356 across 6 files.\n\nReproducibility: yes. source inspection gives a high-signal path: current main returns `completion_handoff_pending` for pending completion handoffs without media or message-tool requirements. I did not run a live gateway reproduction, and the PR's after-fix proof is test-only.",
+      "review_followup": "- [P1] Needs maintainer decision and patch direction for durable-versus-ephemeral completion semantics, plus contributor real behavior proof before merge.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "c9dc427a65c8677c2fe88f5643449ce26ba85e16",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "target": {
+        "kind": "pull_request",
+        "title": "Implement durable system-event fallback for subagent completion when handoff is still pending",
+        "body": "## Summary\n\nReplace the give-up branch in `subagent-announce-delivery.ts` (when the direct subagent-announce handoff fires `completion_handoff_pending`) with a durable fallback that enqueues the completion trigger into the requester's in-process system-event inbox via the existing `enqueueSystemEvent` primitive (`src/infra/system-events.ts`). The original `{delivered:false, error:\"completion agent handoff is still pending\"}` shape is preserved as a try/catch safety net if the enqueue itself fails.\n\n## Motivation\n\nToday's `openclaw tasks audit --json` on a self-hosted gateway (`srv1355327`, OpenClaw `2026.5.26`) showed **34 `delivery_failed` + 37 `stale_blocked`** rows, all with error `\"completion agent handoff is still pending\"`. RCA traced every one to the same code path: when the parent session is active but non-streaming (yielded, queued behind work, mid compaction-prep), the gateway accepts the agent-run dispatch but returns a non-terminal status. The existing give-up logic exhausted its retries and discarded the child's completion content — even though the content was preserved on disk in the child's worktree the whole time.\n\nThe new durable-fallback path uses the same primitive (`enqueueSystemEvent`) that's already used for:\n- Cron job firings\n- Hook events\n- Restart-sentinel deliveries\n- ACP child-spawn announcements\n- Cross-session monitor events\n\nSo no new infrastructure surface is introduced. The fallback is keyed `subagent-announce:${params.directIdempotencyKey}`, idempotent on `(text, contextKey, deliveryContext)`, and drained by the parent on next turn-start via the standard `drainSystemEvents` consumer.\n\n## Changes\n\n6 files, +365/-9:\n\n- `src/agents/subagent-announce-delivery.ts` — replace the give-up return with durable-queue enqueue + try/catch safety net\n- `src/agents/subagent-announce-dispatch.ts` — extend `SubagentDeliveryPath` union from `\"steered\" | \"direct\" | \"none\"` to include `\"durable_queue\"`\n- `src/plugin-sdk/agent-harness-task-runtime.ts` — extend `isDurableAgentHarnessCompletionDelivery` to treat `durable_queue` path as durable (so monitor retry does not re-fire)\n- `src/agents/subagent-announce-delivery.test.ts` — 5 new unit tests covering the durable-queue branch + counterfactual probes\n- `src/agents/embedded-agent-runner/sessions-yield.orchestration.test.ts` — 1 new integration test reproducing the original bug + verifying the fix end-to-end\n- `src/plugin-sdk/agent-harness-task-runtime.test.ts` — 1 new test for `isDurableAgentHarnessCompletionDelivery(durable_queue)`\n\n## Architectural invariant\n\nThe fix is **self-contained at runtime**: no code path reads `warden-status`, `workspace/memory`, or `.openclaw/` ledger paths to make a delivery decision. Status files remain observability-only, not load-bearing. Verified via grep gate in CI patch.\n\n## Tests\n\nLocal on commit `49e43d03` (6.2 lane), re-run on rebased `c9dc427a`:\n- `subagent-announce-delivery.test.ts`: 102/102 pass (97 pre-existing + 5 new)\n- `sessions-yield.orchestration.test.ts`: 5/5 pass (4 pre-existing + 1 new)\n- `agent-harness-task-runtime.test.ts`: 7/7 pass (6 pre-existing + 1 new)\n- Typecheck: 0 errors in all 6 touched files. (Pre-existing TS4058 on `src/secrets/config-io.ts:12` is unchanged from main.)\n\n## Independent review\n\nA second-pass review on the 6.2 lane found **all 11 checklist items + all 6 counterfactual probes green**. Notable items probed:\n1. Empty `directIdempotencyKey` collision risk: not exploitable in practice — `enqueueSystemEvent` dedupes on the full `(text, contextKey, deliveryContext)` triple, not `contextKey` alone, so worst case is degraded observability not lost delivery.\n2. Crash window between `enqueueSystemEvent` returning success and parent's next `drainSystemEvents` call: thin silent-loss window exists at parent process death; recommended as follow-up enhancement (TTL/staleness sweep over `peekSystemEventEntries`) but **not a regression of current behavior** since the give-up branch already lost deliveries during this window.\n3. Existing 5.26 give-up shape (no `reason` field) exactly preserved in the catch fallback — no behavior delta for callers that match on `error` text only.\n\n## Compatibility\n\n- Backward-compatible: the durable-queue path is a NEW positive-delivery shape (`{delivered:true, path:\"durable_queue\"}`), not a change to existing failure shapes.\n- Existing retry/give-up bookkeeping continues to fire if `enqueueSystemEvent` itself throws (try/catch safety net).\n- Migration: no schema/state migration. The system-event inbox is already populated and drained by every running gateway.\n\n## Related\n\nReported as a recurring class of zombie task-runs in self-hosted deployments. Operator-side watchdog cron `b03ce892-ed27-4b1b-a3c5-8abde6c0660a` exists as a downstream mitigation; can be retired once this fix ships in the next release.\n",
+        "branch": "clawflow/2026-06-05-durable-subagent-completion-rebased-on-36d9241c",
+        "head_sha": "c9dc427a65c8677c2fe88f5643449ce26ba85e16",
+        "author": "bradfreels",
+        "labels": [
+          "agents",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner/sessions-yield.orchestration.test.ts",
+            "additions": 124,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce-delivery.test.ts",
+            "additions": 156,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce-delivery.ts",
+            "additions": 41,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce-dispatch.ts",
+            "additions": 14,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/agent-harness-task-runtime.test.ts",
+            "additions": 21,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/agent-harness-task-runtime.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90740",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90740.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 164,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 28,
+            "SUCCESS": 133,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2916,
+    "total_ms": 2695,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 647
+        "ms": 262
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2151
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 2255
+        "ms": 257
       },
       {
         "name": "append_ledger",
