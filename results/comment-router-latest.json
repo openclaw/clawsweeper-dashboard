@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-05T11:19:22.642Z",
+  "generated_at": "2026-06-05T11:19:26.659Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-05T08:19:20.132Z",
+  "since": "2026-06-05T08:19:26.057Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     90647
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4630719277
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -61,85 +63,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(skills): use native recursive fs.watch for skill roots to stop per-SKILL.md fd leak",
-        "body": "## Summary\n\n**What problem does this PR solve?**\nThe skills loader watches each workspace `SKILL.md` through chokidar, which opens one native `fs.watch` per file. On macOS every native `fs.watch` is backed by an open file descriptor, so the gateway's descriptor count grows linearly with the number of installed skills and eventually exhausts the per-process limit (`EMFILE`). This is #90578.\n\n**What is the intended outcome?**\nKeep the descriptor count flat regardless of skill count while preserving the documented refresh-on-`SKILL.md`-change behavior.\n\n- Replace the per-file fan-out with a **single native recursive `fs.watch` per skill root** on macOS and Windows (one FSEvents / ReadDirectoryChangesW watcher per tree). The recursive watcher still reports in-place edits, so refresh behavior is preserved.\n- A non-recursive **parent-directory watch** reattaches on root replacement by inode comparison. Native callbacks are identity-guarded and the watch state is disposed-guarded so a stale event racing teardown cannot re-attach an orphaned watcher.\n- **Linux keeps chokidar** (and so does any non-native platform): Node's recursive `fs.watch` watches every file on Linux (inotify fan-out), and Linux has no per-process fd leak. chokidar also remains the fallback when a native watcher cannot attach.\n\nThis mirrors the existing memory-watcher fix for the sibling issue #86613, which gates native recursive watching on the same `darwin || win32` set and falls back to chokidar.\n\n**Why not a simpler approach?**\nSimply ignoring all files so chokidar never opens per-file FDs does stop the leak, but it silently breaks refresh: chokidar only emits `change` for an in-place edit through the per-file watcher, and a directory-only watch never re-stats existing files. Measured against real chokidar 5.0.0 with the production listener set (`add`/`change`/`unlink`/`unlinkDir`), ignoring all files refreshes on only 1 of 4 triggers:\n\n| refresh trigger | ignore-all-files (dir-only) | this PR |\n| --- | --- | --- |\n| in-place `SKILL.md` edit | no refresh | refresh |\n| add a skill | no refresh | refresh |\n| remove only the `SKILL.md` | no refresh | refresh |\n| remove the whole skill dir | refresh | refresh |\n\nPolling preserves behavior with no persistent fd but adds continuous `stat()` cost on every platform, including the ones with no leak. Native recursive watching has no polling cost and matches the house pattern.\n\n**What is intentionally out of scope?** Linux/Windows behavior beyond the native switch; new config knobs; skill loading itself. One known limitation: a skill root that does not exist when the watcher first starts falls back to chokidar and is not upgraded to native if it is created later — this matches the memory watcher (#86613) and is strictly no worse than current behavior; the reported #90578 case (skills already present at startup) is fully fixed. Upgrading a late-created root to native is a possible follow-up.\n\n**What should reviewers focus on?** The native watcher lifecycle: teardown, the disposed/identity guards, the error->chokidar fallback, and the parent-inode reattach.\n\n> AI-assisted change; I reviewed every line manually, ran the proof below myself, and am responsible for the result.\n\n## Linked context\n\nCloses #90578\n\nRelated #86613 (memory-watcher native-recursive fix this mirrors), #70058 (opt-in polling fallback for the same watcher), #90614 (alternative directory-only approach for this issue — see the trigger table above for why directory-only loses refresh).\n\n## Real behavior proof (required for external PRs)\n\n- **Behavior or issue addressed:** Before this change `shouldIgnoreSkillsWatchPath` returns `false` for `SKILL.md`, so chokidar opens one native `fs.watch` per `SKILL.md` — on macOS one persistent kqueue descriptor per installed skill, growing until `EMFILE`. After this change, on macOS/Windows the skills watcher opens one native recursive `fs.watch` per skill root and zero per `SKILL.md`.\n- **Real environment tested:** Built from source at base `1a3ce7c2a8`, Node v22.22.1, Linux x86_64. The fd leak is macOS/kqueue-specific; see proof limitations.\n- **Exact steps or command run after this patch:**\n  - `node scripts/run-vitest.mjs src/skills/runtime/refresh.test.ts`\n  - `node scripts/run-tsgo.mjs -p tsconfig.core.json` and `-p test/tsconfig/tsconfig.core.test.json`\n  - `node scripts/run-oxlint.mjs src/skills/runtime/refresh.ts src/skills/runtime/refresh.test.ts` and `oxfmt --check`\n  - A standalone probe driving real chokidar 5.0.0 and a real native recursive `fs.watch` over a temp skill tree, exercising edit / add / unlink.\n- **Evidence after fix:** Live output from the real-`fs` probe (real chokidar + real `fs.watch`, three skills under a temp `skills/` tree). It reproduces the directory-only regression and confirms native recursive preserves detection:\n  ```\n  # directory-only (the #90614 approach) vs current per-file watch, real chokidar 5.0.0\n  PROD_dir_only : edit -> (no refresh)   add -> (no refresh)   remove SKILL.md -> (no refresh)   remove dir -> unlinkDir\n  PROD_current  : edit -> change:alpha   add -> add:delta      remove SKILL.md -> unlink:beta     remove dir -> unlinkDir + unlink\n\n  # native recursive fs.watch (this PR), real fs ops:\n  detect_inplace_edit : [\"alpha/SKILL.md\"]\n  detect_add_skill    : [\"delta/SKILL.md\"]\n  detect_unlink_skill : [\"beta/SKILL.md\"]\n  ```\n  Unit suite (supplemental): `Tests 37 passed (37)`; `tsgo` core + core-test exit 0; `oxlint` + `oxfmt --check` clean. The watcher-shape test asserts that on `darwin`/`win32` the code issues exactly one native recursive `fs.watch` per skill root and zero on any `SKILL.md` path, and uses chokidar on `linux`.\n- **Observed result after fix:** On macOS/Windows, one native recursive watcher per skill root plus one non-recursive parent watch; no per-`SKILL.md` native watcher. On Linux, unchanged (chokidar). Add / in-place edit / unlink / whole-dir removal all still refresh the snapshot.\n- **What was not tested:** A live macOS `lsof` descriptor count; real Windows behavior — ReadDirectoryChangesW and backslash-separator `filename`s (the `win32` unit tests mock `process.platform` but run on a POSIX `path` module, so the backslash path handling is reasoned-correct but not actually exercised); very large workspaces (over 100 skills); and multi-hour gateway stability. These need hardware this Linux environment lacks.\n- **Proof limitations or environment constraints:** The issue's ideal artifact is a macOS `lsof` showing the descriptor-count drop, which a Linux host cannot produce. Two independent reasons: the leak is macOS/kqueue-specific, and Node's recursive `fs.watch` on Linux genuinely fans out to one watcher per file, so a Linux probe cannot reproduce the macOS single-watcher fd profile (this is exactly why Linux is excluded). The descriptor-count win therefore rests on the unit test proving the code issues exactly one native recursive call per root and zero per `SKILL.md`, plus Node's documented behavior that recursive `fs.watch` on macOS/Windows is a single FSEvents/ReadDirectoryChangesW watcher per tree. A maintainer with a Mac can confirm directly with `lsof -p <gw_pid> | grep SKILL.md`.\n\n## Tests and validation\n\n**Which commands did you run?** `run-vitest` on `refresh.test.ts`, `tsgo` core + core-test, `oxlint` + `oxfmt --check` on both files, `git diff --check`, plus the real-`fs` probe above.\n\n**What regression coverage was added or updated?** New tests in `src/skills/runtime/refresh.test.ts`: (1) on `darwin`/`win32` the watcher opens one native recursive `fs.watch` per skill root and zero per `SKILL.md`, and does not use chokidar for an existing root; (2) the native watcher detects `add`/`change`/`unlink` of a `SKILL.md`; (3) non-native platforms keep chokidar; (4) a native error falls back to exactly one chokidar watcher; (5) a stale native event after teardown does not re-attach a watcher. A test-only native-watch factory hook (mirroring the memory watcher's) makes the native path injectable.\n\n**What failed before this fix?** Per the issue, descriptor count scaled linearly with installed skills on macOS, trending to `EMFILE`.\n\n## Risk checklist\n\n**Did user-visible behavior change?** No — refresh-on-change is preserved on all platforms; only the underlying watch mechanism changed on macOS/Windows.\n\n**Did config, environment, or migration behavior change?** No.\n\n**Did security, auth, secrets, network, or tool execution behavior change?** No.\n\n**What is the highest-risk area?** The native watcher lifecycle on macOS/Windows: teardown, the disposed/identity guards, the error->chokidar fallback, and the parent-inode reattach.\n\n**How is that risk mitigated?** chokidar remains the fallback on attach/runtime failure; teardown and the test reset mark state disposed and close native + chokidar watchers; native callbacks are identity-guarded against stale events; the pattern is copied from the already-shipped memory watcher (#86613). New tests cover the fallback and teardown-race paths.\n\n## Current review state\n\n**What is the next action?** Maintainer review; ideally a macOS `lsof` confirmation of the descriptor-count drop.\n\n**What is still waiting on author, maintainer, CI, or external proof?** The macOS `lsof` artifact (see proof limitations). All local checks pass.\n",
-        "branch": "fix/90578-skill-watcher-fd-leak",
-        "head_sha": "46167a3ccff40caf6a17f47f08a0ac098115adf5",
-        "author": "nxmxbbd",
-        "labels": [
-          "size: L",
-          "proof: supplied",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/skills/runtime/refresh.test.ts",
-            "additions": 256,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/skills/runtime/refresh.ts",
-            "additions": 275,
-            "deletions": 28,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90647",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90647.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 31,
-            "SUCCESS": 130,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2744,
+    "total_ms": 1087,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 277
+        "ms": 588
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2219
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 222
+        "ms": 485
       },
       {
         "name": "append_ledger",
