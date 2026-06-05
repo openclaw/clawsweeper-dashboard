@@ -1,19 +1,17 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-05T17:26:01.199Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-05T17:26:43.038Z",
+  "repo": "openclaw/gogcli",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-05T14:26:00.631Z",
+  "since": "2026-06-05T14:26:41.463Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    90709
+    701
   ],
-  "comment_ids": [
-    4633887313
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -33,58 +31,115 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:90709:4633887313:2026-06-05T17:24:51Z:re_review",
-      "comment_id": "4633887313",
-      "comment_version_key": "4633887313:2026-06-05T17:24:51Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/90709#issuecomment-4633887313",
-      "repo": "openclaw/openclaw",
-      "issue_number": 90709,
-      "author": "recallmenot",
-      "author_id": 104343143,
+      "idempotency_key": "clawsweeper-repair:openclaw/gogcli:701:4633864155:2026-06-05T17:26:38Z:clawsweeper_auto_repair",
+      "comment_id": "4633864155",
+      "comment_version_key": "4633864155:2026-06-05T17:26:38Z",
+      "comment_url": "https://github.com/openclaw/gogcli/pull/701#issuecomment-4633864155",
+      "repo": "openclaw/gogcli",
+      "issue_number": 701,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "NONE",
-      "comment_created_at": "2026-06-05T17:24:51Z",
-      "comment_updated_at": "2026-06-05T17:24:51Z",
+      "comment_created_at": "2026-06-05T17:21:32Z",
+      "comment_updated_at": "2026-06-05T17:26:38Z",
       "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=6e39e61edecee9f733ad1407a479198229154f5a)",
+      "review_summary": "The PR batches per-tab markdown body, native table structure, table-cell text, and formatting requests into consolidated Docs batchUpdate calls with a 500-request splitter and updated unit coverage.\n\nReproducibility: yes. from source inspection: current main submits the markdown body, then calls InsertNativeTable per parsed table, and InsertNativeTable sends a batchUpdate inside the per-cell loop. I did not run a live Google Docs reproduction in this read-only review.",
+      "review_followup": "- [P1] Needs contributor live Google proof plus maintainer review of the index-accounting fixes; this should not enter an automated repair lane while the proof gate remains unsatisfied.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "6e39e61edecee9f733ad1407a479198229154f5a",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "target": {
+        "kind": "pull_request",
+        "title": "perf(docs write --tab --markdown): batch table-cell inserts into single batchUpdate (fixes #699)",
+        "body": "## Summary\n\nFixes #699. The per-tab markdown writer historically issued one `documents.batchUpdate` per table cell — a 17-row × 4-col table burned 68+ batchUpdate calls, which exceeds the Docs API per-user write quota of 60/min. Multi-table bodies were mathematically impossible to land in one push and consistently 429'd mid-rewrite, leaving the doc in a partially-rendered state (early-table cells land, later-table cells silently absent, downstream image / formatting steps never run).\n\nThis PR folds the structural `InsertTable`, per-cell `InsertText`, and per-cell formatting requests into the same request slice the markdown body uses, then submits **one** batchUpdate. The Docs API processes requests in order with auto index-shift, so the manual `updateIndicesAfter` server-readback dance is no longer needed — empty-table cell indices are predicted from row × col geometry (`predictedTableCellIndex`) and the API renumbers correctly inside the batch.\n\nFor consolidated request lists exceeding the Docs API per-batchUpdate cap (500 requests), `submitBatchedDocsRequests` auto-splits the list into sequential 500-request chunks and notes each split on stderr. Insertion order is preserved across the split so cell-index arithmetic stays valid.\n\n## Wire-call profile (#699 repro)\n\n17-row × 4-col table-only markdown body:\n\n| | Before | After |\n|---|---|---|\n| `batchUpdate` calls | 1 (body) + 1 (`InsertTable`) + 68 (per-cell) = **70** | **1** |\n| Docs API write quota burn | 70 units | 1 unit |\n| Wall-clock | ~30s | ~1.5s |\n\n## What changed\n\n- `internal/cmd/docs_table_inserter.go` — new `BuildNativeTableRequests(tableStartIndex, cells, tabID)` returns `(requests, predictedEndIndex)` without performing any network round trips. `predictedTableLen` + `predictedTableCellIndex` encode the empty-table layout the Docs API produces (1 + 2 × rows × cols characters). The existing `InsertNativeTable` is left in place — additive change.\n- `internal/cmd/docs_mutation.go` — `insertDocsMarkdownAt` and `replaceDocsMarkdownRange` now collect body + per-table requests into a single slice via the new `appendTableRequests` helper, then submit via `submitBatchedDocsRequests` (chunking only kicks in past the 500-request cap). Duplicated tab-id propagation extracted into `applyTabIDToFormattingRequests`.\n- `internal/cmd/docs_append_table_test.go` — `TestInsertDocsMarkdownAt_AppendsTable_IssueRepro` now pins exactly one batchUpdate containing both `InsertText` and `InsertTable`; `TestInsertDocsMarkdownAt_TableErrorIsActionable` updated to assert the unified `append (markdown):` error wrap.\n\n## Risks\n\n- **Empty-table layout constants** (`1 + 2 * rows * cols`) encode the Docs API's current behaviour. If the API ever changes that layout, `predictedTableLen` / `predictedTableCellIndex` will need to follow. Doc comments call this out explicitly. Empirically verified against the existing `getTableCellIndices` server-readback path for the supported markdown-table sizes — predicted indices match.\n- **WriteControl on split batches** — when `submitBatchedDocsRequests` splits past the 500-cap, only the first chunk carries the caller's `WriteControl`. Later chunks operate on whatever revision the prior chunk produced. This matches the historical multi-batch behaviour and keeps the split atomic per chunk.\n- **Whole-doc `--replace` (without `--tab`) is untouched** — that path goes via the Drive API import endpoint, not batchUpdate, and is asserted by `docs_write_markdown_test.go:71` (`\"markdown replace should not use Docs batchUpdate service\"`). That test still passes.\n\n## Test plan\n\n- `go test ./internal/cmd/...` passes (48.8s).\n- `go vet ./...` clean.\n- `TestInsertDocsMarkdownAt_AppendsTable_IssueRepro` now asserts exactly 1 batchUpdate (was: at least 2).\n- `TestInsertDocsMarkdownAt_TableErrorIsActionable` asserts the unified error wrap.\n\n## Adjacent issues on the same per-tab converter\n\nThree independent bugs now confirmed on the per-tab markdown converter — this PR fixes one (#699), the others remain open:\n\n- #644 (closed) — paragraph blank lines collapse on `--tab` mode.\n- #696 — nested-list nesting drops on `--tab` mode.\n- #699 (this PR) — per-cell batchUpdate burst.\n\nThe three suggest the per-tab converter would benefit from a focused rewrite that emits a single request list. This PR is the first step in that direction.",
+        "branch": "fix-699-table-cell-batchupdate-burst",
+        "head_sha": "6e39e61edecee9f733ad1407a479198229154f5a",
+        "author": "sebsnyk",
+        "labels": [
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "internal/cmd/docs_append_table_test.go",
+            "additions": 39,
+            "deletions": 21,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cmd/docs_mutation.go",
+            "additions": 127,
+            "deletions": 66,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cmd/docs_table_inserter.go",
+            "additions": 84,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-gogcli-701",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-gogcli-701.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 7,
+          "counts": {
+            "SUCCESS": 6,
+            "IN_PROGRESS": 1
+          },
+          "blockers": [
+            "windows:IN_PROGRESS"
+          ],
+          "pending": [
+            "windows:IN_PROGRESS"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1971,
+    "total_ms": 1923,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 554
+        "ms": 405
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1155
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 1404
+        "ms": 337
       },
       {
         "name": "append_ledger",
