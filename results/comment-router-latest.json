@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-05T20:55:47.489Z",
+  "generated_at": "2026-06-05T20:56:02.231Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-05T17:55:44.506Z",
+  "since": "2026-06-05T17:56:01.764Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     84306
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4635452355
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
-  "commands_seen": 2,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -36,204 +38,12 @@
       "comment_version_key": "4491902571:2026-06-05T20:55:41Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/84306#issuecomment-4491902571",
       "repo": "openclaw/openclaw",
-      "issue_number": 84306,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-19T20:46:33Z",
-      "comment_updated_at": "2026-06-05T20:55:41Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=a3992f4e620cb00bb0fe705689dbfeb71033f96a)",
-      "review_summary": "The PR moves Gateway `chat.send` abort registration before attachment preprocessing, adds terminal `timeout`/`error` ACK handling and dedupe behavior, updates Control UI terminal-ACK adoption logic, widens a forwarded skills revision result schema, documents the ACK change, and adds regression tests.\n\nPR surface: Source +308, Tests +1237, Docs 0. Total +1545 across 19 files.\n\nReproducibility: yes. Source inspection shows current main registers the chat abort controller only after awaited attachment preprocessing, leaving the reported immediate-abort race; the PR adds deterministic regression coverage, but I did not run tests in this read-only review.",
-      "review_followup": "- [P1] This needs human handling because the external PR still needs contributor real behavior proof and maintainer compatibility review in addition to the small code fix.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "a3992f4e620cb00bb0fe705689dbfeb71033f96a",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "Fix chat.abort during attachment send preprocessing",
-        "body": "## Summary\n\n- Fixes the `chat.abort` / `chat.send` race from #84176 by registering the chat run abort controller **before** awaited attachment/model preprocessing, so an immediate abort can find and cancel the just-started run.\n- An aborted-before/at-dispatch send now acks the **terminal** `{runId,status:\"timeout\"}` (was a non-terminal `{status:\"started\"}`). The non-terminal ack let the Control UI resurrect the cancelled run and left `agent.wait` hanging until its own timeout; the terminal ack records the abort outcome immediately. Accepted live sends still ack `{status:\"started\"}` and duplicates still ack `{status:\"in_flight\"}`.\n- Post-dispatch abort detection reads **this run's own AbortController signal**, not the shared `chatAbortedRuns` marker. The marker is keyed by `clientRunId` (= idempotency key) and is reused by any prior/concurrent same-key run, so a stale or cross-run marker would otherwise misclassify a fresh same-key send as aborted (false `timeout` / a real error swallowed). `abortChatRunById` is the sole production setter of both the marker and the controller abort, so genuine current-run aborts are detected identically while stale markers no longer leak across runs. The shared marker is left untouched, preserving existing abort-tail event suppression.\n- Conflict repair also preserves upstream chat send timing metadata and protects `sessions.abort` terminal dedupe from being overwritten by a late pre-dispatch send ack.\n- Scope boundary: this **does** widen the `chat.send` ack `status` union to add the terminal `\"timeout\"`/`\"error\"` values (Control UI `ChatSendAckStatus` and the forwarded `SkillsProposalRequestRevisionResultSchema`, which carries the `chat.send` ack via `skills.proposals.requestRevision`). No new RPC method, no config/auth/security/network change, no channel adapter change.\n\nAI-assisted; contributor manually reviewed and is responsible for the change.\n\n## Linked context\n\n- Closes #84176\n- Related #84274\n- Current candidate head / proof head for this update: `a3992f4e620cb00bb0fe705689dbfeb71033f96a`\n- Current base checked locally: `1a3ce7c2a8da266cd0bb2844d44ba5af3942908b`\n\n## Real behavior proof\n\n- Behavior or issue addressed:\n\n`chat.abort` called immediately after an attachment `chat.send` now finds and cancels the just-started run during attachment preprocessing, and the send acks the terminal `{runId,status:\"timeout\"}` so no stale active run is left for the Control UI to re-adopt and no `agent.wait` waiter hangs. A fresh send that reuses an idempotency key whose prior run was aborted (after the short `chat:<runId>` dedupe has expired but while the longer-lived abort marker lingers) is reported by its own outcome (`ok`/`error`), not a stale-marker `timeout`.\n\n- Real environment tested:\n\nTwo layers. (1) The registration-order fix (abort reaches the in-preprocess run, no stale active run remains afterward) was validated on a local OpenClaw dev Gateway over loopback WebSocket (protocol 4, isolated temporary OpenClaw home under `/tmp`, device-signed operator GatewayClient with `operator.read`/`operator.write`). (2) The terminal-ack ack-shape change, the per-run-signal abort detection, the UI adopt/normalizer gate, and the widened forwarded schema are covered by focused, deterministic regression tests that drive the real `chat.send` handler and the real UI controller/app-chat send path, plus core/test typechecks, formatter, and independent read-only contract reviews of the branch.\n\n- Exact steps or command run after this patch:\n\n```bash\n# Gateway + protocol-schema suites (real chat.send handler, abort interleavings, schema accept/reject)\nnode scripts/run-vitest.mjs run \\\n  src/gateway/server-methods/chat.directive-tags.test.ts \\\n  src/gateway/server.chat.gateway-server-chat-b.test.ts \\\n  packages/gateway-protocol/src/schema/agents-models-skills.test.ts\n\n# Control UI suites MUST run via the ui workspace vitest\n( cd ui && node ../node_modules/vitest/vitest.mjs run \\\n    src/ui/app-chat.test.ts src/ui/controllers/chat.test.ts )\n\n# Types + format\nnode scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo\nnode scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.test.src.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/test-src.tsbuildinfo\nnode scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.test.ui.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/test-ui.tsbuildinfo\n./node_modules/.bin/oxfmt --check --threads=1 $(git diff --name-only 1a3ce7c2a8da266cd0bb2844d44ba5af3942908b...HEAD)\n```\n\n- Evidence after fix:\n\n```text\ncandidate head: a3992f4e620cb00bb0fe705689dbfeb71033f96a\ngateway suite (directive-tags + gateway-server-chat-b + 2 siblings): 292 tests passed\nprotocol schema suite (agents-models-skills): 6 tests passed\nControl UI suite (app-chat + controllers/chat): 206 tests passed\ntsgo core / test:src / test:ui: passed (exit 0, empty output)\noxfmt --check: all matched files use the correct format\ncommit identity/signature: all 11 PR-range commits authored/committed as nxmxbbd noreply and SSH-signed\nindependent read-only contract reviews of the per-run-signal change: no blocking findings\n```\n\nAsserted behavior in the regression suite (the real handler/controller, not mocks of the logic under test):\n- abort-before/at-dispatch `chat.send` acks `{runId,status:\"timeout\"}` and writes a terminal `{status:\"timeout\",summary:\"aborted\",stopReason}` dedupe; a duplicate same-key send then observes the terminal `timeout`.\n- a fresh same-key send with a stale abort marker present (its own run never aborted) completes `ok` / surfaces a real error, and the shared marker is left intact.\n- the Control UI does not adopt (resurrect) a run on a terminal `timeout`/`error` ack; `normalizeChatSendAck` preserves terminal statuses; the deferred session-refresh is not seeded for terminal acks.\n- `SkillsProposalRequestRevisionResultSchema` accepts `started|in_flight|ok|timeout|error` and rejects unknown statuses.\n\n- Observed result after fix:\n\nThe immediate abort cancels the in-preprocess run and the send acks terminal `timeout`; the Control UI treats that ack as a finished run instead of re-adopting it, and `agent.wait` resolves instead of hanging. After a send settles, a second abort returns `aborted:false`/`runIds:[]` and history stays empty (no stale active run). A same-idempotency retry after `sessions.abort` returns the terminal `{status:\"timeout\",stopReason:\"rpc\"}` dedupe before and after the original suspended send settles. A fresh same-key send long after an earlier abort is reported by its own outcome.\n\n- What was not tested:\n\nNo fresh end-to-end live-Gateway capture was taken for the terminal-ack ack-shape change or the per-run-signal detection; those are covered by the deterministic regression suite and the independent reviews. Not tested: manual browser UI reproduction, remote/non-loopback Gateway, and real model-provider dispatch after preprocessing (the abort proofs intentionally cancel before dispatch). Post-push CI is not yet claimed green for the refreshed head.\n\n## Known trade-offs / out of scope\n\n- The abort marker conflates \"this run id was aborted\" suppression with same-id liveness. This change fixes the post-dispatch dedupe decision via the per-run signal without touching that marker; a fuller fix (a per-registration generation/epoch token on the marker) is a separate, larger refactor and is out of scope here.\n- Same-key idempotency reuse remains inherently ambiguous: in a rare concurrent same-key retry, a first run's sticky cancellation dedupe can keep `chat:<key>` at `timeout` even after a later same-key send writes its own outcome. This is unchanged dedupe behavior, not introduced here.\n- The terminal-ack approach is local to `chat.send` (which is always a `chat-send` run) and depends on dispatch reaching its `.then`/`.catch`; hoisting the terminal write into `abortChatRunById` would also close a theoretical never-settles hang, but that is a broader change deferred out of this PR.\n\n## Risk checklist\n\nDid user-visible behavior change? (`Yes/No`) Yes, intended: immediate abort now reaches the in-preprocess send, and an aborted send acks terminal `{status:\"timeout\"}` instead of non-terminal `{status:\"started\"}`.\n\nDid config, environment, or migration behavior change? (`Yes/No`) No\n\nDid security, auth, secrets, network, or tool execution behavior change? (`Yes/No`) No\n\nWhat is the highest-risk area?\n\nCancellation/idempotency timing around early abort registration, post-dispatch abort detection, and dedupe caching.\n\nHow is that risk mitigated?\n\nAbort detection uses the per-run controller signal (only this run's genuine abort sets it; verified `abortChatRunById` is the sole controller-aborter and marker-setter), the shared marker is left untouched so abort-tail suppression is preserved, response shapes are preserved for non-aborted sends, `chat:<runId>` and `agent:<runId>` dedupe namespaces stay separate, and focused regression coverage exercises the abort interleavings, the stale-marker case, the UI adopt gate, and the forwarded schema.\n\n## Tests and validation\n\nCommands run on candidate head `a3992f4e620cb00bb0fe705689dbfeb71033f96a` (see \"Exact steps\" above for the full invocations):\n\n- Gateway suite (directive-tags + gateway-server-chat-b + 2 siblings) --- 292 tests passed.\n- Protocol schema suite (agents-models-skills) --- 6 tests passed.\n- Control UI suite (app-chat + controllers/chat), run via the `ui` workspace vitest --- 206 tests passed.\n- `tsgo` core + test:src + test:ui --- passed (exit 0, empty output).\n- `oxfmt --check` over changed files --- all matched files use the correct format.\n- Commit identity/signature over the PR range --- all 11 commits authored/committed as `nxmxbbd` noreply and SSH-signed.\n- Independent read-only contract reviews of the per-run-signal change --- no blocking findings.\n\nRegression coverage added/updated in this update:\n\n- abort-before/at-dispatch `chat.send` acks terminal `timeout` and writes the terminal abort dedupe; duplicate same-key send observes the terminal `timeout`.\n- a fresh same-key send with a stale abort marker present completes `ok` / surfaces a real error, with the marker left intact.\n- Control UI does not adopt a run on a terminal `timeout`/`error` ack; `normalizeChatSendAck` preserves terminal statuses; deferred session-refresh is skipped for terminal acks and still seeded for live (`started`/`in_flight`) acks.\n- `SkillsProposalRequestRevisionResultSchema` accepts the widened ack statuses and rejects unknown ones.\n- (Pre-existing, retained) abort by run id during preprocessing, duplicate-send `in_flight`, preprocessing-failure caching, pre-dispatch media cleanup, and `sessions.abort` sticky terminal dedupe.\n\n## Current review state\n\nNext action: push the refreshed candidate head `a3992f4e620cb00bb0fe705689dbfeb71033f96a` to the existing PR branch and let normal post-push CI/bot feedback run. Local guardrails pass and independent read-only contract reviews of the per-run-signal change found no blocking findings.\n\nWaiting on: post-push CI/bot feedback on the refreshed head.\n",
-        "branch": "nex/84176-chat-abort-race",
-        "head_sha": "a3992f4e620cb00bb0fe705689dbfeb71033f96a",
-        "author": "nxmxbbd",
-        "labels": [
-          "docs",
-          "app: web-ui",
-          "gateway",
-          "size: XL",
-          "proof: supplied",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "docs/web/control-ui.md",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/schema/agents-models-skills.test.ts",
-            "additions": 17,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/schema/agents-models-skills.ts",
-            "additions": 13,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/chat-abort.test.ts",
-            "additions": 5,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/chat-abort.ts",
-            "additions": 9,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/gateway-misc.test.ts",
-            "additions": 45,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/chat.directive-tags.test.ts",
-            "additions": 402,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/chat.ts",
-            "additions": 252,
-            "deletions": 49,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-node-events.test.ts",
-            "additions": 39,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-node-events.ts",
-            "additions": 11,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-node-session-runtime.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-node-subscriptions.ts",
-            "additions": 89,
-            "deletions": 30,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-runtime-subscriptions.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.chat.gateway-server-chat-b.test.ts",
-            "additions": 677,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.impl.ts",
-            "additions": 6,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/ui/app-chat.test.ts",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/ui/app-chat.ts",
-            "additions": 10,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/ui/controllers/chat.test.ts",
-            "additions": 25,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/ui/controllers/chat.ts",
-            "additions": 14,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84306",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84306.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "SUCCESS": 132,
-            "SKIPPED": 29,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:84306:4529791784:2026-05-24T19:50:53Z:freeform_assist",
-      "comment_id": "4529791784",
-      "comment_version_key": "4529791784:2026-05-24T19:50:53Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/84306#issuecomment-4529791784",
-      "repo": "openclaw/openclaw",
-      "issue_number": 84306,
-      "author": "nxmxbbd",
-      "author_id": 32288,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-24T19:50:53Z",
-      "comment_updated_at": "2026-05-24T19:50:53Z",
+      "issue_number": 82253,
+      "author": "truiem-bot",
+      "author_id": 269011805,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-05T20:54:39Z",
+      "comment_updated_at": "2026-06-05T20:54:39Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "hatch",
@@ -251,190 +61,30 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "ignored",
+      "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "Fix chat.abort during attachment send preprocessing",
-        "body": "## Summary\n\n- Fixes the `chat.abort` / `chat.send` race from #84176 by registering the chat run abort controller **before** awaited attachment/model preprocessing, so an immediate abort can find and cancel the just-started run.\n- An aborted-before/at-dispatch send now acks the **terminal** `{runId,status:\"timeout\"}` (was a non-terminal `{status:\"started\"}`). The non-terminal ack let the Control UI resurrect the cancelled run and left `agent.wait` hanging until its own timeout; the terminal ack records the abort outcome immediately. Accepted live sends still ack `{status:\"started\"}` and duplicates still ack `{status:\"in_flight\"}`.\n- Post-dispatch abort detection reads **this run's own AbortController signal**, not the shared `chatAbortedRuns` marker. The marker is keyed by `clientRunId` (= idempotency key) and is reused by any prior/concurrent same-key run, so a stale or cross-run marker would otherwise misclassify a fresh same-key send as aborted (false `timeout` / a real error swallowed). `abortChatRunById` is the sole production setter of both the marker and the controller abort, so genuine current-run aborts are detected identically while stale markers no longer leak across runs. The shared marker is left untouched, preserving existing abort-tail event suppression.\n- Conflict repair also preserves upstream chat send timing metadata and protects `sessions.abort` terminal dedupe from being overwritten by a late pre-dispatch send ack.\n- Scope boundary: this **does** widen the `chat.send` ack `status` union to add the terminal `\"timeout\"`/`\"error\"` values (Control UI `ChatSendAckStatus` and the forwarded `SkillsProposalRequestRevisionResultSchema`, which carries the `chat.send` ack via `skills.proposals.requestRevision`). No new RPC method, no config/auth/security/network change, no channel adapter change.\n\nAI-assisted; contributor manually reviewed and is responsible for the change.\n\n## Linked context\n\n- Closes #84176\n- Related #84274\n- Current candidate head / proof head for this update: `a3992f4e620cb00bb0fe705689dbfeb71033f96a`\n- Current base checked locally: `1a3ce7c2a8da266cd0bb2844d44ba5af3942908b`\n\n## Real behavior proof\n\n- Behavior or issue addressed:\n\n`chat.abort` called immediately after an attachment `chat.send` now finds and cancels the just-started run during attachment preprocessing, and the send acks the terminal `{runId,status:\"timeout\"}` so no stale active run is left for the Control UI to re-adopt and no `agent.wait` waiter hangs. A fresh send that reuses an idempotency key whose prior run was aborted (after the short `chat:<runId>` dedupe has expired but while the longer-lived abort marker lingers) is reported by its own outcome (`ok`/`error`), not a stale-marker `timeout`.\n\n- Real environment tested:\n\nTwo layers. (1) The registration-order fix (abort reaches the in-preprocess run, no stale active run remains afterward) was validated on a local OpenClaw dev Gateway over loopback WebSocket (protocol 4, isolated temporary OpenClaw home under `/tmp`, device-signed operator GatewayClient with `operator.read`/`operator.write`). (2) The terminal-ack ack-shape change, the per-run-signal abort detection, the UI adopt/normalizer gate, and the widened forwarded schema are covered by focused, deterministic regression tests that drive the real `chat.send` handler and the real UI controller/app-chat send path, plus core/test typechecks, formatter, and independent read-only contract reviews of the branch.\n\n- Exact steps or command run after this patch:\n\n```bash\n# Gateway + protocol-schema suites (real chat.send handler, abort interleavings, schema accept/reject)\nnode scripts/run-vitest.mjs run \\\n  src/gateway/server-methods/chat.directive-tags.test.ts \\\n  src/gateway/server.chat.gateway-server-chat-b.test.ts \\\n  packages/gateway-protocol/src/schema/agents-models-skills.test.ts\n\n# Control UI suites MUST run via the ui workspace vitest\n( cd ui && node ../node_modules/vitest/vitest.mjs run \\\n    src/ui/app-chat.test.ts src/ui/controllers/chat.test.ts )\n\n# Types + format\nnode scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo\nnode scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.test.src.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/test-src.tsbuildinfo\nnode scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.test.ui.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/test-ui.tsbuildinfo\n./node_modules/.bin/oxfmt --check --threads=1 $(git diff --name-only 1a3ce7c2a8da266cd0bb2844d44ba5af3942908b...HEAD)\n```\n\n- Evidence after fix:\n\n```text\ncandidate head: a3992f4e620cb00bb0fe705689dbfeb71033f96a\ngateway suite (directive-tags + gateway-server-chat-b + 2 siblings): 292 tests passed\nprotocol schema suite (agents-models-skills): 6 tests passed\nControl UI suite (app-chat + controllers/chat): 206 tests passed\ntsgo core / test:src / test:ui: passed (exit 0, empty output)\noxfmt --check: all matched files use the correct format\ncommit identity/signature: all 11 PR-range commits authored/committed as nxmxbbd noreply and SSH-signed\nindependent read-only contract reviews of the per-run-signal change: no blocking findings\n```\n\nAsserted behavior in the regression suite (the real handler/controller, not mocks of the logic under test):\n- abort-before/at-dispatch `chat.send` acks `{runId,status:\"timeout\"}` and writes a terminal `{status:\"timeout\",summary:\"aborted\",stopReason}` dedupe; a duplicate same-key send then observes the terminal `timeout`.\n- a fresh same-key send with a stale abort marker present (its own run never aborted) completes `ok` / surfaces a real error, and the shared marker is left intact.\n- the Control UI does not adopt (resurrect) a run on a terminal `timeout`/`error` ack; `normalizeChatSendAck` preserves terminal statuses; the deferred session-refresh is not seeded for terminal acks.\n- `SkillsProposalRequestRevisionResultSchema` accepts `started|in_flight|ok|timeout|error` and rejects unknown statuses.\n\n- Observed result after fix:\n\nThe immediate abort cancels the in-preprocess run and the send acks terminal `timeout`; the Control UI treats that ack as a finished run instead of re-adopting it, and `agent.wait` resolves instead of hanging. After a send settles, a second abort returns `aborted:false`/`runIds:[]` and history stays empty (no stale active run). A same-idempotency retry after `sessions.abort` returns the terminal `{status:\"timeout\",stopReason:\"rpc\"}` dedupe before and after the original suspended send settles. A fresh same-key send long after an earlier abort is reported by its own outcome.\n\n- What was not tested:\n\nNo fresh end-to-end live-Gateway capture was taken for the terminal-ack ack-shape change or the per-run-signal detection; those are covered by the deterministic regression suite and the independent reviews. Not tested: manual browser UI reproduction, remote/non-loopback Gateway, and real model-provider dispatch after preprocessing (the abort proofs intentionally cancel before dispatch). Post-push CI is not yet claimed green for the refreshed head.\n\n## Known trade-offs / out of scope\n\n- The abort marker conflates \"this run id was aborted\" suppression with same-id liveness. This change fixes the post-dispatch dedupe decision via the per-run signal without touching that marker; a fuller fix (a per-registration generation/epoch token on the marker) is a separate, larger refactor and is out of scope here.\n- Same-key idempotency reuse remains inherently ambiguous: in a rare concurrent same-key retry, a first run's sticky cancellation dedupe can keep `chat:<key>` at `timeout` even after a later same-key send writes its own outcome. This is unchanged dedupe behavior, not introduced here.\n- The terminal-ack approach is local to `chat.send` (which is always a `chat-send` run) and depends on dispatch reaching its `.then`/`.catch`; hoisting the terminal write into `abortChatRunById` would also close a theoretical never-settles hang, but that is a broader change deferred out of this PR.\n\n## Risk checklist\n\nDid user-visible behavior change? (`Yes/No`) Yes, intended: immediate abort now reaches the in-preprocess send, and an aborted send acks terminal `{status:\"timeout\"}` instead of non-terminal `{status:\"started\"}`.\n\nDid config, environment, or migration behavior change? (`Yes/No`) No\n\nDid security, auth, secrets, network, or tool execution behavior change? (`Yes/No`) No\n\nWhat is the highest-risk area?\n\nCancellation/idempotency timing around early abort registration, post-dispatch abort detection, and dedupe caching.\n\nHow is that risk mitigated?\n\nAbort detection uses the per-run controller signal (only this run's genuine abort sets it; verified `abortChatRunById` is the sole controller-aborter and marker-setter), the shared marker is left untouched so abort-tail suppression is preserved, response shapes are preserved for non-aborted sends, `chat:<runId>` and `agent:<runId>` dedupe namespaces stay separate, and focused regression coverage exercises the abort interleavings, the stale-marker case, the UI adopt gate, and the forwarded schema.\n\n## Tests and validation\n\nCommands run on candidate head `a3992f4e620cb00bb0fe705689dbfeb71033f96a` (see \"Exact steps\" above for the full invocations):\n\n- Gateway suite (directive-tags + gateway-server-chat-b + 2 siblings) --- 292 tests passed.\n- Protocol schema suite (agents-models-skills) --- 6 tests passed.\n- Control UI suite (app-chat + controllers/chat), run via the `ui` workspace vitest --- 206 tests passed.\n- `tsgo` core + test:src + test:ui --- passed (exit 0, empty output).\n- `oxfmt --check` over changed files --- all matched files use the correct format.\n- Commit identity/signature over the PR range --- all 11 commits authored/committed as `nxmxbbd` noreply and SSH-signed.\n- Independent read-only contract reviews of the per-run-signal change --- no blocking findings.\n\nRegression coverage added/updated in this update:\n\n- abort-before/at-dispatch `chat.send` acks terminal `timeout` and writes the terminal abort dedupe; duplicate same-key send observes the terminal `timeout`.\n- a fresh same-key send with a stale abort marker present completes `ok` / surfaces a real error, with the marker left intact.\n- Control UI does not adopt a run on a terminal `timeout`/`error` ack; `normalizeChatSendAck` preserves terminal statuses; deferred session-refresh is skipped for terminal acks and still seeded for live (`started`/`in_flight`) acks.\n- `SkillsProposalRequestRevisionResultSchema` accepts the widened ack statuses and rejects unknown ones.\n- (Pre-existing, retained) abort by run id during preprocessing, duplicate-send `in_flight`, preprocessing-failure caching, pre-dispatch media cleanup, and `sessions.abort` sticky terminal dedupe.\n\n## Current review state\n\nNext action: push the refreshed candidate head `a3992f4e620cb00bb0fe705689dbfeb71033f96a` to the existing PR branch and let normal post-push CI/bot feedback run. Local guardrails pass and independent read-only contract reviews of the per-run-signal change found no blocking findings.\n\nWaiting on: post-push CI/bot feedback on the refreshed head.\n",
-        "branch": "nex/84176-chat-abort-race",
-        "head_sha": "a3992f4e620cb00bb0fe705689dbfeb71033f96a",
-        "author": "nxmxbbd",
-        "labels": [
-          "docs",
-          "app: web-ui",
-          "gateway",
-          "size: XL",
-          "proof: supplied",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "docs/web/control-ui.md",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/schema/agents-models-skills.test.ts",
-            "additions": 17,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/schema/agents-models-skills.ts",
-            "additions": 13,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/chat-abort.test.ts",
-            "additions": 5,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/chat-abort.ts",
-            "additions": 9,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/gateway-misc.test.ts",
-            "additions": 45,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/chat.directive-tags.test.ts",
-            "additions": 402,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/chat.ts",
-            "additions": 252,
-            "deletions": 49,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-node-events.test.ts",
-            "additions": 39,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-node-events.ts",
-            "additions": 11,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-node-session-runtime.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-node-subscriptions.ts",
-            "additions": 89,
-            "deletions": 30,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-runtime-subscriptions.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.chat.gateway-server-chat-b.test.ts",
-            "additions": 677,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.impl.ts",
-            "additions": 6,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/ui/app-chat.test.ts",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/ui/app-chat.ts",
-            "additions": 10,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/ui/controllers/chat.test.ts",
-            "additions": 25,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/ui/controllers/chat.ts",
-            "additions": 14,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-84306",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-84306.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "SUCCESS": 132,
-            "SKIPPED": 29,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "author association CONTRIBUTOR and repository permission read are not allowed"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3302,
+    "total_ms": 1782,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 375
+        "ms": 454
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2595
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 309
+        "ms": 1314
       },
       {
         "name": "append_ledger",
