@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-05T13:15:55.426Z",
+  "generated_at": "2026-06-05T13:16:32.514Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-05T10:15:52.188Z",
+  "since": "2026-06-05T10:16:32.041Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4631863232
   ],
-  "status_comment_id": 4631863613,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-05T13:15:14Z",
       "comment_updated_at": "2026-06-05T13:15:14Z",
-      "status_comment_id": 4631863613,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,147 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-05T13:15:56.356Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 90622
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-05T13:15:57.614Z",
-          "response_comment_id": "4631863613",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(ports): batch macOS lsof listener inspection to one spawn per cycle",
-        "body": "## Summary\n\nRefs #90548. This is a partial mitigation and intentionally does not close the issue.\n\nThis changes Unix listener inspection from one `lsof` spawn per inspected port to one LISTEN snapshot per same-cycle multi-port inspection, then filters the snapshot back into the existing per-port `PortUsage` shape.\n\n## Affected Surface\n\n- `src/infra/ports-inspect.ts`\n  - `readUnixListenerSnapshot`\n  - `inspectPortUsages`\n  - `recordsForPort`\n- `src/infra/ports.ts`\n  - exports `inspectPortUsages`\n- `src/cli/daemon-cli/status.gather.ts`\n  - batches daemon/CLI port status inspection when the two ports differ\n\n## Scope\n\nChanged:\n\n- Unix LISTEN inspection now supports a shared snapshot command:\n  - `lsof -nP -iTCP -sTCP:LISTEN -FpFcn`\n- The snapshot parser preserves pid, command, address, and per-port filtered detail.\n- `inspectDaemonPortStatuses` uses the batch helper for daemon/CLI same-cycle checks.\n- `checkPortInUse` still runs per port when no matching listener is found.\n\nIntentionally not changed:\n\n- Windows netstat inspection remains separate.\n- Linux `ss` fallback remains separate and per-port when lsof fails.\n- `inspectPortConnections` / ESTABLISHED connection inspection is untouched.\n- The public per-port `PortUsage` result shape is preserved.\n- Per-port `detail` does not include unrelated sockets from the all-port lsof snapshot.\n- Restart-health polling remains outside this PR, so #90548 should stay open for that remaining surface.\n\n## Real Behavior Proof\n\n### behavior\n\nmacOS Unix listener inspection previously spawned `lsof` once per inspected port. The patched multi-port helper should inspect multiple same-cycle listener ports with one all-LISTEN `lsof` snapshot and still return filtered per-port `PortUsage` results. `gateway status` wiring is covered separately by the status collector regression test that calls `inspectPortUsages([daemonPort, cliPort])` when daemon and CLI ports differ.\n\n### environment\n\n- Machine: local Mac mini4 development machine\n- Platform: `darwin`\n- Checkout branch: `wolf/ports-inspect-batch-lsof-listeners`\n- Head tested: `edd01c72ae9d8b8fef694f700a4161382ce6cf8b`\n- Real process path: Node `child_process.spawn` was instrumented only to log `/usr/sbin/lsof` invocations; the hook forwarded to the real `/usr/sbin/lsof` process.\n- Live listeners: two temporary local TCP listeners bound to `127.0.0.1` on ephemeral ports.\n- No secrets, production services, or private traffic were used.\n\n### steps\n\n```sh\n# Live macOS behavior proof: start two local TCP listeners, call the real branch helper,\n# log child_process.spawn calls for /usr/sbin/lsof, and still execute the real lsof binary.\nOPENCLAW_LSOF_LOG=\"$tmpdir/lsof.log\" node --import \"$tmpdir/hook.mjs\" --import tsx --input-type=module\n\n# Focused regression tests and checks on the same head.\nnode scripts/run-vitest.mjs run src/infra/ports.test.ts src/cli/daemon-cli/status.gather.test.ts\n./node_modules/.bin/oxfmt --check --threads=1 src/infra/ports-inspect.ts src/infra/ports.ts src/infra/ports.test.ts src/cli/daemon-cli/status.gather.ts src/cli/daemon-cli/status.gather.test.ts\ngit diff --check origin/main..HEAD\ngitleaks git --redact --log-opts origin/main..HEAD\n```\n\n### evidence\n\nLive macOS proof output:\n\n```json\n{\n  \"platform\": \"darwin\",\n  \"head\": \"edd01c72ae9d8b8fef694f700a4161382ce6cf8b\",\n  \"proofKind\": \"live macOS child_process spawn hook; real /usr/sbin/lsof still executed\",\n  \"ports\": [49698, 49699],\n  \"lsofCallCount\": 1,\n  \"lsofCalls\": [\n    {\n      \"command\": \"/usr/sbin/lsof\",\n      \"args\": [\"-nP\", \"-iTCP\", \"-sTCP:LISTEN\", \"-FpFcn\"]\n    }\n  ],\n  \"results\": [\n    {\n      \"port\": 49698,\n      \"status\": \"busy\",\n      \"listenerCount\": 1,\n      \"listenerAddresses\": [\"127.0.0.1:49698\"],\n      \"detailMentionsRequestedPort\": true\n    },\n    {\n      \"port\": 49699,\n      \"status\": \"busy\",\n      \"listenerCount\": 1,\n      \"listenerAddresses\": [\"127.0.0.1:49699\"],\n      \"detailMentionsRequestedPort\": true\n    }\n  ]\n}\n```\n\nFocused validation:\n\n- `src/infra/ports.test.ts`: 14/14 passed.\n- `src/cli/daemon-cli/status.gather.test.ts`: 29/29 passed.\n- Targeted `oxfmt --check`: all 5 matched files use correct format.\n- `git diff --check origin/main..HEAD`: passed.\n- `gitleaks git --redact --log-opts origin/main..HEAD`: no leaks found.\n\nThe deterministic spawn-count regression still asserts exactly one mocked `lsof` invocation for ports `[18789, 19001]`, verifies that the args end with `-nP -iTCP -sTCP:LISTEN -FpFcn`, and verifies per-port filtering excludes an unrelated port `3000` listener from requested-port details.\n\nThe status collector regression verifies daemon/CLI port status inspection calls `inspectPortUsages([19001, 18789])` and does not call the per-port `inspectPortUsage` path when the ports differ.\n\n### observedResult\n\nOn the live macOS proof run, `inspectPortUsages([49698, 49699])` executed exactly one real `/usr/sbin/lsof` process with all-LISTEN args and returned `busy` listener results for both requested ports, with each per-port detail mentioning only the requested listener port. Focused tests also confirmed the changed daemon status path uses the batch helper for distinct daemon/CLI ports.\n\n### notTested\n\n- I did not reproduce launchservicesd / WindowServer saturation. That scenario is disruptive and risks destabilizing the desktop session.\n- I did not start or mutate a real OpenClaw LaunchAgent service.\n- I did not cover restart-health polling in this PR. Because that remaining repeated health-loop surface is still open, this PR now uses `Refs #90548` rather than a closing reference.\n\n## De-duplication Evidence\n\nImmediately before the original push, these five independent open-PR searches returned no results:\n\n- `Fixes #90548`\n- `#90548`\n- `ports-inspect lsof iTCP`\n- `inspectPortUsage readUnixListeners`\n- `launchservicesd lsof port`\n\n## Narrow Fix Definition\n\n1. This is a shared helper/default-policy gap: the Unix port-inspection helper owned a per-port process-spawn strategy.\n2. Fixing only one visible caller would leave adjacent status/diagnostic paths able to repeat the same per-port lsof pattern, so the fix is helper-level plus batch-aware status caller wiring.\n3. Maintainers should expect a canonical shared helper fix rather than a local status-only patch because the bug is process-spawn strategy, not output formatting.\n4. Supersession risk is lower with this shared boundary: a narrower macOS-app-only or status-only patch would be more likely to be replaced.\n",
-        "branch": "wolf/ports-inspect-batch-lsof-listeners",
-        "head_sha": "edd01c72ae9d8b8fef694f700a4161382ce6cf8b",
-        "author": "luoyanglang",
-        "labels": [
-          "cli",
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof",
-          "merge-risk: 🚨 other"
-        ],
-        "files": [
-          {
-            "path": "src/cli/daemon-cli/status.gather.test.ts",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/daemon-cli/status.gather.ts",
-            "additions": 13,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/ports-inspect.ts",
-            "additions": 152,
-            "deletions": 25,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/ports.test.ts",
-            "additions": 78,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/ports.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90622",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90622.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "counts": {
-            "FAILURE": 11,
-            "SUCCESS": 122,
-            "SKIPPED": 30,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-fast-bun-launcher:FAILURE",
-            "checks-fast-contracts-channels-b:FAILURE",
-            "checks-node-core-runtime-infra-file-safety:FAILURE",
-            "checks-node-core-runtime-infra-files-commands:FAILURE",
-            "checks-node-core-runtime-infra-gateway-processes:FAILURE",
-            "checks-node-core-runtime-infra-heartbeat-runner:FAILURE",
-            "checks-node-core-runtime-infra-net-install:FAILURE",
-            "checks-node-core-runtime-secrets:FAILURE",
-            "checks-node-core-runtime-infra-process:FAILURE",
-            "checks-node-agentic-cli:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-fast-bun-launcher:FAILURE",
-            "checks-fast-contracts-channels-b:FAILURE",
-            "checks-node-core-runtime-infra-file-safety:FAILURE",
-            "checks-node-core-runtime-infra-files-commands:FAILURE",
-            "checks-node-core-runtime-infra-gateway-processes:FAILURE",
-            "checks-node-core-runtime-infra-heartbeat-runner:FAILURE",
-            "checks-node-core-runtime-infra-net-install:FAILURE",
-            "checks-node-core-runtime-secrets:FAILURE",
-            "checks-node-core-runtime-infra-process:FAILURE",
-            "checks-node-agentic-cli:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 6119,
+    "total_ms": 1908,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 545
+        "ms": 458
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2679
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 2869
+        "ms": 1436
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
