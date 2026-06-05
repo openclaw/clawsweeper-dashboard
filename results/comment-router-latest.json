@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-05T12:56:09.296Z",
+  "generated_at": "2026-06-05T12:56:20.226Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-05T09:56:07.007Z",
+  "since": "2026-06-05T09:56:19.723Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     90469
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4631717770
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 4,
@@ -40,12 +42,12 @@
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-04T22:08:08Z",
-      "comment_updated_at": "2026-06-05T12:56:02Z",
+      "comment_created_at": "2026-06-05T12:54:56Z",
+      "comment_updated_at": "2026-06-05T12:54:56Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -61,168 +63,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(extensions): openclaw-governance — AIBOM + DLP + cost ledger (BG1)",
-        "body": "## Summary\n\nBackports the chokepoint governance trio from the Nexus reference stack as an **optional, opt-in** OpenClaw extension at `extensions/openclaw-governance/`. Designed for personal / single-node operators who want a signed audit trail, regex DLP, and per-call cost accounting without standing up Mongo or a separate service.\n\nThree new primitives, each wired through a local SQLite store:\n\n- **AIBOM recorder** — `AibomRecorder` builds an `AIBOMRecord` (sha-256 prompt/completion hashes, model/provider/session/run/channel/skill metadata), signs it with a JWS-style ed25519 envelope (`AibomSigner` auto-generates and persists a keypair in `~/.openclaw/governance/keys/` on first use), and persists `(id, runId, sessionKey, provider, modelId, channelId, skillId, recordJson, signature, generatedAt)` to `aibom_records`. `verifyStoredEntry` re-canonicalizes the stored JSON and re-checks the signature, returning `verified | tampered | unverified | invalid`.\n- **DLP scanner** — `DlpScanner` covers the 8 entity types from the Nexus baseline: `US_SSN`, `CREDIT_CARD` (Luhn-validated), `EMAIL_ADDRESS`, `PHONE_NUMBER`, `US_PASSPORT`, `IBAN_CODE` (mod-97-validated), `IP_ADDRESS` (ipv4 octet bounds), `US_DRIVER_LICENSE`. Per-channel action overrides via plugin config: `log | warn | redact | block`. Redact mode rewrites the input in place and returns the masked text.\n- **Cost ledger** — `CostLedger` records per-call usage (provider-supplied tokens, with an optional char-based estimate fallback) and persists `(input/output/cacheRead/cacheWrite tokens, costUsd, source)` keyed by `runId/sessionKey/skillId/channelId`. Built-in default prices for Anthropic/OpenAI/Google current-gen models; operator config can override or extend. `getCostSummary({from, to, groupBy})` groups by session/skill/channel/model/day for dashboards.\n\nPlugin manifest activates `onStartup` and ships a strict JSON Schema (`openclaw.plugin.json`) so operators can tune defaults from `openclaw config.patch openclaw-governance` without touching code.\n\n### What landed in this PR\n\n| Commit | Scope |\n|--------|-------|\n| `e8cdf1e5` | Plugin scaffold, `openclaw.plugin.json` manifest + schema, `AIBOMRecord` builder, `AibomSigner` (ed25519 JWS), `AibomVerifier`, SQLite store + migrations |\n| `7e609e12` | `AibomRecorder` (signs + persists), `DlpScanner` (8 entities, validators, redact mode), `CostLedger` (record + summary) |\n| `400238f5` | `src/index.ts` barrel + `GovernancePluginConfig` typed normalizer |\n| `8339e249` | `integration.test.ts` — INFERENCE_END round-trip (recorder -> store -> verifier returns verified), DLP smoke, cost-ledger smoke |\n\n### Notes for reviewers\n\n- **No Presidio dependency.** `@microsoft/presidio-analyzer-node` is not published on npm; the scanner uses a regex+validator pipeline that mirrors the Nexus baseline detector. The `scan(text) -> DlpScanResult` contract is stable, so a future Presidio Node binding can slot in without churning callers.\n- **No event-bus subscription yet.** The plugin manifest activates `onStartup` and the primitives are independently constructible/testable; wiring `INFERENCE_END` / `OUTBOUND_PAYLOAD` / `SKILL_INVOKE` into the recorder/scanner/ledger is left as a follow-up so the upstream review can shape the hook surface. Happy to bundle that work into this PR if you'd prefer — call it.\n- **Local-only by design.** SQLite store at `~/.openclaw/governance/governance.db` (overridable via `storeDir`). No network egress. The signing key lives next to the store; rotation is a `rm` + restart for now.\n- **License.** Plugin is Apache-2.0. Files ported from `kelliott-cloud/Nexus-10.0-A` carry a header crediting the source and the operator-granted re-license.\n\n### Test plan\n\n- [x] `pnpm vitest run extensions/openclaw-governance/src/integration.test.ts` — round-trips a fake INFERENCE_END through recorder -> in-memory store -> verifier and asserts status === verified; smoke-tests DLP picks up SSN/CC/email and CostLedger applies pricing.\n- [ ] Manual: enable the plugin, run a few inferences through the gateway, inspect `~/.openclaw/governance/governance.db` for AIBOM rows (blocked until the event-bus hook lands — see above).\n\nCo-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>\n\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: BG1 governance plugin scaffold ships primitives (AIBOM recorder + signer + verifier, SQLite store, DLP scanner, CostLedger) and a plugin manifest. The event-bus wiring is intentionally deferred (see Notes for reviewers) so upstream review can shape the hook surface; this proof exercises the primitives against real I/O.\n- **Real environment tested**: Windows 11 host, Node.js v24.16.0, pnpm 11.2.2 (corepack). Ran from a fresh clone of `kelliott-cloud/openclaw` at branch `claude/bg1-governance-plugin` head `32b17536`. Vitest 3.2.6 against the real TypeScript sources at `extensions/openclaw-governance/src/`.\n- **Exact steps or command run after this patch**: from the repo root, executed `pnpm vitest run extensions/openclaw-governance/src/integration.test.ts --reporter=verbose` under `node` v24.16.0. The `AibomSigner` writes a fresh Ed25519 keypair into a real `mkdtempSync` temp directory and reads it back to verify each signature; the on-disk SQLite store insert path is wrapped by `InMemoryGovernanceStore` for this round-trip since the event-bus subscription that would drive a gateway run is deferred to a follow-up.\n- **Evidence after fix**: terminal capture from the local `node` run on head `32b17536`:\n\n  ```\n   RUN  v3.2.6 C:/Users/kelli/work/openclaw-bg1-fix\n\n   ✓ extensions/openclaw-governance/src/integration.test.ts > governance integration — INFERENCE_END round-trip > records a signed AIBOM row that can be verified 8ms\n   ✓ extensions/openclaw-governance/src/integration.test.ts > governance integration — INFERENCE_END round-trip > DlpScanner finds SSN + credit card + email in an outbound payload 1ms\n   ✓ extensions/openclaw-governance/src/integration.test.ts > governance integration — INFERENCE_END round-trip > CostLedger records an entry with provider usage and totals it 1ms\n\n   Test Files  1 passed (1)\n        Tests  3 passed (3)\n     Start at  19:13:55\n     Duration  496ms\n  ```\n\n- **Observed result after fix**: The recorder serialized a fake `INFERENCE_END` (`modelId: claude-opus-4-7`, `provider: anthropic`, `runId: run-12345`) through `AibomSigner.fromKeyDir({ keyDir })` against a real on-disk Ed25519 keypair; the signature round-tripped through `verifyStoredEntry` and returned `status === \"verified\"`; the stored row carries the expected `runId`, `sessionKey`, `modelId`, `channelId`, and `skillId`. The DLP regex+validator pipeline flagged `CREDIT_CARD`, `US_SSN`, and `EMAIL_ADDRESS` entities in a real outbound payload. The CostLedger applied provider pricing (`15 * 0.001 + 75 * 0.0005` USD per million) against the recorded usage and stored the row. All three primitives behaved end-to-end against real disk I/O and real cryptographic signing.\n- **What was not tested**: Full operator-loop verification (`openclaw gateway` startup → real `INFERENCE_END` event-bus emission → row appearing in `~/.openclaw/governance/governance.db`) is out of scope for this PR because the event-bus subscription is intentionally deferred to a follow-up so upstream can shape the hook surface (see Notes for reviewers). The on-disk SQLite store insert path lives at `src/store/sqlite.ts` and is exercised separately, but is not driven by this integration test. Requesting maintainer `proof: override` consideration if scaffold-level evidence is acceptable for the deferred-hook scope; otherwise happy to bundle the event-bus wiring into this PR.\n",
-        "branch": "claude/bg1-governance-plugin",
-        "head_sha": "5f3ff82dded255d1af79e331952acbf5221d26f4",
-        "author": "kelliott-cloud",
-        "labels": [
-          "scripts",
-          "size: XL",
-          "proof: supplied",
-          "dependencies-changed",
-          "P3",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 security-boundary",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/openclaw-governance/openclaw.plugin.json",
-            "additions": 118,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/openclaw-governance/package.json",
-            "additions": 20,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/openclaw-governance/src/aibom/record.ts",
-            "additions": 128,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/openclaw-governance/src/aibom/recorder.ts",
-            "additions": 55,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/openclaw-governance/src/aibom/signer.ts",
-            "additions": 203,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/openclaw-governance/src/aibom/verifier.ts",
-            "additions": 21,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/openclaw-governance/src/config.ts",
-            "additions": 150,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/openclaw-governance/src/cost/ledger.ts",
-            "additions": 282,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/openclaw-governance/src/dlp/scanner.ts",
-            "additions": 269,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/openclaw-governance/src/index.ts",
-            "additions": 66,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/openclaw-governance/src/integration.test.ts",
-            "additions": 150,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/openclaw-governance/src/store/sqlite.ts",
-            "additions": 305,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/openclaw-governance/tsconfig.json",
-            "additions": 16,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "pnpm-lock.yaml",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/deadcode-unused-files.allowlist.mjs",
-            "additions": 13,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90469",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90469.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 157,
-          "counts": {
-            "SUCCESS": 126,
-            "SKIPPED": 30,
-            "FAILURE": 1
-          },
-          "blockers": [
-            "dependency-guard:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "dependency-guard:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2491,
+    "total_ms": 1880,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 334
+        "ms": 491
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1940
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 190
+        "ms": 1377
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
