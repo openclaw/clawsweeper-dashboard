@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-05T05:24:07.238Z",
+  "generated_at": "2026-06-05T05:25:06.566Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-05T02:24:05.109Z",
+  "since": "2026-06-05T02:25:06.175Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    63148
+    64081
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 6,
-  "commands_seen": 1,
+  "scanned_comments": 3,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,176 +29,18 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:63148:4323676719:2026-06-05T05:07:01Z:clawsweeper_needs_human",
-      "comment_id": "4323676719",
-      "comment_version_key": "4323676719:2026-06-05T05:07:01Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/63148#issuecomment-4323676719",
-      "repo": "openclaw/openclaw",
-      "issue_number": 63148,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-27T01:48:59Z",
-      "comment_updated_at": "2026-06-05T05:07:01Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=8dd5664bf65ba4189c0b982b232fe30ff981d994)",
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "8dd5664bf65ba4189c0b982b232fe30ff981d994",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(feishu): scope DM topic sessions + per-topic dispatch parallelism",
-        "body": "## Summary\n\n- **Problem:** Feishu p2p (DM) messages that carry `root_id` / `thread_id` (i.e. sent inside a topic/thread) all share a single flat session (`peerId = senderOpenId`). Context from different DM topics mixes, and topics are serialized behind each other in the dispatch queue.\n- **Why it matters:** Users create DM topics to separate contexts (projects, tasks, conversations), but OpenClaw treats them as one session — defeating the purpose and causing prompt pollution.\n- **What changed:** When a DM message carries `root_id` or `thread_id`, the handler now (1) derives a topic-scoped `peerId` using `buildFeishuConversationId`, (2) enables `replyInThread` so replies stay inside the topic, (3) sets a `parentPeer` for parent routing, and (4) uses a per-topic dispatch queue key for parallel processing via a new `resolveFeishuDispatchQueueKey` helper. This mirrors how group topics already work via `resolveFeishuGroupSession`.\n- **What did NOT change:** DM messages on the main chat surface (no `root_id`/`thread_id`) keep the original flat per-sender session. Group chat behavior is completely untouched — groups already have `resolveFeishuGroupSession`. Default behavior is preserved; no configuration is required.\n\n## Change Type (select all)\n\n- [x] New feature\n- [x] Bug fix (DM topics previously mixed context)\n\n## Scope (select all touched areas)\n\n- [x] Integrations\n\n## Linked Issue/PR\n\n- Closes #35478\n\n## Root Cause (if applicable)\n\n`handleFeishuMessage` in `bot.ts` hard-codes `peerId = ctx.senderOpenId` and `replyInThread = false` for all DM messages, ignoring `root_id`/`thread_id`. The dispatch queue in `monitor.account.ts` uses a flat `chatId` key for all DM messages, serializing independent topics behind each other.\n\nThe group chat path already solves this via `resolveFeishuGroupSession` (in `bot-content.ts`), which derives topic-scoped peer IDs and enables `replyInThread` for group topics. The DM path was simply missing equivalent logic.\n\n## Regression Test Plan\n\n16 new tests added:\n- **9 unit tests** (`dispatch-queue-key.test.ts`): queue key derivation for DM topics, group passthrough, edge cases (empty/missing root_id, `private` chat type)\n- **7 integration tests** (`bot.test.ts` → \"DM topic session scoping\"): topic-scoped peerId routing, flat session preservation for main surface, `replyInThread`/`threadReply`/`skipReplyToInMessages` flags, `parentPeer` derivation, `thread_id` fallback, `MessageThreadId` propagation for system notifications\n\n## User-visible / Behavior Changes\n\n| Scenario | Before | After |\n|----------|--------|-------|\n| DM message on main surface | Flat session, main surface reply | **No change** |\n| DM message inside topic | Same flat session, reply on main surface | Independent session, reply stays in topic |\n| Two DM topics in parallel | Serialized (second waits for first) | Parallel processing |\n\n## Diagram\n\n```\nBefore (DM):\n[any DM message] -> peerId = senderOpenId -> single session\n                 -> queueKey = chatId     -> serialized\n\nAfter (DM):\n[DM message] -> [has root_id/thread_id?]\n  -> [yes] -> peerId = senderOpenId:topic:<topicId> -> independent session\n           -> queueKey = chatId:topic:<topicId>      -> parallel processing\n           -> replyInThread = true                    -> reply stays in topic\n  -> [no]  -> peerId = senderOpenId                  -> original flat session (unchanged)\n           -> queueKey = chatId                       -> original queue (unchanged)\n```\n\n## Security Impact\n\nNo security impact. The change only affects session scoping and queue key derivation for DM messages. No new API calls, no permission changes, no data exposure.\n\n## Repro + Verification\n\n**Reproduce the problem:**\n1. Open a Feishu DM with the bot\n2. Create Topic A, send \"What is 1+1?\" → bot replies on main surface (not in topic)\n3. Create Topic B, send \"What is 2+2?\" → bot replies with mixed context from Topic A\n\n**Verify the fix:**\n1. Same setup → Topic A and Topic B get independent sessions\n2. Replies stay inside their respective topics\n3. Main surface messages (outside any topic) work exactly as before\n\n## Human Verification\n\n- Tested on local patched OpenClaw `2026.4.8` with equivalent bundled JS changes\n- Confirmed: DM topic isolation, parallel processing, reply routing all work correctly\n- Confirmed: main surface DM behavior unchanged\n\n## Compatibility / Migration\n\n- Fully backward compatible: no configuration required\n- Consistent with group topic behavior (which is already enabled by default)\n- Existing DM sessions (flat per-sender) continue to work unchanged\n- New DM topic sessions are created only when messages carry `root_id`/`thread_id`\n- No database migration needed\n\n## Risks and Mitigations\n\n| Risk | Mitigation |\n|------|-----------|\n| Existing DM users see new topic sessions | Only activates when user explicitly uses Feishu topics; main surface behavior unchanged |\n| Queue key change affects rate limiting | `resolveFeishuDispatchQueueKey` preserves flat `chatId` for non-topic messages; topic keys add parallelism, they don't change serialization for the main queue |\n\n---\n\n### Files changed (5 files, +439 -16)\n\n| File | Change |\n|------|--------|\n| `extensions/feishu/src/dispatch-queue-key.ts` | **New** — `resolveFeishuDispatchQueueKey()` helper for per-topic dispatch queue keys |\n| `extensions/feishu/src/dispatch-queue-key.test.ts` | **New** — 9 unit tests |\n| `extensions/feishu/src/bot.ts` | DM topic session scoping: `dmTopicId`, `peerId`, `parentPeer`, `replyInThread`, `isTopicSession`, `isTopicSessionForThread`, `configReplyInThread`, `threadReply`, `skipReplyToInMessages` |\n| `extensions/feishu/src/bot.test.ts` | 7 new integration tests for DM topic scoping |\n| `extensions/feishu/src/monitor.account.ts` | Import and use `resolveFeishuDispatchQueueKey` for dispatch queue key |\n",
-        "branch": "feat/feishu-dm-topic-session",
-        "head_sha": "8dd5664bf65ba4189c0b982b232fe30ff981d994",
-        "author": "oakyu",
-        "labels": [
-          "channel: feishu",
-          "stale",
-          "size: M",
-          "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/feishu/src/bot.test.ts",
-            "additions": 247,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/bot.ts",
-            "additions": 42,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/monitor.message-handler.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/sequential-key.test.ts",
-            "additions": 80,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/sequential-key.ts",
-            "additions": 15,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/whatsapp/src/inbound.test.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/whatsapp/src/inbound/extract.test.ts",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/whatsapp/src/inbound/extract.ts",
-            "additions": 16,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/whatsapp/src/inbound/send-api.test.ts",
-            "additions": 54,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/whatsapp/src/inbound/send-api.ts",
-            "additions": 53,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/whatsapp/src/qa-driver.runtime.test.ts",
-            "additions": 308,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/whatsapp/src/qa-driver.runtime.ts",
-            "additions": 292,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-63148",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-63148.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 71,
-          "counts": {
-            "FAILURE": 3,
-            "SUCCESS": 54,
-            "SKIPPED": 14
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-agentic-plugins:FAILURE",
-            "checks-node-core:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-agentic-plugins:FAILURE",
-            "checks-node-core:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2449,
+    "total_ms": 672,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 461
+        "ms": 376
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1658
+        "ms": 2
       },
       {
         "name": "classify_commands",
@@ -206,7 +48,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 312
+        "ms": 281
       },
       {
         "name": "append_ledger",
