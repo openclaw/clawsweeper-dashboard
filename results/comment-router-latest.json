@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-05T07:23:44.112Z",
+  "generated_at": "2026-06-05T07:24:23.698Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-05T04:23:43.667Z",
+  "since": "2026-06-05T04:24:21.689Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    90581
+    90422
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 0,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,224 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:90422:4624481618:2026-06-05T07:24:08Z:clawsweeper_needs_human",
+      "comment_id": "4624481618",
+      "comment_version_key": "4624481618:2026-06-05T07:24:08Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90422#issuecomment-4624481618",
+      "repo": "openclaw/openclaw",
+      "issue_number": 90422,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-04T17:13:27Z",
+      "comment_updated_at": "2026-06-05T07:24:08Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=91c35c3572773512e2904b1d6d98949603611736)",
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "91c35c3572773512e2904b1d6d98949603611736",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(memory-core): keep durable index identity visible during safe reindex",
+        "body": "## Summary\n\nFixes #90361.\n\n`memory_search` intermittently returned `disabled/unavailable` with `index metadata is missing` during parallel or closely overlapping calls, even though the durable builtin index was valid (CLI deep status, direct DB inspection, and fresh-manager checks all showed valid metadata). The cause is a race: `MemoryIndexManager.search()` can kick off an async sync, and `runSafeReindex()` briefly swaps the live `this.db` to a fresh temp db (resetting vector/FTS state before metadata is written). A concurrent `status()` / tool-wrapper read during that window refreshes index identity from the temp db, finds no metadata, and fails closed with `index metadata is missing` — while the real index is fine.\n\n## What changed\n\n**`extensions/memory-core/src/memory/manager-sync-ops.ts`** — add a `reindexInProgress` flag, set for the duration of `runSafeReindex`'s atomic temp-db swap and always cleared in a `finally`.\n\n**`extensions/memory-core/src/memory/manager.ts`** — in `refreshIndexIdentityDirty`, while `reindexInProgress` is set, a transient `missing` no longer overwrites a previously `valid` identity; the last stable identity is returned instead. Real mismatches — and `missing` outside a rebuild — still propagate, so genuine provider/model/settings drift keeps failing closed.\n\n**`extensions/memory-core/src/memory/index.test.ts`** — deterministic regression test: it drives a real safe (atomic) reindex and reads `status()` from inside the reindex build, after the temp db has been swapped in, asserting the durable identity stays `valid`.\n\n## Real behavior proof\n\n**Behavior addressed:** A `status()` read concurrent with a safe reindex's temp-db swap keeps returning the durable `valid` identity instead of a transient `missing`, so `memory_search` no longer fails closed mid-rebuild. Real provider/model/settings mismatches and durable-missing states still fail closed.\n\n**Real environment tested:** Local worktree of `origin/main` at base `118060157d`, Node v22.22.0. Drove the real `MemoryIndexManager` over a real on-disk SQLite index via `node scripts/run-vitest.mjs` (the actual production reindex + status paths, no manager mocks). The concurrent `status()` is read from inside the real reindex build, while the real temp db is swapped in.\n\n**Exact steps or command run after this patch:**\n```\n# Concurrent status() during a real safe (atomic) reindex:\nnode scripts/run-vitest.mjs run extensions/memory-core/src/memory/index.test.ts -t \"concurrent status\"\n# Baseline measured by git-stashing the manager.ts guard and re-running the same test.\n```\n\n**Evidence after fix:** With the guard reverted (origin `manager.ts`), the same test fails — the concurrent read sees the temp db, reproducing the issue:\n```\nAssertionError: expected { status: 'missing', … } to deeply equal { status: 'valid' }\n+   \"reason\": \"index metadata is missing\",\n+   \"status\": \"missing\",\n```\nWith the fix applied:\n```\nTest Files  1 passed (1)\n     Tests  1 passed | 34 skipped (35)\n```\n\n**Observed result after fix:** During a real safe reindex (temp db swapped in), `status().custom.indexIdentity` stays `{ status: \"valid\" }` instead of `{ status: \"missing\", reason: \"index metadata is missing\" }`. The transient `missing` reported by the issue is gone; durable-missing and real mismatch still surface.\n\n**What was not tested:** No live OpenClaw v2026.6.1 end-to-end reproduction across multiple OS/providers; the change is in the deterministic manager identity-refresh path, exercised directly against the real manager and SQLite index. The fix is scoped to the manager identity layer (not a tool-wrapper-only mitigation), preserving real mismatch fail-closed as requested in the issue review.\n\n## Validation (supplemental)\n\n- `index.test.ts` + `tools.test.ts` + `manager-reindex-state.test.ts` → 59 passed; `manager.async-search.test.ts` → 3 passed\n- `tsgo:extensions:test` → no new errors in changed files; `oxlint` → clean\n",
+        "branch": "alix/fix-90361",
+        "head_sha": "91c35c3572773512e2904b1d6d98949603611736",
+        "author": "alix-007",
+        "labels": [
+          "extensions: memory-core",
+          "size: S",
+          "proof: supplied",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-core/src/memory/index.test.ts",
+            "additions": 39,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-sync-ops.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager.ts",
+            "additions": 13,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90422",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90422.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 154,
+          "counts": {
+            "SUCCESS": 122,
+            "SKIPPED": 31,
+            "IN_PROGRESS": 1
+          },
+          "blockers": [
+            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS"
+          ],
+          "pending": [
+            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "target is not open"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:90422:4626275680:2026-06-04T21:34:27Z:re_review",
+      "comment_id": "4626275680",
+      "comment_version_key": "4626275680:2026-06-04T21:34:27Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90422#issuecomment-4626275680",
+      "repo": "openclaw/openclaw",
+      "issue_number": 90422,
+      "author": "myles-mworks",
+      "author_id": 284450871,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-04T21:34:27Z",
+      "comment_updated_at": "2026-06-04T21:34:27Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "ignored",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(memory-core): keep durable index identity visible during safe reindex",
+        "body": "## Summary\n\nFixes #90361.\n\n`memory_search` intermittently returned `disabled/unavailable` with `index metadata is missing` during parallel or closely overlapping calls, even though the durable builtin index was valid (CLI deep status, direct DB inspection, and fresh-manager checks all showed valid metadata). The cause is a race: `MemoryIndexManager.search()` can kick off an async sync, and `runSafeReindex()` briefly swaps the live `this.db` to a fresh temp db (resetting vector/FTS state before metadata is written). A concurrent `status()` / tool-wrapper read during that window refreshes index identity from the temp db, finds no metadata, and fails closed with `index metadata is missing` — while the real index is fine.\n\n## What changed\n\n**`extensions/memory-core/src/memory/manager-sync-ops.ts`** — add a `reindexInProgress` flag, set for the duration of `runSafeReindex`'s atomic temp-db swap and always cleared in a `finally`.\n\n**`extensions/memory-core/src/memory/manager.ts`** — in `refreshIndexIdentityDirty`, while `reindexInProgress` is set, a transient `missing` no longer overwrites a previously `valid` identity; the last stable identity is returned instead. Real mismatches — and `missing` outside a rebuild — still propagate, so genuine provider/model/settings drift keeps failing closed.\n\n**`extensions/memory-core/src/memory/index.test.ts`** — deterministic regression test: it drives a real safe (atomic) reindex and reads `status()` from inside the reindex build, after the temp db has been swapped in, asserting the durable identity stays `valid`.\n\n## Real behavior proof\n\n**Behavior addressed:** A `status()` read concurrent with a safe reindex's temp-db swap keeps returning the durable `valid` identity instead of a transient `missing`, so `memory_search` no longer fails closed mid-rebuild. Real provider/model/settings mismatches and durable-missing states still fail closed.\n\n**Real environment tested:** Local worktree of `origin/main` at base `118060157d`, Node v22.22.0. Drove the real `MemoryIndexManager` over a real on-disk SQLite index via `node scripts/run-vitest.mjs` (the actual production reindex + status paths, no manager mocks). The concurrent `status()` is read from inside the real reindex build, while the real temp db is swapped in.\n\n**Exact steps or command run after this patch:**\n```\n# Concurrent status() during a real safe (atomic) reindex:\nnode scripts/run-vitest.mjs run extensions/memory-core/src/memory/index.test.ts -t \"concurrent status\"\n# Baseline measured by git-stashing the manager.ts guard and re-running the same test.\n```\n\n**Evidence after fix:** With the guard reverted (origin `manager.ts`), the same test fails — the concurrent read sees the temp db, reproducing the issue:\n```\nAssertionError: expected { status: 'missing', … } to deeply equal { status: 'valid' }\n+   \"reason\": \"index metadata is missing\",\n+   \"status\": \"missing\",\n```\nWith the fix applied:\n```\nTest Files  1 passed (1)\n     Tests  1 passed | 34 skipped (35)\n```\n\n**Observed result after fix:** During a real safe reindex (temp db swapped in), `status().custom.indexIdentity` stays `{ status: \"valid\" }` instead of `{ status: \"missing\", reason: \"index metadata is missing\" }`. The transient `missing` reported by the issue is gone; durable-missing and real mismatch still surface.\n\n**What was not tested:** No live OpenClaw v2026.6.1 end-to-end reproduction across multiple OS/providers; the change is in the deterministic manager identity-refresh path, exercised directly against the real manager and SQLite index. The fix is scoped to the manager identity layer (not a tool-wrapper-only mitigation), preserving real mismatch fail-closed as requested in the issue review.\n\n## Validation (supplemental)\n\n- `index.test.ts` + `tools.test.ts` + `manager-reindex-state.test.ts` → 59 passed; `manager.async-search.test.ts` → 3 passed\n- `tsgo:extensions:test` → no new errors in changed files; `oxlint` → clean\n",
+        "branch": "alix/fix-90361",
+        "head_sha": "91c35c3572773512e2904b1d6d98949603611736",
+        "author": "alix-007",
+        "labels": [
+          "extensions: memory-core",
+          "size: S",
+          "proof: supplied",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-core/src/memory/index.test.ts",
+            "additions": 39,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-sync-ops.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager.ts",
+            "additions": 13,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90422",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90422.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 154,
+          "counts": {
+            "SUCCESS": 122,
+            "SKIPPED": 31,
+            "IN_PROGRESS": 1
+          },
+          "blockers": [
+            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS"
+          ],
+          "pending": [
+            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "author association NONE and repository permission read are not allowed"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 823,
+    "total_ms": 2205,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 433
+        "ms": 320
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1672
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 378
+        "ms": 183
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
