@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-05T21:44:06.344Z",
-  "repo": "openclaw/crabbox",
+  "generated_at": "2026-06-05T21:46:44.501Z",
+  "repo": "steipete/CodexBar",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-05T18:44:04.568Z",
+  "since": "2026-06-05T18:46:43.615Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    209
+    1322
   ],
-  "comment_ids": [
-    4635757708
-  ],
-  "status_comment_id": 4635758195,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 3,
+  "commands_seen": 2,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,18 +31,105 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/crabbox:209:4635757708:2026-06-05T21:43:25Z:re_review",
-      "comment_id": "4635757708",
-      "comment_version_key": "4635757708:2026-06-05T21:43:25Z",
-      "comment_url": "https://github.com/openclaw/crabbox/pull/209#issuecomment-4635757708",
-      "repo": "openclaw/crabbox",
-      "issue_number": 209,
-      "author": "anagnorisis2peripeteia",
-      "author_id": 129746152,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-05T21:43:25Z",
-      "comment_updated_at": "2026-06-05T21:43:25Z",
-      "status_comment_id": 4635758195,
+      "idempotency_key": "clawsweeper-repair:steipete/CodexBar:1322:4635593603:2026-06-05T21:46:41Z:clawsweeper_needs_human",
+      "comment_id": "4635593603",
+      "comment_version_key": "4635593603:2026-06-05T21:46:41Z",
+      "comment_url": "https://github.com/steipete/CodexBar/pull/1322#issuecomment-4635593603",
+      "repo": "steipete/CodexBar",
+      "issue_number": 1322,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-05T21:17:17Z",
+      "comment_updated_at": "2026-06-05T21:46:41Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- No ClawSweeper repair lane is needed because the branch now has the targeted code fix, failure-path coverage, and pasted before/after hot-path proof.; Cleared: The diff only changes Swift cost-cache code, a generated parser hash, and tests; I found no dependency, secret, workflow, or supply-chain concern. (sha=1f9f6e76d516a57f5740eb582094278c29785802)",
+      "review_summary": "The branch adds a thread-safe in-memory memo for ModelsDevCache load outcomes, invalidates it on save, updates the Codex parser hash, and adds memoization regression tests.\n\nReproducibility: yes. Current main's source shows the no-catalog fallback reaches ModelsDevCache.load per lookup, and the PR provides a repeated-load benchmark for the valid and invalid-version hot paths.",
+      "review_followup": "- No ClawSweeper repair lane is needed because the branch now has the targeted code fix, failure-path coverage, and pasted before/after hot-path proof.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "1f9f6e76d516a57f5740eb582094278c29785802",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "Memoize models.dev catalog to fix cost-scan CPU spike",
+        "body": "## Summary\n\nFixes a CPU spike / menu freeze during token-cost usage refreshes (reported in #1311).\n\nWhen a cost lookup runs **without** a pre-resolved catalog, `CostUsagePricing.modelsDevLookup` falls back to `ModelsDevPricingPipeline.lookup` → `ModelsDevCache.load`, which reads and JSON-decodes the full **~800 KB** `models.dev` catalog from disk. That fallback is hit **once per usage row** (`codexModeSplitMaps` / Claude scan loops call `codexCostUSD` / `claudeCostUSD` per row). Whenever the top-level catalog load returns nil for a window — cold start, the 24 h TTL refresh writing the cache mid-scan, or a decode hiccup — the entire scan of a large `~/.codex` history re-decodes the catalog hundreds of thousands of times.\n\nA macOS CPU resource report captured this precisely: **90 s of CPU at 95%** over a 94 s window, heaviest stack:\n\n```\nUsageStore.refreshTokenUsage\n └ CostUsageFetcher.loadTokenSnapshot\n    └ CostUsageScanner.loadCodexDaily\n       └ scanCodexFile → rescanCodexFile → codexModeSplitMaps\n          └ CostUsagePricing.codexCostUSD\n             └ ModelsDevCache.load\n                └ JSONDecoder.decode   ← full ~800 KB catalog, per row\n```\n\nBecause `refreshTokenUsage` runs when the menu is opened, this also presents as the menu **freezing on click**.\n\n## Fix\n\nMemoize the **load outcome** inside `ModelsDevCache`, keyed by the cache file's **path + size + modification date**:\n\n- Repeated `load`s of an unchanged file reuse the in-memory result instead of re-reading/decoding, so the per-row fallback collapses to a stat + dictionary lookup.\n- The whole outcome is cached, **including failures** — a corrupt or wrong-version cache is read and decode-attempted exactly as expensively as a valid one (a wrong-version file is fully decoded and only then rejected), so caching only successes would leave the per-row storm in place whenever the cache is unreadable.\n- `isStale` still depends on `now`, so it is recomputed on every call; only the read+decode outcome is memoized.\n- `save(...)` drops the memo entry; the size/mtime key also self-invalidates when the file changes underneath.\n- Thread-safe via `NSLock` (cross-platform; the vendored CostUsage code also builds for Linux), mirroring the existing `PathEnvironment` / `ProviderStorageFootprint` cache helpers.\n\nThis does not change the threading of `modelsDevCatalog` through the scanner (which already exists); it just makes the nil-catalog fallback cheap so a transient nil can no longer turn a full history scan into a CPU storm.\n\nThe codex parser hash (which covers files under `Vendored/CostUsage`) is regenerated; this also invalidates stale cost-usage caches so they rebuild on the fixed path.\n\n## Behavior proof (before/after)\n\nMicro-benchmark of the hot path — repeated `ModelsDevCache.load` against a synthetic **2.1 MB** catalog (larger than the real ~788 KB, so conservative), 1000 iterations, debug build, same machine, `main` vs this branch:\n\n| Cache state | `main` (unfixed) | this branch | speedup |\n|---|---|---|---|\n| valid | **42.54 ms/load** | **0.108 ms/load** | ~394× |\n| invalid-version | **42.69 ms/load** | **0.107 ms/load** | ~399× |\n\nThe `invalid-version` row demonstrates the failed-load path: on `main` it costs the same ~43 ms/load as a valid decode (full decode, then version rejection); with the fix it is memoized to ~0.1 ms/load. At hundreds of thousands of rows per refresh this is the difference between a multi-second main-thread stall and a single decode. (Benchmark was run with a temporary, uncommitted test; happy to share the harness.)\n\n## Tests\n\nAdded to `ModelsDevPricingTests`:\n\n- `serves decoded catalog from memo while the file is unchanged` — corrupts the cache bytes while preserving size + mtime; asserts the load still returns the originally decoded artifact (no re-decode).\n- `serves a failed load from memo while the file is unchanged` — primes a failure, then restores valid bytes of identical size + mtime; asserts the cached failure is still returned (the now-valid file is not read/decoded again).\n- `saving a new catalog invalidates the memo` — asserts a subsequent load reflects freshly written data.\n\n## Commands executed\n\n```\nswift build                                       # Build complete\nswift test --filter 'ModelsDevPricingTests|CostUsage'  # 185 passed\nmake check                                        # swiftformat --lint + swiftlint --strict → 0 violations\n./Scripts/regenerate-codex-parser-hash.sh\n```\n\nNo UI changes, so no screenshots.\n\nRefs #1311",
+        "branch": "fix/models-dev-catalog-reload-cpu",
+        "head_sha": "1f9f6e76d516a57f5740eb582094278c29785802",
+        "author": "turbothad",
+        "labels": [
+          "P2",
+          "proof: sufficient",
+          "status: 👀 ready for maintainer look",
+          "rating: 🐚 platinum hermit"
+        ],
+        "files": [
+          {
+            "path": "Sources/CodexBarCore/Generated/CodexParserHash.generated.swift",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Sources/CodexBarCore/Vendored/CostUsage/ModelsDevPricing.swift",
+            "additions": 101,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Tests/CodexBarTests/ModelsDevPricingTests.swift",
+            "additions": 77,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-steipete-codexbar-1322",
+        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1322.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 1,
+          "counts": {
+            "SUCCESS": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:steipete/CodexBar:1322:4635742969:2026-06-05T21:41:18Z:re_review",
+      "comment_id": "4635742969",
+      "comment_version_key": "4635742969:2026-06-05T21:41:18Z",
+      "comment_url": "https://github.com/steipete/CodexBar/pull/1322#issuecomment-4635742969",
+      "repo": "steipete/CodexBar",
+      "issue_number": 1322,
+      "author": "turbothad",
+      "author_id": 100804836,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-05T21:41:18Z",
+      "comment_updated_at": "2026-06-05T21:41:18Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,147 +146,77 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-05T21:44:07.375Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 209
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-05T21:44:08.710Z",
-          "response_comment_id": "4635758195",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "feat: add tart provider for macOS VMs on Apple Silicon",
-        "body": "## Summary\n\nAdd a `tart` provider for running macOS VMs on Apple Silicon via [Cirrus Labs tart](https://github.com/cirruslabs/tart). This enables local macOS staging environments using Apple's native Virtualization.framework -- no Parallels license needed.\n\n## How it works\n\n- **Acquire**: `tart clone` from OCI base image, `tart set` CPU/memory/disk, `tart run --no-graphics`, poll `tart ip`, inject SSH key via `tart exec`, wait for SSH readiness\n- **Resolve**: find running VM by `crabbox-` name prefix\n- **List**: `tart list --format json` filtered by prefix\n- **Release**: `tart stop` + `tart delete`\n- **Cleanup**: garbage collect stale crabbox-owned VMs past idle timeout\n- **Doctor**: verify tart CLI and list capability\n- **SSH key injection**: via `tart exec` (no sshpass, no credentials on argv)\n- **Ready check**: macOS-safe `uname -s && test -d ~` (no crabbox-ready script needed)\n\n## Crabbox CLI Proof\n\nReal `crabbox warmup`, `crabbox run`, and `crabbox stop` on M4 Pro Mac (macOS 26.4.1), tart 2.32.1, latest head:\n\n### crabbox warmup\n```\n$ crabbox warmup --provider tart --target macos --tart-image ghcr.io/cirruslabs/macos-ventura-base:latest\nprovisioning provider=tart lease=cbx_733710e11ba8 slug=crimson-prawn cpus=4 memory=8192MB disk=50GB keep=true\nprovisioned lease=cbx_733710e11ba8 instance=crabbox-crimson-prawn-df015648 state=ready\nready ssh=admin@192.168.64.2:22 workroot=/Users/admin/crabbox\nwarmup complete total=17.771s\n```\n\n### crabbox run (sync + command execution)\n```\n$ cd /tmp/crabbox-build && crabbox run --provider tart --target macos -- sw_vers\nprovisioning provider=tart lease=cbx_aff2eb72cbdb slug=golden-hermit cpus=4 memory=8192MB disk=50GB\nprovisioned lease=cbx_aff2eb72cbdb instance=crabbox-golden-hermit-9d05603f state=ready\nsync candidate: 604 files, 7.5 MiB\nsync complete in 3.582s\nrunning on 192.168.64.2 sw_vers\nProductName:    macOS\nProductVersion: 13.7.4\nBuildVersion:   22H420\ncommand complete in 86ms total=3.678s\nreleasing cbx_aff2eb72cbdb\n```\n\n### crabbox stop\n```\n$ crabbox stop --provider tart --target macos --id cbx_733710e11ba8\nreleased lease=cbx_733710e11ba8 instance=crabbox-crimson-prawn-df015648\n```\n\n## Configuration\n\nCLI flags: `--tart-image`, `--tart-cpu`, `--tart-memory`, `--tart-disk`\n\nYAML (`.crabbox.yaml`):\n```yaml\ntart:\n  image: ghcr.io/cirruslabs/macos-ventura-base:latest\n  user: admin\n  cpus: 4\n  memory: 8192\n  disk: 50\n```\n\nEnv vars: `CRABBOX_TART_IMAGE`, `CRABBOX_TART_USER`, `CRABBOX_TART_WORK_ROOT`, `CRABBOX_TART_CPUS`, `CRABBOX_TART_MEMORY`, `CRABBOX_TART_DISK`\n\n## Not included (follow-up)\n\n- Desktop/VNC (tart VMs run headless; Screen Sharing setup is a follow-up)\n- Shared-directory mounts (`tart run --dir`; needs explicit host-mount config)\n- Checkpoint/fork (tracked as a separate follow-up PR)\n- `config show` tart section (follow-up)\n\n## Files changed\n\n- `internal/providers/tart/` -- provider, backend, core, flags, tests\n- `internal/cli/config.go` -- TartConfig struct, file config, env var loading\n- `internal/cli/providers_builtin_test.go` -- test provider registration\n- `internal/providers/all/all.go` -- import registration\n- `docs/providers/tart.md` -- provider documentation\n- `docs/providers/README.md` -- provider table entry\n- `docs/source-map.md` -- source map entry\n\n## Test plan\n\n- [x] 12 provider unit tests pass\n- [x] `go build` / `go vet` / `go test` pass (Go 1.26.4 darwin/arm64)\n- [x] Real `crabbox warmup --provider tart` (17.7s)\n- [x] Real `crabbox run --provider tart -- sw_vers` (sync 3.6s + command 86ms)\n- [x] Real `crabbox stop --provider tart`\n- [x] SSH key injection via tart exec (no sshpass)\n- [x] Resource flags applied before boot\n- [x] YAML + env var config wired\n- [x] Cleanup scoped to crabbox-owned VMs only\n- [x] Provider docs + source map + provider index\n",
-        "branch": "feat/local-tart-provider",
-        "head_sha": "24da39021cb67f145316b1c23c4b9321ae7a1b6a",
-        "author": "anagnorisis2peripeteia",
+        "title": "Memoize models.dev catalog to fix cost-scan CPU spike",
+        "body": "## Summary\n\nFixes a CPU spike / menu freeze during token-cost usage refreshes (reported in #1311).\n\nWhen a cost lookup runs **without** a pre-resolved catalog, `CostUsagePricing.modelsDevLookup` falls back to `ModelsDevPricingPipeline.lookup` → `ModelsDevCache.load`, which reads and JSON-decodes the full **~800 KB** `models.dev` catalog from disk. That fallback is hit **once per usage row** (`codexModeSplitMaps` / Claude scan loops call `codexCostUSD` / `claudeCostUSD` per row). Whenever the top-level catalog load returns nil for a window — cold start, the 24 h TTL refresh writing the cache mid-scan, or a decode hiccup — the entire scan of a large `~/.codex` history re-decodes the catalog hundreds of thousands of times.\n\nA macOS CPU resource report captured this precisely: **90 s of CPU at 95%** over a 94 s window, heaviest stack:\n\n```\nUsageStore.refreshTokenUsage\n └ CostUsageFetcher.loadTokenSnapshot\n    └ CostUsageScanner.loadCodexDaily\n       └ scanCodexFile → rescanCodexFile → codexModeSplitMaps\n          └ CostUsagePricing.codexCostUSD\n             └ ModelsDevCache.load\n                └ JSONDecoder.decode   ← full ~800 KB catalog, per row\n```\n\nBecause `refreshTokenUsage` runs when the menu is opened, this also presents as the menu **freezing on click**.\n\n## Fix\n\nMemoize the **load outcome** inside `ModelsDevCache`, keyed by the cache file's **path + size + modification date**:\n\n- Repeated `load`s of an unchanged file reuse the in-memory result instead of re-reading/decoding, so the per-row fallback collapses to a stat + dictionary lookup.\n- The whole outcome is cached, **including failures** — a corrupt or wrong-version cache is read and decode-attempted exactly as expensively as a valid one (a wrong-version file is fully decoded and only then rejected), so caching only successes would leave the per-row storm in place whenever the cache is unreadable.\n- `isStale` still depends on `now`, so it is recomputed on every call; only the read+decode outcome is memoized.\n- `save(...)` drops the memo entry; the size/mtime key also self-invalidates when the file changes underneath.\n- Thread-safe via `NSLock` (cross-platform; the vendored CostUsage code also builds for Linux), mirroring the existing `PathEnvironment` / `ProviderStorageFootprint` cache helpers.\n\nThis does not change the threading of `modelsDevCatalog` through the scanner (which already exists); it just makes the nil-catalog fallback cheap so a transient nil can no longer turn a full history scan into a CPU storm.\n\nThe codex parser hash (which covers files under `Vendored/CostUsage`) is regenerated; this also invalidates stale cost-usage caches so they rebuild on the fixed path.\n\n## Behavior proof (before/after)\n\nMicro-benchmark of the hot path — repeated `ModelsDevCache.load` against a synthetic **2.1 MB** catalog (larger than the real ~788 KB, so conservative), 1000 iterations, debug build, same machine, `main` vs this branch:\n\n| Cache state | `main` (unfixed) | this branch | speedup |\n|---|---|---|---|\n| valid | **42.54 ms/load** | **0.108 ms/load** | ~394× |\n| invalid-version | **42.69 ms/load** | **0.107 ms/load** | ~399× |\n\nThe `invalid-version` row demonstrates the failed-load path: on `main` it costs the same ~43 ms/load as a valid decode (full decode, then version rejection); with the fix it is memoized to ~0.1 ms/load. At hundreds of thousands of rows per refresh this is the difference between a multi-second main-thread stall and a single decode. (Benchmark was run with a temporary, uncommitted test; happy to share the harness.)\n\n## Tests\n\nAdded to `ModelsDevPricingTests`:\n\n- `serves decoded catalog from memo while the file is unchanged` — corrupts the cache bytes while preserving size + mtime; asserts the load still returns the originally decoded artifact (no re-decode).\n- `serves a failed load from memo while the file is unchanged` — primes a failure, then restores valid bytes of identical size + mtime; asserts the cached failure is still returned (the now-valid file is not read/decoded again).\n- `saving a new catalog invalidates the memo` — asserts a subsequent load reflects freshly written data.\n\n## Commands executed\n\n```\nswift build                                       # Build complete\nswift test --filter 'ModelsDevPricingTests|CostUsage'  # 185 passed\nmake check                                        # swiftformat --lint + swiftlint --strict → 0 violations\n./Scripts/regenerate-codex-parser-hash.sh\n```\n\nNo UI changes, so no screenshots.\n\nRefs #1311",
+        "branch": "fix/models-dev-catalog-reload-cpu",
+        "head_sha": "1f9f6e76d516a57f5740eb582094278c29785802",
+        "author": "turbothad",
         "labels": [
           "P2",
-          "merge-risk: 🚨 compatibility",
           "proof: sufficient",
-          "rating: 🐚 platinum hermit",
           "status: 👀 ready for maintainer look",
-          "merge-risk: 🚨 availability"
+          "rating: 🐚 platinum hermit"
         ],
         "files": [
           {
-            "path": "docs/providers/README.md",
-            "additions": 3,
+            "path": "Sources/CodexBarCore/Generated/CodexParserHash.generated.swift",
+            "additions": 1,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "docs/providers/tart.md",
-            "additions": 62,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "docs/source-map.md",
-            "additions": 1,
-            "deletions": 0,
+            "path": "Sources/CodexBarCore/Vendored/CostUsage/ModelsDevPricing.swift",
+            "additions": 101,
+            "deletions": 8,
             "changeType": "MODIFIED"
           },
           {
-            "path": "internal/cli/config.go",
-            "additions": 63,
+            "path": "Tests/CodexBarTests/ModelsDevPricingTests.swift",
+            "additions": 77,
             "deletions": 0,
             "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/cli/config_cmd.go",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/cli/providers_builtin_test.go",
-            "additions": 60,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/providers/all/all.go",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "internal/providers/tart/backend.go",
-            "additions": 745,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/tart/core.go",
-            "additions": 115,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/tart/flags.go",
-            "additions": 57,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/tart/provider.go",
-            "additions": 60,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "internal/providers/tart/provider_test.go",
-            "additions": 256,
-            "deletions": 0,
-            "changeType": "ADDED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-crabbox-209",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-crabbox-209.md",
+        "automerge_cluster_id": "automerge-steipete-codexbar-1322",
+        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1322.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 0,
-          "counts": {},
+          "total": 1,
+          "counts": {
+            "SUCCESS": 1
+          },
           "blockers": [],
           "pending": [],
           "terminalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4898,
+    "total_ms": 1024,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 608
+        "ms": 244
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1154
+        "ms": 627
       },
       {
         "name": "classify_commands",
@@ -209,7 +224,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3112
+        "ms": 127
       },
       {
         "name": "append_ledger",
