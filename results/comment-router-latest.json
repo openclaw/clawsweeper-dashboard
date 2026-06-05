@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-05T10:04:25.046Z",
+  "generated_at": "2026-06-05T10:05:14.387Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-05T07:04:24.449Z",
+  "since": "2026-06-05T07:05:11.870Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    90421
+    90395
   ],
-  "comment_ids": [
-    4630401476
-  ],
-  "status_comment_id": 4630402042,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 9,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,30 +29,129 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:90395:4623716974:2026-06-05T10:05:08Z:clawsweeper_needs_human",
+      "comment_id": "4623716974",
+      "comment_version_key": "4623716974:2026-06-05T10:05:08Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90395#issuecomment-4623716974",
+      "repo": "openclaw/openclaw",
+      "issue_number": 90395,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-04T15:38:55Z",
+      "comment_updated_at": "2026-06-05T10:05:08Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Needs maintainer review because the remaining blocker is the recovery policy for unverified on-disk chunks, not routine validation.; Needs attention: The diff can turn unverified local memory chunks into trusted searchable memory, which is a concrete memory boundary concern.; Review finding: [P1] Verify chunks before writing replacement metadata — extensions/memory-core/src/memory/manager-sync-ops.ts:1880 (sha=8c0ed4441bea5c9b8d5735f0cc7a89d3e14ffb96)",
+      "review_summary": "The PR adds a memory-core `runSync` recovery branch that writes index metadata when metadata is missing but chunks exist, plus a manager regression test and a one-off proof script.\n\nPR surface: Source +27, Tests +28, Other +180. Total +235 across 3 files.\n\nReproducibility: yes. from source inspection: current `runSync()` returns dirty when identity is missing and chunks exist, and the linked issue describes the resulting missing-metadata loop. I did not run the PR tests because this review is read-only.",
+      "review_followup": "- [P1] Needs maintainer review because the remaining blocker is the recovery policy for unverified on-disk chunks, not routine validation.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "8c0ed4441bea5c9b8d5735f0cc7a89d3e14ffb96",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(memory-core): write meta after sync when identity is missing with existing chunks",
+        "body": "## Summary\n\n- Problem: Gateway memory auto-sync creates a dead loop: it indexes files (creating chunks) but never writes the memory_index_meta_v1 meta table entry when indexIdentity.status !== \"valid\" and !needsFullReindex. All memory_search calls return \"index metadata is missing\" with 0 results.\n- Why it matters: Users with fresh or corrupted index state cannot use memory search even though chunks exist in the database.\n- What changed: When the early-return path in runSync() detects identity is missing but existing chunks prevent a full reindex, write the meta entry before returning to break the dead loop. This mirrors the meta construction pattern already used by runUnsafeReindex / runSafeReindex.\n\n## Change Type\n\n- [x] Bug fix\n\n## Scope\n\n- [x] Memory / storage\n\n## Linked Issues\n\n- Closes #90338\n- Related: #90361 (may be same memory-index failure cluster)\n\n## Design note on stale-row safety\n\nThe meta written in the recovery path uses EXACTLY the current provider, sources, scopeHash, chunking, and tokenizer settings — the same construction as runUnsafeReindex/runSafeReindex. Stale rows from a previous provider or scope are cleaned up during the next periodic reindex cycle. This recovery path only activates when meta was never written (fresh/corrupted index) or was manually deleted; in those cases the existing chunks were just created by the same sync that failed to write meta, so they match the current settings. The writeMeta call is the same pattern already in use for the normal reindex paths.\n\n## Real behavior proof\n\n**Behavior addressed:** Memory index meta never written when gateway auto-sync finds identity missing with existing chunks (#90338). This causes a dead loop where every sync cycle indexes files, creates chunks, but returns early without writing meta. All memory_search calls return 0 results. The fix at manager-sync-ops.ts:1857-1883 adds writeMeta() in this early-return path.\n\n**Real environment tested:** Node v22.22.0, Linux x86_64, OpenClaw 2026.6.1. Branch fix/90338-memory-index-meta-deadloop rebased on upstream/main.\n\n**Exact steps or command run after this patch:**\n\nStep 1 — standalone proof script exercising the production database condition (same openMemoryDatabaseAtPath(), production chunks/meta/chunks_fts tables, same hasIndexedChunks() guard, same writeMeta UPSERT pattern):\n\nnode --import tsx/esm scripts/proof-90395-memory-meta.mjs\n\nStep 2 — manager-level vitest test (exercises actual MemoryIndexManager.runSync() path: creates manager, deletes meta, calls sync(), verifies meta recreated):\n\nOPENCLAW_VITEST_MAX_WORKERS=4 pnpm test -- extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts\n\nStep 3 — full memory sync/reindex vitest suite:\n\nOPENCLAW_VITEST_MAX_WORKERS=4 pnpm test -- extensions/memory-core/src/memory/manager-sync-yield.test.ts extensions/memory-core/src/memory/manager-targeted-sync.test.ts extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts extensions/memory-core/src/memory/manager.session-reindex.test.ts\n\n**Evidence after fix:**\n\nManager-level test (terminal capture) — exercises MemoryIndexManager.runSync() directly:\n\n$ OPENCLAW_VITEST_MAX_WORKERS=4 pnpm test -- extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts\n Test Files  1 passed (1)\n      Tests  8 passed (8)\n   Start at  17:50:45\n   Duration  7.29s\nexit code: 0\n\nThe new manager-level test \"writes meta after sync when identity is missing but indexed chunks exist\":\n1. Creates manager, syncs files → chunks + meta present, identity valid\n2. Deletes meta via the manager's own DB (simulating dead-loop condition)\n3. Calls manager.sync() — hits the exact runSync() L1848 early-return path\n4. Verifies meta was recreated by the fix (readMeta() not null after sync)\n\nStandalone proof script (terminal capture):\n\n$ node --import tsx/esm scripts/proof-90395-memory-meta.mjs\n=== Real Behavior Proof: Memory Meta Dead Loop Fix ===\nNode.js: v22.22.0\nDB path: /tmp/memory-proof-skRjDf/proof.db\n\n--- Step 1: Simulate production dead-loop condition ---\nchunks table rows: 2\nhasIndexedChunks(): true\nMeta (memory_index_meta_v1): MISSING\nDead-loop condition: chunks exist AND meta missing → YES (bug!)\n\n--- Step 2: Apply fix (mirrors runSync writeMeta) ---\nMeta after fix: PRESENT\n\n--- Step 3: Verify dead loop is resolved ---\nMeta present: YES, Chunks present: YES\n  model: fts-only, provider: none\n  sources: [{\"type\":\"memory\",\"path\":\"/workspace/memory\"}]\n  chunkTokens: 256, ftsTokenizer: unicode61\nFTS search for \"architecture\": 1 result(s)\n  /workspace/memory/notes.md: Project architecture notes for reference...\nDead loop broken: YES\n\n--- Step 4: Idempotency check ---\nMeta rows after second write: 1 (expected: 1)\n\n=== All checks complete (0 failure(s)) ===\nexit code: 0\n\nFull sync suite (terminal capture):\n\n$ OPENCLAW_VITEST_MAX_WORKERS=4 pnpm test -- extensions/memory-core/src/memory/manager-sync-yield.test.ts ...\n Test Files  4 passed (4)\n      Tests  13 passed (13)\n   Start at  17:56:25\n   Duration  7.02s\nexit code: 0\n\n**Observed result after fix:** The manager-level vitest test exercises the actual MemoryIndexManager.runSync() path: creates indexed chunks, deletes meta, calls sync(), and verifies meta is recreated — proving the fix works at the right level. The standalone proof script exercises the production schema (chunks, meta, chunks_fts with external content FTS) and verifies idempotency. All 13 vitest tests pass (8 fts-only-reindex + 4 sync + 1 session-reindex) including the new regression test. The proof script exits nonzero on any failure.\n\n**What was not tested:** Not tested on a live OpenClaw gateway with a real embedding provider. The related safe-reindex race (#90453) is a distinct issue tracked separately. The stale-row risk is mitigated by: (1) this recovery path only activates when meta was never written or was deleted — existing chunks were just created by the same sync and match current settings, (2) periodic reindex cycles clean up any rows from previous provider/scope configurations, and (3) the meta write uses the exact same construction as runUnsafeReindex/runSafeReindex.\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>",
+        "branch": "fix/90338-memory-index-meta-deadloop",
+        "head_sha": "8c0ed4441bea5c9b8d5735f0cc7a89d3e14ffb96",
+        "author": "chengzhichao-xydt",
+        "labels": [
+          "extensions: memory-core",
+          "scripts",
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-core/src/memory/manager-sync-ops.ts",
+            "additions": 27,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts",
+            "additions": 28,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/proof-90395-memory-meta.mjs",
+            "additions": 180,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90395",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90395.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 149,
+          "counts": {
+            "SUCCESS": 125,
+            "SKIPPED": 23,
+            "FAILURE": 1
+          },
+          "blockers": [
+            "check-lint:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "check-lint:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 832,
+    "total_ms": 2822,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 586
+        "ms": 436
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2066
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 236
+        "ms": 293
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
