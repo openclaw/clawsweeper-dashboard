@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-05T18:04:32.482Z",
+  "generated_at": "2026-06-05T18:05:30.627Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-05T15:04:29.292Z",
+  "since": "2026-06-05T15:05:29.975Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     90727
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4634125260
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -61,91 +63,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(memory): refresh rebuilt index handles",
-        "body": "## Summary\n\n- Fixes a persistent live-manager failure where the injected memory search path can keep reporting `index metadata is missing` after a separate CLI/status manager has rebuilt the durable SQLite index successfully.\n- Ensures safe atomic reindex writes `memory_index_meta_v1` into the fresh temp DB even when the previous DB had the same serialized metadata cached.\n- Tracks the memory DB file identity and reopens the live SQLite handle before status/search/sync when another manager has atomically swapped the index file underneath it.\n- Defers search warmup and on-search background sync until provider and index identity are valid, reducing self-induced dirty-state work before a search has passed readiness checks.\n- Out of scope: fully serializing searches while an active safe reindex is mid-build. That related transient guard still belongs with #90453 if maintainers want a separate in-progress reindex state.\n\n## Linked context\n\nCloses #90414\n\nRelated #90361\nRelated #90338\nRelated #90395\nRelated #90453\n\nRequested by an affected owner/user during live troubleshooting of a local OpenClaw install.\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: live injected `memory_search` / `openclaw.memory_search` could report `index metadata is missing` even though the durable disk index was healthy and CLI/fresh-manager search worked.\n- Real environment tested: macOS local OpenClaw gateway, OpenClaw `2026.6.2-beta.1 (f03f57a)`, Node `v25.6.1`, builtin memory index, installed global npm runtime.\n- Exact steps or command run after this patch:\n  1. Applied the same manager changes locally to `/usr/local/lib/node_modules/openclaw/dist/manager-B5STWg-k.js`.\n  2. Verified the patched installed bundle with `node --check /usr/local/lib/node_modules/openclaw/dist/manager-B5STWg-k.js`.\n  3. Restarted the gateway with `openclaw gateway stop` and `openclaw gateway start`.\n  4. Confirmed `openclaw gateway status` reported gateway version `2026.6.2-beta.1`, runtime running, connectivity probe `ok`, admin-capable, and listening on `127.0.0.1:18789` / `[::1]:18789`.\n  5. Rebased the source branch onto current `origin/main` and reran focused memory validation.\n- Evidence after fix:\n  ```text\n  OpenClaw 2026.6.2-beta.1 (f03f57a)\n  node --version: v25.6.1\n  Gateway version: 2026.6.2-beta.1\n  Runtime: running\n  Connectivity probe: ok\n  Capability: admin-capable\n  Listening: 127.0.0.1:18789, [::1]:18789\n  ```\n- Observed result after fix: the patched local runtime loads and runs with the reopened-handle and meta-write safeguards in place; source regression tests reproduce stale live-handle repair after external atomic rebuilds for both missing and valid metadata.\n- What was not tested: a new live Discord/agent turn invoking the injected memory tool after the local runtime patch. The direct injected-tool path needs an agent turn, so the live proof is gateway-load proof plus source-level regression coverage of the failed manager state.\n- Proof limitations or environment constraints: broad repository type-aware checks are blocked in this checkout by unrelated missing optional extension deps and plugin-sdk boundary generation issues; focused memory checks pass.\n- Before evidence: live troubleshooting showed the disk memory index was healthy and CLI memory search returned results, while the live injected tool still failed with `index metadata is missing` after gateway restart. That pointed at stale live manager state rather than durable index corruption.\n\n## Tests and validation\n\nFocused commands run after rebasing onto current `origin/main`:\n\n```text\ngit diff --check origin/main...HEAD\nnode_modules/.bin/oxlint extensions/memory-core/src/memory/manager.ts extensions/memory-core/src/memory/manager-sync-ops.ts extensions/memory-core/src/memory/index.test.ts --report-unused-disable-directives-severity error --threads=1\nOPENCLAW_VITEST_INCLUDE_FILE=/private/tmp/openclaw-memory-include.json node scripts/run-vitest.mjs run --config test/vitest/vitest.extension-memory.config.ts\n  Test Files  1 passed (1)\n  Tests       36 passed (36)\n```\n\nRegression coverage added:\n\n- `index.test.ts` now covers a live manager reopening after another manager atomically rebuilds an index that had missing metadata.\n- `index.test.ts` also covers a live manager reopening after another manager atomically rebuilds a valid index with changed content, proving the stale handle is not kept after file replacement.\n\nWhat failed before this fix:\n\n- `runSafeReindex()` could switch to a fresh temp DB while `lastMetaSerialized` still matched the previous DB, causing `writeMeta()` to skip writing metadata into the new DB.\n- A cached live manager could hold a SQLite handle to the old/unlinked DB after another manager atomically replaced `main.sqlite`, so status/search could keep seeing missing or stale metadata while disk and CLI were healthy.\n\n## Risk checklist\n\nDid user-visible behavior change? (`Yes/No`): Yes, memory search should recover from externally rebuilt indexes instead of staying paused on stale live manager state.\n\nDid config, environment, or migration behavior change? (`Yes/No`): No.\n\nDid security, auth, secrets, network, or tool execution behavior change? (`Yes/No`): No.\n\nWhat is the highest-risk area?\n\n- Reopening the SQLite handle when the index file identity changes while the live manager is otherwise idle.\n\nHow is that risk mitigated?\n\n- The refresh is skipped while the manager is closed or already syncing.\n- The old handle is kept unless the new handle opens, schema is ensured, metadata can be read, and vector/FTS state is reset consistently.\n- On failure, the code restores the previous DB handle and identity and logs a warning.\n- Focused tests cover both missing-meta and valid-meta external rebuild cases.\n\n## Current review state\n\nWhat is the next action?\n\n- Maintainer review and CI. The patch is ready for review with focused validation passing.\n\nWhat is still waiting on author, maintainer, CI, or external proof?\n\n- Waiting on maintainer/CI. A maintainer may choose whether this should also close the broader canonical #90361, or only close the persistent manager-cache report #90414.\n\nWhich bot or reviewer comments were addressed?\n\n- None yet on this PR.\n",
-        "branch": "fix/memory-search-refresh-index-identity",
-        "head_sha": "203017314e5b6e5d6995128633afcd45d10f159d",
-        "author": "dr00-eth",
-        "labels": [
-          "extensions: memory-core",
-          "size: S",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/memory-core/src/memory/index.test.ts",
-            "additions": 70,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager-sync-ops.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager.ts",
-            "additions": 99,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90727",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90727.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 157,
-          "counts": {
-            "CANCELLED": 1,
-            "SUCCESS": 125,
-            "SKIPPED": 31
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3519,
+    "total_ms": 1358,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 409
+        "ms": 640
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2766
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 318
+        "ms": 705
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
