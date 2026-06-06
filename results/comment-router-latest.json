@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-06T22:01:33.319Z",
+  "generated_at": "2026-06-06T22:02:31.504Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-06T19:01:30.766Z",
+  "since": "2026-06-06T19:02:31.319Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    91015
+    91018
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,180 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91015:4640485706:2026-06-06T22:01:28Z:clawsweeper_auto_repair",
-      "comment_id": "4640485706",
-      "comment_version_key": "4640485706:2026-06-06T22:01:28Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/91015#issuecomment-4640485706",
-      "repo": "openclaw/openclaw",
-      "issue_number": 91015,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-06T21:54:37Z",
-      "comment_updated_at": "2026-06-06T22:01:28Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=42fca4ea3f030d4895f4efad50d48a6c1aebf49d)",
-      "review_summary": "The PR adds a Docker exec deadline, threads a new `agents.defaults.sandbox.docker.initTimeoutMs` through Docker sandbox initialization, updates doctor messaging, and adds mock regression tests.\n\nPR surface: Source +143, Tests +313. Total +456 across 11 files.\n\nReproducibility: yes. Source inspection shows current main awaits Docker sandbox init through `execDockerRaw` with no deadline, but I did not run a live wedged Docker or OrbStack reproduction.",
-      "review_followup": "- [P1] Needs contributor real Docker proof plus maintainer decision on the new config/default surface and overlap with #66836 before merge.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "42fca4ea3f030d4895f4efad50d48a6c1aebf49d",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(sandbox): bound Docker exec with a deadline so a wedged engine can't hang the gateway",
-        "body": "## What / why\n\nA present-but-unresponsive Docker engine (the socket accepts the connection but never answers — distinct from \"daemon not running\", which returns a stderr quickly) makes `docker …` emit nothing and never exit. `execDockerRaw` awaited that child with **no timeout**, so sandbox container init pended forever; with `sandbox.mode=all` every agent run hung — the \"all agents offline / blocked at initializing sandboxed agents\" symptom of #90980. This is the still-open hang half of #5135.\n\n## Why non-sandboxed agents were also offline\n\nThe gateway process stays reachable throughout (a hung `docker` spawn is async I/O and doesn't block the event loop); readiness/health key only on sidecars + channel health + event-loop and **never observe sandbox/docker** (`src/gateway/server/readiness.ts`, `src/gateway/server-methods/health.ts`, and `server-startup-post-attach.ts` awaits no sandbox op). So this fix targets the **agent-run path** — with `sandbox.mode=all` a wedged engine made *every* run hang, which presents as all agents offline.\n\n## Restart loop (inferred / external)\n\nThe ~5-min restart loop in the report is external/operator-side — there is **no in-repo health check gated on sandbox/docker** (`gateway status --deep` and the post-restart probe don't touch docker). Stated as inference, not an asserted in-repo cause. Converting the infinite hang into a fast, clear failure removes the no-reply condition an external uptime probe (or a frequent sandboxed cron job) would have tripped.\n\n## Layer 1 — bound the exec\n\n- `execDockerRaw` gains an opt-in `timeoutMs`; on deadline it kills the child (SIGTERM) and rejects with a typed `SANDBOX_DOCKER_TIMEOUT` error. A single `settled` guard composes the caller `AbortSignal` **OR** the deadline (first to fire wins) with no double-settle and no timer/listener leak. The success, ENOENT, daemon-unavailable, and abort paths are unchanged.\n- New `agents.defaults.sandbox.docker.initTimeoutMs` (default **60000**) is threaded **per-call** through the init control-plane ops (inspect/create/start/rm). It is a per-call deadline, not a total budget: a fully wedged engine is bounded to ~one timeout (the first `dockerContainerState` inspect rejects and the rest short-circuit); a slow-but-progressing host could see up to N× across sequential calls. `ensureDockerImage` runs before `docker create` and throws on a missing image, so create never triggers an implicit pull under the deadline. The user-defined `setupCommand` and the long-running command exec path stay **unbounded** so legitimate long work is not killed.\n\n## Layer 2 — fail soft\n\n- On timeout the sandboxed run fails with a clear \"sandbox unavailable\" error, logged loudly; `openclaw doctor` distinguishes a present-but-unresponsive engine from a not-running daemon.\n- Also: `initTimeoutMs` is excluded from the container-reuse config hash, so this operational timeout never forces container recreation on upgrade.\n\n## Tests (mock-based, no real Docker)\n\n- Hung-engine deadline regression (rejects via the deadline + kills the child) plus abort-wins and back-compat (no `timeoutMs` ⇒ no timer armed).\n- `ensureSandboxContainer` init-timeout fail-soft (rejects fast, not a hang).\n- Config-hash guard that `initTimeoutMs` does not change container identity.\n- The existing ENOENT test stays green.\n\n## Verification (gates already passed locally)\n\nHook-verified locally: **oxfmt** (lockfile-pinned v0.52.0, run via the pre-commit hook) clean; **oxlint = 0** on all changed files; **tsgo** `core` + `core:test` = 0.\n\n## Testing notes\n\nTwo pre-existing sandbox spawn-mock tests (`docker.test.ts`, `docker.config-hash-recreate.test.ts`) fail **only on Windows with Docker Desktop installed** — their mocks assume a bare `docker` command, but Windows resolves it to the full `…\\docker.exe` path. This is unrelated to this change and they pass on Linux/CI (the Windows-specific `docker.windows.test.ts` passes locally).\n\nFixes #90980\nRefs #5135\n",
-        "branch": "fix/sandbox-init-timeout",
-        "head_sha": "42fca4ea3f030d4895f4efad50d48a6c1aebf49d",
-        "author": "wsyjh8",
-        "labels": [
-          "commands",
-          "docker",
-          "agents",
-          "size: L",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/sandbox/config-hash.test.ts",
-            "additions": 22,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sandbox/config-hash.ts",
-            "additions": 10,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sandbox/config.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sandbox/constants.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sandbox/docker-backend.ts",
-            "additions": 25,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sandbox/docker.execDockerRaw.timeout.test.ts",
-            "additions": 128,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/sandbox/docker.init-timeout.test.ts",
-            "additions": 163,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/sandbox/docker.ts",
-            "additions": 92,
-            "deletions": 15,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor-sandbox.ts",
-            "additions": 35,
-            "deletions": 15,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/types.sandbox.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/zod-schema.agent-runtime.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91015",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91015.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 29,
-            "SUCCESS": 130,
-            "FAILURE": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "build-artifacts:FAILURE",
-            "check-additional-runtime-topology-architecture:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "build-artifacts:FAILURE",
-            "check-additional-runtime-topology-architecture:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2745,
+    "total_ms": 300,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 238
+        "ms": 172
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2300
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 182
+        "ms": 114
       },
       {
         "name": "append_ledger",
