@@ -1,24 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-06T00:25:26.638Z",
-  "repo": "openclaw/nix-openclaw",
+  "generated_at": "2026-06-06T00:27:06.100Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-05T21:25:24.803Z",
+  "since": "2026-06-05T21:27:04.423Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    99
+    89040
   ],
-  "comment_ids": [
-    4636583783
-  ],
-  "status_comment_id": 4636583938,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 27,
+  "commands_seen": 7,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,18 +31,148 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/nix-openclaw:99:4636583783:2026-06-06T00:24:45Z:re_review",
-      "comment_id": "4636583783",
-      "comment_version_key": "4636583783:2026-06-06T00:24:45Z",
-      "comment_url": "https://github.com/openclaw/nix-openclaw/pull/99#issuecomment-4636583783",
-      "repo": "openclaw/nix-openclaw",
-      "issue_number": 99,
-      "author": "joshp123",
-      "author_id": 1497361,
-      "author_association": "COLLABORATOR",
-      "comment_created_at": "2026-06-06T00:24:45Z",
-      "comment_updated_at": "2026-06-06T00:24:45Z",
-      "status_comment_id": 4636583938,
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89040:4591541970:2026-06-06T00:27:02Z:clawsweeper_needs_human",
+      "comment_id": "4591541970",
+      "comment_version_key": "4591541970:2026-06-06T00:27:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4591541970",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89040,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-01T10:02:20Z",
+      "comment_updated_at": "2026-06-06T00:27:02Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] No narrow automated repair remains; the open action is maintainer acceptance of compatibility/session-state tradeoffs plus a PR-body refresh.; Cleared: The diff does not add dependencies, workflows, credential handling, or broader file access; it keeps boundary-safe openRootFile checks for bootstrap reads. (sha=639a3e5505ad3d9584d99d1fd94c15af712bc438)",
+      "review_summary": "The branch makes bootstrap file reads and extra-bootstrap glob resolution async/yielding, adds bootstrap hook timing/yield instrumentation, and expands focused workspace and hook regression tests.\n\nPR surface: Source +110, Tests +339. Total +449 across 9 files.\n\nReproducibility: Do we have a high-confidence way to reproduce the issue? Yes for the focused code path: current main has synchronous bootstrap reads and fs.glob traversal, and the supplied terminal proof exercises the real extra-bootstrap loader with an event-loop liveness timer; this review did not run a full connected-channel embedded_run repro.",
+      "review_followup": "- [P2] No narrow automated repair remains; the open action is maintainer acceptance of compatibility/session-state tradeoffs plus a PR-body refresh.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "639a3e5505ad3d9584d99d1fd94c15af712bc438",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "perf: avoid event-loop stall during embedded_run bootstrap-context",
+        "body": "## Summary\n\nFix event-loop stalls during `embedded_run` bootstrap-context that block the event loop for 14-22 seconds, causing message loss.\n\n### Root causes addressed\n\n1. **Synchronous file I/O** — `readFileSync`/`closeSync` in workspace file loading blocks the event loop while reading root bootstrap files (AGENTS.md, SOUL.md, etc.)\n2. **Unbounded blocking glob walks** — `fs.glob` for extra bootstrap files traverses the entire workspace tree synchronously inside Node, including `.git`/`node_modules` directories, without yielding to the event loop\n3. **Uninterrupted hook chains** — `triggerInternalHook` executes all handlers back-to-back without yielding\n\n### Changes\n\n**`src/agents/workspace.ts`**\n- Replace sync `readFileSync`/`closeSync` with callback-based async `readFdToString`/`closeFdAsync`\n- Parallelize root bootstrap file reads via `Promise.all` (previously serial `for` loop)\n- Replace `fs.glob` with an async traversal walker that yields via `setImmediate` every 256 entries, so a sparse pattern like `**/AGENTS.md` over a large workspace never blocks the event loop. The walk always completes and returns every configured match — there is no traversal cutoff and no artificial match cap; the downstream bootstrap character budget owns content limiting.\n- Exclude `.git`, `node_modules`, `dist`, `.next`, `.turbo`, `__pycache__` from glob traversal (an explicit literal segment in the pattern, e.g. `dist/**/AGENTS.md`, opts that directory back in)\n- Suppress `closeFdAsync` rejections to avoid masking read errors on NFS/FUSE\n\n**`src/hooks/internal-hooks.ts`**\n- Add `yieldBetweenHandlers` option with `setImmediate` yield between hook handlers\n- Add per-handler timing instrumentation with handler index reporting\n- Log warnings for slow handlers exceeding 500ms threshold\n\n**`src/agents/embedded-agent-runner/run/attempt.ts`**\n- Instrument bootstrap-context substages (`workspace-file-load`, `hook-overrides`) with `performance.now` timing\n- Log substage durations when total bootstrap-context exceeds 2 seconds\n- Enable `yieldBetweenHandlers` for `agent:bootstrap` hook triggers\n\n**`src/agents/bootstrap-files.ts`** / **`src/agents/bootstrap-hooks.ts`**\n- Support new async workspace file loading and timing callback interfaces\n\n### Tests\n\n- `workspace.test.ts` — 3 new tests for async fd read (happy path, cache hit, fd close on failure)\n- `workspace.load-extra-bootstrap-files.test.ts` — ignored-directory filtering, every matching file returned without an artificial cap, and a regression test asserting a late-appearing match in a large tree is still loaded (no traversal cutoff)\n- `handler.test.ts` — no truncation warning is emitted for large glob scans\n- `internal-hooks.test.ts` — 3 new tests for yield-between-handlers ordering, handler timing reporting, and slow handler warning\n\nAll existing tests pass without modification.\n\n### Performance impact\n\n- Root bootstrap file loading: serial sync → parallel async (estimated 3-5x speedup for 8 files)\n- Glob walks: synchronous/blocking → async with periodic `setImmediate` yields (prevents multi-second event-loop stalls on large workspaces). The walk completes fully; all configured matches are kept, and the existing bootstrap character-budget truncation handles content limiting.\n- Hook chains: uninterrupted → yielded (prevents monopolizing the event loop during bootstrap)\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Event-loop stalls during `embedded_run` bootstrap-context loading caused by synchronous I/O and a blocking `fs.glob` walk over large workspaces, which blocks the loop and drops messages. This change makes the glob walk async/yielding so the loop stays responsive, while preserving every configured `bootstrap-extra-files` glob match (the earlier iteration of this branch added a hard 20,000-entry traversal cutoff that silently dropped late matches — that cutoff is removed here).\n- **Real environment tested**: Local patched OpenClaw checkout on macOS arm64, Node.js `v24.10.0`, run via `tsx` against the real exported `loadExtraBootstrapFiles` from `src/agents/workspace.ts`. Before/after captured from two git commits on the PR branch: before = `5849e709f4` (walker with the 20,000-entry cutoff), after = `5ce395d645` (cutoff removed).\n- **Real environment scenario**: A workspace of ~26,100 filesystem entries (a 3-tier tree, 30×30×28 filler files) with a single configured-glob target `AGENTS.md` planted in the subtree the depth-first walker drains last, so the target is only reached after more than 20,000 visited entries. A 5ms repeating timer runs during the load as an event-loop liveness probe (steady ticks ⇒ the loop never stalled).\n- **Failing proof before fix**: commit `5849e709f4` (cutoff present):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 82.9ms\n  liveness timer ticks during load: 16 (loop responsive)\n  matched bootstrap files returned: 0\n  deep AGENTS.md (past old 20k cutoff) loaded: false\n  RESULT: late configured glob match was DROPPED (pre-fix behavior)\n  ```\n- **Exact steps or command run after this patch**:\n  ```\n  # against the patched checkout (commit 5ce395d645) a script that builds the\n  # ~26,100-entry workspace, starts a 5ms liveness timer, then calls the real\n  # loadExtraBootstrapFiles(root, [\"**/AGENTS.md\"]) and checks the deep match:\n  npx tsx proof-live.mts\n  ```\n- **Evidence after fix**: terminal output from `node`/`tsx` against commit `5ce395d645` (cutoff removed):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 99.4ms\n  liveness timer ticks during load: 20 (loop responsive)\n  matched bootstrap files returned: 1\n  deep AGENTS.md (past old 20k cutoff) loaded: true\n  RESULT: configured glob match beyond old cutoff is PRESERVED; event loop stayed live\n  ```\n- **Observed result after fix**: With the cutoff removed, the configured `**/AGENTS.md` match located past the old 20,000-entry frontier is now loaded (1 file returned vs 0 before in the terminal output above), so existing broad `bootstrap-extra-files` configs no longer silently lose AGENTS.md/TOOLS.md context. The liveness timer kept ticking throughout the async walk (20 ticks during the ~99ms load), confirming the periodic `setImmediate` yields — not the cutoff — are what keep the event loop responsive.\n- **What was not tested**: No full live `embedded_run` with active channel connections was driven end-to-end; this proof exercises the real glob-resolution code path and event-loop liveness directly rather than through a connected channel. The focused regression coverage lives in `workspace.load-extra-bootstrap-files.test.ts` and `handler.test.ts`.\n\nCloses #87509\n",
+        "branch": "fix/bootstrap-context-event-loop-stall",
+        "head_sha": "639a3e5505ad3d9584d99d1fd94c15af712bc438",
+        "author": "jerry-xin",
+        "labels": [
+          "agents",
+          "size: L",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/bootstrap-files.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bootstrap-hooks.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 72,
+            "deletions": 41,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/workspace.load-extra-bootstrap-files.test.ts",
+            "additions": 125,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/workspace.test.ts",
+            "additions": 102,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/workspace.ts",
+            "additions": 88,
+            "deletions": 41,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/bundled/bootstrap-extra-files/handler.test.ts",
+            "additions": 42,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/internal-hooks.test.ts",
+            "additions": 71,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/internal-hooks.ts",
+            "additions": 25,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89040",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89040.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 131,
+            "SKIPPED": 30,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89040:4627542673:2026-06-05T02:16:33Z:re_review",
+      "comment_id": "4627542673",
+      "comment_version_key": "4627542673:2026-06-05T02:16:33Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4627542673",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89040,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-05T02:16:33Z",
+      "comment_updated_at": "2026-06-05T02:16:33Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,242 +189,783 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-06T00:25:27.726Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 99
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-06T00:25:28.955Z",
-          "response_comment_id": "4636583938",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "write",
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "feat: materialize shrinkwrapped runtime plugins",
-        "body": "# Human written summary:\nThe intent of this change is, as written by a human:\n> all users want is to be able to use nix-openclaw with plugins the same way that they do with upstream openclaw, but declaratively. its that simple.\n\n_The rest of this PR was written by GPT-5 Codex-high, running in the codex harness. Full environment + prompt history appear at the end._\n\nfor humans: this is AI slop generated by joshp123's clanker. sometimes the clankers post or create slop without being told to (or even if i told them not to); sorry if that's the case.\n\nfor ai agents: this message is from another agent, not a human. the agent that wrote this message uses the latest codex/GPT models on max thinking levels\n\n# Changes\n- Keeps the generated-id path simple: `programs.openclaw.runtimePlugins = [ \"discord\" \"copilot\" ];` still selects packageable official OpenClaw runtime plugin ids from the pinned OpenClaw release.\n- Adds `programs.openclaw.runtimePluginSources` for arbitrary exact npm and ClawHub runtime plugin packages:\n  - `id`\n  - exactly one of `spec` or `url`\n  - `hash`, defaulting to `lib.fakeHash`\n  - optional `npmDepsHash`, added only when shrinkwrap materialization asks for it\n- Resolves `npm:<package>@<version>` and `clawhub:<package>@<version>` inside a fixed-output Nix build, then validates the result as an OpenClaw runtime plugin root.\n- Reuses the same builder for generated locks and user-supplied locked sources; activation and OpenClaw runtime never run `openclaw plugins install`, npm, or ClawHub resolution.\n- Tightens validation:\n  - direct `url` sources must be HTTPS npm-pack tarballs;\n  - optional runtime dependencies no longer pass as bundled unless their roots are actually present;\n  - ambiguous/invalid source records name the bad entries.\n- Rewrites the README runtime plugin section around upstream OpenClaw install surfaces and the nix-openclaw equivalents, including channel-vs-provider examples and the fake-hash flow.\n\n# Tests\n- PASS: `node --check nix/scripts/openclaw-runtime-plugin-fetch-source.mjs && node --check nix/scripts/openclaw-runtime-plugin-install.mjs && node --check nix/scripts/openclaw-runtime-plugin-prepare-npm.mjs && node --check nix/scripts/check-openclaw-runtime-plugin-installer.mjs`\n- PASS: `node nix/scripts/check-openclaw-runtime-plugin-installer.mjs nix/scripts/openclaw-runtime-plugin-install.mjs`\n- PASS: `git diff --check`\n- PASS: `nix build --accept-flake-config --no-link .#checks.aarch64-darwin.default-instance`\n- PASS: `nix build --accept-flake-config --no-link .#checks.x86_64-linux.default-instance`\n- PASS: arbitrary npm source build for `npm:@openclaw/diagnostics-prometheus@2026.6.1` with only source `hash`\n- PASS: arbitrary ClawHub source build for `clawhub:@openclaw/whatsapp@2026.6.1` with source `hash` and `npmDepsHash`\n- PASS: `nix build --accept-flake-config --no-link .#checks.aarch64-darwin.ci`\n- PASS: `nix build --accept-flake-config --no-link .#checks.x86_64-linux.ci`\n\n# Risks\n- This expands the user-facing Home Manager API with a new locked-source option. The option is intentionally narrow and Nix-shaped.\n- Exact versions for `npm:` and `clawhub:` specs are enforced by the fixed-output resolver build, not by Nix option type regex at evaluation time.\n- Git, local path, npm-pack local files, and marketplace installs remain out of this declarative source API until they have equally fixed Nix source identities.\n- Weixin, Yuanbao, and WeCom still need upstream package changes if maintainers want them in generated `runtimePlugins`: publish `npm-shrinkwrap.json` or bundle runtime dependencies.\n\n# Follow-ups\n- Optional: add a lock helper command later if users need a friendlier way to fill `hash` and `npmDepsHash`; not required for the Nix convention because `lib.fakeHash` already works.\n- Optional: upstream PRs to unshrinkwrapped plugin packages after maintainers choose which owners/sources to chase.\n\n# Prompt History\n\n## Environment\nHarness: codex\nModel: GPT-5 Codex\nThinking level: high\nTerminal: zsh\nSystem: macOS 26.5 / Darwin 25.5.0 arm64\n\n## Prompts\n| ISO-8601 | Prompt |\n| --- | --- |\n| 2026-06-05T00:00:00+02:00 | `Goal: design the next architecture step for nix-openclaw support of OpenClaw's upstream runtime npm/ClawHub plugin model. Do not patch repos yet. Do not create worktrees.` |\n| 2026-06-05T00:00:00+02:00 | `all users want is to be able to use nix-openclaw with plugins the same way that they do with upstream openclaw, but declaratively. its that simple.` |\n| 2026-06-05T00:00:00+02:00 | `can we package them using shrinkwrap or something? can we be clever and say if its shrinkwrapped then we support it otherwise fuck off? because shrinkwrap lets you install declaratively` |\n| 2026-06-05T00:00:00+02:00 | `sure thats fine. okay then i think we have everyhting, simple as possible user config, as few knobs as possible, we support everything that has shrinkwrapped, we have a config, etc, this should be clear?` |\n| 2026-06-05T00:00:00+02:00 | `i added a bunch of comments on the repo. the readme is still really bad and really doesn't make this friendly user-facing at all. compare with upstream openclaw plugin docs and how they explain it.` |\n| 2026-06-06T00:00:00+02:00 | `we should also use the lib.fakehash thing so the user doesn't supply anything more than that? follow usual nix conventions? adversarial review should be checking for stuff like \"is this nix like\"` |\n\nOlder prompt timestamps above are normalized because this work resumed from a compacted Codex thread; quoted prompts are copied from the thread context available to the agent.\n",
-        "branch": "codex/runtime-plugin-shrinkwrap-materialization",
-        "head_sha": "b0c24bdb778eab0a18d9ac5e95cbd76b052a1e77",
-        "author": "joshp123",
+        "title": "perf: avoid event-loop stall during embedded_run bootstrap-context",
+        "body": "## Summary\n\nFix event-loop stalls during `embedded_run` bootstrap-context that block the event loop for 14-22 seconds, causing message loss.\n\n### Root causes addressed\n\n1. **Synchronous file I/O** — `readFileSync`/`closeSync` in workspace file loading blocks the event loop while reading root bootstrap files (AGENTS.md, SOUL.md, etc.)\n2. **Unbounded blocking glob walks** — `fs.glob` for extra bootstrap files traverses the entire workspace tree synchronously inside Node, including `.git`/`node_modules` directories, without yielding to the event loop\n3. **Uninterrupted hook chains** — `triggerInternalHook` executes all handlers back-to-back without yielding\n\n### Changes\n\n**`src/agents/workspace.ts`**\n- Replace sync `readFileSync`/`closeSync` with callback-based async `readFdToString`/`closeFdAsync`\n- Parallelize root bootstrap file reads via `Promise.all` (previously serial `for` loop)\n- Replace `fs.glob` with an async traversal walker that yields via `setImmediate` every 256 entries, so a sparse pattern like `**/AGENTS.md` over a large workspace never blocks the event loop. The walk always completes and returns every configured match — there is no traversal cutoff and no artificial match cap; the downstream bootstrap character budget owns content limiting.\n- Exclude `.git`, `node_modules`, `dist`, `.next`, `.turbo`, `__pycache__` from glob traversal (an explicit literal segment in the pattern, e.g. `dist/**/AGENTS.md`, opts that directory back in)\n- Suppress `closeFdAsync` rejections to avoid masking read errors on NFS/FUSE\n\n**`src/hooks/internal-hooks.ts`**\n- Add `yieldBetweenHandlers` option with `setImmediate` yield between hook handlers\n- Add per-handler timing instrumentation with handler index reporting\n- Log warnings for slow handlers exceeding 500ms threshold\n\n**`src/agents/embedded-agent-runner/run/attempt.ts`**\n- Instrument bootstrap-context substages (`workspace-file-load`, `hook-overrides`) with `performance.now` timing\n- Log substage durations when total bootstrap-context exceeds 2 seconds\n- Enable `yieldBetweenHandlers` for `agent:bootstrap` hook triggers\n\n**`src/agents/bootstrap-files.ts`** / **`src/agents/bootstrap-hooks.ts`**\n- Support new async workspace file loading and timing callback interfaces\n\n### Tests\n\n- `workspace.test.ts` — 3 new tests for async fd read (happy path, cache hit, fd close on failure)\n- `workspace.load-extra-bootstrap-files.test.ts` — ignored-directory filtering, every matching file returned without an artificial cap, and a regression test asserting a late-appearing match in a large tree is still loaded (no traversal cutoff)\n- `handler.test.ts` — no truncation warning is emitted for large glob scans\n- `internal-hooks.test.ts` — 3 new tests for yield-between-handlers ordering, handler timing reporting, and slow handler warning\n\nAll existing tests pass without modification.\n\n### Performance impact\n\n- Root bootstrap file loading: serial sync → parallel async (estimated 3-5x speedup for 8 files)\n- Glob walks: synchronous/blocking → async with periodic `setImmediate` yields (prevents multi-second event-loop stalls on large workspaces). The walk completes fully; all configured matches are kept, and the existing bootstrap character-budget truncation handles content limiting.\n- Hook chains: uninterrupted → yielded (prevents monopolizing the event loop during bootstrap)\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Event-loop stalls during `embedded_run` bootstrap-context loading caused by synchronous I/O and a blocking `fs.glob` walk over large workspaces, which blocks the loop and drops messages. This change makes the glob walk async/yielding so the loop stays responsive, while preserving every configured `bootstrap-extra-files` glob match (the earlier iteration of this branch added a hard 20,000-entry traversal cutoff that silently dropped late matches — that cutoff is removed here).\n- **Real environment tested**: Local patched OpenClaw checkout on macOS arm64, Node.js `v24.10.0`, run via `tsx` against the real exported `loadExtraBootstrapFiles` from `src/agents/workspace.ts`. Before/after captured from two git commits on the PR branch: before = `5849e709f4` (walker with the 20,000-entry cutoff), after = `5ce395d645` (cutoff removed).\n- **Real environment scenario**: A workspace of ~26,100 filesystem entries (a 3-tier tree, 30×30×28 filler files) with a single configured-glob target `AGENTS.md` planted in the subtree the depth-first walker drains last, so the target is only reached after more than 20,000 visited entries. A 5ms repeating timer runs during the load as an event-loop liveness probe (steady ticks ⇒ the loop never stalled).\n- **Failing proof before fix**: commit `5849e709f4` (cutoff present):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 82.9ms\n  liveness timer ticks during load: 16 (loop responsive)\n  matched bootstrap files returned: 0\n  deep AGENTS.md (past old 20k cutoff) loaded: false\n  RESULT: late configured glob match was DROPPED (pre-fix behavior)\n  ```\n- **Exact steps or command run after this patch**:\n  ```\n  # against the patched checkout (commit 5ce395d645) a script that builds the\n  # ~26,100-entry workspace, starts a 5ms liveness timer, then calls the real\n  # loadExtraBootstrapFiles(root, [\"**/AGENTS.md\"]) and checks the deep match:\n  npx tsx proof-live.mts\n  ```\n- **Evidence after fix**: terminal output from `node`/`tsx` against commit `5ce395d645` (cutoff removed):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 99.4ms\n  liveness timer ticks during load: 20 (loop responsive)\n  matched bootstrap files returned: 1\n  deep AGENTS.md (past old 20k cutoff) loaded: true\n  RESULT: configured glob match beyond old cutoff is PRESERVED; event loop stayed live\n  ```\n- **Observed result after fix**: With the cutoff removed, the configured `**/AGENTS.md` match located past the old 20,000-entry frontier is now loaded (1 file returned vs 0 before in the terminal output above), so existing broad `bootstrap-extra-files` configs no longer silently lose AGENTS.md/TOOLS.md context. The liveness timer kept ticking throughout the async walk (20 ticks during the ~99ms load), confirming the periodic `setImmediate` yields — not the cutoff — are what keep the event loop responsive.\n- **What was not tested**: No full live `embedded_run` with active channel connections was driven end-to-end; this proof exercises the real glob-resolution code path and event-loop liveness directly rather than through a connected channel. The focused regression coverage lives in `workspace.load-extra-bootstrap-files.test.ts` and `handler.test.ts`.\n\nCloses #87509\n",
+        "branch": "fix/bootstrap-context-event-loop-stall",
+        "head_sha": "639a3e5505ad3d9584d99d1fd94c15af712bc438",
+        "author": "jerry-xin",
         "labels": [
-          "P2",
+          "agents",
+          "size: L",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
           "rating: 🐚 platinum hermit",
-          "status: 👀 ready for maintainer look",
           "merge-risk: 🚨 compatibility",
-          "feature: ✨ showcase",
-          "merge-risk: 🚨 automation",
-          "proof: sufficient"
+          "merge-risk: 🚨 session-state",
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "README.md",
-            "additions": 257,
-            "deletions": 34,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/plugins-maintainers.md",
-            "additions": 41,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/rfc/2026-05-28-openclaw-runtime-plugins.md",
-            "additions": 6,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/rfc/2026-06-05-runtime-plugin-artifact-materialization.md",
-            "additions": 308,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "nix/checks/openclaw-default-instance.nix",
-            "additions": 131,
-            "deletions": 17,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "nix/generated/openclaw-runtime-plugins/acpx.nix",
-            "additions": 41,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "nix/generated/openclaw-runtime-plugins/codex.nix",
-            "additions": 48,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "nix/generated/openclaw-runtime-plugins/copilot.nix",
-            "additions": 38,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "nix/generated/openclaw-runtime-plugins/default.nix",
-            "additions": 7,
+            "path": "src/agents/bootstrap-files.ts",
+            "additions": 9,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "nix/generated/openclaw-runtime-plugins/matrix.nix",
-            "additions": 51,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "nix/generated/openclaw-runtime-plugins/memoryLancedb.nix",
-            "additions": 47,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "nix/generated/openclaw-runtime-plugins/report.json",
-            "additions": 118,
-            "deletions": 114,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "nix/generated/openclaw-runtime-plugins/tlon.nix",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "nix/generated/openclaw-runtime-plugins/whatsapp.nix",
-            "additions": 46,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "nix/lib/openclaw-runtime-plugin.nix",
-            "additions": 135,
-            "deletions": 43,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "nix/modules/home-manager/openclaw/config.nix",
-            "additions": 10,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "nix/modules/home-manager/openclaw/options-instance.nix",
-            "additions": 8,
+            "path": "src/agents/bootstrap-hooks.ts",
+            "additions": 1,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "nix/modules/home-manager/openclaw/options.nix",
-            "additions": 52,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "nix/modules/home-manager/openclaw/plugins.nix",
-            "additions": 42,
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 72,
             "deletions": 41,
             "changeType": "MODIFIED"
           },
           {
-            "path": "nix/modules/home-manager/openclaw/runtime-plugins.nix",
-            "additions": 98,
-            "deletions": 17,
+            "path": "src/agents/workspace.load-extra-bootstrap-files.test.ts",
+            "additions": 125,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "nix/scripts/check-openclaw-runtime-plugin-installer.mjs",
-            "additions": 67,
+            "path": "src/agents/workspace.test.ts",
+            "additions": 102,
             "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "nix/scripts/check-openclaw-runtime-plugin-locks.mjs",
-            "additions": 38,
-            "deletions": 9,
             "changeType": "MODIFIED"
           },
           {
-            "path": "nix/scripts/openclaw-runtime-plugin-fetch-source.mjs",
-            "additions": 165,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "nix/scripts/openclaw-runtime-plugin-install.mjs",
-            "additions": 141,
-            "deletions": 28,
+            "path": "src/agents/workspace.ts",
+            "additions": 88,
+            "deletions": 41,
             "changeType": "MODIFIED"
           },
           {
-            "path": "nix/scripts/openclaw-runtime-plugin-prepare-npm.mjs",
-            "additions": 137,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "src/hooks/bundled/bootstrap-extra-files/handler.test.ts",
+            "additions": 42,
+            "deletions": 1,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "nix/scripts/update-openclaw-runtime-plugin-locks.mjs",
-            "additions": 600,
-            "deletions": 134,
+            "path": "src/hooks/internal-hooks.test.ts",
+            "additions": 71,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/internal-hooks.ts",
+            "additions": 25,
+            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-nix-openclaw-99",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-nix-openclaw-99.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89040",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89040.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 16,
+          "total": 162,
           "counts": {
-            "SUCCESS": 16
+            "SUCCESS": 131,
+            "SKIPPED": 30,
+            "NEUTRAL": 1
           },
           "blockers": [],
           "pending": [],
           "terminalBlockers": []
         }
       },
-      "maintainer_authorized": true,
-      "author_readonly_authorized": false
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89040:4613872043:2026-06-03T15:12:30Z:re_review",
+      "comment_id": "4613872043",
+      "comment_version_key": "4613872043:2026-06-03T15:12:30Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4613872043",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89040,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-03T15:12:30Z",
+      "comment_updated_at": "2026-06-03T15:12:30Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "perf: avoid event-loop stall during embedded_run bootstrap-context",
+        "body": "## Summary\n\nFix event-loop stalls during `embedded_run` bootstrap-context that block the event loop for 14-22 seconds, causing message loss.\n\n### Root causes addressed\n\n1. **Synchronous file I/O** — `readFileSync`/`closeSync` in workspace file loading blocks the event loop while reading root bootstrap files (AGENTS.md, SOUL.md, etc.)\n2. **Unbounded blocking glob walks** — `fs.glob` for extra bootstrap files traverses the entire workspace tree synchronously inside Node, including `.git`/`node_modules` directories, without yielding to the event loop\n3. **Uninterrupted hook chains** — `triggerInternalHook` executes all handlers back-to-back without yielding\n\n### Changes\n\n**`src/agents/workspace.ts`**\n- Replace sync `readFileSync`/`closeSync` with callback-based async `readFdToString`/`closeFdAsync`\n- Parallelize root bootstrap file reads via `Promise.all` (previously serial `for` loop)\n- Replace `fs.glob` with an async traversal walker that yields via `setImmediate` every 256 entries, so a sparse pattern like `**/AGENTS.md` over a large workspace never blocks the event loop. The walk always completes and returns every configured match — there is no traversal cutoff and no artificial match cap; the downstream bootstrap character budget owns content limiting.\n- Exclude `.git`, `node_modules`, `dist`, `.next`, `.turbo`, `__pycache__` from glob traversal (an explicit literal segment in the pattern, e.g. `dist/**/AGENTS.md`, opts that directory back in)\n- Suppress `closeFdAsync` rejections to avoid masking read errors on NFS/FUSE\n\n**`src/hooks/internal-hooks.ts`**\n- Add `yieldBetweenHandlers` option with `setImmediate` yield between hook handlers\n- Add per-handler timing instrumentation with handler index reporting\n- Log warnings for slow handlers exceeding 500ms threshold\n\n**`src/agents/embedded-agent-runner/run/attempt.ts`**\n- Instrument bootstrap-context substages (`workspace-file-load`, `hook-overrides`) with `performance.now` timing\n- Log substage durations when total bootstrap-context exceeds 2 seconds\n- Enable `yieldBetweenHandlers` for `agent:bootstrap` hook triggers\n\n**`src/agents/bootstrap-files.ts`** / **`src/agents/bootstrap-hooks.ts`**\n- Support new async workspace file loading and timing callback interfaces\n\n### Tests\n\n- `workspace.test.ts` — 3 new tests for async fd read (happy path, cache hit, fd close on failure)\n- `workspace.load-extra-bootstrap-files.test.ts` — ignored-directory filtering, every matching file returned without an artificial cap, and a regression test asserting a late-appearing match in a large tree is still loaded (no traversal cutoff)\n- `handler.test.ts` — no truncation warning is emitted for large glob scans\n- `internal-hooks.test.ts` — 3 new tests for yield-between-handlers ordering, handler timing reporting, and slow handler warning\n\nAll existing tests pass without modification.\n\n### Performance impact\n\n- Root bootstrap file loading: serial sync → parallel async (estimated 3-5x speedup for 8 files)\n- Glob walks: synchronous/blocking → async with periodic `setImmediate` yields (prevents multi-second event-loop stalls on large workspaces). The walk completes fully; all configured matches are kept, and the existing bootstrap character-budget truncation handles content limiting.\n- Hook chains: uninterrupted → yielded (prevents monopolizing the event loop during bootstrap)\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Event-loop stalls during `embedded_run` bootstrap-context loading caused by synchronous I/O and a blocking `fs.glob` walk over large workspaces, which blocks the loop and drops messages. This change makes the glob walk async/yielding so the loop stays responsive, while preserving every configured `bootstrap-extra-files` glob match (the earlier iteration of this branch added a hard 20,000-entry traversal cutoff that silently dropped late matches — that cutoff is removed here).\n- **Real environment tested**: Local patched OpenClaw checkout on macOS arm64, Node.js `v24.10.0`, run via `tsx` against the real exported `loadExtraBootstrapFiles` from `src/agents/workspace.ts`. Before/after captured from two git commits on the PR branch: before = `5849e709f4` (walker with the 20,000-entry cutoff), after = `5ce395d645` (cutoff removed).\n- **Real environment scenario**: A workspace of ~26,100 filesystem entries (a 3-tier tree, 30×30×28 filler files) with a single configured-glob target `AGENTS.md` planted in the subtree the depth-first walker drains last, so the target is only reached after more than 20,000 visited entries. A 5ms repeating timer runs during the load as an event-loop liveness probe (steady ticks ⇒ the loop never stalled).\n- **Failing proof before fix**: commit `5849e709f4` (cutoff present):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 82.9ms\n  liveness timer ticks during load: 16 (loop responsive)\n  matched bootstrap files returned: 0\n  deep AGENTS.md (past old 20k cutoff) loaded: false\n  RESULT: late configured glob match was DROPPED (pre-fix behavior)\n  ```\n- **Exact steps or command run after this patch**:\n  ```\n  # against the patched checkout (commit 5ce395d645) a script that builds the\n  # ~26,100-entry workspace, starts a 5ms liveness timer, then calls the real\n  # loadExtraBootstrapFiles(root, [\"**/AGENTS.md\"]) and checks the deep match:\n  npx tsx proof-live.mts\n  ```\n- **Evidence after fix**: terminal output from `node`/`tsx` against commit `5ce395d645` (cutoff removed):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 99.4ms\n  liveness timer ticks during load: 20 (loop responsive)\n  matched bootstrap files returned: 1\n  deep AGENTS.md (past old 20k cutoff) loaded: true\n  RESULT: configured glob match beyond old cutoff is PRESERVED; event loop stayed live\n  ```\n- **Observed result after fix**: With the cutoff removed, the configured `**/AGENTS.md` match located past the old 20,000-entry frontier is now loaded (1 file returned vs 0 before in the terminal output above), so existing broad `bootstrap-extra-files` configs no longer silently lose AGENTS.md/TOOLS.md context. The liveness timer kept ticking throughout the async walk (20 ticks during the ~99ms load), confirming the periodic `setImmediate` yields — not the cutoff — are what keep the event loop responsive.\n- **What was not tested**: No full live `embedded_run` with active channel connections was driven end-to-end; this proof exercises the real glob-resolution code path and event-loop liveness directly rather than through a connected channel. The focused regression coverage lives in `workspace.load-extra-bootstrap-files.test.ts` and `handler.test.ts`.\n\nCloses #87509\n",
+        "branch": "fix/bootstrap-context-event-loop-stall",
+        "head_sha": "639a3e5505ad3d9584d99d1fd94c15af712bc438",
+        "author": "jerry-xin",
+        "labels": [
+          "agents",
+          "size: L",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/bootstrap-files.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bootstrap-hooks.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 72,
+            "deletions": 41,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/workspace.load-extra-bootstrap-files.test.ts",
+            "additions": 125,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/workspace.test.ts",
+            "additions": 102,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/workspace.ts",
+            "additions": 88,
+            "deletions": 41,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/bundled/bootstrap-extra-files/handler.test.ts",
+            "additions": 42,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/internal-hooks.test.ts",
+            "additions": 71,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/internal-hooks.ts",
+            "additions": 25,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89040",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89040.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 131,
+            "SKIPPED": 30,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89040:4609780678:2026-06-03T06:44:35Z:re_review",
+      "comment_id": "4609780678",
+      "comment_version_key": "4609780678:2026-06-03T06:44:35Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4609780678",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89040,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-03T06:44:35Z",
+      "comment_updated_at": "2026-06-03T06:44:35Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "perf: avoid event-loop stall during embedded_run bootstrap-context",
+        "body": "## Summary\n\nFix event-loop stalls during `embedded_run` bootstrap-context that block the event loop for 14-22 seconds, causing message loss.\n\n### Root causes addressed\n\n1. **Synchronous file I/O** — `readFileSync`/`closeSync` in workspace file loading blocks the event loop while reading root bootstrap files (AGENTS.md, SOUL.md, etc.)\n2. **Unbounded blocking glob walks** — `fs.glob` for extra bootstrap files traverses the entire workspace tree synchronously inside Node, including `.git`/`node_modules` directories, without yielding to the event loop\n3. **Uninterrupted hook chains** — `triggerInternalHook` executes all handlers back-to-back without yielding\n\n### Changes\n\n**`src/agents/workspace.ts`**\n- Replace sync `readFileSync`/`closeSync` with callback-based async `readFdToString`/`closeFdAsync`\n- Parallelize root bootstrap file reads via `Promise.all` (previously serial `for` loop)\n- Replace `fs.glob` with an async traversal walker that yields via `setImmediate` every 256 entries, so a sparse pattern like `**/AGENTS.md` over a large workspace never blocks the event loop. The walk always completes and returns every configured match — there is no traversal cutoff and no artificial match cap; the downstream bootstrap character budget owns content limiting.\n- Exclude `.git`, `node_modules`, `dist`, `.next`, `.turbo`, `__pycache__` from glob traversal (an explicit literal segment in the pattern, e.g. `dist/**/AGENTS.md`, opts that directory back in)\n- Suppress `closeFdAsync` rejections to avoid masking read errors on NFS/FUSE\n\n**`src/hooks/internal-hooks.ts`**\n- Add `yieldBetweenHandlers` option with `setImmediate` yield between hook handlers\n- Add per-handler timing instrumentation with handler index reporting\n- Log warnings for slow handlers exceeding 500ms threshold\n\n**`src/agents/embedded-agent-runner/run/attempt.ts`**\n- Instrument bootstrap-context substages (`workspace-file-load`, `hook-overrides`) with `performance.now` timing\n- Log substage durations when total bootstrap-context exceeds 2 seconds\n- Enable `yieldBetweenHandlers` for `agent:bootstrap` hook triggers\n\n**`src/agents/bootstrap-files.ts`** / **`src/agents/bootstrap-hooks.ts`**\n- Support new async workspace file loading and timing callback interfaces\n\n### Tests\n\n- `workspace.test.ts` — 3 new tests for async fd read (happy path, cache hit, fd close on failure)\n- `workspace.load-extra-bootstrap-files.test.ts` — ignored-directory filtering, every matching file returned without an artificial cap, and a regression test asserting a late-appearing match in a large tree is still loaded (no traversal cutoff)\n- `handler.test.ts` — no truncation warning is emitted for large glob scans\n- `internal-hooks.test.ts` — 3 new tests for yield-between-handlers ordering, handler timing reporting, and slow handler warning\n\nAll existing tests pass without modification.\n\n### Performance impact\n\n- Root bootstrap file loading: serial sync → parallel async (estimated 3-5x speedup for 8 files)\n- Glob walks: synchronous/blocking → async with periodic `setImmediate` yields (prevents multi-second event-loop stalls on large workspaces). The walk completes fully; all configured matches are kept, and the existing bootstrap character-budget truncation handles content limiting.\n- Hook chains: uninterrupted → yielded (prevents monopolizing the event loop during bootstrap)\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Event-loop stalls during `embedded_run` bootstrap-context loading caused by synchronous I/O and a blocking `fs.glob` walk over large workspaces, which blocks the loop and drops messages. This change makes the glob walk async/yielding so the loop stays responsive, while preserving every configured `bootstrap-extra-files` glob match (the earlier iteration of this branch added a hard 20,000-entry traversal cutoff that silently dropped late matches — that cutoff is removed here).\n- **Real environment tested**: Local patched OpenClaw checkout on macOS arm64, Node.js `v24.10.0`, run via `tsx` against the real exported `loadExtraBootstrapFiles` from `src/agents/workspace.ts`. Before/after captured from two git commits on the PR branch: before = `5849e709f4` (walker with the 20,000-entry cutoff), after = `5ce395d645` (cutoff removed).\n- **Real environment scenario**: A workspace of ~26,100 filesystem entries (a 3-tier tree, 30×30×28 filler files) with a single configured-glob target `AGENTS.md` planted in the subtree the depth-first walker drains last, so the target is only reached after more than 20,000 visited entries. A 5ms repeating timer runs during the load as an event-loop liveness probe (steady ticks ⇒ the loop never stalled).\n- **Failing proof before fix**: commit `5849e709f4` (cutoff present):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 82.9ms\n  liveness timer ticks during load: 16 (loop responsive)\n  matched bootstrap files returned: 0\n  deep AGENTS.md (past old 20k cutoff) loaded: false\n  RESULT: late configured glob match was DROPPED (pre-fix behavior)\n  ```\n- **Exact steps or command run after this patch**:\n  ```\n  # against the patched checkout (commit 5ce395d645) a script that builds the\n  # ~26,100-entry workspace, starts a 5ms liveness timer, then calls the real\n  # loadExtraBootstrapFiles(root, [\"**/AGENTS.md\"]) and checks the deep match:\n  npx tsx proof-live.mts\n  ```\n- **Evidence after fix**: terminal output from `node`/`tsx` against commit `5ce395d645` (cutoff removed):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 99.4ms\n  liveness timer ticks during load: 20 (loop responsive)\n  matched bootstrap files returned: 1\n  deep AGENTS.md (past old 20k cutoff) loaded: true\n  RESULT: configured glob match beyond old cutoff is PRESERVED; event loop stayed live\n  ```\n- **Observed result after fix**: With the cutoff removed, the configured `**/AGENTS.md` match located past the old 20,000-entry frontier is now loaded (1 file returned vs 0 before in the terminal output above), so existing broad `bootstrap-extra-files` configs no longer silently lose AGENTS.md/TOOLS.md context. The liveness timer kept ticking throughout the async walk (20 ticks during the ~99ms load), confirming the periodic `setImmediate` yields — not the cutoff — are what keep the event loop responsive.\n- **What was not tested**: No full live `embedded_run` with active channel connections was driven end-to-end; this proof exercises the real glob-resolution code path and event-loop liveness directly rather than through a connected channel. The focused regression coverage lives in `workspace.load-extra-bootstrap-files.test.ts` and `handler.test.ts`.\n\nCloses #87509\n",
+        "branch": "fix/bootstrap-context-event-loop-stall",
+        "head_sha": "639a3e5505ad3d9584d99d1fd94c15af712bc438",
+        "author": "jerry-xin",
+        "labels": [
+          "agents",
+          "size: L",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/bootstrap-files.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bootstrap-hooks.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 72,
+            "deletions": 41,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/workspace.load-extra-bootstrap-files.test.ts",
+            "additions": 125,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/workspace.test.ts",
+            "additions": 102,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/workspace.ts",
+            "additions": 88,
+            "deletions": 41,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/bundled/bootstrap-extra-files/handler.test.ts",
+            "additions": 42,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/internal-hooks.test.ts",
+            "additions": 71,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/internal-hooks.ts",
+            "additions": 25,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89040",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89040.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 131,
+            "SKIPPED": 30,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89040:4602422401:2026-06-02T12:35:00Z:re_review",
+      "comment_id": "4602422401",
+      "comment_version_key": "4602422401:2026-06-02T12:35:00Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4602422401",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89040,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-02T12:35:00Z",
+      "comment_updated_at": "2026-06-02T12:35:00Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "perf: avoid event-loop stall during embedded_run bootstrap-context",
+        "body": "## Summary\n\nFix event-loop stalls during `embedded_run` bootstrap-context that block the event loop for 14-22 seconds, causing message loss.\n\n### Root causes addressed\n\n1. **Synchronous file I/O** — `readFileSync`/`closeSync` in workspace file loading blocks the event loop while reading root bootstrap files (AGENTS.md, SOUL.md, etc.)\n2. **Unbounded blocking glob walks** — `fs.glob` for extra bootstrap files traverses the entire workspace tree synchronously inside Node, including `.git`/`node_modules` directories, without yielding to the event loop\n3. **Uninterrupted hook chains** — `triggerInternalHook` executes all handlers back-to-back without yielding\n\n### Changes\n\n**`src/agents/workspace.ts`**\n- Replace sync `readFileSync`/`closeSync` with callback-based async `readFdToString`/`closeFdAsync`\n- Parallelize root bootstrap file reads via `Promise.all` (previously serial `for` loop)\n- Replace `fs.glob` with an async traversal walker that yields via `setImmediate` every 256 entries, so a sparse pattern like `**/AGENTS.md` over a large workspace never blocks the event loop. The walk always completes and returns every configured match — there is no traversal cutoff and no artificial match cap; the downstream bootstrap character budget owns content limiting.\n- Exclude `.git`, `node_modules`, `dist`, `.next`, `.turbo`, `__pycache__` from glob traversal (an explicit literal segment in the pattern, e.g. `dist/**/AGENTS.md`, opts that directory back in)\n- Suppress `closeFdAsync` rejections to avoid masking read errors on NFS/FUSE\n\n**`src/hooks/internal-hooks.ts`**\n- Add `yieldBetweenHandlers` option with `setImmediate` yield between hook handlers\n- Add per-handler timing instrumentation with handler index reporting\n- Log warnings for slow handlers exceeding 500ms threshold\n\n**`src/agents/embedded-agent-runner/run/attempt.ts`**\n- Instrument bootstrap-context substages (`workspace-file-load`, `hook-overrides`) with `performance.now` timing\n- Log substage durations when total bootstrap-context exceeds 2 seconds\n- Enable `yieldBetweenHandlers` for `agent:bootstrap` hook triggers\n\n**`src/agents/bootstrap-files.ts`** / **`src/agents/bootstrap-hooks.ts`**\n- Support new async workspace file loading and timing callback interfaces\n\n### Tests\n\n- `workspace.test.ts` — 3 new tests for async fd read (happy path, cache hit, fd close on failure)\n- `workspace.load-extra-bootstrap-files.test.ts` — ignored-directory filtering, every matching file returned without an artificial cap, and a regression test asserting a late-appearing match in a large tree is still loaded (no traversal cutoff)\n- `handler.test.ts` — no truncation warning is emitted for large glob scans\n- `internal-hooks.test.ts` — 3 new tests for yield-between-handlers ordering, handler timing reporting, and slow handler warning\n\nAll existing tests pass without modification.\n\n### Performance impact\n\n- Root bootstrap file loading: serial sync → parallel async (estimated 3-5x speedup for 8 files)\n- Glob walks: synchronous/blocking → async with periodic `setImmediate` yields (prevents multi-second event-loop stalls on large workspaces). The walk completes fully; all configured matches are kept, and the existing bootstrap character-budget truncation handles content limiting.\n- Hook chains: uninterrupted → yielded (prevents monopolizing the event loop during bootstrap)\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Event-loop stalls during `embedded_run` bootstrap-context loading caused by synchronous I/O and a blocking `fs.glob` walk over large workspaces, which blocks the loop and drops messages. This change makes the glob walk async/yielding so the loop stays responsive, while preserving every configured `bootstrap-extra-files` glob match (the earlier iteration of this branch added a hard 20,000-entry traversal cutoff that silently dropped late matches — that cutoff is removed here).\n- **Real environment tested**: Local patched OpenClaw checkout on macOS arm64, Node.js `v24.10.0`, run via `tsx` against the real exported `loadExtraBootstrapFiles` from `src/agents/workspace.ts`. Before/after captured from two git commits on the PR branch: before = `5849e709f4` (walker with the 20,000-entry cutoff), after = `5ce395d645` (cutoff removed).\n- **Real environment scenario**: A workspace of ~26,100 filesystem entries (a 3-tier tree, 30×30×28 filler files) with a single configured-glob target `AGENTS.md` planted in the subtree the depth-first walker drains last, so the target is only reached after more than 20,000 visited entries. A 5ms repeating timer runs during the load as an event-loop liveness probe (steady ticks ⇒ the loop never stalled).\n- **Failing proof before fix**: commit `5849e709f4` (cutoff present):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 82.9ms\n  liveness timer ticks during load: 16 (loop responsive)\n  matched bootstrap files returned: 0\n  deep AGENTS.md (past old 20k cutoff) loaded: false\n  RESULT: late configured glob match was DROPPED (pre-fix behavior)\n  ```\n- **Exact steps or command run after this patch**:\n  ```\n  # against the patched checkout (commit 5ce395d645) a script that builds the\n  # ~26,100-entry workspace, starts a 5ms liveness timer, then calls the real\n  # loadExtraBootstrapFiles(root, [\"**/AGENTS.md\"]) and checks the deep match:\n  npx tsx proof-live.mts\n  ```\n- **Evidence after fix**: terminal output from `node`/`tsx` against commit `5ce395d645` (cutoff removed):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 99.4ms\n  liveness timer ticks during load: 20 (loop responsive)\n  matched bootstrap files returned: 1\n  deep AGENTS.md (past old 20k cutoff) loaded: true\n  RESULT: configured glob match beyond old cutoff is PRESERVED; event loop stayed live\n  ```\n- **Observed result after fix**: With the cutoff removed, the configured `**/AGENTS.md` match located past the old 20,000-entry frontier is now loaded (1 file returned vs 0 before in the terminal output above), so existing broad `bootstrap-extra-files` configs no longer silently lose AGENTS.md/TOOLS.md context. The liveness timer kept ticking throughout the async walk (20 ticks during the ~99ms load), confirming the periodic `setImmediate` yields — not the cutoff — are what keep the event loop responsive.\n- **What was not tested**: No full live `embedded_run` with active channel connections was driven end-to-end; this proof exercises the real glob-resolution code path and event-loop liveness directly rather than through a connected channel. The focused regression coverage lives in `workspace.load-extra-bootstrap-files.test.ts` and `handler.test.ts`.\n\nCloses #87509\n",
+        "branch": "fix/bootstrap-context-event-loop-stall",
+        "head_sha": "639a3e5505ad3d9584d99d1fd94c15af712bc438",
+        "author": "jerry-xin",
+        "labels": [
+          "agents",
+          "size: L",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/bootstrap-files.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bootstrap-hooks.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 72,
+            "deletions": 41,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/workspace.load-extra-bootstrap-files.test.ts",
+            "additions": 125,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/workspace.test.ts",
+            "additions": 102,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/workspace.ts",
+            "additions": 88,
+            "deletions": 41,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/bundled/bootstrap-extra-files/handler.test.ts",
+            "additions": 42,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/internal-hooks.test.ts",
+            "additions": 71,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/internal-hooks.ts",
+            "additions": 25,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89040",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89040.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 131,
+            "SKIPPED": 30,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89040:4600478603:2026-06-02T08:45:25Z:re_review",
+      "comment_id": "4600478603",
+      "comment_version_key": "4600478603:2026-06-02T08:45:25Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4600478603",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89040,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-02T08:45:25Z",
+      "comment_updated_at": "2026-06-02T08:45:25Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "perf: avoid event-loop stall during embedded_run bootstrap-context",
+        "body": "## Summary\n\nFix event-loop stalls during `embedded_run` bootstrap-context that block the event loop for 14-22 seconds, causing message loss.\n\n### Root causes addressed\n\n1. **Synchronous file I/O** — `readFileSync`/`closeSync` in workspace file loading blocks the event loop while reading root bootstrap files (AGENTS.md, SOUL.md, etc.)\n2. **Unbounded blocking glob walks** — `fs.glob` for extra bootstrap files traverses the entire workspace tree synchronously inside Node, including `.git`/`node_modules` directories, without yielding to the event loop\n3. **Uninterrupted hook chains** — `triggerInternalHook` executes all handlers back-to-back without yielding\n\n### Changes\n\n**`src/agents/workspace.ts`**\n- Replace sync `readFileSync`/`closeSync` with callback-based async `readFdToString`/`closeFdAsync`\n- Parallelize root bootstrap file reads via `Promise.all` (previously serial `for` loop)\n- Replace `fs.glob` with an async traversal walker that yields via `setImmediate` every 256 entries, so a sparse pattern like `**/AGENTS.md` over a large workspace never blocks the event loop. The walk always completes and returns every configured match — there is no traversal cutoff and no artificial match cap; the downstream bootstrap character budget owns content limiting.\n- Exclude `.git`, `node_modules`, `dist`, `.next`, `.turbo`, `__pycache__` from glob traversal (an explicit literal segment in the pattern, e.g. `dist/**/AGENTS.md`, opts that directory back in)\n- Suppress `closeFdAsync` rejections to avoid masking read errors on NFS/FUSE\n\n**`src/hooks/internal-hooks.ts`**\n- Add `yieldBetweenHandlers` option with `setImmediate` yield between hook handlers\n- Add per-handler timing instrumentation with handler index reporting\n- Log warnings for slow handlers exceeding 500ms threshold\n\n**`src/agents/embedded-agent-runner/run/attempt.ts`**\n- Instrument bootstrap-context substages (`workspace-file-load`, `hook-overrides`) with `performance.now` timing\n- Log substage durations when total bootstrap-context exceeds 2 seconds\n- Enable `yieldBetweenHandlers` for `agent:bootstrap` hook triggers\n\n**`src/agents/bootstrap-files.ts`** / **`src/agents/bootstrap-hooks.ts`**\n- Support new async workspace file loading and timing callback interfaces\n\n### Tests\n\n- `workspace.test.ts` — 3 new tests for async fd read (happy path, cache hit, fd close on failure)\n- `workspace.load-extra-bootstrap-files.test.ts` — ignored-directory filtering, every matching file returned without an artificial cap, and a regression test asserting a late-appearing match in a large tree is still loaded (no traversal cutoff)\n- `handler.test.ts` — no truncation warning is emitted for large glob scans\n- `internal-hooks.test.ts` — 3 new tests for yield-between-handlers ordering, handler timing reporting, and slow handler warning\n\nAll existing tests pass without modification.\n\n### Performance impact\n\n- Root bootstrap file loading: serial sync → parallel async (estimated 3-5x speedup for 8 files)\n- Glob walks: synchronous/blocking → async with periodic `setImmediate` yields (prevents multi-second event-loop stalls on large workspaces). The walk completes fully; all configured matches are kept, and the existing bootstrap character-budget truncation handles content limiting.\n- Hook chains: uninterrupted → yielded (prevents monopolizing the event loop during bootstrap)\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Event-loop stalls during `embedded_run` bootstrap-context loading caused by synchronous I/O and a blocking `fs.glob` walk over large workspaces, which blocks the loop and drops messages. This change makes the glob walk async/yielding so the loop stays responsive, while preserving every configured `bootstrap-extra-files` glob match (the earlier iteration of this branch added a hard 20,000-entry traversal cutoff that silently dropped late matches — that cutoff is removed here).\n- **Real environment tested**: Local patched OpenClaw checkout on macOS arm64, Node.js `v24.10.0`, run via `tsx` against the real exported `loadExtraBootstrapFiles` from `src/agents/workspace.ts`. Before/after captured from two git commits on the PR branch: before = `5849e709f4` (walker with the 20,000-entry cutoff), after = `5ce395d645` (cutoff removed).\n- **Real environment scenario**: A workspace of ~26,100 filesystem entries (a 3-tier tree, 30×30×28 filler files) with a single configured-glob target `AGENTS.md` planted in the subtree the depth-first walker drains last, so the target is only reached after more than 20,000 visited entries. A 5ms repeating timer runs during the load as an event-loop liveness probe (steady ticks ⇒ the loop never stalled).\n- **Failing proof before fix**: commit `5849e709f4` (cutoff present):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 82.9ms\n  liveness timer ticks during load: 16 (loop responsive)\n  matched bootstrap files returned: 0\n  deep AGENTS.md (past old 20k cutoff) loaded: false\n  RESULT: late configured glob match was DROPPED (pre-fix behavior)\n  ```\n- **Exact steps or command run after this patch**:\n  ```\n  # against the patched checkout (commit 5ce395d645) a script that builds the\n  # ~26,100-entry workspace, starts a 5ms liveness timer, then calls the real\n  # loadExtraBootstrapFiles(root, [\"**/AGENTS.md\"]) and checks the deep match:\n  npx tsx proof-live.mts\n  ```\n- **Evidence after fix**: terminal output from `node`/`tsx` against commit `5ce395d645` (cutoff removed):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 99.4ms\n  liveness timer ticks during load: 20 (loop responsive)\n  matched bootstrap files returned: 1\n  deep AGENTS.md (past old 20k cutoff) loaded: true\n  RESULT: configured glob match beyond old cutoff is PRESERVED; event loop stayed live\n  ```\n- **Observed result after fix**: With the cutoff removed, the configured `**/AGENTS.md` match located past the old 20,000-entry frontier is now loaded (1 file returned vs 0 before in the terminal output above), so existing broad `bootstrap-extra-files` configs no longer silently lose AGENTS.md/TOOLS.md context. The liveness timer kept ticking throughout the async walk (20 ticks during the ~99ms load), confirming the periodic `setImmediate` yields — not the cutoff — are what keep the event loop responsive.\n- **What was not tested**: No full live `embedded_run` with active channel connections was driven end-to-end; this proof exercises the real glob-resolution code path and event-loop liveness directly rather than through a connected channel. The focused regression coverage lives in `workspace.load-extra-bootstrap-files.test.ts` and `handler.test.ts`.\n\nCloses #87509\n",
+        "branch": "fix/bootstrap-context-event-loop-stall",
+        "head_sha": "639a3e5505ad3d9584d99d1fd94c15af712bc438",
+        "author": "jerry-xin",
+        "labels": [
+          "agents",
+          "size: L",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/bootstrap-files.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bootstrap-hooks.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 72,
+            "deletions": 41,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/workspace.load-extra-bootstrap-files.test.ts",
+            "additions": 125,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/workspace.test.ts",
+            "additions": 102,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/workspace.ts",
+            "additions": 88,
+            "deletions": 41,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/bundled/bootstrap-extra-files/handler.test.ts",
+            "additions": 42,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/internal-hooks.test.ts",
+            "additions": 71,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/internal-hooks.ts",
+            "additions": 25,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89040",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89040.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 131,
+            "SKIPPED": 30,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89040:4600442002:2026-06-02T08:42:31Z:re_review",
+      "comment_id": "4600442002",
+      "comment_version_key": "4600442002:2026-06-02T08:42:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4600442002",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89040,
+      "author": "Jerry-Xin",
+      "author_id": 3401616,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-02T08:42:31Z",
+      "comment_updated_at": "2026-06-02T08:42:31Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "perf: avoid event-loop stall during embedded_run bootstrap-context",
+        "body": "## Summary\n\nFix event-loop stalls during `embedded_run` bootstrap-context that block the event loop for 14-22 seconds, causing message loss.\n\n### Root causes addressed\n\n1. **Synchronous file I/O** — `readFileSync`/`closeSync` in workspace file loading blocks the event loop while reading root bootstrap files (AGENTS.md, SOUL.md, etc.)\n2. **Unbounded blocking glob walks** — `fs.glob` for extra bootstrap files traverses the entire workspace tree synchronously inside Node, including `.git`/`node_modules` directories, without yielding to the event loop\n3. **Uninterrupted hook chains** — `triggerInternalHook` executes all handlers back-to-back without yielding\n\n### Changes\n\n**`src/agents/workspace.ts`**\n- Replace sync `readFileSync`/`closeSync` with callback-based async `readFdToString`/`closeFdAsync`\n- Parallelize root bootstrap file reads via `Promise.all` (previously serial `for` loop)\n- Replace `fs.glob` with an async traversal walker that yields via `setImmediate` every 256 entries, so a sparse pattern like `**/AGENTS.md` over a large workspace never blocks the event loop. The walk always completes and returns every configured match — there is no traversal cutoff and no artificial match cap; the downstream bootstrap character budget owns content limiting.\n- Exclude `.git`, `node_modules`, `dist`, `.next`, `.turbo`, `__pycache__` from glob traversal (an explicit literal segment in the pattern, e.g. `dist/**/AGENTS.md`, opts that directory back in)\n- Suppress `closeFdAsync` rejections to avoid masking read errors on NFS/FUSE\n\n**`src/hooks/internal-hooks.ts`**\n- Add `yieldBetweenHandlers` option with `setImmediate` yield between hook handlers\n- Add per-handler timing instrumentation with handler index reporting\n- Log warnings for slow handlers exceeding 500ms threshold\n\n**`src/agents/embedded-agent-runner/run/attempt.ts`**\n- Instrument bootstrap-context substages (`workspace-file-load`, `hook-overrides`) with `performance.now` timing\n- Log substage durations when total bootstrap-context exceeds 2 seconds\n- Enable `yieldBetweenHandlers` for `agent:bootstrap` hook triggers\n\n**`src/agents/bootstrap-files.ts`** / **`src/agents/bootstrap-hooks.ts`**\n- Support new async workspace file loading and timing callback interfaces\n\n### Tests\n\n- `workspace.test.ts` — 3 new tests for async fd read (happy path, cache hit, fd close on failure)\n- `workspace.load-extra-bootstrap-files.test.ts` — ignored-directory filtering, every matching file returned without an artificial cap, and a regression test asserting a late-appearing match in a large tree is still loaded (no traversal cutoff)\n- `handler.test.ts` — no truncation warning is emitted for large glob scans\n- `internal-hooks.test.ts` — 3 new tests for yield-between-handlers ordering, handler timing reporting, and slow handler warning\n\nAll existing tests pass without modification.\n\n### Performance impact\n\n- Root bootstrap file loading: serial sync → parallel async (estimated 3-5x speedup for 8 files)\n- Glob walks: synchronous/blocking → async with periodic `setImmediate` yields (prevents multi-second event-loop stalls on large workspaces). The walk completes fully; all configured matches are kept, and the existing bootstrap character-budget truncation handles content limiting.\n- Hook chains: uninterrupted → yielded (prevents monopolizing the event loop during bootstrap)\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Event-loop stalls during `embedded_run` bootstrap-context loading caused by synchronous I/O and a blocking `fs.glob` walk over large workspaces, which blocks the loop and drops messages. This change makes the glob walk async/yielding so the loop stays responsive, while preserving every configured `bootstrap-extra-files` glob match (the earlier iteration of this branch added a hard 20,000-entry traversal cutoff that silently dropped late matches — that cutoff is removed here).\n- **Real environment tested**: Local patched OpenClaw checkout on macOS arm64, Node.js `v24.10.0`, run via `tsx` against the real exported `loadExtraBootstrapFiles` from `src/agents/workspace.ts`. Before/after captured from two git commits on the PR branch: before = `5849e709f4` (walker with the 20,000-entry cutoff), after = `5ce395d645` (cutoff removed).\n- **Real environment scenario**: A workspace of ~26,100 filesystem entries (a 3-tier tree, 30×30×28 filler files) with a single configured-glob target `AGENTS.md` planted in the subtree the depth-first walker drains last, so the target is only reached after more than 20,000 visited entries. A 5ms repeating timer runs during the load as an event-loop liveness probe (steady ticks ⇒ the loop never stalled).\n- **Failing proof before fix**: commit `5849e709f4` (cutoff present):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 82.9ms\n  liveness timer ticks during load: 16 (loop responsive)\n  matched bootstrap files returned: 0\n  deep AGENTS.md (past old 20k cutoff) loaded: false\n  RESULT: late configured glob match was DROPPED (pre-fix behavior)\n  ```\n- **Exact steps or command run after this patch**:\n  ```\n  # against the patched checkout (commit 5ce395d645) a script that builds the\n  # ~26,100-entry workspace, starts a 5ms liveness timer, then calls the real\n  # loadExtraBootstrapFiles(root, [\"**/AGENTS.md\"]) and checks the deep match:\n  npx tsx proof-live.mts\n  ```\n- **Evidence after fix**: terminal output from `node`/`tsx` against commit `5ce395d645` (cutoff removed):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 99.4ms\n  liveness timer ticks during load: 20 (loop responsive)\n  matched bootstrap files returned: 1\n  deep AGENTS.md (past old 20k cutoff) loaded: true\n  RESULT: configured glob match beyond old cutoff is PRESERVED; event loop stayed live\n  ```\n- **Observed result after fix**: With the cutoff removed, the configured `**/AGENTS.md` match located past the old 20,000-entry frontier is now loaded (1 file returned vs 0 before in the terminal output above), so existing broad `bootstrap-extra-files` configs no longer silently lose AGENTS.md/TOOLS.md context. The liveness timer kept ticking throughout the async walk (20 ticks during the ~99ms load), confirming the periodic `setImmediate` yields — not the cutoff — are what keep the event loop responsive.\n- **What was not tested**: No full live `embedded_run` with active channel connections was driven end-to-end; this proof exercises the real glob-resolution code path and event-loop liveness directly rather than through a connected channel. The focused regression coverage lives in `workspace.load-extra-bootstrap-files.test.ts` and `handler.test.ts`.\n\nCloses #87509\n",
+        "branch": "fix/bootstrap-context-event-loop-stall",
+        "head_sha": "639a3e5505ad3d9584d99d1fd94c15af712bc438",
+        "author": "jerry-xin",
+        "labels": [
+          "agents",
+          "size: L",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/agents/bootstrap-files.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bootstrap-hooks.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 72,
+            "deletions": 41,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/workspace.load-extra-bootstrap-files.test.ts",
+            "additions": 125,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/workspace.test.ts",
+            "additions": 102,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/workspace.ts",
+            "additions": 88,
+            "deletions": 41,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/bundled/bootstrap-extra-files/handler.test.ts",
+            "additions": 42,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/internal-hooks.test.ts",
+            "additions": 71,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/internal-hooks.ts",
+            "additions": 25,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89040",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89040.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 131,
+            "SKIPPED": 30,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4941,
+    "total_ms": 1868,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 666
+        "ms": 239
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1154
+        "ms": 1418
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 4
       },
       {
         "name": "execute_commands",
-        "ms": 3094
+        "ms": 180
       },
       {
         "name": "append_ledger",
