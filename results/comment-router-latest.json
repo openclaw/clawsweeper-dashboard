@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-06T13:44:21.630Z",
+  "generated_at": "2026-06-06T13:45:02.942Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-06T10:44:17.397Z",
+  "since": "2026-06-06T10:45:02.410Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4638995620
   ],
-  "status_comment_id": 4638995793,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "NONE",
       "comment_created_at": "2026-06-06T13:43:39Z",
       "comment_updated_at": "2026-06-06T13:43:39Z",
-      "status_comment_id": 4638995793,
+      "status_comment_id": null,
       "trigger": "slash",
       "command": "review",
       "intent": "re_review",
@@ -61,108 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-06T13:44:22.624Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 90937
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-06T13:44:23.740Z",
-          "response_comment_id": "4638995793",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): preserve stale channel restart diagnostics",
-        "body": "## Summary\n\nFixes #90901.\n\nThis keeps gateway-owned lifecycle state authoritative after a channel task has been aborted. A stale Telegram/polling-style task can still emit a late status patch after a recovery stop timeout. Before this change, that late patch could re-mark the account as `connected=true` and clear `lastError` while the manager still had `running=false`, `restartPending=true`, and `reconnectAttempts=0`.\n\nThe fix:\n\n- sanitizes status patches emitted by aborted channel tasks so they cannot overwrite gateway-owned lifecycle fields;\n- prevents late stale-task patches from re-marking a stopped runtime as connected;\n- preserves actionable lifecycle diagnostics such as `channel stop timed out after 5000ms` instead of allowing `lastError=null`;\n- marks stopped runtimes as disconnected when the runtime previously had a connection state.\n\n## Reproduction / before evidence\n\nAdded regression coverage for the reported shape:\n\n1. start a managed account task;\n2. abort it through a non-manual recovery stop;\n3. let the stop timeout leave recovery restart pending;\n4. request a restart while the stale task is still present;\n5. have the stale task emit a late `connected=true` / `lastError=null` status patch.\n\nBefore the fix, the new test fails because the stale task revives `connected=true` in the stopped runtime:\n\n- GitHub Actions before-fix run: https://github.com/snowzlm/openclaw/actions/runs/27063237738\n- Before-fix commit: `6739bbf06eda1740878cfcc2097f39609d18de69`\n- Failure: `src/gateway/server-channels.test.ts > keeps recovery timeout diagnostics when a stale task reports connected after abort`\n- Observed assertion: `expected true to be false`\n\n## After evidence\n\nWith the fix, the same regression passes and the runtime keeps the actionable timeout diagnostic instead of returning to `connected=true` / `lastError=null`.\n\nFocused local verification:\n\n```text\nnode scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-channels.test.ts -t \"keeps recovery timeout diagnostics\"\n# 1 passed\n\nnode scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-channels.test.ts src/gateway/channel-health-monitor.test.ts src/gateway/server-methods/channels.status.test.ts\n# 6 files passed, 155 tests passed\n\nnode scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test-issue90901.tsbuildinfo\n# passed\n\n./node_modules/.bin/oxfmt --check --threads=1 src/gateway/server-channels.ts src/gateway/server-channels.test.ts\n# passed\n```\n\nGitHub Actions after-fix evidence:\n\n- Run: https://github.com/snowzlm/openclaw/actions/runs/27063476563\n- Fixed commit: `2e267c6cbe792fdca4d94bc922e9c34a563199ee`\n- Relevant gateway job passed: `checks-node-agentic-control-plane-runtime-server`\n- That job ran `src/gateway/server-channels.test.ts` and reported `39 tests` passed.\n\nNote: the full fork CI workflow still has unrelated failures in non-gateway lanes (`extension-test-boundary` for existing Google/Minimax live-test helper imports, and `openclaw-tools.camera.test.ts` inline-image expectations). The gateway lifecycle job covering this change passes.\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: after a recovery stop timeout, a stale aborted channel task must not re-mark the runtime as connected or clear the actionable timeout error while restart remains pending.\n- **Real environment tested**: Linux source checkout, Node.js v24, patched OpenClaw gateway lifecycle manager running from the branch head.\n- **Exact steps or command run after this patch**: ran a source-runtime proof harness with `node --import tsx` against the patched `createChannelManager` path, then forced the issue sequence: start account, non-manual stop timeout, restart request while old task remains present, late stale task status patch.\n- **Evidence after fix**:\n\n```text\n$ node --import tsx real-proof-after.mjs\n[issue-90901-proof] [default] channel stop exceeded 5000ms after abort; continuing shutdown\nISSUE_90901_REAL_BEHAVIOR_PROOF_AFTER\n{\n  \"startAccountCalls\": 1,\n  \"running\": false,\n  \"connected\": false,\n  \"restartPending\": true,\n  \"reconnectAttempts\": 0,\n  \"lastError\": \"channel stop timed out after 5000ms\"\n}\n```\n\n- **Observed result after fix**: the visible runtime no longer returns to the reported false-positive shape (`connected=true`, `lastError=null`) after the late stale task patch. It stays stopped/restart-pending and keeps the concrete timeout diagnostic.\n- **What was not tested**: live Telegram Bot API polling and macOS LaunchAgent supervisor behavior still require a credentialed maintainer-owned environment; this proof exercises the gateway lifecycle state that produces the reported status shape without network secrets.\n\n## Risk / behavior notes\n\n- This does **not** force-start a duplicate runner while an old task is still present; that remains safer for polling transports.\n- If an old task never exits, status now retains a concrete recovery timeout diagnostic instead of silently returning to `lastError=null` with a stale connected marker.\n- The fix is channel-agnostic and stays in the gateway lifecycle manager rather than Telegram-specific code.\n",
-        "branch": "fix/90901-telegram-restart-pending",
-        "head_sha": "2e267c6cbe792fdca4d94bc922e9c34a563199ee",
-        "author": "snowzlm",
-        "labels": [
-          "gateway",
-          "size: S",
-          "proof: supplied",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/gateway/server-channels.test.ts",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-channels.ts",
-            "additions": 74,
-            "deletions": 18,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90937",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90937.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "counts": {
-            "SUCCESS": 131,
-            "SKIPPED": 31,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-agentic-agents-core-tools:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-agentic-agents-core-tools:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 7171,
+    "total_ms": 1771,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1744
+        "ms": 519
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2473
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2928
+        "ms": 1240
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
