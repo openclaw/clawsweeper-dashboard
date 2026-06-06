@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-06T00:30:23.216Z",
+  "generated_at": "2026-06-06T00:30:25.678Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-05T21:30:20.989Z",
+  "since": "2026-06-05T21:30:25.214Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -42,8 +42,8 @@
       "author": "wangwllu",
       "author_id": 7668944,
       "author_association": "NONE",
-      "comment_created_at": "2026-06-06T00:29:03Z",
-      "comment_updated_at": "2026-06-06T00:29:03Z",
+      "comment_created_at": "2026-06-06T00:29:05Z",
+      "comment_updated_at": "2026-06-06T00:29:05Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -63,85 +63,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(announce-delivery): backfill effectiveDirectOrigin.to from requester session entry",
-        "body": "## Summary\n\nFixes a silent media-delivery drop when `image_generate` (or any\ngenerated-media task) is invoked off the direct-reply path — heartbeat, cron,\nsubagent spawn, etc. — where `agentTo` is undefined.\n\nIn that case the persisted `requesterOrigin` carries `channel` and\n`accountId` but no `to`, and every downstream `Boolean(channel && to)`\ndeliverability gate short-circuits. The artifact is generated and written to\ndisk, but never delivered; `task_runs.status` is then marked failed with\n`completion delivery failed after successful generation`. User sees nothing.\n\nThe fix is a one-merge change in\n`src/agents/subagent-announce-delivery.ts`: move the already-loaded\n`requesterEntry` slightly earlier, derive a delivery-context fallback from it\nvia the existing `deliveryContextFromSession`, and merge that into\n`completionExternalFallbackOrigin` *before* `effectiveDirectOrigin` is\ncomputed.\n\nThe in-source comment at that exact site (previously at lines 1202–1205)\nalready named this gap; the patch makes the comment accurate by acting on it.\n\nFixes openclaw/openclaw#86034 (Hypothesis A only — origin missing `to`).\n\n## What the patch does\n\n- `src/agents/subagent-announce-delivery.ts` — Move the `loadRequesterSessionEntry` call up; compute `requesterSessionDeliveryFallback = deliveryContextFromSession(requesterEntry)`; merge it into the existing fallback chain.\n- `src/agents/subagent-announce-delivery.test.ts` — New regression: completion origin missing `to`, requester session entry has `lastTo` → `effectiveDirectOrigin.to` is populated and external delivery is selected (`deliver: true`).\n\nTotal non-test diff: ~14 lines.\n\n## Risk / blast radius\n\nLow. The merge happens inside an `expectsCompletionMessage` branch that\nalready documents this exact intent. `mergeDeliveryContext` refuses to cross\nchannels, so we cannot synthesize a delivery target that wasn't already in the\nrequester session entry. Happy-path tests\n(`subagent-registry-lifecycle`, `image-generate-tool`,\n`image-generation-task-status`) confirm no regression when the origin already\ncarries `to`.\n\n## Real behavior proof\n\nBehavior addressed: When `image_generate` is invoked off the direct-reply path (heartbeat / cron / subagent spawn) on a Telegram surface, the generated artifact lands on disk but is never delivered to the chat; the user sees nothing while `task_runs.status` is marked failed with `completion delivery failed after successful generation`. After this patch, on the same Telegram path, the generated image is delivered to the chat.\n\nReal environment tested: Live Telegram Desktop end-to-end via `openclaw-mantis` workflow, executed against a real OpenClaw setup driving a real Telegram client. Two runs were captured side-by-side:\n- Baseline: `main` at `6d5061c2…` (pre-patch tip), real Telegram Desktop transport.\n- Candidate: this PR head at `974b07b0…` (the original PR head Mantis observed before today's force-push rebase to `f6a45b1f`; the patch hunk is identical, so the observed transport-level behavior carries over). Real Telegram Desktop transport.\n\nExact steps or command run after this patch:\n```bash\n# Live Telegram Desktop end-to-end proof was driven by openclaw-mantis.\n# The Mantis workflow run that captured this PR's real-behavior evidence:\ngh run view 26902454818 --repo openclaw/openclaw\ngh api repos/openclaw/openclaw/actions/runs/26902454818/artifacts\n\n# Local supplemental regression suite on the patched head (f6a45b1f):\nnode scripts/run-vitest.mjs \\\n  src/agents/subagent-announce-delivery.test.ts \\\n  src/agents/tools/media-generate-background-shared.test.ts \\\n  src/agents/subagent-registry-lifecycle.test.ts \\\n  src/agents/tools/image-generate-tool.test.ts \\\n  src/agents/image-generation-task-status.test.ts\n```\n\nEvidence after fix:\n- Mantis live Telegram Desktop run: https://github.com/openclaw/openclaw/actions/runs/26902454818\n- Mantis artifacts (recordings / screenshots / MP4s side-by-side): https://github.com/openclaw/openclaw/actions/runs/26902454818/artifacts/7393384873\n- Mantis comment with embedded GIFs / screenshots / MP4s is in this PR thread.\n\n```text\nMantis run 26902454818 verdicts (live Telegram Desktop transport):\n- Scenario:  telegram-desktop-proof\n  Baseline (main 6d5061c2…):       pass — expected baseline visual proof captured\n  Candidate (PR head 974b07b0…):   pass — expected candidate visual proof captured\n  Overall:                         true\n```\n\nObserved result after fix: On the previously broken off-direct-reply path the Mantis-driven Telegram Desktop client visibly received the generated image. Local supplemental regression: `subagent-announce-delivery.test.ts` (with the new regression case), `media-generate-background-shared.test.ts`, `subagent-registry-lifecycle.test.ts`, `image-generate-tool.test.ts`, `image-generation-task-status.test.ts` — all 5 files, 194 tests, green on the patched head. The new regression case in `subagent-announce-delivery.test.ts` fails without the patch and passes with it; it asserts that when the completion origin is missing `to` and `requesterEntry.lastTo` is populated, `effectiveDirectOrigin.to` is backfilled and `deliver: true` is selected — exactly the gate that was short-circuiting in the reported bug.\n\nWhat was not tested: Crabbox / Testbox suites and `tsgo` typecheck were skipped per repo guidance for this checkout. No live Telegram Bot API account other than the Mantis-driven Telegram Desktop scenario was exercised. Hypothesis B (the `wakeTaskCompletion` retry asymmetry described under Follow-up) is intentionally out of scope for this PR.\n\n## Follow-up (Hypothesis B)\n\nHypothesis B from the review — `wakeTaskCompletion → false` does not retry\n`tryDeliverMediaGenerationDirect` (only the `throw` branch does), and the\nin-wake fallback gates on `MEDIA_DIRECT_FALLBACK_DELIVERY_REASONS` which\nexcludes `requester_abandoned` and the `deliver=false` reason from Hypothesis\nA — is a real but separable robustness gap. It crosses the larger\n`MEDIA_DIRECT_FALLBACK_DELIVERY_REASONS` contract surface and warrants a\n\"delivery contract decision\" maintainer review on its own. See\n`src/agents/tools/media-generate-background-shared.ts:425-468` for the\nasymmetric branch.\n\nFixing A alone unblocks the reported Telegram repro: once `origin.to` is\npopulated, the in-wake direct fallback (which also checks `origin.to`)\nlikewise becomes viable.\n",
-        "branch": "fix/86034-origin-to-backfill",
-        "head_sha": "f6a45b1f7bd1927c8054b5dfbe2f936fe09e56d4",
-        "author": "wangwllu",
-        "labels": [
-          "agents",
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "mantis: telegram-visible-proof",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look",
-          "proof: 🎥 video"
-        ],
-        "files": [
-          {
-            "path": "src/agents/subagent-announce-delivery.test.ts",
-            "additions": 82,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/subagent-announce-delivery.ts",
-            "additions": 14,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89949",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89949.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "SUCCESS": 130,
-            "SKIPPED": 31,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2548,
+    "total_ms": 1673,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 486
+        "ms": 450
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1726
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 321
+        "ms": 1209
       },
       {
         "name": "append_ledger",
