@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-06T20:02:38.588Z",
-  "repo": "steipete/CodexBar",
+  "generated_at": "2026-06-06T20:02:47.499Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-06T17:02:37.494Z",
+  "since": "2026-06-06T17:02:45.865Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    1328
+    90989
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:steipete/CodexBar:1328:4640207929:2026-06-06T20:02:35Z:clawsweeper_auto_repair",
-      "comment_id": "4640207929",
-      "comment_version_key": "4640207929:2026-06-06T20:02:35Z",
-      "comment_url": "https://github.com/steipete/CodexBar/pull/1328#issuecomment-4640207929",
-      "repo": "steipete/CodexBar",
-      "issue_number": 1328,
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:90989:4640063563:2026-06-06T20:02:42Z:clawsweeper_auto_repair",
+      "comment_id": "4640063563",
+      "comment_version_key": "4640063563:2026-06-06T20:02:42Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90989#issuecomment-4640063563",
+      "repo": "openclaw/openclaw",
+      "issue_number": 90989,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-06T19:59:15Z",
-      "comment_updated_at": "2026-06-06T20:02:35Z",
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-06T19:08:51Z",
+      "comment_updated_at": "2026-06-06T20:02:42Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -52,51 +52,99 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=58a62bba14e379f1a31dff942e185c9008a8aa96)",
-      "review_summary": "PR updates Antigravity process detection so `antigravity-cli` and `antigravity_cli` are treated like the existing language-server command names.\n\nReproducibility: yes. at source level: current main requires a `language_server` executable-name match before accepting an Antigravity process, so an `antigravity-cli` command line would be skipped. I did not run a live provider probe because repository policy warns against live provider checks unless explicitly requested.",
-      "review_followup": "- [P1] Contributor should add real behavior proof before merge; automation should not be requested because it cannot prove the contributor's Antigravity setup.",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=e4cc4adf47bcfa4252d0473a4c7598856a5d028f)",
+      "review_summary": "Adds a gateway startup ingress-claim sweep, queue/startup tests for stale SQLite claims, and a standalone reproduction script for `channel_ingress_events` recovery.\n\nPR surface: Source +163, Tests +226, Other +128. Total +517 across 6 files.\n\nReproducibility: Do we have a high-confidence way to reproduce the issue? Source-level yes: current main has per-queue recovery but no general gateway startup sweep, and the linked issue provides concrete stale `channel_ingress_events` state; I did not verify a live Telegram crash/restart in this review.",
+      "review_followup": "- [P1] The branch needs a narrow code correction plus contributor-supplied live behavior proof, so it should stay in human review rather than an automated repair lane.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "58a62bba14e379f1a31dff942e185c9008a8aa96",
+      "expected_head_sha": "e4cc4adf47bcfa4252d0473a4c7598856a5d028f",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "Fix Antigravity CLI detection",
-        "body": "### Summary\nSince the main entry point for Antigravity is now `antigravity-cli` (rather than the IDE `language_server` process), usage tracking failed to probe local status endpoints. This updates `isLanguageServerCommandLine` and `isAntigravityCommandLine` to correctly match the new `antigravity-cli` process name so local probing and usage tracking can succeed.\n\n### Commands Run\n- `make check`: SwiftFormat passed (0 files require formatting).\n- `swift test`: Passed locally.\n\n*(No UI changes)*",
-        "branch": "fix/antigravity-cli-detection",
-        "head_sha": "58a62bba14e379f1a31dff942e185c9008a8aa96",
-        "author": "oyaah",
+        "title": "fix(channels): recover stale ingress queue claims at gateway startup",
+        "body": "### Summary\n\n- **Problem**: Issue #90945 reports that after a gateway crash, `channel_ingress_events` rows left in `claimed` state are never recovered. Every new message into the affected session adds another stuck claim, silently deadlocking the channel (observed with Telegram DM). The existing stale-claim recovery (`recoverStaleTelegramSpooledUpdateClaims`) only covers the Telegram spool drain path — it runs inside the polling loop, not at startup, so it cannot release claims left by a crashed process before the loop starts.\n\n- **Root cause**: `recoverStaleClaims()` exists on each per-queue `ChannelIngressQueue` instance and works correctly, but nothing calls it at gateway startup for the general SQLite ingress queue. The Telegram spool recovery runs during drain cycles, but at that point the session is already blocked by stale claims from the previous crash. No cross-queue sweep exists.\n\n- **Fix**: Add `recoverAllStaleChannelIngressClaims()` — a module-level function in `ingress-queue.ts` that queries all `channel_ingress_events` rows with `status = \"claimed\"`, filters to rows older than `staleMs` (default 60s), checks whether each `claim_owner` PID is still alive via `process.kill(pid, 0)`, and batch-releases dead-owner claims back to `pending` in a single write transaction. Wire it into the gateway startup sequence via a new `runStartupIngressClaimSweep` in `server-startup-ingress-sweep.ts`, called in parallel with the existing `runStartupSessionMigration` during `prepareGatewayPluginBootstrap`. The sweep is best-effort and non-blocking — errors are caught, logged, and gateway startup continues.\n\n- **Duplicate delivery protection**: The sweep runs during `prepareGatewayPluginBootstrap`, which completes before `startChannels()`. At sweep time no channel workers are running, so every claimed row is stale from a previous crashed session. The 60s `staleMs` age threshold is an additional guard for multi-gateway deployments where a concurrently-starting sibling gateway on the same host may hold recent legitimate claims. PID recycling risk is the same trade-off as the existing Telegram spool recovery.\n\n- **What changed**:\n  - `src/channels/message/ingress-queue.ts` — new exported function `recoverAllStaleChannelIngressClaims()` with `staleMs` age guard + helper `isIngressClaimProcessAlive()`.\n  - `src/gateway/server-startup-ingress-sweep.ts` — new startup sweep file, follows the `server-startup-session-migration.ts` pattern (deps injection for testability, try/catch with warn).\n  - `src/gateway/server-startup-plugins.ts` — wires the sweep into `prepareGatewayPluginBootstrap` alongside existing startup tasks.\n  - `src/channels/message/ingress-queue.test.ts` — 6 new tests: cross-queue recovery, live-PID preservation, empty-table fast path, null-owner recovery, staleMs age filter pass, staleMs recent-claim protection.\n  - `src/gateway/server-startup-ingress-sweep.test.ts` — 3 new tests: success logging, error recovery, no-op path.\n  - `scripts/repro-90945.mjs` — standalone reproduction script (not a test framework).\n\n- **What did NOT change (scope boundary)**:\n  - Per-queue `recoverStaleClaims()` is unchanged — the startup sweep is additive.\n  - `claimNext()` with `staleMs` is unchanged — still dead code but out of scope for this fix.\n  - Telegram spool recovery is unchanged — the startup sweep covers the gap before the drain loop starts.\n  - No config surface, plugin surface, or gateway protocol changes.\n\n### Reproduction\n\n1. Active Telegram DM session with messages flowing through `channel_ingress_events`.\n2. Kill the gateway mid-turn (`kill -HUP <pid>`).\n3. Observe `channel_ingress_events` contains rows with `status = \"claimed\"` and `claim_owner` = dead PID.\n4. Restart gateway — before this PR: claims stay stuck, channel is deadlocked. After this PR: claims older than 60s with dead PIDs are released to `pending` before channels start, messages resume.\n\n### Real behavior proof\n\n**Behavior addressed**: After a gateway crash, stale claimed rows in `channel_ingress_events` are recovered at next startup; channel message processing resumes normally. Fixes #90945.\n\n**Real environment tested**: macOS Darwin 24.6.0, Node 22.19. Standalone reproduction script (`scripts/repro-90945.mjs`) creates real SQLite databases via `openOpenClawStateDatabase`, writes real rows, runs the production `recoverAllStaleChannelIngressClaims` code path, and queries the DB directly to show state transitions. No test framework, no mocks.\n\n**Exact steps or command run after this patch**:\n```\nnode --import tsx scripts/repro-90945.mjs\n```\n\n**Evidence after fix**:\n```\n=== Reproduction: #90945 stale ingress claims ===\n\n--- BEFORE sweep (simulating post-crash state) ---\n  [\"telegram\",\"dm\"] | tg-msg-1 | status=claimed | claim_owner=999999999\n  [\"telegram\",\"dm\"] | tg-msg-2 | status=claimed | claim_owner=999999999\n  [\"whatsapp\",\"dm\"] | wa-msg-1 | status=claimed | claim_owner=999999999\n\n--- SWEEP: recovered 3 stale claim(s) ---\n\n--- AFTER sweep ---\n  [\"telegram\",\"dm\"] | tg-msg-1 | status=pending | last_error=\"recovered at startup: owner process gone\"\n  [\"telegram\",\"dm\"] | tg-msg-2 | status=pending | last_error=\"recovered at startup: owner process gone\"\n  [\"whatsapp\",\"dm\"] | wa-msg-1 | status=pending | last_error=\"recovered at startup: owner process gone\"\n\n--- Queue API verification ---\n  Telegram pending: [tg-msg-1, tg-msg-2]\n  Telegram claims:  []\n  WhatsApp pending: [wa-msg-1]\n  WhatsApp claims:  []\n\nResult: PASS — all stale claims recovered, channels unblocked\n```\n\nThe output shows real SQLite `channel_ingress_events` rows transitioning from `status=claimed` (with dead PID 999999999) to `status=pending` after the sweep. Two separate queues (telegram and whatsapp) are swept in a single pass. The queue API confirms both channels are unblocked.\n\n**Observed result after fix**: Dead-PID claims older than 60s are released to `pending`; live-PID claims are preserved; recent claims within the staleMs window are age-protected; the sweep runs before channels start and does not block startup on failure.\n\n**What was not tested**: Full gateway process crash/restart with a live Telegram channel connected. The SQLite queue state machine is covered with real database operations via a standalone script and 9 deterministic tests; a live gateway round-trip would add transport-layer coverage but the bug and fix are entirely in the SQLite claim lifecycle.\n\n### Risk / Mitigation\n\n- **Risk**: PID recycling — after crash, a different process might reuse the dead PID, causing the sweep to skip a stale claim. **Mitigation**: The 60s `staleMs` age threshold means only claims older than 60s are candidates; a recycled PID from a recently-started process won't match old claims. This is the same trade-off as the existing Telegram spool recovery (`isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess`).\n- **Risk**: Cross-queue sweep might be slow if thousands of claims exist. **Mitigation**: The sweep batches all releases in a single write transaction. In practice, the number of stale claims is small (proportional to sessions active at crash time).\n- **Risk**: In multi-gateway deployments, sweep releases a claim from a sibling gateway. **Mitigation**: The sweep runs before `startChannels()` (no local workers), and the PID liveness check + 60s age threshold protect sibling claims.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] channels\n- [x] gateway\n\n### Linked Issue/PR\n\nFixes #90945\n",
+        "branch": "worktree-fix-90945-sqlite-stale-claims",
+        "head_sha": "e4cc4adf47bcfa4252d0473a4c7598856a5d028f",
+        "author": "849261680",
         "labels": [
+          "gateway",
+          "scripts",
+          "size: L",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
           "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "Sources/CodexBarCore/Providers/Antigravity/AntigravityStatusProbe.swift",
-            "additions": 2,
+            "path": "scripts/repro-90945.mjs",
+            "additions": 128,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/channels/message/ingress-queue.test.ts",
+            "additions": 174,
             "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/channels/message/ingress-queue.ts",
+            "additions": 116,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-ingress-sweep.test.ts",
+            "additions": 53,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-startup-ingress-sweep.ts",
+            "additions": 42,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-startup-plugins.ts",
+            "additions": 5,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-steipete-codexbar-1328",
-        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1328.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90989",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90989.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 1,
+          "total": 162,
           "counts": {
-            "SUCCESS": 1
+            "SUCCESS": 129,
+            "SKIPPED": 29,
+            "FAILURE": 3,
+            "NEUTRAL": 1
           },
-          "blockers": [],
+          "blockers": [
+            "build-artifacts:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ],
           "pending": [],
-          "terminalBlockers": []
+          "terminalBlockers": [
+            "build-artifacts:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ]
         }
       },
       "maintainer_authorized": false,
@@ -106,23 +154,23 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1358,
+    "total_ms": 1848,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 286
+        "ms": 244
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 795
+        "ms": 1375
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 252
+        "ms": 203
       },
       {
         "name": "append_ledger",
