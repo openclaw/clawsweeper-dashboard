@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-06T17:03:18.471Z",
+  "generated_at": "2026-06-06T17:04:06.259Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-06T14:03:13.717Z",
+  "since": "2026-06-06T14:04:05.569Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4639779191
   ],
-  "status_comment_id": 4639779293,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-06T17:02:35Z",
       "comment_updated_at": "2026-06-06T17:02:35Z",
-      "status_comment_id": 4639779293,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,153 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-06T17:03:19.252Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 90923
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-06T17:03:20.266Z",
-          "response_comment_id": "4639703493",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(daemon): write LaunchAgent plist to boot volume when home is on external APFS",
-        "body": "## Summary\n\nmacOS `launchd` refuses to bootstrap a LaunchAgent plist that lives on an external APFS volume (`Bootstrap failed: 5: Input/output error`). When a user's `$HOME` is on an external drive, `openclaw gateway install` always fails.\n\nThis PR makes the macOS LaunchAgent path resolution **boot-volume-aware**. A single helper, `resolveLaunchAgentHomeDir(env)` (in `src/daemon/paths.ts`), returns `$HOME` normally but falls back to the boot-volume home `/Users/<user>` when `$HOME` is on an external volume (detected by comparing `statSync(\"/\").dev` vs `statSync(home).dev`). Every launchd lifecycle path derives from this one source, so install, repair, restart, uninstall, status/audit, and doctor service detection all converge on the same path launchd can actually bootstrap.\n\n### Why this shape (vs. an install-only copy)\n\nAn earlier revision wrote a second boot-volume plist only at install time. That left `repair`, `restart`, and `uninstall` still bootstrapping from the external path (which fails with the same error 5), and split state across two plists. Making the resolver canonical avoids a second path and keeps every lifecycle command consistent. Correctness details handled:\n\n- **Uninstall trash** now targets `/Users/<user>/.Trash` (same volume as the plist) instead of the external `$HOME/.Trash`; a cross-volume `rename` would `EXDEV`-fail and leak the plist.\n- **Doctor service detection** (`src/daemon/inspect.ts`) scans the boot-volume `Library/LaunchAgents` so an external-home install is actually detected.\n- **Detached restart handoff** (`src/daemon/launchd-restart-handoff.ts`) routes through the same resolver, so an in-band reload/kickstart fallback bootstraps the boot-volume plist instead of re-hitting error 5 against the external volume.\n- **Supervisor restart fallback** (`src/infra/restart.ts`) and the **update restart helper script** (`src/cli/update-cli/restart-helper.ts`) also `launchctl bootstrap` the plist; both now resolve through the same boot-volume-aware home. Logs and state stay under the user's real `$HOME`.\n- The boot-volume account folder is derived from the **login identity** (`USER`/`LOGNAME`, else the process owner via `os.userInfo()`), not from `$HOME`'s structure — the reported `$HOME` is the external volume root itself (`/Volumes/MainDataDrive`), whose last path segment is the volume name, not the user. Case is preserved.\n- The external-volume decision is memoized (single slot; a path's volume is process-stable), so the status/restart polling loops do not re-`stat` on every poll.\n\n**Behavior on a normal Mac (HOME on the boot volume): unchanged.** `/` and `$HOME` report the same `st_dev` (macOS firmlinks), so the resolver returns `$HOME` exactly as before — no extra plist, no path change.\n\n**Changed files:**\n- `src/daemon/paths.ts` — `resolveLaunchAgentHomeDir()` + memoized external-volume detection.\n- `src/daemon/launchd.ts` — plist path, plist write, and uninstall trash all derive from the boot-volume-aware home (removed the install-only double-write helpers).\n- `src/daemon/inspect.ts` — darwin user-scope service scan uses the boot-volume-aware home.\n- `src/daemon/launchd-restart-handoff.ts` — detached restart plist path uses the boot-volume-aware home.\n- `src/infra/restart.ts` / `src/cli/update-cli/restart-helper.ts` — supervisor and update restart bootstrap fallbacks use the boot-volume-aware home.\n- Tests: external-volume canonical-path test using a real external `/Volumes/.../Users/test` HOME, plus uninstall-trash, restart-handoff, supervisor-restart, and update-restart-script external-HOME regression tests.\n\nRebased onto current `main`.\n\n## Verification\n\n```\nnode scripts/run-vitest.mjs src/daemon/launchd.test.ts   # 82/82 passed\nnode scripts/run-vitest.mjs src/daemon/inspect.test.ts    # passed\noxfmt --check / oxlint / tsgo (prod types)                # clean\n```\n\n### Real behavior proof (live macOS launchd + real APFS volume)\n\n- **Behavior addressed:** `openclaw gateway install` fails with `Bootstrap failed: 5: Input/output error` when `$HOME` is on an external APFS volume, because launchd cannot bootstrap a plist from that volume. The fix resolves the plist (and its lifecycle siblings) to the boot volume.\n- **Real environment tested:** macOS (Darwin 24.6.0), real APFS disk image attached as an external volume (`hdiutil`), real `launchctl` in the `gui/<uid>` domain, and the real `resolveLaunchAgentPlistPath` from `src/daemon/launchd.ts`. A harmless plist running `/usr/bin/true` was used so no real gateway was started; everything was booted out and the image detached afterward.\n- **Exact steps or command run after this patch:**\n  1. Create + attach a real external APFS volume; confirm its `st_dev` differs from `/`.\n  2. `launchctl bootstrap gui/$UID <plist-on-external-volume>` → observe error 5.\n  3. `launchctl bootstrap gui/$UID <plist-on-boot-volume>` → observe success + `launchctl print`.\n  4. Run the patched `resolveLaunchAgentPlistPath` with `HOME` on the external volume and assert it returns the boot-volume path.\n- **Evidence after fix:**\n\n```text\n=== 1. Real external APFS volume ===\nroot '/' device id: 16777220\n'/Volumes/OCExtHome' device id: 16777234\n-> confirmed: external volume is a DIFFERENT device than root\n\n=== 3. BEFORE FIX behavior: bootstrap FROM the external volume ===\n$ launchctl bootstrap gui/501 /Volumes/OCExtHome/Users/<user>/Library/LaunchAgents/ai.openclaw.proof.exthome60398.plist\nBootstrap failed: 5: Input/output error\nlaunchctl exit code: 5   (the reported #60398 failure)\n\n=== 4. AFTER FIX behavior: bootstrap FROM the boot volume ===\n$ launchctl bootstrap gui/501 /Users/<user>/Library/LaunchAgents/ai.openclaw.proof.exthome60398.plist\nlaunchctl exit code: 0   (success)\n$ launchctl print gui/501/ai.openclaw.proof.exthome60398\n\tpath = /Users/<user>/Library/LaunchAgents/ai.openclaw.proof.exthome60398.plist\n\tstate = not running\n\tprogram = /usr/bin/true\n\n=== patched resolver against the real external volume (both HOME shapes) ===\nexternal volume device: 16777234, root device: 16777220\nnested external HOME: HOME=/Volumes/OCExtHome2/Users/<user>\n  -> /Users/<user>/Library/LaunchAgents/ai.openclaw.gateway.plist PASS\nvolume-root external HOME (#60398 shape): HOME=/Volumes/OCExtHome2\n  -> /Users/<user>/Library/LaunchAgents/ai.openclaw.gateway.plist PASS\nALL PASS: both external HOME shapes resolve to the boot-volume plist (derived\nfrom the login user, not the volume name)\n```\n\n- **Observed result after fix:** bootstrapping the plist from the external APFS volume reproduces `Bootstrap failed: 5: Input/output error`; the identical plist on the boot volume bootstraps with exit code 0 and is visible via `launchctl print`; and the patched `resolveLaunchAgentPlistPath` redirects an external `$HOME` to the boot-volume path while leaving a normal boot-volume `$HOME` unchanged.\n- **What was not tested:** a full end-to-end `openclaw gateway install` of the real gateway service on an external home (avoided to not register a real launchd gateway on the test machine); a physically separate USB/Thunderbolt enclosure (an attached APFS disk image was used, which is a real, distinct APFS volume with a distinct `st_dev`).\n\nFixes #60398\n",
-        "branch": "fix/60398-external-apfs-launchd",
-        "head_sha": "d0ed6cce298692d4fc45ed669c37c0b430c7f076",
-        "author": "849261680",
-        "labels": [
-          "gateway",
-          "cli",
-          "size: M",
-          "proof: supplied",
-          "P1",
-          "rating: 🌊 off-meta tidepool",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability"
-        ],
-        "files": [
-          {
-            "path": "src/cli/update-cli/restart-helper.test.ts",
-            "additions": 42,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/update-cli/restart-helper.ts",
-            "additions": 8,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/inspect.ts",
-            "additions": 4,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/launchd-restart-handoff.test.ts",
-            "additions": 37,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/launchd-restart-handoff.ts",
-            "additions": 8,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/launchd.test.ts",
-            "additions": 104,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/launchd.ts",
-            "additions": 9,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/daemon/paths.ts",
-            "additions": 56,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/restart.test.ts",
-            "additions": 57,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/restart.ts",
-            "additions": 7,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90923",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90923.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "counts": {
-            "SUCCESS": 133,
-            "SKIPPED": 30,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 7061,
+    "total_ms": 2715,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2893
+        "ms": 678
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1848
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2296
+        "ms": 2025
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
