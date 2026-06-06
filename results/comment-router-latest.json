@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-06T10:59:48.454Z",
+  "generated_at": "2026-06-06T11:00:19.263Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-06T07:59:45.182Z",
+  "since": "2026-06-06T08:00:18.736Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     90903
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4638220521
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -61,96 +63,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): inherit default agent model catalog for secondary agents",
-        "body": "# fix(agents): inherit default agent model catalog for secondary agents\n\n## Summary\n\nSecondary (non-default) agents created with `openclaw agents add` fail at runtime\nwith `FailoverError: Unknown model: google/gemini-2.5-flash` when using a\nGoogle/Gemini model authenticated via `GEMINI_API_KEY`. The default/`main` agent\nworks with the same model and key.\n\n**Root cause:** model discovery only runs for the default agent at gateway\nstartup, so generated plugin model catalogs (`plugins/<provider>/catalog.json`)\nare only populated under the default agent dir. A secondary agent gets an\napiKey-only google catalog with **no models**. `ModelRegistry.loadCustomModels()`\nloads plugin catalogs only from the current agent dir, with no read-through to\nthe default agent — unlike auth profiles, which already inherit via\n`inheritedAuthDir`.\n\n## The fix\n\nAdd read-through inheritance for generated plugin model catalogs, mirroring the\nexisting auth-profile read-through:\n\n- `ModelRegistry` accepts an optional `inheritedAgentDir`. When set (and distinct\n  from the agent's own dir), its generated plugin catalogs are loaded **first**\n  (so any provider request config they register is overridden by the local\n  agent's own catalogs — local always wins), and their models are merged as a\n  **gap-fill only**: a `(provider, id)` pair already defined locally is never\n  overridden.\n- A broken/invalid inherited catalog is skipped, never breaking the local agent.\n- `discoverModels` threads `inheritedAgentDir` through to the registry.\n- `discoverCachedAgentStores` passes the resolved default agent dir, and the\n  inherited catalog files are folded into the discovery-cache fingerprint so\n  changes to the default agent's catalog invalidate the secondary agent's cached\n  snapshot.\n\nThe default agent never inherits from itself (guarded by a path-equality check),\nso its behavior is unchanged.\n\n## Files\n\n- `src/agents/sessions/model-registry.ts` — `inheritedAgentDir` option + read-through merge\n- `src/agents/agent-model-discovery.ts` — thread option through `discoverModels`\n- `src/agents/embedded-agent-runner/model-discovery-cache.ts` — pass default dir + fingerprint\n- `src/agents/sessions/model-registry.test.ts` — 3 new tests\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: A secondary agent created with `openclaw agents add`\n  could not use `google/gemini-2.5-flash` (authed via `GEMINI_API_KEY`) and failed\n  every turn with `Unknown model: google/gemini-2.5-flash`, while the default\n  `main` agent worked with the same model and key.\n- Real environment tested: Local OpenClaw 2026.6.2 install on macOS (launchd\n  gateway), Google Gemini via `GEMINI_API_KEY`, default model\n  `google/gemini-2.5-flash`, with a real `main` agent plus a secondary agent\n  (`english-tutor`).\n- Exact steps or command run after this patch: Applied the patch to my install,\n  ran `pnpm build`, restarted the gateway, emptied the secondary agent's google\n  plugin catalog to the apiKey-only state (the state `agents add` leaves behind),\n  then ran a turn through the running gateway — the same lane a Telegram DM uses:\n  `openclaw agent --agent english-tutor -m \"Hi Lexi, correct this: I has two cats yesterday.\" --json`\n- Evidence after fix (copied live output from the running gateway):\n  ```\n  $ cat ~/.openclaw/agents/english-tutor/agent/plugins/google/catalog.json\n  {\"generatedBy\":\"openclaw-plugin-model-catalog-v1\",\"providers\":{\"google\":{\"apiKey\":\"GEMINI_API_KEY\"}}}   # no models\n\n  $ openclaw agent --agent english-tutor -m \"Hi Lexi, correct this: I has two cats yesterday.\" --json\n  \"status\": \"ok\"\n  \"text\": \"...Câu đúng phải là: \\\"I **had** two cats yesterday.\\\" ... (real model reply)\"\n  ```\n  And the patched discovery path exercised directly against the real on-disk agent\n  dirs (`discoverModels`):\n  ```\n  secondary agent dir : ~/.openclaw/agents/english-tutor/agent   (catalog: apiKey-only, no models)\n  BEFORE (no inheritance): Unknown model (undefined)\n  AFTER  (inherit main)  : google/gemini-2.5-flash  api=google-generative-ai  baseUrl=https://generativelanguage.googleapis.com/v1beta\n  ```\n- Observed result after fix: The secondary agent resolved\n  `google/gemini-2.5-flash` via read-through inheritance, through the native\n  `google-generative-ai` transport, and produced a real model reply — with **no\n  manual catalog seeding**. Before the patch the identical gateway turn returned\n  `Unknown model: google/gemini-2.5-flash`.\n- What was not tested: A second independent reproduction on a non-macOS host.\n  Full `pnpm test` was run; 4 shards each reported 1 failing test, all unrelated\n  to this change (macOS `/private/var` path-normalization / packaged-worker /\n  fixture assertions; none of those files reference the changed modules).\n- Proof limitations or environment constraints: Verified on a single macOS\n  workstation. The live gateway turn was invoked via the CLI `agent` command\n  (which routes through the running gateway on the same agent lane as a Telegram\n  DM) rather than by sending an actual Telegram message.\n- Before evidence (optional): `openclaw agent --agent <secondary> -m \"...\"` →\n  `GatewayClientRequestError: FailoverError: Unknown model: google/gemini-2.5-flash`\n  (default `main` agent returned `\"status\": \"ok\"` for the same model).\n\n## Tests and validation\n\nSupplemental (not a substitute for the real behavior proof above):\n\n```\npnpm build        # exit 0\npnpm tsgo:all     # full prod + test typecheck, all projects — exit 0, 0 errors\nnpx oxlint <4 touched files>   # no warnings\nnpx vitest run src/agents/sessions/model-registry.test.ts src/agents/agent-model-discovery*.test.ts   # 36 passed\n```\nNew tests cover: (1) secondary agent inherits the default agent's catalog models,\n(2) no inheritance without `inheritedAgentDir` (reproduces the bug), (3) the\nsecondary agent's own catalog wins over inherited models.\n\n## Known unrelated / pre-existing\n\n- `pnpm check`'s `npm-shrinkwrap` guard reports a stale shrinkwrap; pre-existing\n  on `main` and unrelated (this change touches no dependencies). The remaining\n  `pnpm check` steps (typecheck via `tsgo:all`, oxlint) pass.\n- The 4 failing `pnpm test` shards are pre-existing macOS path / fixture\n  environment failures and do not reference the changed modules.\n\n## AI assistance\n\nDrafted with Claude Code (Opus); reviewed and validated by me. Session log\navailable on request.\n",
-        "branch": "fix/secondary-agent-model-catalog-inheritance",
-        "head_sha": "c780e8c246f5df79a8c220de84b242ba8acffd9d",
-        "author": "thinhkhang97",
-        "labels": [
-          "agents",
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 security-boundary",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/agents/agent-model-discovery.ts",
-            "additions": 9,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/model-discovery-cache.ts",
-            "additions": 20,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sessions/model-registry.test.ts",
-            "additions": 79,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sessions/model-registry.ts",
-            "additions": 47,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90903",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90903.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "counts": {
-            "SUCCESS": 133,
-            "SKIPPED": 30,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3605,
+    "total_ms": 1002,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 395
+        "ms": 513
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2862
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 322
+        "ms": 476
       },
       {
         "name": "append_ledger",
