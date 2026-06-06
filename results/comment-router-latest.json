@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-06T02:59:53.001Z",
-  "repo": "openclaw/openclaw-windows-node",
+  "generated_at": "2026-06-06T03:00:06.058Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-05T23:59:52.453Z",
+  "since": "2026-06-06T00:00:03.975Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    705
+    90819
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +29,124 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:90819:4637081398:2026-06-06T03:00:00Z:clawsweeper_needs_human",
+      "comment_id": "4637081398",
+      "comment_version_key": "4637081398:2026-06-06T03:00:00Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90819#issuecomment-4637081398",
+      "repo": "openclaw/openclaw",
+      "issue_number": 90819,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-06T02:37:25Z",
+      "comment_updated_at": "2026-06-06T03:00:00Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- No automated repair job is needed; the PR appears ready for ordinary maintainer and CI review.; Cleared: The diff uses Node core AsyncLocalStorage and does not alter workflows, dependencies, secrets handling, packaging, or network/security boundaries. (sha=3c01637def4563ff24e62d12f5486f1f4e89e3b0)",
+      "review_summary": "The PR adds an AsyncLocalStorage-scoped active plugin workspace-dir pin around the awaited `sessions.list` row batch and adds regression tests for pinned workspace behavior.\n\nPR surface: Source +39, Tests +78. Total +117 across 3 files.\n\nReproducibility: yes. current main shows the row-yield window, workspace-keyed plugin metadata lookup, and global workspace mutation path; I did not rerun the harness in this read-only review.",
+      "review_followup": "- No automated repair job is needed; the PR appears ready for ordinary maintainer and CI review.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "3c01637def4563ff24e62d12f5486f1f4e89e3b0",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): pin plugin workspace dir during sessions.list to stop O(rows) metadata scans under concurrency",
+        "body": "## Summary\n\nFixes the residual concurrency facet of #76562, tracked in #90814.\n\n`sessions.list` becomes O(rows) slow — tens of seconds — **only when other agents/crons run concurrently**; on an idle gateway it is fast. The per-row plugin model-id-normalization lookup reads a **process-global \"active plugin-registry workspace dir\"**. `listSessionsFromStoreAsync` yields to the event loop every `SESSIONS_LIST_YIELD_BATCH_SIZE` rows, and during those yields concurrent agent-turns/crons call `setActivePluginRegistry(...)`, mutating that global. The plugin-metadata-snapshot memo key includes `workspaceDir`, so it changes on essentially every row, the memo never hits, and each row triggers a fresh full `loadPluginMetadataSnapshot` scan (~100 ms).\n\nEvidence on a busy gateway (one call, `OPENCLAW_DIAGNOSTICS=1`):\n\n```\ngateway.sessions.list:            ~10100 ms\n  └─ rows:                        ~10100 ms   <-- ~100%\nplugins.metadata.scan: 112–319 spans, 0 cacheHit, avg ~100 ms each\n```\n\nBumping the snapshot memo to a 512-slot LRU still produced **0 hits** — the key never repeats, so this is not a cache-size/eviction problem; it is global-mutable-state-under-concurrency.\n\n## Fix\n\nPin the active plugin-registry workspace dir for the duration of the row-building batch via `AsyncLocalStorage`, so every row in one `sessions.list` reads a stable value, immune to concurrent global mutation, while other concurrent async contexts still observe the live global. This collapses the O(rows) scans to one, independent of concurrent agent/cron activity.\n\n- `src/plugins/runtime-workspace-state.ts` — add `withPinnedActivePluginRegistryWorkspaceDir<T>(fn: () => T): T`; `getActivePluginRegistryWorkspaceDirFromState()` returns the pinned value when a scope is active, else the live global. Nested calls reuse the outer pin.\n- `src/gateway/session-utils.ts` — wrap the `listSessionsFromStoreAsync` row loop (including its inter-batch `setImmediate` yields) in the pin.\n- `src/plugins/runtime-workspace-state.test.ts` — regression tests: pass-through when unpinned; stability inside a pinned scope across a `setImmediate` yield while `setActivePluginRegistry` mutates the global mid-scope; live again after exit; nested-scope reuse; and rejection propagation with no sticky context.\n\n## Notes\n\n- The pin only wraps a batch that does not spawn detached/fire-and-forget async work (the row loop awaits everything), so the pinned context cannot outlive the call.\n- Semantically this is *more* correct than before: the old per-row \"live\" read was a race where row N could normalize against workspace A and row N+1 against workspace B purely because an unrelated task mutated the global mid-yield. Snapshotting at batch start removes that nondeterminism.\n\n## Validation\n\n- `node scripts/run-tsgo.mjs` — clean\n- `node scripts/run-oxlint.mjs` — clean (changed files)\n- pin + manifest-model-id-normalization tests: pass\n- gateway session-utils tests (plugin-runtime + perf + single-row-cache): 24/24 pass\n\n## Real behavior proof\n\n**Behavior or issue addressed**: `sessions.list` triggered O(rows) full `loadPluginMetadataSnapshot` scans whenever concurrent agents/crons flipped the process-global active workspace dir during the row loop's `setImmediate` yields (issue #90814). This pins the workspace for the batch so per-row plugin-metadata lookups hit the memo regardless of concurrent mutation.\n\n**Real environment tested**: Linux x64, Node v22.22.0, this branch's real source modules (no mocks/stubs): the real `normalizeProviderModelIdWithManifest` → `resolvePluginMetadataSnapshot` → `loadPluginMetadataSnapshot` resolver path, a real on-disk installed-plugin index + manifest, and the real `OPENCLAW_DIAGNOSTICS=1` timeline emitting `plugins.metadata.scan` spans. A concurrent task flips the global active workspace dir on every event-loop tick, exactly as parallel agent-turns/crons do, while the harness reproduces the `listSessionsFromStoreAsync` per-row loop (resolve per row, yield every 10 rows).\n\n**Exact steps or command run after this patch**: drove 200 rows through the real resolver path with the concurrent workspace-flipping actor running, once with the pre-fix code path (no pin) and once through this PR's `withPinnedActivePluginRegistryWorkspaceDir`, counting `plugins.metadata.scan` spans with `cacheHit !== true` (i.e. real full scans) parsed from the diagnostics timeline JSONL:\n\n```\n$ node node_modules/.bin/tsx scripts/repro-90814.mts\n```\n\n**Evidence after fix**: copied live console output of that run:\n\n```\n# repro #90814 — real resolver path, real diagnostics timeline, 200 rows\npre-fix (no pin)         rows=200 workspaceFlips=21 scanSpans=400 fullScans(cacheMiss)=40 elapsedMs=157\nthis PR (withPinned)     rows=200 workspaceFlips=21 scanSpans=400 fullScans(cacheMiss)=2 elapsedMs=61\n```\n\n**Observed result after fix**: with the pin, real full plugin-metadata scans drop from **40 → 2** (just the cold-start resolves) and stay flat regardless of the 21 concurrent workspace flips; wall time falls **157 ms → 61 ms** for the batch. Pre-fix, the full-scan count tracks the concurrent flip count (each flip across a yield invalidates the per-row memo key); post-fix it is constant and independent of concurrency, confirming the O(rows-under-concurrency) → O(1) collapse. (The total `scanSpans=400` is unchanged because cache *hits* still emit a span — a separate cosmetic concern, #86790; the meaningful metric is the cache-miss full scans.)\n\n**What was not tested**: not exercised against a live multi-tenant production gateway over WebSocket in this run (the harness drives the same real resolver + diagnostics modules in-process); the upstream end-to-end symptom under real concurrent load is documented in #90814 and the now-closed #76562.\n",
+        "branch": "fix/sessions-list-metadata-scan-concurrency",
+        "head_sha": "3c01637def4563ff24e62d12f5486f1f4e89e3b0",
+        "author": "k-l-lambda",
+        "labels": [
+          "gateway",
+          "size: M",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/session-utils.ts",
+            "additions": 63,
+            "deletions": 54,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/runtime-workspace-state.test.ts",
+            "additions": 78,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/plugins/runtime-workspace-state.ts",
+            "additions": 30,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90819",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90819.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 31,
+            "SUCCESS": 128,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 853,
+    "total_ms": 2270,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 536
+        "ms": 280
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1788
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 305
+        "ms": 174
       },
       {
         "name": "append_ledger",
