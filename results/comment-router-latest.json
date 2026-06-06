@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-06T15:18:22.290Z",
+  "generated_at": "2026-06-06T15:19:14.405Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-06T12:18:22.087Z",
+  "since": "2026-06-06T12:19:12.199Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    90949
+    90908
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 13,
+  "commands_seen": 7,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,528 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:90908:4638299516:2026-06-06T15:19:09Z:clawsweeper_auto_repair",
+      "comment_id": "4638299516",
+      "comment_version_key": "4638299516:2026-06-06T15:19:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90908#issuecomment-4638299516",
+      "repo": "openclaw/openclaw",
+      "issue_number": 90908,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-06T10:54:02Z",
+      "comment_updated_at": "2026-06-06T15:19:09Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=6be1a7c3d4cceaf36b29e4c08ff892fbea75be09)",
+      "review_summary": "The PR narrows model-fallback AbortError rethrows to externally aborted runs, surfaces provider-side abort failures instead of generic non-direct silence, adds compaction abort propagation, and expands regression coverage.\n\nPR surface: Source +69, Tests +229. Total +298 across 6 files.\n\nReproducibility: yes. by source inspection and redacted trajectory: current main can rethrow a provider-side AbortError and route the resulting generic non-direct failure to SILENT_REPLY_TOKEN. I did not run a live provider repro in this read-only review.",
+      "review_followup": "- [P1] Needs human/contributor follow-up because a concrete code blocker remains and ClawSweeper cannot supply the contributor's real provider/channel proof.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "6be1a7c3d4cceaf36b29e4c08ff892fbea75be09",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(model-fallback): don't rethrow provider-side AbortErrors as user cancellations",
+        "body": "## Problem\n\nWhen the LLM API closes the connection mid-stream, the fetch layer surfaces `AbortError(\"This operation was aborted\")` with **no external abort signal triggered** (`externalAbort: false` in trajectory). The existing code treated *any* AbortError as a user/gateway cancellation, causing a silent failure chain in group/channel sessions.\n\n**Reproduction path (source inspection + confirmed by real trajectory):**\n\n1. Provider drops connection → `AbortError(\"This operation was aborted\")`, `promptErrorSource: \"prompt\"`, `externalAbort: false`\n2. `runFallbackCandidate`: `shouldRethrowAbort` = true (name === \"AbortError\"), `normalizedFailover` = null → **throws**, skipping all fallback candidates\n3. `agent-runner-execution.ts` catch: not a user/restart/draining abort → `buildExternalRunFailureReply` → `isGenericRunnerFailure: true`\n4. `resolveExternalRunFailureTextForConversation`: group/channel session + generic failure → **`SILENT_REPLY_TOKEN`**\n5. User receives **zero visible response**; every subsequent message in the same topic repeats the same path → topic is permanently silenced\n\n## Before-fix behavior proof (redacted)\n\nTwo trajectory records from the affected installation:\n\n**Event 1 — 2026-06-06T02:14:27Z**\n```json\n{ \"type\": \"trace.artifacts\", \"provider\": \"<provider>\",\n  \"data\": { \"finalStatus\": \"error\", \"aborted\": true, \"externalAbort\": false,\n             \"promptError\": \"This operation was aborted\", \"promptErrorSource\": \"prompt\" } }\n```\n**Event 2 — 2026-06-06T09:02:28Z** (same session — confirms repeat-silence pattern)\n```json\n{ \"type\": \"trace.artifacts\", \"provider\": \"<provider>\",\n  \"data\": { \"finalStatus\": \"error\", \"aborted\": true, \"externalAbort\": false,\n             \"promptError\": \"This operation was aborted\", \"promptErrorSource\": \"prompt\" } }\n```\n\nBoth: `externalAbort: false` → no external signal fired → `dispatch complete replies=0` in gateway logs.\n\n## After-fix behavior proof\n\nRunning `isProviderSideAbortFailure` (the new helper) directly against the patched logic shows all 6 classification cases are correct. Output from `node /tmp/patch-verify.mjs` on the patched branch (logic inlined from `agent-runner-execution.ts`, no provider/user data):\n\n```\n=== PR #90908 after-fix behavior proof ===\n\nisProviderSideAbortFailure(err, replyOp) → true = visible error, false = SILENT_REPLY_TOKEN\n\n✅ Raw AbortError, no external signal (provider-side abort — the bug scenario)\n     main:    visible-error ✓\n     patched: visible-error ✓\n\n✅ FallbackSummaryError — all attempts abort-like (multi-model, all provider-side aborts)\n     main:    SILENT ✓\n     patched: visible-error ✓  ← BEHAVIOR CHANGED by PR\n\n✅ FallbackSummaryError — ordinary timeouts (ETIMEDOUT, no abort text) — must stay silent\n     main:    SILENT ✓\n     patched: SILENT ✓\n\n✅ FallbackSummaryError — mixed (abort + rate_limit) — must stay silent\n     main:    SILENT ✓\n     patched: SILENT ✓\n\n✅ Raw AbortError with upstream abort signal fired (real cancellation — must stay silent)\n     main:    visible-error ✓\n     patched: SILENT ✓  ← BEHAVIOR CHANGED by PR\n\n✅ Raw AbortError with result.kind=aborted (user /stop — must stay silent)\n     main:    visible-error ✓\n     patched: SILENT ✓  ← BEHAVIOR CHANGED by PR\n\nResult: 6 passed, 0 failed\n```\n\nKey: the only case that changes from `SILENT` → `visible-error` is the bug scenario (FallbackSummaryError all-abort-text-timeouts). Ordinary timeouts, rate-limit, mixed failures, and real cancellations all preserve `SILENT_REPLY_TOKEN`.\n\n## Fix (4 commits — all ClawSweeper/Codex issues addressed)\n\n### Part 1 — `src/agents/model-fallback.ts`\nGate `shouldRethrowAbort` rethrow on `params.abortSignal?.aborted`:\n```diff\n-    if (shouldRethrowAbort(err) && !normalizedFailover) {\n+    if (shouldRethrowAbort(err) && !normalizedFailover && params.abortSignal?.aborted) {\n```\n→ With fallback configured: provider-side AbortError enters fallback loop.\n\n### Part 2 — `src/auto-reply/reply/agent-runner-execution.ts`\nNew `isProviderSideAbortFailure(err, replyOperation)` helper covering two shapes:\n\n1. **Raw AbortError** (single-model/no-fallback — `throwFallbackFailureSummary` re-throws when `attempts.length <= 1`)\n2. **FallbackSummaryError** where every attempt has `reason: \"timeout\"` AND error text matches the abort/stream-closed pattern — narrows to provider-side aborts, excludes ordinary timeouts (\"ETIMEDOUT\", \"timed out\"), rate-limit, auth, and mixed failures\n\nCancellation semantics preserved: helper returns `false` immediately when `replyOperation.result?.kind === \"aborted\"` (set by `abortByUser`/`abortForRestart`) or `replyOperation.abortSignal?.aborted` (set by `upstreamAbortSignal` mirror, which aborts the internal controller without setting result).\n\n## Tests (213 agent-runner-execution + 78 model-fallback, all pass)\n\nNew tests added (18 cases across 3 × it.each(NON_DIRECT_FAILURE_SURFACE_CASES)):\n- **FallbackSummaryError all-abort-text-timeout → visible error** (regression #90908 multi-model path)\n- **FallbackSummaryError ordinary timeouts (ETIMEDOUT) → SILENT** (ClawSweeper P2 regression)\n- **FallbackSummaryError mixed reasons → SILENT** (rate_limit + timeout keeps silence)\n- **upstream abort signal fired → SILENT** (preserves cancellation semantics)\n- **user /stop abort → SILENT** (preserves cancellation semantics)",
+        "branch": "fix/abort-no-visible-reply-fallback",
+        "head_sha": "6be1a7c3d4cceaf36b29e4c08ff892fbea75be09",
+        "author": "shengting",
+        "labels": [
+          "agents",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner/compact.hooks.test.ts",
+            "additions": 33,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compact.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback.test.ts",
+            "additions": 31,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback.ts",
+            "additions": 11,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
+            "additions": 166,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.ts",
+            "additions": 54,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90908",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90908.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 164,
+          "counts": {
+            "FAILURE": 3,
+            "CANCELLED": 1,
+            "SKIPPED": 29,
+            "SUCCESS": 130,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-lint:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-lint:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:90908:4639366234:2026-06-06T15:10:28Z:re_review",
+      "comment_id": "4639366234",
+      "comment_version_key": "4639366234:2026-06-06T15:10:28Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90908#issuecomment-4639366234",
+      "repo": "openclaw/openclaw",
+      "issue_number": 90908,
+      "author": "shengting",
+      "author_id": 4449022,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-06T15:10:28Z",
+      "comment_updated_at": "2026-06-06T15:10:28Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(model-fallback): don't rethrow provider-side AbortErrors as user cancellations",
+        "body": "## Problem\n\nWhen the LLM API closes the connection mid-stream, the fetch layer surfaces `AbortError(\"This operation was aborted\")` with **no external abort signal triggered** (`externalAbort: false` in trajectory). The existing code treated *any* AbortError as a user/gateway cancellation, causing a silent failure chain in group/channel sessions.\n\n**Reproduction path (source inspection + confirmed by real trajectory):**\n\n1. Provider drops connection → `AbortError(\"This operation was aborted\")`, `promptErrorSource: \"prompt\"`, `externalAbort: false`\n2. `runFallbackCandidate`: `shouldRethrowAbort` = true (name === \"AbortError\"), `normalizedFailover` = null → **throws**, skipping all fallback candidates\n3. `agent-runner-execution.ts` catch: not a user/restart/draining abort → `buildExternalRunFailureReply` → `isGenericRunnerFailure: true`\n4. `resolveExternalRunFailureTextForConversation`: group/channel session + generic failure → **`SILENT_REPLY_TOKEN`**\n5. User receives **zero visible response**; every subsequent message in the same topic repeats the same path → topic is permanently silenced\n\n## Before-fix behavior proof (redacted)\n\nTwo trajectory records from the affected installation:\n\n**Event 1 — 2026-06-06T02:14:27Z**\n```json\n{ \"type\": \"trace.artifacts\", \"provider\": \"<provider>\",\n  \"data\": { \"finalStatus\": \"error\", \"aborted\": true, \"externalAbort\": false,\n             \"promptError\": \"This operation was aborted\", \"promptErrorSource\": \"prompt\" } }\n```\n**Event 2 — 2026-06-06T09:02:28Z** (same session — confirms repeat-silence pattern)\n```json\n{ \"type\": \"trace.artifacts\", \"provider\": \"<provider>\",\n  \"data\": { \"finalStatus\": \"error\", \"aborted\": true, \"externalAbort\": false,\n             \"promptError\": \"This operation was aborted\", \"promptErrorSource\": \"prompt\" } }\n```\n\nBoth: `externalAbort: false` → no external signal fired → `dispatch complete replies=0` in gateway logs.\n\n## After-fix behavior proof\n\nRunning `isProviderSideAbortFailure` (the new helper) directly against the patched logic shows all 6 classification cases are correct. Output from `node /tmp/patch-verify.mjs` on the patched branch (logic inlined from `agent-runner-execution.ts`, no provider/user data):\n\n```\n=== PR #90908 after-fix behavior proof ===\n\nisProviderSideAbortFailure(err, replyOp) → true = visible error, false = SILENT_REPLY_TOKEN\n\n✅ Raw AbortError, no external signal (provider-side abort — the bug scenario)\n     main:    visible-error ✓\n     patched: visible-error ✓\n\n✅ FallbackSummaryError — all attempts abort-like (multi-model, all provider-side aborts)\n     main:    SILENT ✓\n     patched: visible-error ✓  ← BEHAVIOR CHANGED by PR\n\n✅ FallbackSummaryError — ordinary timeouts (ETIMEDOUT, no abort text) — must stay silent\n     main:    SILENT ✓\n     patched: SILENT ✓\n\n✅ FallbackSummaryError — mixed (abort + rate_limit) — must stay silent\n     main:    SILENT ✓\n     patched: SILENT ✓\n\n✅ Raw AbortError with upstream abort signal fired (real cancellation — must stay silent)\n     main:    visible-error ✓\n     patched: SILENT ✓  ← BEHAVIOR CHANGED by PR\n\n✅ Raw AbortError with result.kind=aborted (user /stop — must stay silent)\n     main:    visible-error ✓\n     patched: SILENT ✓  ← BEHAVIOR CHANGED by PR\n\nResult: 6 passed, 0 failed\n```\n\nKey: the only case that changes from `SILENT` → `visible-error` is the bug scenario (FallbackSummaryError all-abort-text-timeouts). Ordinary timeouts, rate-limit, mixed failures, and real cancellations all preserve `SILENT_REPLY_TOKEN`.\n\n## Fix (4 commits — all ClawSweeper/Codex issues addressed)\n\n### Part 1 — `src/agents/model-fallback.ts`\nGate `shouldRethrowAbort` rethrow on `params.abortSignal?.aborted`:\n```diff\n-    if (shouldRethrowAbort(err) && !normalizedFailover) {\n+    if (shouldRethrowAbort(err) && !normalizedFailover && params.abortSignal?.aborted) {\n```\n→ With fallback configured: provider-side AbortError enters fallback loop.\n\n### Part 2 — `src/auto-reply/reply/agent-runner-execution.ts`\nNew `isProviderSideAbortFailure(err, replyOperation)` helper covering two shapes:\n\n1. **Raw AbortError** (single-model/no-fallback — `throwFallbackFailureSummary` re-throws when `attempts.length <= 1`)\n2. **FallbackSummaryError** where every attempt has `reason: \"timeout\"` AND error text matches the abort/stream-closed pattern — narrows to provider-side aborts, excludes ordinary timeouts (\"ETIMEDOUT\", \"timed out\"), rate-limit, auth, and mixed failures\n\nCancellation semantics preserved: helper returns `false` immediately when `replyOperation.result?.kind === \"aborted\"` (set by `abortByUser`/`abortForRestart`) or `replyOperation.abortSignal?.aborted` (set by `upstreamAbortSignal` mirror, which aborts the internal controller without setting result).\n\n## Tests (213 agent-runner-execution + 78 model-fallback, all pass)\n\nNew tests added (18 cases across 3 × it.each(NON_DIRECT_FAILURE_SURFACE_CASES)):\n- **FallbackSummaryError all-abort-text-timeout → visible error** (regression #90908 multi-model path)\n- **FallbackSummaryError ordinary timeouts (ETIMEDOUT) → SILENT** (ClawSweeper P2 regression)\n- **FallbackSummaryError mixed reasons → SILENT** (rate_limit + timeout keeps silence)\n- **upstream abort signal fired → SILENT** (preserves cancellation semantics)\n- **user /stop abort → SILENT** (preserves cancellation semantics)",
+        "branch": "fix/abort-no-visible-reply-fallback",
+        "head_sha": "6be1a7c3d4cceaf36b29e4c08ff892fbea75be09",
+        "author": "shengting",
+        "labels": [
+          "agents",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner/compact.hooks.test.ts",
+            "additions": 33,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compact.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback.test.ts",
+            "additions": 31,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback.ts",
+            "additions": 11,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
+            "additions": 166,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.ts",
+            "additions": 54,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90908",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90908.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 164,
+          "counts": {
+            "FAILURE": 3,
+            "CANCELLED": 1,
+            "SKIPPED": 29,
+            "SUCCESS": 130,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-lint:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-lint:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:90908:4639250853:2026-06-06T14:40:50Z:re_review",
+      "comment_id": "4639250853",
+      "comment_version_key": "4639250853:2026-06-06T14:40:50Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90908#issuecomment-4639250853",
+      "repo": "openclaw/openclaw",
+      "issue_number": 90908,
+      "author": "shengting",
+      "author_id": 4449022,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-06T14:40:50Z",
+      "comment_updated_at": "2026-06-06T14:40:50Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:90908:4639163565:2026-06-06T14:20:23Z:re_review",
+      "comment_id": "4639163565",
+      "comment_version_key": "4639163565:2026-06-06T14:20:23Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90908#issuecomment-4639163565",
+      "repo": "openclaw/openclaw",
+      "issue_number": 90908,
+      "author": "shengting",
+      "author_id": 4449022,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-06T14:20:23Z",
+      "comment_updated_at": "2026-06-06T14:20:23Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:90908:4639056147:2026-06-06T13:50:31Z:re_review",
+      "comment_id": "4639056147",
+      "comment_version_key": "4639056147:2026-06-06T13:50:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90908#issuecomment-4639056147",
+      "repo": "openclaw/openclaw",
+      "issue_number": 90908,
+      "author": "shengting",
+      "author_id": 4449022,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-06T13:50:31Z",
+      "comment_updated_at": "2026-06-06T13:50:31Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:90908:4638876201:2026-06-06T13:25:31Z:re_review",
+      "comment_id": "4638876201",
+      "comment_version_key": "4638876201:2026-06-06T13:25:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90908#issuecomment-4638876201",
+      "repo": "openclaw/openclaw",
+      "issue_number": 90908,
+      "author": "shengting",
+      "author_id": 4449022,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-06T13:25:31Z",
+      "comment_updated_at": "2026-06-06T13:25:31Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(model-fallback): don't rethrow provider-side AbortErrors as user cancellations",
+        "body": "## Problem\n\nWhen the LLM API closes the connection mid-stream, the fetch layer surfaces `AbortError(\"This operation was aborted\")` with **no external abort signal triggered** (`externalAbort: false` in trajectory). The existing code treated *any* AbortError as a user/gateway cancellation, causing a silent failure chain in group/channel sessions.\n\n**Reproduction path (source inspection + confirmed by real trajectory):**\n\n1. Provider drops connection → `AbortError(\"This operation was aborted\")`, `promptErrorSource: \"prompt\"`, `externalAbort: false`\n2. `runFallbackCandidate`: `shouldRethrowAbort` = true (name === \"AbortError\"), `normalizedFailover` = null → **throws**, skipping all fallback candidates\n3. `agent-runner-execution.ts` catch: not a user/restart/draining abort → `buildExternalRunFailureReply` → `isGenericRunnerFailure: true`\n4. `resolveExternalRunFailureTextForConversation`: group/channel session + generic failure → **`SILENT_REPLY_TOKEN`**\n5. User receives **zero visible response**; every subsequent message in the same topic repeats the same path → topic is permanently silenced\n\n## Before-fix behavior proof (redacted)\n\nTwo trajectory records from the affected installation:\n\n**Event 1 — 2026-06-06T02:14:27Z**\n```json\n{ \"type\": \"trace.artifacts\", \"provider\": \"<provider>\",\n  \"data\": { \"finalStatus\": \"error\", \"aborted\": true, \"externalAbort\": false,\n             \"promptError\": \"This operation was aborted\", \"promptErrorSource\": \"prompt\" } }\n```\n**Event 2 — 2026-06-06T09:02:28Z** (same session — confirms repeat-silence pattern)\n```json\n{ \"type\": \"trace.artifacts\", \"provider\": \"<provider>\",\n  \"data\": { \"finalStatus\": \"error\", \"aborted\": true, \"externalAbort\": false,\n             \"promptError\": \"This operation was aborted\", \"promptErrorSource\": \"prompt\" } }\n```\n\nBoth: `externalAbort: false` → no external signal fired → `dispatch complete replies=0` in gateway logs.\n\n## After-fix behavior proof\n\nRunning `isProviderSideAbortFailure` (the new helper) directly against the patched logic shows all 6 classification cases are correct. Output from `node /tmp/patch-verify.mjs` on the patched branch (logic inlined from `agent-runner-execution.ts`, no provider/user data):\n\n```\n=== PR #90908 after-fix behavior proof ===\n\nisProviderSideAbortFailure(err, replyOp) → true = visible error, false = SILENT_REPLY_TOKEN\n\n✅ Raw AbortError, no external signal (provider-side abort — the bug scenario)\n     main:    visible-error ✓\n     patched: visible-error ✓\n\n✅ FallbackSummaryError — all attempts abort-like (multi-model, all provider-side aborts)\n     main:    SILENT ✓\n     patched: visible-error ✓  ← BEHAVIOR CHANGED by PR\n\n✅ FallbackSummaryError — ordinary timeouts (ETIMEDOUT, no abort text) — must stay silent\n     main:    SILENT ✓\n     patched: SILENT ✓\n\n✅ FallbackSummaryError — mixed (abort + rate_limit) — must stay silent\n     main:    SILENT ✓\n     patched: SILENT ✓\n\n✅ Raw AbortError with upstream abort signal fired (real cancellation — must stay silent)\n     main:    visible-error ✓\n     patched: SILENT ✓  ← BEHAVIOR CHANGED by PR\n\n✅ Raw AbortError with result.kind=aborted (user /stop — must stay silent)\n     main:    visible-error ✓\n     patched: SILENT ✓  ← BEHAVIOR CHANGED by PR\n\nResult: 6 passed, 0 failed\n```\n\nKey: the only case that changes from `SILENT` → `visible-error` is the bug scenario (FallbackSummaryError all-abort-text-timeouts). Ordinary timeouts, rate-limit, mixed failures, and real cancellations all preserve `SILENT_REPLY_TOKEN`.\n\n## Fix (4 commits — all ClawSweeper/Codex issues addressed)\n\n### Part 1 — `src/agents/model-fallback.ts`\nGate `shouldRethrowAbort` rethrow on `params.abortSignal?.aborted`:\n```diff\n-    if (shouldRethrowAbort(err) && !normalizedFailover) {\n+    if (shouldRethrowAbort(err) && !normalizedFailover && params.abortSignal?.aborted) {\n```\n→ With fallback configured: provider-side AbortError enters fallback loop.\n\n### Part 2 — `src/auto-reply/reply/agent-runner-execution.ts`\nNew `isProviderSideAbortFailure(err, replyOperation)` helper covering two shapes:\n\n1. **Raw AbortError** (single-model/no-fallback — `throwFallbackFailureSummary` re-throws when `attempts.length <= 1`)\n2. **FallbackSummaryError** where every attempt has `reason: \"timeout\"` AND error text matches the abort/stream-closed pattern — narrows to provider-side aborts, excludes ordinary timeouts (\"ETIMEDOUT\", \"timed out\"), rate-limit, auth, and mixed failures\n\nCancellation semantics preserved: helper returns `false` immediately when `replyOperation.result?.kind === \"aborted\"` (set by `abortByUser`/`abortForRestart`) or `replyOperation.abortSignal?.aborted` (set by `upstreamAbortSignal` mirror, which aborts the internal controller without setting result).\n\n## Tests (213 agent-runner-execution + 78 model-fallback, all pass)\n\nNew tests added (18 cases across 3 × it.each(NON_DIRECT_FAILURE_SURFACE_CASES)):\n- **FallbackSummaryError all-abort-text-timeout → visible error** (regression #90908 multi-model path)\n- **FallbackSummaryError ordinary timeouts (ETIMEDOUT) → SILENT** (ClawSweeper P2 regression)\n- **FallbackSummaryError mixed reasons → SILENT** (rate_limit + timeout keeps silence)\n- **upstream abort signal fired → SILENT** (preserves cancellation semantics)\n- **user /stop abort → SILENT** (preserves cancellation semantics)",
+        "branch": "fix/abort-no-visible-reply-fallback",
+        "head_sha": "6be1a7c3d4cceaf36b29e4c08ff892fbea75be09",
+        "author": "shengting",
+        "labels": [
+          "agents",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner/compact.hooks.test.ts",
+            "additions": 33,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compact.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback.test.ts",
+            "additions": 31,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback.ts",
+            "additions": 11,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
+            "additions": 166,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.ts",
+            "additions": 54,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90908",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90908.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 164,
+          "counts": {
+            "FAILURE": 3,
+            "CANCELLED": 1,
+            "SKIPPED": 29,
+            "SUCCESS": 130,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-lint:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "checks-node-agentic-gateway-methods:FAILURE",
+            "check-lint:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:90908:4638359895:2026-06-06T11:25:47Z:re_review",
+      "comment_id": "4638359895",
+      "comment_version_key": "4638359895:2026-06-06T11:25:47Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90908#issuecomment-4638359895",
+      "repo": "openclaw/openclaw",
+      "issue_number": 90908,
+      "author": "shengting",
+      "author_id": 4449022,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-06T11:25:47Z",
+      "comment_updated_at": "2026-06-06T11:25:47Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 395,
+    "total_ms": 6695,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 192
+        "ms": 338
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 1850
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 4
       },
       {
         "name": "execute_commands",
-        "ms": 192
+        "ms": 4477
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
