@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-06T14:21:41.534Z",
+  "generated_at": "2026-06-06T14:21:53.284Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-06T11:21:39.874Z",
+  "since": "2026-06-06T11:21:50.506Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     90910
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4639163565
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -36,16 +38,16 @@
       "comment_version_key": "4638329804:2026-06-06T14:21:37Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/90910#issuecomment-4638329804",
       "repo": "openclaw/openclaw",
-      "issue_number": 90910,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-06T11:09:31Z",
-      "comment_updated_at": "2026-06-06T14:21:37Z",
+      "issue_number": 90908,
+      "author": "shengting",
+      "author_id": 4449022,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-06T14:20:23Z",
+      "comment_updated_at": "2026-06-06T14:20:23Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -61,140 +63,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): surface approval delivery failures",
-        "body": "## Summary\n\n- Fixes #89217.\n- Problem: explicit exec/plugin approval delivery failures were flattened to `false`, so `handlePendingApprovalRequest()` could not distinguish \"no configured delivery route\" from \"a configured delivery path was tried and failed\". When the originating turn source could route approvals, that failure silently fell back to pending turn-source routing instead of surfacing `no-approval-route`.\n- Solution: carry delivery result metadata as `{ delivered, attempted }` through shared approval handling, exec approval forwarding, plugin approval forwarding, and iOS push delivery. A configured delivery path that was attempted and failed now expires the approval with `resolvedBy: \"no-approval-route\"` and `decision: null`; an unconfigured delivery path still allows the existing turn-source fallback.\n- What did NOT change: this does not add a new approval channel, change approval decisions, change approval request IDs or payload fields, remove turn-source routing, or alter the unconfigured-delivery fallback. It only changes the route/no-route classification for explicit delivery attempts that already ran and failed.\n- Architecture / source-of-truth check: the source-of-truth boundary is the shared gateway approval delivery contract consumed by `handlePendingApprovalRequest()`. Exec forwarding, plugin forwarding, and iOS push now report the same canonical `{ delivered, attempted }` state to that shared contract; channel-specific code does not decide the final pending/no-route lifecycle state.\n- Related open PR scan: daily-fix issue-mode setup did not identify an open competing fix for #89217 before this branch was prepared.\n- Out of scope: no channel-specific retry policy, APNs/Slack/Discord transport behavior, approval UI, approval decision semantics, or plugin schema/config migration is changed in this PR.\n\n## Root Cause\n\n- Root cause: the gateway approval lifecycle invariant was violated because the delivery contract used one boolean for two different states: no configured route and configured route attempted but failed. That lossy contract caused the shared pending-approval state machine to treat explicit delivery failure as if no delivery had been attempted.\n- Why this is root-cause fix: the source-of-truth delivery contract now carries the invariant explicitly as `{ delivered, attempted }`, so `handlePendingApprovalRequest()` can reject attempted explicit delivery failures while preserving the unchanged turn-source fallback for unattempted delivery. This fixes the state/lifecycle cause instead of adding a downstream special case for one channel.\n- Missing detection / guardrail: there was no regression coverage for an explicit delivery failure when an originating turn-source route was also available.\n- `handlePendingApprovalRequest()` treated `false` plus an available turn-source route as safe to keep pending, even after a real explicit delivery failure.\n- `ExecApprovalForwarder` also fire-and-forgot request delivery, so all-target delivery failures were logged but not surfaced back to the gateway request path.\n\n## What changed\n\n- `src/gateway/server-methods/approval-shared.ts` now normalizes approval delivery results and only allows turn-source fallback when no explicit delivery was attempted.\n- `src/gateway/server-methods/exec-approval.ts` aggregates forwarder and iOS push delivery results with attempted/delivered semantics.\n- `src/gateway/server-methods/plugin-approval.ts` treats plugin forwarder exceptions as attempted delivery failures.\n- `src/gateway/exec-approval-ios-push.ts` reports no eligible push target as unattempted, but reports all attempted push failures as attempted delivery failure.\n- `src/infra/exec-approval-forwarder.ts` waits for request delivery, summarizes target outcomes, and rejects all-target delivery failures so the gateway can surface them.\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** An exec approval request with an available turn-source route and a configured forwarder that throws must not remain pending through turn-source fallback. It should resolve immediately as no approval route because explicit delivery was attempted and failed.\n\n- **Real environment tested:** Local Linux OpenClaw worktree running the production gateway exec approval handler (`createExecApprovalHandlers`) with `ExecApprovalManager`, the production `hasApprovalTurnSourceRoute()` check, and a configured forwarder that fails exactly at the delivery boundary. This proof exercises the gateway request path after the patch; it is not a unit-test-only claim.\n\n- **Exact steps or command run after this patch:**\n\n  ```bash\n  env -C \"/media/vdc/code/ai/aispace/openclaw-worktrees/issue-89217\" node --import tsx -e 'import { createExecApprovalHandlers } from \"./src/gateway/server-methods/exec-approval.ts\"; import { ExecApprovalManager } from \"./src/gateway/exec-approval-manager.ts\"; import { hasApprovalTurnSourceRoute } from \"./src/infra/approval-turn-source.ts\"; const manager = new ExecApprovalManager(); const responses = []; const errors = []; let forwarderCalls = 0; const routeAvailable = hasApprovalTurnSourceRoute({ turnSourceChannel: \"tui\", approvalKind: \"exec\" }); const forwarder = { handleRequested: async () => { forwarderCalls += 1; throw new Error(\"configured delivery target failed\"); }, handleResolved: async () => {}, stop: () => {} }; const handlers = createExecApprovalHandlers(manager, { forwarder }); await handlers[\"exec.approval.request\"]({ params: { id: \"approval-real-proof\", command: \"echo ok\", host: \"gateway\", turnSourceChannel: \"tui\", twoPhase: true, timeoutMs: 60000 }, respond: (ok, result, error) => responses.push({ ok, result, error }), context: { broadcast: () => {}, hasExecApprovalClients: () => false, logGateway: { error: (message) => errors.push(String(message)) } }, client: null }); const snapshot = manager.getSnapshot(\"approval-real-proof\"); const summary = { routeAvailableBeforeRequest: routeAvailable, forwarderCalls, resolvedBy: snapshot?.resolvedBy ?? null, decision: snapshot?.decision ?? null, responses, errors }; console.log(JSON.stringify(summary, null, 2)); if (!routeAvailable) process.exit(2); if (forwarderCalls !== 1) process.exit(3); if (snapshot?.resolvedBy !== \"no-approval-route\") process.exit(4); if (!responses.some((entry) => entry.ok === true && entry.result?.decision === null)) process.exit(5); if (responses.some((entry) => entry.result?.status === \"accepted\")) process.exit(6);' > \"/media/vdc/code/ai/aispace/openclaw-issue-89217-evidence/real-behavior-proof.log\" 2>&1\n  ```\n\n- **Evidence after fix:**\n\n  From `/media/vdc/code/ai/aispace/openclaw-issue-89217-evidence/real-behavior-proof.log`:\n\n  ```json\n  {\n    \"routeAvailableBeforeRequest\": true,\n    \"forwarderCalls\": 1,\n    \"resolvedBy\": \"no-approval-route\",\n    \"decision\": null,\n    \"responses\": [\n      {\n        \"ok\": true,\n        \"result\": {\n          \"id\": \"approval-real-proof\",\n          \"decision\": null,\n          \"createdAtMs\": 1780742759631,\n          \"expiresAtMs\": 1780742819631\n        }\n      }\n    ],\n    \"errors\": [\n      \"exec approvals: forward request failed: Error: configured delivery target failed\"\n    ]\n  }\n  ```\n\n- **Observed result after fix:** The originating `tui` route was available before the request, the explicit forwarder was called once, and the request resolved as `no-approval-route` with `decision: null`. The response did not return an accepted/pending approval, which confirms the failed explicit delivery no longer silently falls back to turn-source routing.\n\n- **What was not tested:** No live Slack/Discord/iOS/APNs delivery was used. The patch is at the gateway/forwarder delivery-result boundary, so the local proof injects the delivery failure at that boundary and verifies the production handler behavior. The proof log also contains local stale plugin config warnings before the JSON result; they are unrelated to this approval path.\n\n## Regression Test Plan\n\n- Coverage level: gateway handler + forwarder behavior tests.\n- Target test file: `src/gateway/server-methods/approval-shared.test.ts`, `src/gateway/server-methods/server-methods.test.ts`, `src/gateway/server-methods/plugin-approval.test.ts`, `src/infra/exec-approval-forwarder.test.ts`, and `src/gateway/exec-approval-ios-push.test.ts`.\n- Scenario locked in: a two-phase approval request has an originating turn-source route available, but an explicitly configured exec/plugin delivery path is attempted and fails; the expected result is `decision: null` / `resolvedBy: \"no-approval-route\"`, not an accepted pending approval.\n- New/updated regression coverage:\n  - `src/gateway/server-methods/approval-shared.test.ts` verifies attempted explicit delivery failure expires instead of checking turn-source fallback.\n  - `src/gateway/server-methods/server-methods.test.ts` verifies exec forwarder rejection becomes `no-approval-route` even when an originating chat route exists.\n  - `src/gateway/server-methods/plugin-approval.test.ts` verifies plugin approval forwarding failures return `decision: null`.\n  - `src/infra/exec-approval-forwarder.test.ts` verifies all-target request delivery failure rejects, while per-target success and `partial_failed` results with visible delivery receipts keep the approval pending.\n  - `src/gateway/exec-approval-ios-push.test.ts` verifies no eligible target remains unattempted, while all attempted push failures report attempted failure.\n- Why this is the smallest reliable guardrail: the tests lock the delivery-result semantics at each boundary that can otherwise collapse explicit delivery failure back into a generic `false`.\n\n## Verification\n\nPassed after the daily-fix `sync-main` onto upstream main `5b84ebfc56c9aedcbe506260b3e5105419ad7de1`:\n\n```bash\nenv -C \"/media/vdc/code/ai/aispace/openclaw-worktrees/pr-90910\" node scripts/run-vitest.mjs src/infra/exec-approval-forwarder.test.ts src/gateway/server-methods/approval-shared.test.ts src/gateway/server-methods/server-methods.test.ts src/gateway/server-methods/plugin-approval.test.ts src/gateway/exec-approval-ios-push.test.ts\n```\n\nResult: 2 Vitest shards passed, 10 test files passed, 295 tests passed.\n\n```bash\nenv -C \"/media/vdc/code/ai/aispace/openclaw-worktrees/pr-90910\" node scripts/run-vitest.mjs src/agents/openclaw-tools.camera.test.ts\n```\n\nResult: 1 test file passed, 23 tests passed. The prior `checks-node-agentic-agents-core-tools` camera failure no longer reproduces after syncing the upstream camera mock fix into this PR branch.\n\n```bash\nenv -C \"/media/vdc/code/ai/aispace/openclaw-worktrees/pr-90910\" corepack pnpm format:check -- src/infra/exec-approval-forwarder.ts src/infra/exec-approval-forwarder.test.ts\n```\n\nResult: all matched files use the correct format.\n\n```bash\nenv -C \"/media/vdc/code/ai/aispace/openclaw-worktrees/pr-90910\" corepack pnpm tsgo:core\n```\n\nResult: passed.\n\n```bash\ngit -C \"/media/vdc/code/ai/aispace/openclaw-worktrees/pr-90910\" diff --check\n```\n\nResult: passed with no whitespace output.\n\n## Review findings addressed\n\n- **RF-001 — Status: fixed by update.** The `status: ⏳ waiting on author` label is addressed by this follow-up commit and PR body update.\n- **RF-002 — Status: fixed.** Added regression coverage for a `partial_failed` durable delivery result with visible delivery results.\n- **RF-003 — Status: maintainer decision.** The intentional fail-closed behavior for fully failed configured delivery remains documented as compatibility-sensitive and needs maintainer acceptance.\n- **RF-004 — Status: maintainer decision.** This PR intentionally keeps the fail-closed fallback change for configured delivery failures; the merge-risk section explains the compatibility boundary.\n- **RF-005 — Status: fixed.** `partial_failed` with visible delivery results is now counted as delivered so the approval remains valid instead of being treated as undelivered.\n- **RF-006 — Status: fixed plus maintainer decision.** The narrow accounting repair is included here; the fail-closed compatibility behavior remains explicitly documented for maintainer review.\n- **RF-007 — Status: fixed.** `src/infra/exec-approval-forwarder.ts` now preserves approvals after partial durable delivery when `send.results` is non-empty.\n- **RF-008 — Status: fixed.** Ran the requested focused approval Vitest command after this patch: 2 shards passed, 10 files passed, 295 tests passed.\n- **RF-009 — Status: fixed.** Ran the requested format check for `src/infra/exec-approval-forwarder.ts` and `src/infra/exec-approval-forwarder.test.ts`; formatting passed.\n- **RF-010 — Status: fixed.** Ran `git diff --check`; it passed with no whitespace output.\n\n## Merge risk\n\n- Why it matters / User impact: configured approval delivery failures now fail closed and surface immediately instead of leaving commands waiting for an approval path that already failed.\n- Risk labels considered: `merge-risk:medium` because the result shape crosses gateway, forwarder, plugin approval, and iOS push boundaries.\n- Risk explanation: this changes only approval request delivery classification after explicit delivery attempts; it does not change approval decisions, add channels, or remove the existing turn-source route for unconfigured delivery.\n- Why acceptable: each modified boundary has regression coverage for the new attempted/delivered semantics, including all-target failure, partial delivery success, plugin forwarding failure, and iOS push no-target versus attempted-failure cases.\n- Compatibility: unconfigured delivery remains compatible with the existing turn-source fallback because `{ delivered: false, attempted: false }` still permits that route.\n\n## Maintainer-ready confidence\n\n- Fix classification: root-cause behavioral bug fix for gateway approval delivery failure handling.\n- Maintainer-ready confidence: high after local production-handler proof plus focused gateway/infra regression shards.\n- Patch quality notes: patch quality warnings are explained here rather than hidden: the broad catches are existing delivery-boundary error handling that converts transport/forwarder rejection into an attempted delivery failure; the default `return false` keeps unsupported targets unattempted; the `as unknown as GatewayRequestContext` cast is test fixture narrowing only; and the 10-file diff is kept together because the same delivery contract must be updated consistently across shared gateway handling, exec forwarding, plugin forwarding, iOS push, and their regression tests. No new public configuration, no new channel behavior, no feature flag, no broad approval decision rewrite, and no unrelated formatting or refactor is included.\n\n",
-        "branch": "feat/issue-89217",
-        "head_sha": "99a192826941ad59b157d41fdb8f628182b746b7",
-        "author": "mushuiyu886",
-        "labels": [
-          "gateway",
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/gateway/exec-approval-ios-push.test.ts",
-            "additions": 4,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/exec-approval-ios-push.ts",
-            "additions": 4,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/approval-shared.test.ts",
-            "additions": 57,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/approval-shared.ts",
-            "additions": 24,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/exec-approval.ts",
-            "additions": 40,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/plugin-approval.test.ts",
-            "additions": 32,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/plugin-approval.ts",
-            "additions": 3,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/server-methods.test.ts",
-            "additions": 30,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/exec-approval-forwarder.test.ts",
-            "additions": 83,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/exec-approval-forwarder.ts",
-            "additions": 42,
-            "deletions": 11,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90910",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90910.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "counts": {
-            "SUCCESS": 132,
-            "SKIPPED": 30,
-            "IN_PROGRESS": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Security High (channel-runtime-boundary):IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (channel-runtime-boundary):IN_PROGRESS"
-          ],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1857,
+    "total_ms": 4223,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 223
+        "ms": 2765
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1423
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 184
+        "ms": 1445
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
