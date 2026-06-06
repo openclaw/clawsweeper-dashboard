@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-06T02:07:44.706Z",
+  "generated_at": "2026-06-06T02:07:51.849Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-05T23:07:41.888Z",
+  "since": "2026-06-05T23:07:51.253Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
@@ -14,10 +14,10 @@
   "comment_ids": [
     4636967993
   ],
-  "status_comment_id": 4636968184,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -42,9 +42,9 @@
       "author": "Takhoffman",
       "author_id": 781889,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-06T02:07:02Z",
-      "comment_updated_at": "2026-06-06T02:07:02Z",
-      "status_comment_id": 4636968184,
+      "comment_created_at": "2026-06-06T02:06:36Z",
+      "comment_updated_at": "2026-06-06T02:06:36Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "automerge",
       "intent": "automerge",
@@ -61,115 +61,22 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "ensure_automerge_job",
-          "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90697.md",
-          "status": "executed",
-          "mode": "autonomous",
-          "cluster_id": "automerge-openclaw-openclaw-90697",
-          "status_detail": "written"
-        },
-        {
-          "action": "label",
-          "label": "clawsweeper:automerge",
-          "status": "executed"
-        },
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-06T02:07:48.099Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 90697
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-06T02:07:49.294Z",
-          "response_comment_id": "4636968184",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "write",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(llm): defer Anthropic stream start event until after message_start",
-        "body": "### Summary\n\n- **Problem**: Extended thinking sessions become permanently broken after a gateway restart or Anthropic prompt-cache TTL expiry (5 min). Every turn after the first failure also fails; once broken, the session never recovers on its own.\n- **Root Cause**: Both Anthropic stream implementations pushed `{type:'start'}` before entering the SSE event loop. In `pumpStreamWithRecovery` (`thinking.ts`), `yieldedOutput` is set `true` for every non-error event — once true, the thinking-block recovery retry is permanently disabled for that request. Anthropic sends thinking-signature validation errors as SSE `event: error` **before** `message_start` (pre-generation request validation). With the old placement, the `start` event set `yieldedOutput=true` before the SSE error arrived; recovery was silently skipped; the stale signatures stayed in the transcript; every subsequent turn also failed.\n- **Fix**: Defer `stream.push({type:'start'})` into the `message_start` handler in both stream implementations so a pre-stream SSE error always arrives while `yieldedOutput=false`, letting `pumpStreamWithRecovery` strip all thinking blocks and retry cleanly.\n- **What changed**:\n  - `src/llm/providers/anthropic.ts` — move `stream.push({type:'start'})` from before the SSE loop into the `message_start` event handler body (provider stream path).\n  - `src/agents/anthropic-transport-stream.ts` — same deferral for the embedded-agent default path (`resolveEmbeddedAgentStreamFn` → `createBoundaryAwareStreamFnForModel` → `createAnthropicMessagesTransportStreamFn`).\n  - `src/llm/providers/anthropic.test.ts` — two new tests: verify `start` is deferred until after `message_start` in normal flow; verify a pre-stream SSE error arrives with no preceding `start`.\n  - `src/agents/anthropic-transport-stream.test.ts` — same two ordering tests for the transport path.\n- **What did NOT change (scope boundary)**:\n  - `pumpStreamWithRecovery`, `wrapAnthropicStreamWithRecovery`, `stripAllThinkingBlocks` — unchanged; the fix only corrects the provider-level event ordering.\n  - Config surface unchanged. Plugin surface unchanged. Gateway protocol unchanged.\n\n### Reproduction\n\n1. Enable extended thinking on an Anthropic model and run a multi-turn session.\n2. Wait 5+ minutes (Anthropic prompt-cache TTL) or restart the gateway so the cached thinking block signatures expire.\n3. Send the next message.\n4. **Before this PR**: Anthropic sends SSE `event: error` `\"Invalid signature in thinking block\"` before `message_start`; `{type:'start'}` was already emitted before the SSE loop; `yieldedOutput=true`; `pumpStreamWithRecovery` skips retry; the error propagates; all subsequent turns also fail permanently.\n5. **After this PR**: `{type:'start'}` is deferred until inside the `message_start` handler in both stream implementations; `yieldedOutput=false` when the pre-stream SSE error arrives; `pumpStreamWithRecovery` detects the thinking-signature pattern, strips all thinking blocks, and retries; session continues normally.\n\n### Real behavior proof\n\n**Behavior addressed (#90667)**: extended thinking sessions permanently broken after gateway restart or Anthropic prompt-cache TTL expiry — every turn after the first signature error fails because `yieldedOutput=true` silently blocked the recovery retry in both the provider and transport stream paths.\n\n**Real environment tested (Linux, Node 22 — Vitest against the production `streamAnthropic` SSE event loop, `pumpStreamWithRecovery` recovery harness, and `createAnthropicMessagesTransportStreamFn` transport stream)**: `src/llm/providers/anthropic.test.ts` exercises the deferral ordering contract directly against `streamAnthropic`; `src/agents/embedded-agent-runner/thinking.test.ts` exercises `pumpStreamWithRecovery` with a stream that emits `{type:'error'}` before any `{type:'start'}` — the exact scenario this fix enables; `src/agents/anthropic-transport-stream.test.ts` covers the embedded-agent default path.\n\n**Exact steps or command run after this patch**: `pnpm test src/llm/providers/anthropic.test.ts src/agents/embedded-agent-runner/thinking.test.ts src/agents/anthropic-transport-stream.test.ts`; `node scripts/run-oxlint.mjs` and `pnpm format:fix` on all four changed files.\n\n**Evidence after fix (Vitest output for touched test files)**:\n\n```text\n anthropic.test.ts              Tests  8 passed (8)\n thinking.test.ts               Tests  42 passed (42)\n anthropic-transport-stream.test.ts  Tests  53 passed (53)\n```\n\nThe four new tests cover the deferral ordering contract: `start` is emitted only after `message_start` processing in both stream implementations; a pre-stream SSE error arrives with no preceding `start` event.\n\n**Observed result after fix**: the \"retries pre-content terminal stream-error events\" case in `thinking.test.ts` exercises the exact recovery path — stream emits `{type:'error'}` with no preceding `{type:'start'}` → retry fires (`callCount=2`). The new `anthropic.test.ts` and `anthropic-transport-stream.test.ts` tests confirm both implementations now uphold the `yieldedOutput=false` precondition that recovery requires.\n\n**What was not tested**: live Anthropic API call with expired cache and thinking blocks (requires waiting 5+ min for cache TTL expiry in a real session).\n\n**Repro confirmation**: the pre-existing \"retries pre-content terminal stream-error events\" test was already gated on `yieldedOutput=false` — it tested the recovery machinery in isolation but could not catch the provider-level ordering bug. Before this fix, both stream implementations set `yieldedOutput=true` before any SSE error arrived, so that test passed while the real provider path failed silently. The new tests close that gap by driving both stream implementations directly.\n\n### Risk / Mitigation\n\n- **Risk**: `start` event now carries populated `usage` (filled from `message_start`) instead of a zero-usage snapshot. **Mitigation**: `start.partial` is always treated as a partial/in-progress snapshot by all consumers; no caller depends on usage being zero; the change is strictly more informative.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Core\n\n### Linked Issue/PR\n\nFixes #90667",
-        "branch": "fix/90667-thinking-recovery-start-before-error",
-        "head_sha": "399a243c6437aa49e8dc2e7dbc661ff6caa60d10",
-        "author": "openperf",
-        "labels": [
-          "agents",
-          "size: S",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/agents/anthropic-transport-stream.test.ts",
-            "additions": 60,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/anthropic-transport-stream.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/anthropic.test.ts",
-            "additions": 89,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/anthropic.ts",
-            "additions": 5,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": "automerge-openclaw-openclaw-90697",
-        "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90697.md",
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90697",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90697.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "SUCCESS": 131,
-            "SKIPPED": 30,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": true,
-      "author_readonly_authorized": false
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 8131,
+    "total_ms": 1809,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 649
+        "ms": 582
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2153
+        "ms": 1
       },
       {
         "name": "classify_commands",
@@ -177,7 +84,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 5301
+        "ms": 1214
       },
       {
         "name": "append_ledger",
