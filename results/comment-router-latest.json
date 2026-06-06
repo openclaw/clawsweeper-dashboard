@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-06T19:21:47.254Z",
+  "generated_at": "2026-06-06T19:22:22.876Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-06T16:21:44.582Z",
+  "since": "2026-06-06T16:22:22.136Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     90989
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4640063563
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -61,104 +63,20 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(channels): recover stale ingress queue claims at gateway startup",
-        "body": "### Summary\n\n- **Problem**: Issue #90945 reports that after a gateway crash, `channel_ingress_events` rows left in `claimed` state are never recovered. Every new message into the affected session adds another stuck claim, silently deadlocking the channel (observed with Telegram DM). The existing stale-claim recovery (`recoverStaleTelegramSpooledUpdateClaims`) only covers the Telegram spool drain path — it runs inside the polling loop, not at startup, so it cannot release claims left by a crashed process before the loop starts.\n\n- **Root cause**: `recoverStaleClaims()` exists on each per-queue `ChannelIngressQueue` instance and works correctly, but nothing calls it at gateway startup for the general SQLite ingress queue. The Telegram spool recovery runs during drain cycles, but at that point the session is already blocked by stale claims from the previous crash. No cross-queue sweep exists.\n\n- **Fix**: Add `recoverAllStaleChannelIngressClaims()` — a module-level function in `ingress-queue.ts` that queries all `channel_ingress_events` rows with `status = \"claimed\"`, checks whether each `claim_owner` PID is still alive via `process.kill(pid, 0)`, and batch-releases dead-owner claims back to `pending` in a single write transaction. Wire it into the gateway startup sequence via a new `runStartupIngressClaimSweep` in `server-startup-ingress-sweep.ts`, called in parallel with the existing `runStartupSessionMigration` during `prepareGatewayPluginBootstrap`. The sweep is best-effort and non-blocking — errors are caught, logged, and gateway startup continues.\n\n- **What changed**:\n  - `src/channels/message/ingress-queue.ts` — new exported function `recoverAllStaleChannelIngressClaims()` + helper `isIngressClaimProcessAlive()`.\n  - `src/gateway/server-startup-ingress-sweep.ts` — new startup sweep file, follows the `server-startup-session-migration.ts` pattern (deps injection for testability, try/catch with warn).\n  - `src/gateway/server-startup-plugins.ts` — wires the sweep into `prepareGatewayPluginBootstrap` alongside existing startup tasks.\n  - `src/channels/message/ingress-queue.test.ts` — 4 new tests: cross-queue recovery, live-PID preservation, empty-table fast path, null-owner recovery.\n  - `src/gateway/server-startup-ingress-sweep.test.ts` — 3 new tests: success logging, error recovery, no-op path.\n\n- **What did NOT change (scope boundary)**:\n  - Per-queue `recoverStaleClaims()` is unchanged — the startup sweep is additive.\n  - `claimNext()` with `staleMs` is unchanged — still dead code but out of scope for this fix.\n  - Telegram spool recovery is unchanged — the startup sweep covers the gap before the drain loop starts.\n  - No config surface, plugin surface, or gateway protocol changes.\n\n### Reproduction\n\n1. Active Telegram DM session with messages flowing through `channel_ingress_events`.\n2. Kill the gateway mid-turn (`kill -HUP <pid>`).\n3. Observe `channel_ingress_events` contains rows with `status = \"claimed\"` and `claim_owner` = dead PID.\n4. Restart gateway — before this PR: claims stay stuck, channel is deadlocked. After this PR: claims are released to `pending` before channels start, messages resume.\n\n### Real behavior proof\n\n**Behavior addressed**: After a gateway crash, stale claimed rows in `channel_ingress_events` are recovered at next startup; channel message processing resumes normally. Fixes #90945.\n\n**Real environment tested**: macOS Darwin 24.6.0, Node 22.19. Verified against the production `recoverAllStaleChannelIngressClaims`, `createChannelIngressQueue`, and `runStartupIngressClaimSweep` paths with real SQLite state databases — no mocks on the queue or redaction layer. Terminal output captured below.\n\n**Exact steps or command run after this patch**:\n```\nnode scripts/run-vitest.mjs src/channels/message/ingress-queue.test.ts\nnode scripts/run-vitest.mjs src/gateway/server-startup-ingress-sweep.test.ts\n```\n\n**Evidence after fix**:\n```\n$ node scripts/run-vitest.mjs src/channels/message/ingress-queue.test.ts\n\n RUN  v4.1.7\n\n Test Files  1 passed (1)\n      Tests  12 passed (12)\n  Start at  03:02:23\n  Duration  6.58s\n\n$ node scripts/run-vitest.mjs src/gateway/server-startup-ingress-sweep.test.ts\n\n RUN  v4.1.7\n\n Test Files  1 passed (1)\n      Tests  3 passed (3)\n  Start at  03:03:01\n  Duration  1.58s\n```\n\nThe four new `recoverAllStaleChannelIngressClaims` tests verify real SQLite state transitions:\n- `recovers claims with dead owner PIDs across multiple queues` — creates two real queue instances (telegram/dm-1 and whatsapp/dm-2), claims events with a dead PID (999999999), runs the sweep, then queries both queues to confirm all three events returned to `pending` state and `listClaims()` returns empty arrays.\n- `preserves claims owned by the current process` — claims an event using the default `process.pid` (alive), runs the sweep, confirms zero recoveries and the claim remains held.\n- `returns zero when there are no claimed rows` — enqueues a pending event, confirms the sweep returns 0 with no side effects.\n- `recovers claims with null or empty claim_owner` — manually sets `claim_owner` to null via raw SQL update to simulate a partially-written crash row, confirms the sweep recovers it.\n\nThe three `runStartupIngressClaimSweep` tests verify the startup wiring:\n- `logs recovered count on success` — injects a mock sweep, verifies info logging.\n- `logs warning and continues when sweep throws` — injects a throwing mock, verifies the error is caught and startup continues.\n- `does not call log.info when no claims are recovered` — verifies no-op path produces no log output.\n\n**Observed result after fix**: Dead-PID claims are released to `pending`; live-PID claims are preserved; the sweep runs before channels start and does not block startup on failure.\n\n**What was not tested**: Live gateway crash/restart round-trip with a real Telegram channel. The SQLite queue operations are covered deterministically with real DB instances; a full gateway restart was not driven.\n\n### Risk / Mitigation\n\n- **Risk**: PID recycling — after crash, a different process might reuse the dead PID, causing the sweep to incorrectly preserve a stale claim. **Mitigation**: This is the same assumption made by the existing Telegram spool recovery (`isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess`). PID recycling is rare on modern Linux with PID cgroups, and the consequence (claim stays stuck until next restart) is no worse than the current behavior.\n- **Risk**: Cross-queue sweep might be slow if thousands of claims exist. **Mitigation**: The sweep batches all releases in a single write transaction. In practice, the number of stale claims is small (proportional to sessions active at crash time).\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] channels\n- [x] gateway\n\n### Linked Issue/PR\n\nFixes #90945\n",
-        "branch": "worktree-fix-90945-sqlite-stale-claims",
-        "head_sha": "22e6025854c817f71fba54ab055928d117b6b0a4",
-        "author": "849261680",
-        "labels": [
-          "gateway",
-          "size: M",
-          "proof: supplied",
-          "mantis: telegram-visible-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/channels/message/ingress-queue.test.ts",
-            "additions": 118,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/message/ingress-queue.ts",
-            "additions": 96,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-startup-ingress-sweep.test.ts",
-            "additions": 53,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/server-startup-ingress-sweep.ts",
-            "additions": 37,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/server-startup-plugins.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90989",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90989.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 30,
-            "SUCCESS": 126,
-            "FAILURE": 3,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "build-artifacts:FAILURE",
-            "check-lint:FAILURE",
-            "check-additional-runtime-topology-architecture:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "build-artifacts:FAILURE",
-            "check-lint:FAILURE",
-            "check-additional-runtime-topology-architecture:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3022,
+    "total_ms": 1444,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 434
+        "ms": 729
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2224
+        "ms": 0
       },
       {
         "name": "classify_commands",
@@ -166,7 +84,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 338
+        "ms": 705
       },
       {
         "name": "append_ledger",
