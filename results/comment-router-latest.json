@@ -1,20 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-06T09:32:33.858Z",
+  "generated_at": "2026-06-06T09:33:46.352Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-06T06:32:33.318Z",
+  "since": "2026-06-06T06:33:45.418Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    78741
+    90886
   ],
   "comment_ids": [
-    4638120532
+    4638127929
   ],
-  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -34,17 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:90395:4623716974:2026-06-06T09:32:14Z:clawsweeper_needs_human",
-      "comment_id": "4623716974",
-      "comment_version_key": "4623716974:2026-06-06T09:32:14Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/90395#issuecomment-4623716974",
+      "idempotency_key": "comment-router:openclaw/openclaw:90886:4638127929:2026-06-06T09:33:06Z:re_review",
+      "comment_id": "4638127929",
+      "comment_version_key": "4638127929:2026-06-06T09:33:06Z",
+      "comment_url": "https://github.com/openclaw/openclaw/issues/90886#issuecomment-4638127929",
       "repo": "openclaw/openclaw",
-      "issue_number": 90395,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-06T09:31:10Z",
-      "comment_updated_at": "2026-06-06T09:31:10Z",
+      "issue_number": 90886,
+      "author": "ttruongatl",
+      "author_id": 5000972,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-06T09:33:06Z",
+      "comment_updated_at": "2026-06-06T09:33:06Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -62,177 +61,52 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
+      "status": "ignored",
       "actions": [],
       "author_repository_permission": "read",
       "target": {
-        "kind": "pull_request",
-        "title": "fix(memory-core): write meta after sync when identity is missing with existing chunks",
-        "body": "## Summary\n\n- Problem: Gateway memory auto-sync creates a dead loop: it indexes files (creating chunks) but never writes the `memory_index_meta_v1` meta table entry when `indexIdentity.status !== \"valid\"` and `!needsFullReindex`. All `memory_search` calls return \"index metadata is missing\" with 0 results.\n- Why it matters: Users with fresh or corrupted index state cannot use memory search even though chunks exist in the database.\n- What changed: When the early-return path in `runSync()` detects identity is missing but existing chunks prevent a full reindex, the fix forces a verified full reindex via `runSafeReindex`/`runUnsafeReindex`. The reindex path prunes stale chunks from deleted paths, old providers, or old scopes before writing meta.\n\n## Design note on stale-row safety\n\nThe recovery path triggers a full reindex rather than stamping fresh metadata onto unverified chunks. The reindex path (`runSafeReindex`/`runUnsafeReindex`) scans current sources, indexes only matching files, prunes stale rows from deleted paths, and writes meta only after verification.\n\n**Guard against semantic-index downgrade:** When a specific embedding provider (e.g. `openai`) is configured but currently unavailable, the recovery path leaves the index dirty/paused instead of forcing a reindex. Without this guard, a provider outage would cause the recovery path to silently rebuild an existing semantic/vector index as FTS-only, permanently losing vector embeddings. For `auto`/`none`/unset providers or when the provider is available, the verified full reindex proceeds safely.\n\n## Change Type\n\n- [x] Bug fix\n\n## Scope\n\n- [x] Memory / storage\n\n## Linked Issues\n\n- Closes #90338\n- Related: #90361\n\n## Real behavior proof\n\n**Behavior addressed:** Memory index meta never written when auto-sync finds identity missing with existing chunks (#90338). Every sync cycle indexes files, creates chunks, returns early without writing meta — dead loop. The fix triggers a verified full reindex in this recovery path, with a guard that preserves existing semantic indexes during provider outages.\n\n**Real environment tested:** Node v22.22.0, Linux x86_64, OpenClaw 2026.6.1.\n\n**Exact steps or command run after this patch:**\n\nStep 1 — FTS-only recovery tests (dead-loop + stale pruning + provider-unavailable guard):\n\n```\nOPENCLAW_VITEST_MAX_WORKERS=4 pnpm test -- extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts\n```\n\nStep 2 — full memory test suite:\n\n```\nOPENCLAW_VITEST_MAX_WORKERS=4 pnpm test -- extensions/memory-core/src/memory/index.test.ts extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts extensions/memory-core/src/memory/manager-sync-yield.test.ts extensions/memory-core/src/memory/manager-targeted-sync.test.ts extensions/memory-core/src/memory/manager.session-reindex.test.ts\n```\n\n**Evidence after fix (terminal capture):**\n\nDead-loop condition reproduced (console output):\n\n```\n$ node --import tsx/esm -e \"\nconst {openMemoryDatabaseAtPath}=await import('./extensions/memory-core/src/memory/manager-db.js');\nconst db=openMemoryDatabaseAtPath('/tmp/deadloop4.db',true);\ndb.exec('CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT); CREATE TABLE IF NOT EXISTS chunks(id TEXT PRIMARY KEY, path TEXT NOT NULL, source TEXT NOT NULL DEFAULT ''memory'', text TEXT NOT NULL);');\ndb.prepare('INSERT INTO chunks VALUES(?,?,?,?)').run('c1','/ws/notes.md','memory','architecture notes');\nconst hc=db.prepare('SELECT 1 as found FROM chunks LIMIT 1').get();\nconst m=db.prepare('SELECT value FROM meta WHERE key=?').get('memory_index_meta_v1');\nconsole.log('hasIndexedChunks:',hc?'true':'false','| meta:',m?'PRESENT':'MISSING (dead loop!)');\ndb.close();\n\"\nhasIndexedChunks: true | meta: MISSING (dead loop!)\n```\n\nFTS-only recovery tests (10 tests, 3 scenarios: reindex recovery, stale pruning, provider-unavailable guard):\n\n```\n$ OPENCLAW_VITEST_MAX_WORKERS=4 pnpm test -- extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts\n\n Test Files  1 passed (1)\n      Tests  10 passed (10)\n   Start at  17:26:45\n   Duration  5.91s\nexit code: 0\n```\n\nFull memory test suite (console output — 5 files, 49 tests):\n\n```\n$ OPENCLAW_VITEST_MAX_WORKERS=4 pnpm test -- extensions/memory-core/src/memory/index.test.ts extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts extensions/memory-core/src/memory/manager-sync-yield.test.ts extensions/memory-core/src/memory/manager-targeted-sync.test.ts extensions/memory-core/src/memory/manager.session-reindex.test.ts\n\n Test Files  5 passed (5)\n      Tests  49 passed (49)\n   Start at  17:27:06\n   Duration  9.24s\nexit code: 0\n```\n\n**Observed result after fix:** Three recovery scenarios verified:\n1. **FTS-only dead-loop recovery** — identity missing + FTS-only chunks → triggers verified reindex → meta recreated, dead loop broken\n2. **Stale chunk pruning** — memory file deleted + meta missing → reindex prunes stale chunks from deleted paths before writing meta\n3. **Semantic-index guard** — specific provider configured but unavailable → index stays dirty/paused, no FTS-only downgrade\n\n**What was not tested:** Live OpenClaw gateway with real embedding provider. The related safe-reindex race (#90453) and stale-handle fix (#90727) are tracked separately.\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n",
-        "branch": "fix/90338-memory-index-meta-deadloop",
-        "head_sha": "019865b85e9ca80077fcd665a6ed65a5af4e0394",
-        "author": "chengzhichao-xydt",
-        "labels": [
-          "extensions: memory-core",
-          "size: S",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/memory-core/src/memory/manager-sync-ops.ts",
-            "additions": 23,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts",
-            "additions": 95,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
+        "kind": "issue",
+        "state": "open",
+        "locked": false,
+        "title": "gateway hangs at `[gateway] starting...` when a declared provider lacks credentials (regression v2026.4.8 → v2026.4.26)",
+        "body": "# [bug] gateway hangs at `[gateway] starting...` when configured provider lacks credentials (regression v2026.4.8 → v2026.4.26)\n\n## Summary\n\nA configmap that declares `github-copilot` and `openai` providers (in `models.providers`) and references them in `agents.defaults.model.fallbacks`, when paired with **unset** `COPILOT_GITHUB_TOKEN` and `OPENAI_API_KEY` env vars, causes the openclaw sidecar to **hang at the `[gateway] starting...` log line for ~190s** and get SIGKILLed by Kubernetes startupProbe.\n\nThe same configuration ran clean on **v2026.4.8** (degraded silently to the only credentialed provider, `google`). It regressed in **v2026.4.26**.\n\n## Environment\n\n- Image: `ghcr.io/openclaw/openclaw:2026.4.26` (compared against `:2026.4.8`)\n- Runtime: alpine-based, `openclaw gateway run --bind custom --allow-unconfigured` as ENTRYPOINT\n- Container: sidecar in a Kubernetes pod (AKS), `runAsUser: 1000`\n- Credentials present at startup: `GOOGLE_API_KEY` only\n- Credentials absent: `COPILOT_GITHUB_TOKEN`, `OPENAI_API_KEY` (env vars unset; `optional: true` `secretKeyRef` to a Secret that doesn't exist)\n\n## Configmap (`openclaw.json`) shape that triggers the hang\n\n```json\n{\n  \"models\": {\n    \"providers\": {\n      \"google\":         { \"baseUrl\": \"https://generativelanguage.googleapis.com/v1beta\", \"api\": \"google-generative-ai\", \"models\": [{\"id\": \"gemini-2.5-flash\", ...}] },\n      \"github-copilot\": { \"baseUrl\": \"https://api.githubcopilot.com\",                    \"models\": [{\"id\": \"gpt-4o-mini\", ...}] },\n      \"openai\":         { \"baseUrl\": \"https://api.openai.com/v1\",                       \"models\": [{\"id\": \"gpt-4o-mini\", ...}] }\n    }\n  },\n  \"gateway\": { \"mode\": \"local\", \"port\": 18789, \"bind\": \"custom\", \"customBindHost\": \"0.0.0.0\", \"auth\": { \"mode\": \"token\" }, \"http\": { \"endpoints\": { \"chatCompletions\": { \"enabled\": true } } } },\n  \"agents\": {\n    \"defaults\": {\n      \"model\": {\n        \"primary\":   \"google/gemini-2.5-flash\",\n        \"fallbacks\": [\"github-copilot/gpt-4o-mini\", \"openai/gpt-4o-mini\"]\n      },\n      \"timeoutSeconds\": 60\n    }\n  }\n}\n```\n\nWhen `COPILOT_GITHUB_TOKEN` / `OPENAI_API_KEY` are **set**, this config presumably works (we have not retested at 2026.4.26 with creds present — but the same shape worked under 2026.4.8 with creds also absent, so degraded-mode is the regression).\n\n## Observed behaviour\n\n### v2026.4.8 — degraded silently (no hang)\n\n```\n[gateway] starting...\n[gateway] listening on 0.0.0.0:18789\n[gateway] /healthz responding 200 in <1s of startup\n```\n\nSidecar reached `Ready=True` within the startupProbe budget; ai-central → openclaw `/chat/completions` succeeded via the google provider.\n\n### v2026.4.26 — hangs at `starting...`\n\n```\n[gateway] starting...\n<no further log lines for ≥190s>\n<SIGKILL from kubelet startupProbe>\nCrashLoopBackOff\n```\n\nNo further log output between the `starting...` line and the SIGKILL. No panic, no provider-bootstrap error message, no `auth` complaint, nothing.\n\n`/healthz` never binds. The container restarts indefinitely.\n\n## Reproduction (minimal)\n\n```bash\n# Write the configmap shown above to ./openclaw.json\ndocker run --rm -it \\\n  -e GOOGLE_API_KEY=\"$REAL_GEMINI_KEY\" \\\n  -e NODE_OPTIONS=\"--max-old-space-size=768\" \\\n  -v \"$PWD/openclaw.json:/home/node/.openclaw/openclaw.json:ro\" \\\n  -p 18789:18789 \\\n  ghcr.io/openclaw/openclaw:2026.4.26 \\\n  openclaw gateway run --bind custom --allow-unconfigured\n# Wait. The `[gateway] starting...` line prints, then nothing for ≥190s.\n```\n\nRepeat with `ghcr.io/openclaw/openclaw:2026.4.8` (or even `:2026.4.24`/`:2026.4.25` if you want to bisect) — the gateway should reach `listening on` and `/healthz` should answer 200 within a couple seconds.\n\n## Workaround applied (downstream)\n\nStrip the unconfigured providers from the configmap so it declares only `google`:\n\n```json\n\"providers\": { \"google\": { ... } },\n\"agents\": { \"defaults\": { \"model\": { \"primary\": \"google/gemini-2.5-flash\" } } }\n```\n\nAfter this change the v2026.4.26 sidecar starts cleanly. So the trigger is specifically \"configured provider in `models.providers` + listed in `fallbacks` + missing credential env var\", not anything inherent to v2026.4.26.\n\n## Hypothesis (unverified — please bisect / triage)\n\nBetween v2026.4.8 and v2026.4.26 something in the provider-bootstrap / gateway-startup path appears to either:\n\n- block (hang) on a missing credential for a declared provider (instead of degrading to the providers that do have credentials), OR\n- attempt a network handshake / token-refresh against the unconfigured provider's `baseUrl` with no key and no timeout, OR\n- silently retry indefinitely without emitting a log line.\n\nWe have not bisected; the v2026.4.8..v2026.4.26 range is ~8000 commits and the failure mode is silent (no log between `starting...` and SIGKILL), so a maintainer with familiarity with the gateway-bootstrap + provider-init code paths is much better positioned to localize this than we are.\n\nCommits in the range that *might* be relevant (no proof — heuristic grep for `gateway start` / `provider` / `optional` / `credential`):\n\n- `6ff7a30b9f` — fix(providers): guard optional provider index installs\n- `674d188153` — feat(plugins): plan gateway startup from registry\n- `8e37ee4bf2` — fix(voice-call): avoid blocking gateway startup\n- `df95949fe4` — refactor: simplify gateway startup auth checks\n- `b72414c94e` — fix: include startup plan in lookup timing\n- `5e2136c6ae` — fix: include memory plugins in gateway startup\n\n## Suggested fixes (one of)\n\n1. **Restore silent degrade**: if a declared provider has no credential at startup, log a WARN and skip it (don't block, don't include it in the fallback chain). v2026.4.8 behaviour.\n2. **Hard-fail fast with a clear error** instead of hanging silently — so the operator gets `error: provider 'github-copilot' has no credential (COPILOT_GITHUB_TOKEN unset); set the env var or remove from models.providers` within 5s, not a silent 190s hang.\n\nEither is acceptable. The current behaviour (hang silently → SIGKILL → CrashLoopBackOff) is the worst of both worlds.\n\n## Downstream tracking\n\n- Downstream issue: smisy/nail-notes-api#5786 (private)\n- Downstream workaround PR: smisy/nail-notes-api#5791 (private)\n\nHappy to repro inside a public sandbox if that would help; we'd appreciate a heads-up if there's a known fix or workaround in a newer beta we should jump to instead.\n",
+        "author": "smisy-system-design[bot]",
+        "labels": [],
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90395",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90395.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 157,
-          "counts": {
-            "CANCELLED": 1,
-            "SUCCESS": 126,
-            "SKIPPED": 30
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
+        "open_prs": [],
+        "issue_implementation_cluster_id": "issue-openclaw-openclaw-90886",
+        "issue_implementation_job_path": "jobs/openclaw/inbox/issue-openclaw-openclaw-90886.md",
+        "mode": "autonomous"
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:90395:4638032877:2026-06-06T08:56:47Z:re_review",
-      "comment_id": "4638032877",
-      "comment_version_key": "4638032877:2026-06-06T08:56:47Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/90395#issuecomment-4638032877",
-      "repo": "openclaw/openclaw",
-      "issue_number": 90395,
-      "author": "chengzhichao-xydt",
-      "author_id": 264300353,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-06T08:56:47Z",
-      "comment_updated_at": "2026-06-06T08:56:47Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(memory-core): write meta after sync when identity is missing with existing chunks",
-        "body": "## Summary\n\n- Problem: Gateway memory auto-sync creates a dead loop: it indexes files (creating chunks) but never writes the `memory_index_meta_v1` meta table entry when `indexIdentity.status !== \"valid\"` and `!needsFullReindex`. All `memory_search` calls return \"index metadata is missing\" with 0 results.\n- Why it matters: Users with fresh or corrupted index state cannot use memory search even though chunks exist in the database.\n- What changed: When the early-return path in `runSync()` detects identity is missing but existing chunks prevent a full reindex, the fix forces a verified full reindex via `runSafeReindex`/`runUnsafeReindex`. The reindex path prunes stale chunks from deleted paths, old providers, or old scopes before writing meta.\n\n## Design note on stale-row safety\n\nThe recovery path triggers a full reindex rather than stamping fresh metadata onto unverified chunks. The reindex path (`runSafeReindex`/`runUnsafeReindex`) scans current sources, indexes only matching files, prunes stale rows from deleted paths, and writes meta only after verification.\n\n**Guard against semantic-index downgrade:** When a specific embedding provider (e.g. `openai`) is configured but currently unavailable, the recovery path leaves the index dirty/paused instead of forcing a reindex. Without this guard, a provider outage would cause the recovery path to silently rebuild an existing semantic/vector index as FTS-only, permanently losing vector embeddings. For `auto`/`none`/unset providers or when the provider is available, the verified full reindex proceeds safely.\n\n## Change Type\n\n- [x] Bug fix\n\n## Scope\n\n- [x] Memory / storage\n\n## Linked Issues\n\n- Closes #90338\n- Related: #90361\n\n## Real behavior proof\n\n**Behavior addressed:** Memory index meta never written when auto-sync finds identity missing with existing chunks (#90338). Every sync cycle indexes files, creates chunks, returns early without writing meta — dead loop. The fix triggers a verified full reindex in this recovery path, with a guard that preserves existing semantic indexes during provider outages.\n\n**Real environment tested:** Node v22.22.0, Linux x86_64, OpenClaw 2026.6.1.\n\n**Exact steps or command run after this patch:**\n\nStep 1 — FTS-only recovery tests (dead-loop + stale pruning + provider-unavailable guard):\n\n```\nOPENCLAW_VITEST_MAX_WORKERS=4 pnpm test -- extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts\n```\n\nStep 2 — full memory test suite:\n\n```\nOPENCLAW_VITEST_MAX_WORKERS=4 pnpm test -- extensions/memory-core/src/memory/index.test.ts extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts extensions/memory-core/src/memory/manager-sync-yield.test.ts extensions/memory-core/src/memory/manager-targeted-sync.test.ts extensions/memory-core/src/memory/manager.session-reindex.test.ts\n```\n\n**Evidence after fix (terminal capture):**\n\nDead-loop condition reproduced (console output):\n\n```\n$ node --import tsx/esm -e \"\nconst {openMemoryDatabaseAtPath}=await import('./extensions/memory-core/src/memory/manager-db.js');\nconst db=openMemoryDatabaseAtPath('/tmp/deadloop4.db',true);\ndb.exec('CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT); CREATE TABLE IF NOT EXISTS chunks(id TEXT PRIMARY KEY, path TEXT NOT NULL, source TEXT NOT NULL DEFAULT ''memory'', text TEXT NOT NULL);');\ndb.prepare('INSERT INTO chunks VALUES(?,?,?,?)').run('c1','/ws/notes.md','memory','architecture notes');\nconst hc=db.prepare('SELECT 1 as found FROM chunks LIMIT 1').get();\nconst m=db.prepare('SELECT value FROM meta WHERE key=?').get('memory_index_meta_v1');\nconsole.log('hasIndexedChunks:',hc?'true':'false','| meta:',m?'PRESENT':'MISSING (dead loop!)');\ndb.close();\n\"\nhasIndexedChunks: true | meta: MISSING (dead loop!)\n```\n\nFTS-only recovery tests (10 tests, 3 scenarios: reindex recovery, stale pruning, provider-unavailable guard):\n\n```\n$ OPENCLAW_VITEST_MAX_WORKERS=4 pnpm test -- extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts\n\n Test Files  1 passed (1)\n      Tests  10 passed (10)\n   Start at  17:26:45\n   Duration  5.91s\nexit code: 0\n```\n\nFull memory test suite (console output — 5 files, 49 tests):\n\n```\n$ OPENCLAW_VITEST_MAX_WORKERS=4 pnpm test -- extensions/memory-core/src/memory/index.test.ts extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts extensions/memory-core/src/memory/manager-sync-yield.test.ts extensions/memory-core/src/memory/manager-targeted-sync.test.ts extensions/memory-core/src/memory/manager.session-reindex.test.ts\n\n Test Files  5 passed (5)\n      Tests  49 passed (49)\n   Start at  17:27:06\n   Duration  9.24s\nexit code: 0\n```\n\n**Observed result after fix:** Three recovery scenarios verified:\n1. **FTS-only dead-loop recovery** — identity missing + FTS-only chunks → triggers verified reindex → meta recreated, dead loop broken\n2. **Stale chunk pruning** — memory file deleted + meta missing → reindex prunes stale chunks from deleted paths before writing meta\n3. **Semantic-index guard** — specific provider configured but unavailable → index stays dirty/paused, no FTS-only downgrade\n\n**What was not tested:** Live OpenClaw gateway with real embedding provider. The related safe-reindex race (#90453) and stale-handle fix (#90727) are tracked separately.\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n",
-        "branch": "fix/90338-memory-index-meta-deadloop",
-        "head_sha": "019865b85e9ca80077fcd665a6ed65a5af4e0394",
-        "author": "chengzhichao-xydt",
-        "labels": [
-          "extensions: memory-core",
-          "size: S",
-          "proof: supplied",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/memory-core/src/memory/manager-sync-ops.ts",
-            "additions": 23,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts",
-            "additions": 95,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90395",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90395.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 157,
-          "counts": {
-            "CANCELLED": 1,
-            "SUCCESS": 126,
-            "SKIPPED": 30
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "author_readonly_authorized": false,
+      "reason": "author association NONE and repository permission read are not allowed"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1801,
+    "total_ms": 1176,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 527
+        "ms": 510
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 314
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 98
       },
       {
         "name": "execute_commands",
-        "ms": 1261
+        "ms": 243
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
