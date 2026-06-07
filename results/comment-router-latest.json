@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-07T12:24:55.444Z",
+  "generated_at": "2026-06-07T12:25:47.530Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-07T09:24:53.240Z",
+  "since": "2026-06-07T09:25:46.880Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4642564837
   ],
-  "status_comment_id": 4642564999,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-07T12:24:12Z",
       "comment_updated_at": "2026-06-07T12:24:12Z",
-      "status_comment_id": 4642564999,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "automerge",
       "intent": "automerge",
@@ -54,122 +54,41 @@
       "trusted_bot": false,
       "trusted_bot_author": null,
       "automation_source": null,
-      "repair_reason": "automerge enabled; current checks are failing: check-lint:FAILURE, check-test-types:FAILURE",
+      "repair_reason": null,
       "review_summary": null,
       "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "label",
-          "label": "clawsweeper:automerge",
-          "status": "executed"
-        },
-        {
-          "action": "dispatch_repair",
-          "workflow": "repair-cluster-worker.yml",
-          "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91124.md",
-          "mode": "autonomous",
-          "status": "executed",
-          "dispatched_at": "2026-06-07T12:25:05.401Z",
-          "run_url": "https://github.com/openclaw/clawsweeper/actions/runs/27092501586"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-07T12:25:06.299Z",
-          "response_comment_id": "4642564999",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "write",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): do not refresh lastUsedAt on MCP lease release",
-        "body": "### Summary\n\n- **Problem**: Issue #91075 reports MCP server processes accumulating linearly over gateway uptime — 24 processes / 3.3 GB observed after ~3 h with 4 cron agents running at 5–15 min intervals. `sweepIdleRuntimes` never reclaims any of them.\n- **Root Cause**: `acquireLease()` in `createSessionMcpRuntime` returns a release callback that unconditionally sets `lastUsedAt = Date.now()`. The idle sweep evicts a runtime only when `nowMs - runtime.lastUsedAt >= idleTtlMs` and `activeLeases === 0`. When a cron agent holds a lease for longer than `sessionIdleTtlMs`, releasing that lease resets the clock to the moment of release; the very next sweep finds the runtime within TTL again and keeps it. Because cron agents re-lease before the next full TTL cycle elapses, the sweep never fires. The accumulated runtimes — including their MCP child processes and SSE/HTTP handles — are never disposed.\n- **Fix**: Remove `lastUsedAt = Date.now()` from the release callback. `markUsed()` already stamps the clock at the correct points: inside `materializeBundleMcpToolsForRun` when tools are prepared and before every tool/resource/prompt execution. Releasing a lease is not \"using\" the runtime and must not extend the TTL window.\n- **What changed**:\n  - `src/agents/agent-bundle-mcp-runtime.ts` — remove `lastUsedAt = Date.now()` from `acquireLease()` release callback; add a one-line comment explaining the invariant.\n  - `src/agents/agent-bundle-mcp-runtime.test.ts` — update the existing idle-eviction test mock to match corrected production behavior (remove mirrored `lastUsedAt = now` from the mock release callback); add new regression test `evicts immediately after release when TTL already elapsed during active lease`.\n- **What did NOT change (scope boundary)**:\n  - `markUsed()` call sites in `agent-bundle-mcp-materialize.ts` are unchanged; the TTL window resets correctly at materialization and tool execution.\n  - `sweepIdleRuntimes()` logic, active-lease guard, and dispose path are unchanged.\n  - Config surface unchanged (no schema, defaults, doctor migrations, or `docs/reference/config`).\n  - Plugin surface unchanged (no plugin SDK, manifest, `extensions/*` api/runtime-api, registry/loader).\n  - Gateway protocol unchanged.\n\n### Reproduction\n\n1. Start gateway with cron agents that reuse the same session key at intervals shorter than `mcp.sessionIdleTtlMs` (default 600 s).\n2. Monitor MCP child-process count over several hours — it grows linearly, one per cron fire, and idle sweep never reduces it.\n3. **Before this PR**: the lease release resets `lastUsedAt` to now; the next `sweepIdleRuntimes` call finds `nowMs - lastUsedAt < idleTtlMs` and skips the runtime; process accumulation is unbounded.\n4. **After this PR**: releasing a lease leaves `lastUsedAt` at its last genuine use time; a runtime held past its TTL is evicted on the first sweep after the final lease is released, without requiring any further clock advance.\n\n### Real behavior proof\n\n**Behavior addressed (#91075)**: MCP server processes no longer accumulate after the patch; a runtime whose TTL elapsed while a lease was active is evicted on the next `sweepIdleRuntimes` call after the lease is released.\n\n**Real environment tested (Linux, Node 22 — Vitest against the production `createSessionMcpRuntime`, `acquireLease`, and `sweepIdleRuntimes` implementations in `agent-bundle-mcp-runtime.ts`)**: tests drive the real manager and runtime factory with a controlled clock; no mocking of the idle-sweep or dispose logic.\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs src/agents/agent-bundle-mcp-runtime.test.ts -t \"evicts idle runtimes|evicts immediately after release\"` — 4 passed; `pnpm format:fix` on changed files; `node scripts/run-oxlint.mjs` on changed files — clean.\n\n**Evidence after fix**: Vitest: 4 passed, 0 failed; autoreview: no accepted/actionable findings, correctness 0.97.\n\n**Observed result after fix**: in the new regression test, the clock does not advance after the lease is released — yet `sweepIdleRuntimes` returns 1 and `dispose` is called, confirming the runtime is evicted immediately rather than after an additional full TTL cycle.\n\n**What was not tested**: live gateway cron scenario with real MCP child processes; the sweep logic and dispose path are covered by the test harness against production functions.\n\n**Repro confirmation**: the new regression test (`evicts immediately after release when TTL already elapsed during active lease`) fails on the unfixed tree because the mock release callback refreshes `lastUsedAt` and the sweep returns 0 instead of 1; it passes with the fix, directly covering the reported accumulation path.\n\n### Risk / Mitigation\n\n- **Risk**: a caller relying on the release callback to refresh the TTL window silently loses that extension. **Mitigation**: no such caller exists; `markUsed()` is the only documented mechanism and is already invoked at `acquireLease` time inside `materializeBundleMcpToolsForRun`.\n- **Risk**: an active runtime disposed prematurely if `activeLeases` and `lastUsedAt` are out of sync. **Mitigation**: `sweepIdleRuntimes` still skips any runtime with `activeLeases > 0`; the TTL is only evaluated after all leases are released.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Agents / embedded runner\n\n### Linked Issue/PR\n\nFixes #91075",
-        "branch": "fix/91075-mcp-idle-sweep-release-timestamp",
-        "head_sha": "3535e5c70fb0a8c24b6b3c8b345dd1e5cea57210",
-        "author": "openperf",
-        "labels": [
-          "agents",
-          "size: S",
-          "clawsweeper:automerge",
-          "P1",
-          "rating: 🦞 diamond lobster",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/agents/agent-bundle-mcp-runtime.test.ts",
-            "additions": 72,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-bundle-mcp-runtime.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": "automerge-openclaw-openclaw-91124",
-        "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91124.md",
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91124",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91124.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "counts": {
-            "SUCCESS": 130,
-            "SKIPPED": 31,
-            "FAILURE": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": true,
-      "author_readonly_authorized": false
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 13502,
+    "total_ms": 2704,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 541
+        "ms": 636
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1646
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 5
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 11285
+        "ms": 2055
       },
       {
         "name": "append_ledger",
-        "ms": 2
+        "ms": 0
       }
     ]
   }
