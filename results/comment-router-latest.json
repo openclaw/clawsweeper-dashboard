@@ -1,19 +1,17 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-07T17:42:01.023Z",
+  "generated_at": "2026-06-07T17:47:04.846Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-07T14:42:00.428Z",
+  "since": "2026-06-07T14:47:02.269Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    103
+    89442
   ],
-  "comment_ids": [
-    4643432040
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -33,58 +31,123 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:88768:4643432040:2026-06-07T17:40:36Z:re_review",
-      "comment_id": "4643432040",
-      "comment_version_key": "4643432040:2026-06-07T17:40:36Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/88768#issuecomment-4643432040",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89442:4602451853:2026-06-07T17:46:59Z:clawsweeper_needs_human",
+      "comment_id": "4602451853",
+      "comment_version_key": "4602451853:2026-06-07T17:46:59Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89442#issuecomment-4602451853",
       "repo": "openclaw/openclaw",
-      "issue_number": 88768,
-      "author": "bdjben",
-      "author_id": 188106718,
+      "issue_number": 89442,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-07T17:40:36Z",
-      "comment_updated_at": "2026-06-07T17:40:36Z",
+      "comment_created_at": "2026-06-02T12:38:39Z",
+      "comment_updated_at": "2026-06-07T17:46:59Z",
       "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- No automated repair is needed; the remaining action is maintainer review of the availability-sensitive startup ordering and proof boundary.; Cleared: The diff changes Codex startup timeout code and tests only; it does not add dependencies, workflows, package metadata, secret handling, or new code-execution surfaces. (sha=893129334921d78735bacf9c7c1d121286df4a81)",
+      "review_summary": "The PR threads a remaining startup deadline into Codex app-server client startup, applies it around `client.initialize()`, stops post-timeout connection-close retries, and adds focused regression coverage.\n\nPR surface: Source +35, Tests +48. Total +83 across 4 files.\n\nReproducibility: yes. from source: current main sends Codex `initialize` under the generic startup watchdog, while Codex requires initialize before `thread/start`; a stalled initialize can therefore surface as generic startup timeout. I did not rerun the live OAuth cron account path.",
+      "review_followup": "- No automated repair is needed; the remaining action is maintainer review of the availability-sensitive startup ordering and proof boundary.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "893129334921d78735bacf9c7c1d121286df4a81",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "target": {
+        "kind": "pull_request",
+        "title": "fix #84567: [Bug]: Codex bundled harness initialize still hangs in 2026.5.18 isolated cron — surfaces via #64744 timeout-wrapping as 'isolated agent setup timed out before runner start'",
+        "body": "## Summary\n\n- Bound Codex app-server `initialize` with the remaining startup deadline instead of giving it the full outer timeout after earlier startup work has already elapsed.\n- Apply the phase timeout at `client.initialize()` inside the shared/isolated client path, not around the entire factory, so pre-initialize factory hangs still report the generic startup timeout.\n- Make the initialize phase timeout fire before the outer startup watchdog, so stalled initialize reports `codex app-server initialize timed out` instead of the generic startup timeout.\n- Stop connection-closed retry attempts after the outer startup timeout has already abandoned the startup operation.\n- Add regression coverage for the stalled-initialize stdio path, remaining-budget calculation, pre-initialize factory timeout boundary, startup-timeout cleanup, cancellation cleanup, and startup RPC timeout behavior.\n\nFixes #84567.\n\n## Root Cause\n\nThe Codex startup operation had two timeout layers with mismatched ownership. The outer app-server startup watchdog measured the whole pre-run setup, while the inner shared-client initialize timeout was supposed to guard the first Codex protocol request. Because the inner initialize timeout was created later but still received the full startup timeout duration, both timers could race at the same effective boundary and the outer watchdog could surface the less-specific `codex app-server startup timed out` / cron setup timeout even after the child had already received `initialize`. When the outer timeout closed the client, the background startup attempt could also still treat that connection close as retryable.\n\n## Why this is root cause fix\n\n`initialize` is the first required Codex app-server protocol step before `thread/start`, so the startup invariant is that this phase must either complete or fail inside the same startup deadline. This patch enforces that invariant at the source boundary: startup passes an initialize deadline into the client factory, the shared/isolated client applies the timeout at `client.initialize()`, that phase timer is scheduled to win before the outer watchdog, and the retry loop no longer restarts after the outer startup timeout has already abandoned the attempt. Pre-initialize factory/start-context hangs stay on the generic startup timeout path.\n\n## Why it matters / User impact\n\nIsolated cron users could see `isolated agent setup timed out before runner start` even though the real stall was the Codex app-server `initialize` handshake. That made the failure hard to diagnose and could leave an abandoned startup path racing in the background. With this patch, the user-visible failure points at the stalled Codex initialize phase and cleanup starts before a thread runner is created.\n\n## Fix classification\n\nRoot cause fix.\n\n## Maintainer-ready confidence\n\nHigh for the pre-`thread/start` initialize stall boundary: the code now enforces the Codex lifecycle deadline where the protocol can stall, the regression test covers the timer ordering case, and the real-stdio proof shows the initialize error wins over the generic startup watchdog. The only remaining proof gap is a live OpenAI OAuth isolated cron on the reporter's account, which is unavailable in this environment and is disclosed below.\n\n## Maintainer-ready checklist\n\n- **Root cause:** The bug was a timeout-budget invariant mismatch in Codex startup. OpenClaw started the outer app-server startup watchdog before the initialize phase, but the later initialize timeout still received the full startup timeout duration. In the stalled-stdio case, that allowed the generic outer watchdog to win the race even though the real blocked protocol step was `initialize`, and the background startup attempt could still treat the watchdog-induced connection close as retryable.\n- **Why this is root-cause fix:** Codex requires `initialize` before `thread/start`, so the first protocol boundary must complete or fail inside the same startup deadline. This patch derives an initialize deadline from the startup deadline, applies the phase timeout at `client.initialize()` inside shared/isolated client startup, and prevents connection-closed retries once the startup watchdog has already abandoned the attempt. Successful initialize responses and pre-initialize factory hangs still follow their existing paths; only the stalled initialize boundary now reports the correct phase.\n- **Why it matters / User impact:** Isolated cron users get a precise Codex initialize timeout instead of a generic pre-run setup timeout, making the stalled provider setup diagnosable before any runner starts.\n- **Fix classification:** Root cause fix.\n- **Maintainer-ready confidence:** High for the pre-`thread/start` initialize stall boundary; the live OAuth account path is not available here and is disclosed in the proof section.\n- **Patch quality notes:** Timeout/retry changes are intentional and bounded: the initialize deadline is only consumed by the shared/isolated `client.initialize()` phase, while the retry guard only applies after the startup watchdog has already fired.\n- **Target test file:** `extensions/codex/src/app-server/attempt-startup.test.ts`.\n\n## Review findings addressed\n\n- **RF-001:** The current `status: ⏳ waiting on author` label is addressed by this update: the author-actionable ClawSweeper finding is fixed below, proof remains supplied/sufficient, and the PR body maps the changed boundary and fresh verification.\n- **RF-002:** The factory-wide initialize wrapper was removed. `attempt-startup.ts` no longer wraps the whole `attemptClientFactory` promise with `codex app-server initialize timed out`.\n- **RF-003:** Pre-initialize startup work can no longer be reported as an initialize protocol stall by the new patch. Startup passes an initialize deadline through the factory options, and `shared-client.ts` consumes it only around `client.initialize()`.\n- **RF-004:** Focused `run-attempt` coverage was run on this branch: `node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.test.ts -t \"times out app-server startup before thread setup can hang forever\"` passed.\n- **RF-005:** The repair keeps the remaining-budget initialize fix while restoring the generic startup-timeout behavior for pre-initialize factory hangs.\n- **RF-006:** The pre-initialize factory-hang path is covered by the focused `run-attempt` regression and remains on `codex app-server startup timed out`.\n- **RF-007:** `node scripts/run-vitest.mjs extensions/codex/src/app-server/attempt-startup.test.ts` passed: 1 file passed, 6 tests passed.\n- **RF-008:** `node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.test.ts -t \"times out app-server startup before thread setup can hang forever\"` passed: 1 test passed / 85 skipped.\n- **RF-009:** `node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions/codex/src/app-server/attempt-startup.ts extensions/codex/src/app-server/shared-client.ts extensions/codex/src/app-server/client-factory.ts extensions/codex/src/app-server/attempt-startup.test.ts` passed with no lint findings.\n\n## Codex contract checked\n\nChecked sibling `../codex` source before changing the Codex boundary:\n\n- `codex-rs/app-server/README.md:76` and `codex-rs/app-server/README.md:85` document that clients must send `initialize` before any other method and then send `initialized`.\n- `codex-rs/app-server-protocol/src/protocol/common.rs:435` through `codex-rs/app-server-protocol/src/protocol/common.rs:449` define the `initialize` and `thread/start` client requests as distinct protocol steps.\n- `codex-rs/app-server/src/request_processors/initialize_processor.rs:59` through `codex-rs/app-server/src/request_processors/initialize_processor.rs:61` reject repeated initialize calls, and `codex-rs/app-server/src/request_processors/initialize_processor.rs:148` through `codex-rs/app-server/src/request_processors/initialize_processor.rs:153` send the initialize response before marking outbound initialized.\n- `codex-rs/app-server/src/request_processors/thread_processor.rs:377` through `codex-rs/app-server/src/request_processors/thread_processor.rs:394` handle `thread/start` after initialization as the next lifecycle phase.\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** stalled real stdio Codex initialize is bounded before `thread/start` and reports the initialize phase error.\n- **Real environment tested:** Linux, Node `v22.22.0`, OpenClaw worktree after this patch, with a real stdio child process spawned through the Codex app-server client startup path.\n- **Exact steps or command run after this patch:**\n\n```bash\npnpm exec tsx <evidence>/real-stdio-stalled-initialize-proof.ts\n```\n\n- **Evidence after fix:** copied output from the real-stdio proof:\n\n```text\nBehavior addressed: stalled real stdio Codex initialize is bounded before thread/start.\nReal environment tested: Linux Node v22.22.0; spawned /usr/local/node/bin/node <evidence>/stalled-codex-app-server.mjs\nExact steps or command run after this patch: pnpm exec tsx evidence/real-stdio-stalled-initialize-proof.ts\nEvidence after fix: observed error \"codex app-server initialize timed out\" after 9855 ms; onStartupTimeoutCalls=0; stubLog=<evidence>/stalled-codex-stub.log\nObserved result after fix: initialize phase error won; generic codex app-server startup timed out was not surfaced.\nWhat was not tested: a live OpenAI OAuth account or real Codex binary responding successfully after initialize.\n```\n\nCopied stub log from the real stdio child:\n\n```text\n2026-06-02T15:13:51.604Z stub-start pid=<redacted>\n2026-06-02T15:13:51.609Z received method=initialize id=1\n2026-06-02T15:14:00.757Z stub-exit signal=stdin-end\n```\n\n- **Observed result after fix:** the stdio child received the real `initialize` request, did not answer, OpenClaw raised `codex app-server initialize timed out`, and the generic `codex app-server startup timed out` message did not win.\n- **What was not tested:** a live OpenAI OAuth isolated cron on the reporter's account. This environment does not have that OAuth profile, so the live proof uses a deterministic real-stdio stalled app-server child to exercise the same pre-`thread/start` initialize boundary without external credentials.\n\n## Regression Test Plan\n\n- `node scripts/run-vitest.mjs extensions/codex/src/app-server/attempt-startup.test.ts`\n- `node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.test.ts -t \"times out app-server startup before thread setup can hang forever\"`\n- `node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions/codex/src/app-server/attempt-startup.ts extensions/codex/src/app-server/shared-client.ts extensions/codex/src/app-server/client-factory.ts extensions/codex/src/app-server/attempt-startup.test.ts`\n- `pnpm exec tsx <evidence>/real-stdio-stalled-initialize-proof.ts`\n\n## Verification\n\n- `node scripts/run-vitest.mjs extensions/codex/src/app-server/attempt-startup.test.ts`\n  - Result: 1 file passed, 6 tests passed.\n- `node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.test.ts -t \"times out app-server startup before thread setup can hang forever\"`\n  - Result: 1 file passed, 1 test passed / 85 skipped.\n- `node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions/codex/src/app-server/attempt-startup.ts extensions/codex/src/app-server/shared-client.ts extensions/codex/src/app-server/client-factory.ts extensions/codex/src/app-server/attempt-startup.test.ts`\n  - Result: no lint findings.\n- `pnpm exec tsx <evidence>/real-stdio-stalled-initialize-proof.ts`\n  - Result: copied in **Real behavior proof** above.\n\n## Patch quality notes\n\n- **Timeout/retry change:** This intentionally changes timeout ordering, not the configured timeout amount. Startup passes an initialize deadline with a 150ms head start so the shared/isolated `client.initialize()` timeout can win before the outer watchdog. The `2_000ms` value in `attempt-startup.test.ts` is only a test cleanup wait, not a production timeout.\n- **Factory boundary:** The phase timeout is no longer wrapped around the entire `attemptClientFactory` promise. Pre-initialize factory/start-context hangs still use the generic `codex app-server startup timed out` path, covered by the focused `run-attempt` regression.\n- **Runtime contract boundary:** This is not a post-processing or mirror/projection transformation. The change carries a startup deadline into the Codex app-server client lifecycle and consumes it only at the first protocol request, `client.initialize()`, before `thread/start` can be sent.\n- **Compatibility / public contract:** No user config, schema, protocol payload, or public app-server API changes. The existing PR already added optional internal factory timeout wiring; callers that omit it keep the previous default behavior. This patch changes the Codex startup caller to pass an initialize deadline and shared/isolated client startup to consume it only at `client.initialize()`.\n- **Related open PR scan:** `init-pr` and `check-upstream-fixed` checked the existing PR against current `origin/main`; main does not already cover this repair, and there is no overlap between current main changes and this PR's changed files. No broader canonical open PR was identified for this private Codex startup timeout boundary.\n- **Out of scope:** This does not change live OAuth auth selection, model routing, successful Codex app-server startup behavior, or post-`thread/start` runtime behavior.\n\n## Merge risk\n\n- **Risk labels considered:** `availability`, `compatibility`.\n- **Risk explanation:** Availability risk is limited to Codex app-server startup: a stalled initialize now fails earlier with `codex app-server initialize timed out` inside the already configured startup budget. Compatibility risk is limited to the optional factory timeout path already present on this PR; there is no new config/schema/protocol surface.\n- **Why acceptable:** The change narrows an ambiguous startup timeout to the required first protocol phase and prevents retries only after the outer startup watchdog has already abandoned the attempt. It does not introduce a fallback, broaden retries, or change successful startup behavior.\n\n\n\n## Merge conflict resolution verification\n\nAfter merging current `main`, the Codex startup conflict was resolved by keeping both the initialize-deadline budget and the abandoned-startup cleanup path. Fresh verification on the merge-resolution HEAD:\n\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.extension-codex-app-server-attempt-support.config.ts extensions/codex/src/app-server/attempt-startup.test.ts`\n  - Result: 1 file passed, 10 tests passed.\n- `pnpm check:no-conflict-markers`\n  - Result: passed.\n- `pnpm exec oxfmt --check --threads=1 extensions/codex/src/app-server/attempt-startup.ts extensions/codex/src/app-server/client-factory.ts extensions/codex/src/app-server/attempt-startup.test.ts`\n  - Result: all matched files use the correct format.\n",
+        "branch": "feat/issue-84567",
+        "head_sha": "893129334921d78735bacf9c7c1d121286df4a81",
+        "author": "zhangguiping-xydt",
+        "labels": [
+          "size: S",
+          "extensions: codex",
+          "proof: supplied",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 availability",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "extensions/codex/src/app-server/attempt-startup.test.ts",
+            "additions": 52,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/attempt-startup.ts",
+            "additions": 11,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/client-factory.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/shared-client.ts",
+            "additions": 28,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89442",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89442.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 157,
+          "counts": {
+            "SUCCESS": 126,
+            "SKIPPED": 31
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2490,
+    "total_ms": 2949,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 583
+        "ms": 462
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 2101
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 1895
+        "ms": 360
       },
       {
         "name": "append_ledger",
