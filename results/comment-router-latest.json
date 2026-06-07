@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-07T13:08:35.048Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-07T13:09:16.267Z",
+  "repo": "openclaw/nix-openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-07T10:08:32.732Z",
+  "since": "2026-06-07T10:09:14.585Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    86744
+    103
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4642765045
+  ],
+  "status_comment_id": 4642765128,
   "max_autoclose_targets": 8,
-  "scanned_comments": 14,
-  "commands_seen": 7,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,115 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:86744:4539737334:2026-06-07T13:08:29Z:clawsweeper_needs_human",
-      "comment_id": "4539737334",
-      "comment_version_key": "4539737334:2026-06-07T13:08:29Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86744#issuecomment-4539737334",
-      "repo": "openclaw/openclaw",
-      "issue_number": 86744,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-26T03:30:45Z",
-      "comment_updated_at": "2026-06-07T13:08:29Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] The remaining action is maintainer acceptance of the shared-state availability-first recovery policy, not an automated code repair.; Cleared: No concrete security or supply-chain concern found; the diff changes runtime SQLite open/recovery logic and tests, not dependencies, workflows, permissions, secrets, or downloaded code. (sha=ed1372d0347f4d72146adb7969ba97c47842fa1a)",
-      "review_summary": "The PR adds corruption detection, quarantine, handle cleanup, and retry for `state/openclaw.sqlite`, plus tests for task-registry recovery and stale file descriptors.\n\nPR surface: Source +77, Tests +119. Total +196 across 3 files.\n\nReproducibility: yes. Source inspection and the PR proof show a clear malformed `state/openclaw.sqlite` path through `loadTaskRegistryStateFromSqlite()`, but I did not run it locally because this review is read-only.",
-      "review_followup": "- [P2] The remaining action is maintainer acceptance of the shared-state availability-first recovery policy, not an automated code repair.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "ed1372d0347f4d72146adb7969ba97c47842fa1a",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(tasks): recover from corrupted task registry SQLite on startup",
-        "body": "## Summary\n\n- Problem: Gateway startup can fail with uncaught SQLite corruption errors when the shared OpenClaw state database (`state/openclaw.sqlite`) is malformed; the task registry now restores through this shared database opener.\n- Solution: Detect SQLite corruption during shared state database open/setup, close every early `DatabaseSync` handle before retry, quarantine the malformed database, and create a fresh shared state database so startup can continue.\n- What changed: `src/state/openclaw-state-db.ts` now wraps WAL setup, PRAGMAs, and schema setup in one guarded initialization path; corruption recovery closes WAL/Kysely/SQLite state before quarantine retry. `src/state/openclaw-state-db.test.ts` adds regression coverage proving the WAL setup failure path leaves no stale quarantine file descriptor. `src/tasks/task-registry.store.test.ts` keeps the task-registry recovery roundtrip covered through the shared state database.\n- What did NOT change: No schema shape, task registry API, or healthy database behavior changed. Corrupted databases are preserved when quarantine succeeds; startup continues with a fresh empty shared state database.\n\nFixes #71689\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Gateway startup/task registry restore can crash when the shared `state/openclaw.sqlite` file is corrupted, including corruption detected by the early WAL setup path.\n- **Real environment tested:** Node 24.x on Linux, actual `loadTaskRegistryStateFromSqlite()` call through the production shared state DB opener (`openOpenClawStateDatabase()`), with a malformed `state/openclaw.sqlite` and WAL/SHM sidecar files.\n- **Exact steps or command run after this patch:**\n  ```bash\n  node --import tsx --input-type=module <<'NODE'\n  import { mkdirSync, readlinkSync, readdirSync, writeFileSync } from 'node:fs';\n  import { dirname, join } from 'node:path';\n\n  const stateDir = `/tmp/proof-openclaw-state-recovery-${Date.now()}`;\n  const sqlitePath = join(stateDir, 'state', 'openclaw.sqlite');\n  mkdirSync(dirname(sqlitePath), { recursive: true });\n  writeFileSync(sqlitePath, Buffer.from('not a sqlite database'));\n  writeFileSync(`${sqlitePath}-wal`, Buffer.from('corrupted wal'));\n  writeFileSync(`${sqlitePath}-shm`, Buffer.from('corrupted shm'));\n  process.env.OPENCLAW_STATE_DIR = stateDir;\n\n  const { loadTaskRegistryStateFromSqlite } = await import('./src/tasks/task-registry.store.sqlite.ts');\n  const { closeOpenClawStateDatabase } = await import('./src/state/openclaw-state-db.ts');\n\n  const snapshot = loadTaskRegistryStateFromSqlite();\n  const files = readdirSync(dirname(sqlitePath)).sort();\n  const quarantineFiles = files.filter((name) => name.startsWith('openclaw.sqlite.corrupted.'));\n  const fdTargets = process.platform === 'linux'\n    ? readdirSync('/proc/self/fd').flatMap((fd) => {\n        try {\n          return [readlinkSync(join('/proc/self/fd', fd))];\n        } catch {\n          return [];\n        }\n      })\n    : [];\n  const staleQuarantineFds = fdTargets.filter((target) =>\n    quarantineFiles.some((name) => target.startsWith(join(dirname(sqlitePath), name))),\n  );\n\n  console.log(JSON.stringify({\n    stateDir,\n    sqlitePath,\n    tasks: snapshot.tasks.size,\n    deliveryStates: snapshot.deliveryStates.size,\n    databaseExists: files.includes('openclaw.sqlite'),\n    quarantineFiles,\n    staleQuarantineFds,\n  }, null, 2));\n\n  closeOpenClawStateDatabase();\n  NODE\n  ```\n- **Evidence after fix:** Terminal output from the real loader path on the updated branch:\n  ```text\n  [openclaw-state-db] Corrupted OpenClaw state database quarantined, creating fresh database\n  {\n    \"stateDir\": \"/tmp/proof-openclaw-state-recovery-1780808040607\",\n    \"sqlitePath\": \"/tmp/proof-openclaw-state-recovery-1780808040607/state/openclaw.sqlite\",\n    \"tasks\": 0,\n    \"deliveryStates\": 0,\n    \"databaseExists\": true,\n    \"quarantineFiles\": [\n      \"openclaw.sqlite.corrupted.1780808041707\"\n    ],\n    \"staleQuarantineFds\": []\n  }\n  ```\n- **Observed result after fix:** The production task-registry restore path returned an empty snapshot instead of throwing, logged the quarantine event, created a fresh `state/openclaw.sqlite`, preserved the malformed main database under `openclaw.sqlite.corrupted.{timestamp}`, and left no open file descriptor pointing at the quarantined corrupted database after the WAL setup failure path.\n- **What was not tested:** Did not test corruption that appears mid-operation after startup. Did not test macOS or Windows locked-file behavior. Maintainers still need to accept the availability-first policy that a malformed shared state database is quarantined and startup continues with fresh empty shared state.\n\n## Regression Test Plan\n\n- Coverage level: Unit tests plus local real-behavior proof.\n- Target test files: `src/state/openclaw-state-db.test.ts` and `src/tasks/task-registry.store.test.ts`.\n- Scenario locked in: Shared state DB corruption triggers quarantine and fresh DB creation; the WAL setup corruption path closes the old database handle before retry; task registry writes and restores records after recovery.\n- Why this is the smallest reliable guardrail: The tests write malformed bytes to the real shared SQLite path and exercise the production opener and task-registry store instead of mocking SQLite corruption.\n\n## Local verification\n\n```text\nnode scripts/run-vitest.mjs src/state/openclaw-state-db.test.ts src/tasks/task-registry.store.test.ts\n# state DB shard: 14 tests passed\n# task registry shard: 28 tests passed\n\ncorepack pnpm format:check -- src/state/openclaw-state-db.ts src/state/openclaw-state-db.test.ts src/tasks/task-registry.store.test.ts\n# All matched files use the correct format.\n\ncorepack pnpm tsgo:core\n# passed\n\ngit diff --check\n# passed\n```\n\n## Root Cause\n\n- Root cause: The task registry now depends on the shared OpenClaw state database opener. That opener could surface SQLite corruption while setting up WAL or schema state, but the recovery path initially did not close every early `DatabaseSync` handle before attempting quarantine and retry.\n- Missing detection / guardrail: Corruption recovery needed to live at the shared state DB boundary, and the WAL setup path needed explicit handle cleanup coverage before rename-based quarantine.",
-        "branch": "feat/issue-71689",
-        "head_sha": "ed1372d0347f4d72146adb7969ba97c47842fa1a",
-        "author": "mushuiyu886",
-        "labels": [
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/state/openclaw-state-db.test.ts",
-            "additions": 34,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-state-db.ts",
-            "additions": 95,
-            "deletions": 18,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tasks/task-registry.store.test.ts",
-            "additions": 86,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86744",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86744.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 156,
-          "counts": {
-            "SUCCESS": 129,
-            "SKIPPED": 25,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-agentic-agents-core-runtime:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-agentic-agents-core-runtime:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:86744:4641552687:2026-06-07T05:38:25Z:re_review",
-      "comment_id": "4641552687",
-      "comment_version_key": "4641552687:2026-06-07T05:38:25Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86744#issuecomment-4641552687",
-      "repo": "openclaw/openclaw",
-      "issue_number": 86744,
-      "author": "mushuiyu886",
-      "author_id": 266724580,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-07T05:38:25Z",
-      "comment_updated_at": "2026-06-07T05:38:25Z",
-      "status_comment_id": null,
+      "idempotency_key": "comment-router:openclaw/nix-openclaw:103:4642765045:2026-06-07T13:08:33Z:re_review",
+      "comment_id": "4642765045",
+      "comment_version_key": "4642765045:2026-06-07T13:08:33Z",
+      "comment_url": "https://github.com/openclaw/nix-openclaw/pull/103#issuecomment-4642765045",
+      "repo": "openclaw/nix-openclaw",
+      "issue_number": 103,
+      "author": "joshp123",
+      "author_id": 1497361,
+      "author_association": "COLLABORATOR",
+      "comment_created_at": "2026-06-07T13:08:33Z",
+      "comment_updated_at": "2026-06-07T13:08:33Z",
+      "status_comment_id": 4642765128,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -156,520 +61,149 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:86744:4641510199:2026-06-07T05:15:18Z:re_review",
-      "comment_id": "4641510199",
-      "comment_version_key": "4641510199:2026-06-07T05:15:18Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86744#issuecomment-4641510199",
-      "repo": "openclaw/openclaw",
-      "issue_number": 86744,
-      "author": "mushuiyu886",
-      "author_id": 266724580,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-07T05:15:18Z",
-      "comment_updated_at": "2026-06-07T05:15:18Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-07T13:09:17.439Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 103
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-07T13:09:18.669Z",
+          "response_comment_id": "4642765128",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "fix(tasks): recover from corrupted task registry SQLite on startup",
-        "body": "## Summary\n\n- Problem: Gateway startup can fail with uncaught SQLite corruption errors when the shared OpenClaw state database (`state/openclaw.sqlite`) is malformed; the task registry now restores through this shared database opener.\n- Solution: Detect SQLite corruption during shared state database open/setup, close every early `DatabaseSync` handle before retry, quarantine the malformed database, and create a fresh shared state database so startup can continue.\n- What changed: `src/state/openclaw-state-db.ts` now wraps WAL setup, PRAGMAs, and schema setup in one guarded initialization path; corruption recovery closes WAL/Kysely/SQLite state before quarantine retry. `src/state/openclaw-state-db.test.ts` adds regression coverage proving the WAL setup failure path leaves no stale quarantine file descriptor. `src/tasks/task-registry.store.test.ts` keeps the task-registry recovery roundtrip covered through the shared state database.\n- What did NOT change: No schema shape, task registry API, or healthy database behavior changed. Corrupted databases are preserved when quarantine succeeds; startup continues with a fresh empty shared state database.\n\nFixes #71689\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Gateway startup/task registry restore can crash when the shared `state/openclaw.sqlite` file is corrupted, including corruption detected by the early WAL setup path.\n- **Real environment tested:** Node 24.x on Linux, actual `loadTaskRegistryStateFromSqlite()` call through the production shared state DB opener (`openOpenClawStateDatabase()`), with a malformed `state/openclaw.sqlite` and WAL/SHM sidecar files.\n- **Exact steps or command run after this patch:**\n  ```bash\n  node --import tsx --input-type=module <<'NODE'\n  import { mkdirSync, readlinkSync, readdirSync, writeFileSync } from 'node:fs';\n  import { dirname, join } from 'node:path';\n\n  const stateDir = `/tmp/proof-openclaw-state-recovery-${Date.now()}`;\n  const sqlitePath = join(stateDir, 'state', 'openclaw.sqlite');\n  mkdirSync(dirname(sqlitePath), { recursive: true });\n  writeFileSync(sqlitePath, Buffer.from('not a sqlite database'));\n  writeFileSync(`${sqlitePath}-wal`, Buffer.from('corrupted wal'));\n  writeFileSync(`${sqlitePath}-shm`, Buffer.from('corrupted shm'));\n  process.env.OPENCLAW_STATE_DIR = stateDir;\n\n  const { loadTaskRegistryStateFromSqlite } = await import('./src/tasks/task-registry.store.sqlite.ts');\n  const { closeOpenClawStateDatabase } = await import('./src/state/openclaw-state-db.ts');\n\n  const snapshot = loadTaskRegistryStateFromSqlite();\n  const files = readdirSync(dirname(sqlitePath)).sort();\n  const quarantineFiles = files.filter((name) => name.startsWith('openclaw.sqlite.corrupted.'));\n  const fdTargets = process.platform === 'linux'\n    ? readdirSync('/proc/self/fd').flatMap((fd) => {\n        try {\n          return [readlinkSync(join('/proc/self/fd', fd))];\n        } catch {\n          return [];\n        }\n      })\n    : [];\n  const staleQuarantineFds = fdTargets.filter((target) =>\n    quarantineFiles.some((name) => target.startsWith(join(dirname(sqlitePath), name))),\n  );\n\n  console.log(JSON.stringify({\n    stateDir,\n    sqlitePath,\n    tasks: snapshot.tasks.size,\n    deliveryStates: snapshot.deliveryStates.size,\n    databaseExists: files.includes('openclaw.sqlite'),\n    quarantineFiles,\n    staleQuarantineFds,\n  }, null, 2));\n\n  closeOpenClawStateDatabase();\n  NODE\n  ```\n- **Evidence after fix:** Terminal output from the real loader path on the updated branch:\n  ```text\n  [openclaw-state-db] Corrupted OpenClaw state database quarantined, creating fresh database\n  {\n    \"stateDir\": \"/tmp/proof-openclaw-state-recovery-1780808040607\",\n    \"sqlitePath\": \"/tmp/proof-openclaw-state-recovery-1780808040607/state/openclaw.sqlite\",\n    \"tasks\": 0,\n    \"deliveryStates\": 0,\n    \"databaseExists\": true,\n    \"quarantineFiles\": [\n      \"openclaw.sqlite.corrupted.1780808041707\"\n    ],\n    \"staleQuarantineFds\": []\n  }\n  ```\n- **Observed result after fix:** The production task-registry restore path returned an empty snapshot instead of throwing, logged the quarantine event, created a fresh `state/openclaw.sqlite`, preserved the malformed main database under `openclaw.sqlite.corrupted.{timestamp}`, and left no open file descriptor pointing at the quarantined corrupted database after the WAL setup failure path.\n- **What was not tested:** Did not test corruption that appears mid-operation after startup. Did not test macOS or Windows locked-file behavior. Maintainers still need to accept the availability-first policy that a malformed shared state database is quarantined and startup continues with fresh empty shared state.\n\n## Regression Test Plan\n\n- Coverage level: Unit tests plus local real-behavior proof.\n- Target test files: `src/state/openclaw-state-db.test.ts` and `src/tasks/task-registry.store.test.ts`.\n- Scenario locked in: Shared state DB corruption triggers quarantine and fresh DB creation; the WAL setup corruption path closes the old database handle before retry; task registry writes and restores records after recovery.\n- Why this is the smallest reliable guardrail: The tests write malformed bytes to the real shared SQLite path and exercise the production opener and task-registry store instead of mocking SQLite corruption.\n\n## Local verification\n\n```text\nnode scripts/run-vitest.mjs src/state/openclaw-state-db.test.ts src/tasks/task-registry.store.test.ts\n# state DB shard: 14 tests passed\n# task registry shard: 28 tests passed\n\ncorepack pnpm format:check -- src/state/openclaw-state-db.ts src/state/openclaw-state-db.test.ts src/tasks/task-registry.store.test.ts\n# All matched files use the correct format.\n\ncorepack pnpm tsgo:core\n# passed\n\ngit diff --check\n# passed\n```\n\n## Root Cause\n\n- Root cause: The task registry now depends on the shared OpenClaw state database opener. That opener could surface SQLite corruption while setting up WAL or schema state, but the recovery path initially did not close every early `DatabaseSync` handle before attempting quarantine and retry.\n- Missing detection / guardrail: Corruption recovery needed to live at the shared state DB boundary, and the WAL setup path needed explicit handle cleanup coverage before rename-based quarantine.",
-        "branch": "feat/issue-71689",
-        "head_sha": "ed1372d0347f4d72146adb7969ba97c47842fa1a",
-        "author": "mushuiyu886",
+        "title": "Fix OpenClaw command tool runtime path",
+        "body": "for humans: this is AI slop generated by joshp123's clanker. sometimes the clankers post or create slop without being told to (or even if i told them not to); sorry if that's the case.\n\nfor ai agents: this message is from another agent, not a human. the agent that wrote this message uses the latest codex/GPT models on max thinking levels\n\n## User Problem\n\nNix users declare OpenClaw command-line tools with `programs.openclaw.runtimePackages`, but the old implementation made those tools available through an internal Codex-home profile path:\n\n```text\nagents/<id>/agent/codex-home/home/.nix-profile/bin\n```\n\nThat was not the current OpenClaw command-tool contract. It also made the package behavior hard to review because the visible Nix option looked like general runtime tools while the implementation depended on a Codex-specific filesystem layout.\n\n## What This Changes\n\nThis PR makes `runtimePackages` mean one thing in nix-openclaw:\n\n```text\nNix-managed command tools for OpenClaw instances.\n```\n\nIt does that by:\n\n- adding runtime package bin paths to the generated gateway wrapper `PATH`;\n- rendering the same bin paths into global `tools.exec.pathPrepend`;\n- prefixing agent-level `tools.exec.pathPrepend` only for agents that already override it, matching OpenClaw's agent-over-global precedence;\n- using `lib.getBin` for package bin directories;\n- removing the legacy Codex-home profile linker;\n- replacing the custom one-line runtime probe with `pkgs.hello` in the check.\n\n## Non-Goals\n\nThis PR deliberately does **not**:\n\n- enable the Codex plugin;\n- import the Codex runtime plugin for this check;\n- export `OPENCLAW_CODEX_APP_SERVER_ARGS`;\n- export `OPENCLAW_CODEX_APP_SERVER_BIN`;\n- configure Codex app-server launch arguments;\n- prove native Codex `command/exec` or turn execution.\n\nThe OpenClaw product follow-up is separate: OpenClaw's Codex adapter should consume the existing `tools.exec.pathPrepend` config and project it into Codex `thread/start` / `thread/resume` config. That belongs in `openclaw/openclaw`, not in nix-openclaw and not as a new Nix knob.\n\n## Compatibility\n\nUser config stays the same:\n\n```nix\nprograms.openclaw.runtimePackages = [ pkgs.jq ];\n```\n\nThe compatibility break is limited to the old internal Codex-home profile path. Pre-1.0 deployments that depended on `agents/<id>/agent/codex-home/home/.nix-profile/bin` should depend on `runtimePackages` / generated `tools.exec.pathPrepend` instead. There is no cleanup activation for that old path in this PR.\n\n## Behavioral Proof\n\n`nix/checks/openclaw-runtime-path.nix` evaluates the generated Home Manager config and runs `nix/scripts/openclaw-runtime-path-smoke.mjs`.\n\nThe check proves:\n\n- generated `tools.exec.pathPrepend` includes the runtime package bin dir;\n- configured user global `tools.exec.pathPrepend` entries are preserved after the Nix runtime tool paths;\n- configured agent-level `tools.exec.pathPrepend` entries are preserved after the Nix runtime tool paths;\n- runtime packages do not create `plugins.entries.codex`;\n- legacy Codex-home profile activation is absent;\n- the generated gateway wrapper prepends the same runtime tool path;\n- the wrapper does not configure Codex app-server launch env.\n\nThe rebuilt focused check printed this proof summary locally:\n\n```text\nopenclaw-runtime-path proof:\n- generated tools.exec.pathPrepend resolves /nix/store/...-hello-2.12.2/bin/hello\n- gateway wrapper prepends the same runtime tool path\n- runtimePackages do not configure Codex app-server launch argv\n```\n\n## CI Wiring Proof\n\n`flake.nix` includes `runtime-path` inside `checks.<system>.runtime-smoke`.\n\n`.github/workflows/ci.yml` builds `runtime-smoke` in both supported-surface jobs:\n\n- `Linux supported surface`: `.#checks.x86_64-linux.runtime-smoke`\n- `macOS supported surface`: `.#checks.aarch64-darwin.runtime-smoke`\n\nThe same workflow also builds platform activation on Linux and builds/runs the macOS launchd activation smoke. The activation smokes now assert that the wrapper contains the runtime package path and does **not** contain `OPENCLAW_CODEX_APP_SERVER_ARGS` or `OPENCLAW_CODEX_APP_SERVER_BIN`.\n\n## Local Proof Run\n\nRun before pushing `3b14915437e6cdc1d8cfffd06ed5c279f82d76366`:\n\n```text\nnix fmt --accept-flake-config -- CHANGELOG.md flake.nix nix/checks/openclaw-runtime-path.nix nix/modules/home-manager/openclaw/config.nix nix/modules/home-manager/openclaw/options.nix nix/modules/home-manager/openclaw/options-instance.nix nix/scripts/openclaw-runtime-path-smoke.mjs nix/tests/hm-activation.py scripts/hm-activation-macos.sh\nnode --check nix/scripts/openclaw-runtime-path-smoke.mjs\ngit diff --check\nnix build --accept-flake-config --no-link --print-build-logs .#checks.aarch64-darwin.runtime-path .#checks.aarch64-darwin.runtime-smoke .#checks.aarch64-darwin.module-render\nnix build --accept-flake-config --no-link --print-build-logs .#checks.aarch64-darwin.platform-activation\nnix build --accept-flake-config --out-link result-platform-activation-local .#checks.aarch64-darwin.platform-activation --print-build-logs\nOPENCLAW_HM_ACTIVATION_PACKAGE=\"$PWD/result-platform-activation-local\" scripts/hm-activation-macos.sh\nnix eval --accept-flake-config .#checks.x86_64-linux.runtime-path.drvPath\nnix eval --accept-flake-config .#checks.x86_64-linux.runtime-smoke.drvPath\nnix eval --accept-flake-config .#checks.x86_64-linux.platform-activation.drvPath\nnix flake show --accept-flake-config --json\nnix build --accept-flake-config --no-link --rebuild --print-build-logs .#checks.aarch64-darwin.runtime-path\n```\n\nLocal ClawSweeper-style review and two independent review agents found no remaining code blocker after the scope was narrowed. The remaining external proof is GitHub CI on the pushed head.\n",
+        "branch": "codex/agent-runtime-path-cleanup",
+        "head_sha": "3b14915435e238aa5d059e3c103543a1d30bfba2",
+        "author": "joshp123",
         "labels": [
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
           "P2",
           "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
+          "status: 👀 ready for maintainer look",
+          "merge-risk: 🚨 compatibility"
         ],
         "files": [
           {
-            "path": "src/state/openclaw-state-db.test.ts",
-            "additions": 34,
+            "path": "CHANGELOG.md",
+            "additions": 24,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/state/openclaw-state-db.ts",
-            "additions": 95,
-            "deletions": 18,
+            "path": "flake.nix",
+            "additions": 11,
+            "deletions": 10,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/tasks/task-registry.store.test.ts",
-            "additions": 86,
+            "path": "nix/checks/openclaw-default-instance.nix",
+            "additions": 33,
+            "deletions": 47,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "nix/checks/openclaw-runtime-path.nix",
+            "additions": 228,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "nix/modules/home-manager/openclaw-link-codex-runtime-profiles.sh",
+            "additions": 0,
+            "deletions": 22,
+            "changeType": "DELETED"
+          },
+          {
+            "path": "nix/modules/home-manager/openclaw/config.nix",
+            "additions": 67,
+            "deletions": 50,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "nix/modules/home-manager/openclaw/options-instance.nix",
+            "additions": 1,
             "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "nix/modules/home-manager/openclaw/options.nix",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "nix/scripts/openclaw-runtime-path-smoke.mjs",
+            "additions": 100,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "nix/tests/hm-activation.py",
+            "additions": 9,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/hm-activation-macos.sh",
+            "additions": 5,
+            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86744",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86744.md",
+        "automerge_cluster_id": "automerge-openclaw-nix-openclaw-103",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-nix-openclaw-103.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 156,
+          "total": 10,
           "counts": {
-            "SUCCESS": 129,
-            "SKIPPED": 25,
-            "FAILURE": 1,
-            "NEUTRAL": 1
+            "SUCCESS": 10
           },
-          "blockers": [
-            "checks-node-agentic-agents-core-runtime:FAILURE"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "checks-node-agentic-agents-core-runtime:FAILURE"
-          ]
+          "terminalBlockers": []
         }
       },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:86744:4641479621:2026-06-07T05:01:19Z:re_review",
-      "comment_id": "4641479621",
-      "comment_version_key": "4641479621:2026-06-07T05:01:19Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86744#issuecomment-4641479621",
-      "repo": "openclaw/openclaw",
-      "issue_number": 86744,
-      "author": "mushuiyu886",
-      "author_id": 266724580,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-07T05:01:19Z",
-      "comment_updated_at": "2026-06-07T05:01:19Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(tasks): recover from corrupted task registry SQLite on startup",
-        "body": "## Summary\n\n- Problem: Gateway startup can fail with uncaught SQLite corruption errors when the shared OpenClaw state database (`state/openclaw.sqlite`) is malformed; the task registry now restores through this shared database opener.\n- Solution: Detect SQLite corruption during shared state database open/setup, close every early `DatabaseSync` handle before retry, quarantine the malformed database, and create a fresh shared state database so startup can continue.\n- What changed: `src/state/openclaw-state-db.ts` now wraps WAL setup, PRAGMAs, and schema setup in one guarded initialization path; corruption recovery closes WAL/Kysely/SQLite state before quarantine retry. `src/state/openclaw-state-db.test.ts` adds regression coverage proving the WAL setup failure path leaves no stale quarantine file descriptor. `src/tasks/task-registry.store.test.ts` keeps the task-registry recovery roundtrip covered through the shared state database.\n- What did NOT change: No schema shape, task registry API, or healthy database behavior changed. Corrupted databases are preserved when quarantine succeeds; startup continues with a fresh empty shared state database.\n\nFixes #71689\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Gateway startup/task registry restore can crash when the shared `state/openclaw.sqlite` file is corrupted, including corruption detected by the early WAL setup path.\n- **Real environment tested:** Node 24.x on Linux, actual `loadTaskRegistryStateFromSqlite()` call through the production shared state DB opener (`openOpenClawStateDatabase()`), with a malformed `state/openclaw.sqlite` and WAL/SHM sidecar files.\n- **Exact steps or command run after this patch:**\n  ```bash\n  node --import tsx --input-type=module <<'NODE'\n  import { mkdirSync, readlinkSync, readdirSync, writeFileSync } from 'node:fs';\n  import { dirname, join } from 'node:path';\n\n  const stateDir = `/tmp/proof-openclaw-state-recovery-${Date.now()}`;\n  const sqlitePath = join(stateDir, 'state', 'openclaw.sqlite');\n  mkdirSync(dirname(sqlitePath), { recursive: true });\n  writeFileSync(sqlitePath, Buffer.from('not a sqlite database'));\n  writeFileSync(`${sqlitePath}-wal`, Buffer.from('corrupted wal'));\n  writeFileSync(`${sqlitePath}-shm`, Buffer.from('corrupted shm'));\n  process.env.OPENCLAW_STATE_DIR = stateDir;\n\n  const { loadTaskRegistryStateFromSqlite } = await import('./src/tasks/task-registry.store.sqlite.ts');\n  const { closeOpenClawStateDatabase } = await import('./src/state/openclaw-state-db.ts');\n\n  const snapshot = loadTaskRegistryStateFromSqlite();\n  const files = readdirSync(dirname(sqlitePath)).sort();\n  const quarantineFiles = files.filter((name) => name.startsWith('openclaw.sqlite.corrupted.'));\n  const fdTargets = process.platform === 'linux'\n    ? readdirSync('/proc/self/fd').flatMap((fd) => {\n        try {\n          return [readlinkSync(join('/proc/self/fd', fd))];\n        } catch {\n          return [];\n        }\n      })\n    : [];\n  const staleQuarantineFds = fdTargets.filter((target) =>\n    quarantineFiles.some((name) => target.startsWith(join(dirname(sqlitePath), name))),\n  );\n\n  console.log(JSON.stringify({\n    stateDir,\n    sqlitePath,\n    tasks: snapshot.tasks.size,\n    deliveryStates: snapshot.deliveryStates.size,\n    databaseExists: files.includes('openclaw.sqlite'),\n    quarantineFiles,\n    staleQuarantineFds,\n  }, null, 2));\n\n  closeOpenClawStateDatabase();\n  NODE\n  ```\n- **Evidence after fix:** Terminal output from the real loader path on the updated branch:\n  ```text\n  [openclaw-state-db] Corrupted OpenClaw state database quarantined, creating fresh database\n  {\n    \"stateDir\": \"/tmp/proof-openclaw-state-recovery-1780808040607\",\n    \"sqlitePath\": \"/tmp/proof-openclaw-state-recovery-1780808040607/state/openclaw.sqlite\",\n    \"tasks\": 0,\n    \"deliveryStates\": 0,\n    \"databaseExists\": true,\n    \"quarantineFiles\": [\n      \"openclaw.sqlite.corrupted.1780808041707\"\n    ],\n    \"staleQuarantineFds\": []\n  }\n  ```\n- **Observed result after fix:** The production task-registry restore path returned an empty snapshot instead of throwing, logged the quarantine event, created a fresh `state/openclaw.sqlite`, preserved the malformed main database under `openclaw.sqlite.corrupted.{timestamp}`, and left no open file descriptor pointing at the quarantined corrupted database after the WAL setup failure path.\n- **What was not tested:** Did not test corruption that appears mid-operation after startup. Did not test macOS or Windows locked-file behavior. Maintainers still need to accept the availability-first policy that a malformed shared state database is quarantined and startup continues with fresh empty shared state.\n\n## Regression Test Plan\n\n- Coverage level: Unit tests plus local real-behavior proof.\n- Target test files: `src/state/openclaw-state-db.test.ts` and `src/tasks/task-registry.store.test.ts`.\n- Scenario locked in: Shared state DB corruption triggers quarantine and fresh DB creation; the WAL setup corruption path closes the old database handle before retry; task registry writes and restores records after recovery.\n- Why this is the smallest reliable guardrail: The tests write malformed bytes to the real shared SQLite path and exercise the production opener and task-registry store instead of mocking SQLite corruption.\n\n## Local verification\n\n```text\nnode scripts/run-vitest.mjs src/state/openclaw-state-db.test.ts src/tasks/task-registry.store.test.ts\n# state DB shard: 14 tests passed\n# task registry shard: 28 tests passed\n\ncorepack pnpm format:check -- src/state/openclaw-state-db.ts src/state/openclaw-state-db.test.ts src/tasks/task-registry.store.test.ts\n# All matched files use the correct format.\n\ncorepack pnpm tsgo:core\n# passed\n\ngit diff --check\n# passed\n```\n\n## Root Cause\n\n- Root cause: The task registry now depends on the shared OpenClaw state database opener. That opener could surface SQLite corruption while setting up WAL or schema state, but the recovery path initially did not close every early `DatabaseSync` handle before attempting quarantine and retry.\n- Missing detection / guardrail: Corruption recovery needed to live at the shared state DB boundary, and the WAL setup path needed explicit handle cleanup coverage before rename-based quarantine.",
-        "branch": "feat/issue-71689",
-        "head_sha": "ed1372d0347f4d72146adb7969ba97c47842fa1a",
-        "author": "mushuiyu886",
-        "labels": [
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/state/openclaw-state-db.test.ts",
-            "additions": 34,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-state-db.ts",
-            "additions": 95,
-            "deletions": 18,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tasks/task-registry.store.test.ts",
-            "additions": 86,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86744",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86744.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 156,
-          "counts": {
-            "SUCCESS": 129,
-            "SKIPPED": 25,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-agentic-agents-core-runtime:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-agentic-agents-core-runtime:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:86744:4541419121:2026-05-26T07:01:50Z:re_review",
-      "comment_id": "4541419121",
-      "comment_version_key": "4541419121:2026-05-26T07:01:50Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86744#issuecomment-4541419121",
-      "repo": "openclaw/openclaw",
-      "issue_number": 86744,
-      "author": "mushuiyu886",
-      "author_id": 266724580,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-26T07:01:50Z",
-      "comment_updated_at": "2026-05-26T07:01:50Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(tasks): recover from corrupted task registry SQLite on startup",
-        "body": "## Summary\n\n- Problem: Gateway startup can fail with uncaught SQLite corruption errors when the shared OpenClaw state database (`state/openclaw.sqlite`) is malformed; the task registry now restores through this shared database opener.\n- Solution: Detect SQLite corruption during shared state database open/setup, close every early `DatabaseSync` handle before retry, quarantine the malformed database, and create a fresh shared state database so startup can continue.\n- What changed: `src/state/openclaw-state-db.ts` now wraps WAL setup, PRAGMAs, and schema setup in one guarded initialization path; corruption recovery closes WAL/Kysely/SQLite state before quarantine retry. `src/state/openclaw-state-db.test.ts` adds regression coverage proving the WAL setup failure path leaves no stale quarantine file descriptor. `src/tasks/task-registry.store.test.ts` keeps the task-registry recovery roundtrip covered through the shared state database.\n- What did NOT change: No schema shape, task registry API, or healthy database behavior changed. Corrupted databases are preserved when quarantine succeeds; startup continues with a fresh empty shared state database.\n\nFixes #71689\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Gateway startup/task registry restore can crash when the shared `state/openclaw.sqlite` file is corrupted, including corruption detected by the early WAL setup path.\n- **Real environment tested:** Node 24.x on Linux, actual `loadTaskRegistryStateFromSqlite()` call through the production shared state DB opener (`openOpenClawStateDatabase()`), with a malformed `state/openclaw.sqlite` and WAL/SHM sidecar files.\n- **Exact steps or command run after this patch:**\n  ```bash\n  node --import tsx --input-type=module <<'NODE'\n  import { mkdirSync, readlinkSync, readdirSync, writeFileSync } from 'node:fs';\n  import { dirname, join } from 'node:path';\n\n  const stateDir = `/tmp/proof-openclaw-state-recovery-${Date.now()}`;\n  const sqlitePath = join(stateDir, 'state', 'openclaw.sqlite');\n  mkdirSync(dirname(sqlitePath), { recursive: true });\n  writeFileSync(sqlitePath, Buffer.from('not a sqlite database'));\n  writeFileSync(`${sqlitePath}-wal`, Buffer.from('corrupted wal'));\n  writeFileSync(`${sqlitePath}-shm`, Buffer.from('corrupted shm'));\n  process.env.OPENCLAW_STATE_DIR = stateDir;\n\n  const { loadTaskRegistryStateFromSqlite } = await import('./src/tasks/task-registry.store.sqlite.ts');\n  const { closeOpenClawStateDatabase } = await import('./src/state/openclaw-state-db.ts');\n\n  const snapshot = loadTaskRegistryStateFromSqlite();\n  const files = readdirSync(dirname(sqlitePath)).sort();\n  const quarantineFiles = files.filter((name) => name.startsWith('openclaw.sqlite.corrupted.'));\n  const fdTargets = process.platform === 'linux'\n    ? readdirSync('/proc/self/fd').flatMap((fd) => {\n        try {\n          return [readlinkSync(join('/proc/self/fd', fd))];\n        } catch {\n          return [];\n        }\n      })\n    : [];\n  const staleQuarantineFds = fdTargets.filter((target) =>\n    quarantineFiles.some((name) => target.startsWith(join(dirname(sqlitePath), name))),\n  );\n\n  console.log(JSON.stringify({\n    stateDir,\n    sqlitePath,\n    tasks: snapshot.tasks.size,\n    deliveryStates: snapshot.deliveryStates.size,\n    databaseExists: files.includes('openclaw.sqlite'),\n    quarantineFiles,\n    staleQuarantineFds,\n  }, null, 2));\n\n  closeOpenClawStateDatabase();\n  NODE\n  ```\n- **Evidence after fix:** Terminal output from the real loader path on the updated branch:\n  ```text\n  [openclaw-state-db] Corrupted OpenClaw state database quarantined, creating fresh database\n  {\n    \"stateDir\": \"/tmp/proof-openclaw-state-recovery-1780808040607\",\n    \"sqlitePath\": \"/tmp/proof-openclaw-state-recovery-1780808040607/state/openclaw.sqlite\",\n    \"tasks\": 0,\n    \"deliveryStates\": 0,\n    \"databaseExists\": true,\n    \"quarantineFiles\": [\n      \"openclaw.sqlite.corrupted.1780808041707\"\n    ],\n    \"staleQuarantineFds\": []\n  }\n  ```\n- **Observed result after fix:** The production task-registry restore path returned an empty snapshot instead of throwing, logged the quarantine event, created a fresh `state/openclaw.sqlite`, preserved the malformed main database under `openclaw.sqlite.corrupted.{timestamp}`, and left no open file descriptor pointing at the quarantined corrupted database after the WAL setup failure path.\n- **What was not tested:** Did not test corruption that appears mid-operation after startup. Did not test macOS or Windows locked-file behavior. Maintainers still need to accept the availability-first policy that a malformed shared state database is quarantined and startup continues with fresh empty shared state.\n\n## Regression Test Plan\n\n- Coverage level: Unit tests plus local real-behavior proof.\n- Target test files: `src/state/openclaw-state-db.test.ts` and `src/tasks/task-registry.store.test.ts`.\n- Scenario locked in: Shared state DB corruption triggers quarantine and fresh DB creation; the WAL setup corruption path closes the old database handle before retry; task registry writes and restores records after recovery.\n- Why this is the smallest reliable guardrail: The tests write malformed bytes to the real shared SQLite path and exercise the production opener and task-registry store instead of mocking SQLite corruption.\n\n## Local verification\n\n```text\nnode scripts/run-vitest.mjs src/state/openclaw-state-db.test.ts src/tasks/task-registry.store.test.ts\n# state DB shard: 14 tests passed\n# task registry shard: 28 tests passed\n\ncorepack pnpm format:check -- src/state/openclaw-state-db.ts src/state/openclaw-state-db.test.ts src/tasks/task-registry.store.test.ts\n# All matched files use the correct format.\n\ncorepack pnpm tsgo:core\n# passed\n\ngit diff --check\n# passed\n```\n\n## Root Cause\n\n- Root cause: The task registry now depends on the shared OpenClaw state database opener. That opener could surface SQLite corruption while setting up WAL or schema state, but the recovery path initially did not close every early `DatabaseSync` handle before attempting quarantine and retry.\n- Missing detection / guardrail: Corruption recovery needed to live at the shared state DB boundary, and the WAL setup path needed explicit handle cleanup coverage before rename-based quarantine.",
-        "branch": "feat/issue-71689",
-        "head_sha": "ed1372d0347f4d72146adb7969ba97c47842fa1a",
-        "author": "mushuiyu886",
-        "labels": [
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/state/openclaw-state-db.test.ts",
-            "additions": 34,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-state-db.ts",
-            "additions": 95,
-            "deletions": 18,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tasks/task-registry.store.test.ts",
-            "additions": 86,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86744",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86744.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 156,
-          "counts": {
-            "SUCCESS": 129,
-            "SKIPPED": 25,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-agentic-agents-core-runtime:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-agentic-agents-core-runtime:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:86744:4540536313:2026-05-26T05:32:40Z:re_review",
-      "comment_id": "4540536313",
-      "comment_version_key": "4540536313:2026-05-26T05:32:40Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86744#issuecomment-4540536313",
-      "repo": "openclaw/openclaw",
-      "issue_number": 86744,
-      "author": "mushuiyu886",
-      "author_id": 266724580,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-26T05:32:40Z",
-      "comment_updated_at": "2026-05-26T05:32:40Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(tasks): recover from corrupted task registry SQLite on startup",
-        "body": "## Summary\n\n- Problem: Gateway startup can fail with uncaught SQLite corruption errors when the shared OpenClaw state database (`state/openclaw.sqlite`) is malformed; the task registry now restores through this shared database opener.\n- Solution: Detect SQLite corruption during shared state database open/setup, close every early `DatabaseSync` handle before retry, quarantine the malformed database, and create a fresh shared state database so startup can continue.\n- What changed: `src/state/openclaw-state-db.ts` now wraps WAL setup, PRAGMAs, and schema setup in one guarded initialization path; corruption recovery closes WAL/Kysely/SQLite state before quarantine retry. `src/state/openclaw-state-db.test.ts` adds regression coverage proving the WAL setup failure path leaves no stale quarantine file descriptor. `src/tasks/task-registry.store.test.ts` keeps the task-registry recovery roundtrip covered through the shared state database.\n- What did NOT change: No schema shape, task registry API, or healthy database behavior changed. Corrupted databases are preserved when quarantine succeeds; startup continues with a fresh empty shared state database.\n\nFixes #71689\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Gateway startup/task registry restore can crash when the shared `state/openclaw.sqlite` file is corrupted, including corruption detected by the early WAL setup path.\n- **Real environment tested:** Node 24.x on Linux, actual `loadTaskRegistryStateFromSqlite()` call through the production shared state DB opener (`openOpenClawStateDatabase()`), with a malformed `state/openclaw.sqlite` and WAL/SHM sidecar files.\n- **Exact steps or command run after this patch:**\n  ```bash\n  node --import tsx --input-type=module <<'NODE'\n  import { mkdirSync, readlinkSync, readdirSync, writeFileSync } from 'node:fs';\n  import { dirname, join } from 'node:path';\n\n  const stateDir = `/tmp/proof-openclaw-state-recovery-${Date.now()}`;\n  const sqlitePath = join(stateDir, 'state', 'openclaw.sqlite');\n  mkdirSync(dirname(sqlitePath), { recursive: true });\n  writeFileSync(sqlitePath, Buffer.from('not a sqlite database'));\n  writeFileSync(`${sqlitePath}-wal`, Buffer.from('corrupted wal'));\n  writeFileSync(`${sqlitePath}-shm`, Buffer.from('corrupted shm'));\n  process.env.OPENCLAW_STATE_DIR = stateDir;\n\n  const { loadTaskRegistryStateFromSqlite } = await import('./src/tasks/task-registry.store.sqlite.ts');\n  const { closeOpenClawStateDatabase } = await import('./src/state/openclaw-state-db.ts');\n\n  const snapshot = loadTaskRegistryStateFromSqlite();\n  const files = readdirSync(dirname(sqlitePath)).sort();\n  const quarantineFiles = files.filter((name) => name.startsWith('openclaw.sqlite.corrupted.'));\n  const fdTargets = process.platform === 'linux'\n    ? readdirSync('/proc/self/fd').flatMap((fd) => {\n        try {\n          return [readlinkSync(join('/proc/self/fd', fd))];\n        } catch {\n          return [];\n        }\n      })\n    : [];\n  const staleQuarantineFds = fdTargets.filter((target) =>\n    quarantineFiles.some((name) => target.startsWith(join(dirname(sqlitePath), name))),\n  );\n\n  console.log(JSON.stringify({\n    stateDir,\n    sqlitePath,\n    tasks: snapshot.tasks.size,\n    deliveryStates: snapshot.deliveryStates.size,\n    databaseExists: files.includes('openclaw.sqlite'),\n    quarantineFiles,\n    staleQuarantineFds,\n  }, null, 2));\n\n  closeOpenClawStateDatabase();\n  NODE\n  ```\n- **Evidence after fix:** Terminal output from the real loader path on the updated branch:\n  ```text\n  [openclaw-state-db] Corrupted OpenClaw state database quarantined, creating fresh database\n  {\n    \"stateDir\": \"/tmp/proof-openclaw-state-recovery-1780808040607\",\n    \"sqlitePath\": \"/tmp/proof-openclaw-state-recovery-1780808040607/state/openclaw.sqlite\",\n    \"tasks\": 0,\n    \"deliveryStates\": 0,\n    \"databaseExists\": true,\n    \"quarantineFiles\": [\n      \"openclaw.sqlite.corrupted.1780808041707\"\n    ],\n    \"staleQuarantineFds\": []\n  }\n  ```\n- **Observed result after fix:** The production task-registry restore path returned an empty snapshot instead of throwing, logged the quarantine event, created a fresh `state/openclaw.sqlite`, preserved the malformed main database under `openclaw.sqlite.corrupted.{timestamp}`, and left no open file descriptor pointing at the quarantined corrupted database after the WAL setup failure path.\n- **What was not tested:** Did not test corruption that appears mid-operation after startup. Did not test macOS or Windows locked-file behavior. Maintainers still need to accept the availability-first policy that a malformed shared state database is quarantined and startup continues with fresh empty shared state.\n\n## Regression Test Plan\n\n- Coverage level: Unit tests plus local real-behavior proof.\n- Target test files: `src/state/openclaw-state-db.test.ts` and `src/tasks/task-registry.store.test.ts`.\n- Scenario locked in: Shared state DB corruption triggers quarantine and fresh DB creation; the WAL setup corruption path closes the old database handle before retry; task registry writes and restores records after recovery.\n- Why this is the smallest reliable guardrail: The tests write malformed bytes to the real shared SQLite path and exercise the production opener and task-registry store instead of mocking SQLite corruption.\n\n## Local verification\n\n```text\nnode scripts/run-vitest.mjs src/state/openclaw-state-db.test.ts src/tasks/task-registry.store.test.ts\n# state DB shard: 14 tests passed\n# task registry shard: 28 tests passed\n\ncorepack pnpm format:check -- src/state/openclaw-state-db.ts src/state/openclaw-state-db.test.ts src/tasks/task-registry.store.test.ts\n# All matched files use the correct format.\n\ncorepack pnpm tsgo:core\n# passed\n\ngit diff --check\n# passed\n```\n\n## Root Cause\n\n- Root cause: The task registry now depends on the shared OpenClaw state database opener. That opener could surface SQLite corruption while setting up WAL or schema state, but the recovery path initially did not close every early `DatabaseSync` handle before attempting quarantine and retry.\n- Missing detection / guardrail: Corruption recovery needed to live at the shared state DB boundary, and the WAL setup path needed explicit handle cleanup coverage before rename-based quarantine.",
-        "branch": "feat/issue-71689",
-        "head_sha": "ed1372d0347f4d72146adb7969ba97c47842fa1a",
-        "author": "mushuiyu886",
-        "labels": [
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/state/openclaw-state-db.test.ts",
-            "additions": 34,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-state-db.ts",
-            "additions": 95,
-            "deletions": 18,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tasks/task-registry.store.test.ts",
-            "additions": 86,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86744",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86744.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 156,
-          "counts": {
-            "SUCCESS": 129,
-            "SKIPPED": 25,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-agentic-agents-core-runtime:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-agentic-agents-core-runtime:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:86744:4539877045:2026-05-26T04:00:57Z:re_review",
-      "comment_id": "4539877045",
-      "comment_version_key": "4539877045:2026-05-26T04:00:57Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/86744#issuecomment-4539877045",
-      "repo": "openclaw/openclaw",
-      "issue_number": 86744,
-      "author": "mushuiyu886",
-      "author_id": 266724580,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-26T04:00:57Z",
-      "comment_updated_at": "2026-05-26T04:00:57Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(tasks): recover from corrupted task registry SQLite on startup",
-        "body": "## Summary\n\n- Problem: Gateway startup can fail with uncaught SQLite corruption errors when the shared OpenClaw state database (`state/openclaw.sqlite`) is malformed; the task registry now restores through this shared database opener.\n- Solution: Detect SQLite corruption during shared state database open/setup, close every early `DatabaseSync` handle before retry, quarantine the malformed database, and create a fresh shared state database so startup can continue.\n- What changed: `src/state/openclaw-state-db.ts` now wraps WAL setup, PRAGMAs, and schema setup in one guarded initialization path; corruption recovery closes WAL/Kysely/SQLite state before quarantine retry. `src/state/openclaw-state-db.test.ts` adds regression coverage proving the WAL setup failure path leaves no stale quarantine file descriptor. `src/tasks/task-registry.store.test.ts` keeps the task-registry recovery roundtrip covered through the shared state database.\n- What did NOT change: No schema shape, task registry API, or healthy database behavior changed. Corrupted databases are preserved when quarantine succeeds; startup continues with a fresh empty shared state database.\n\nFixes #71689\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Gateway startup/task registry restore can crash when the shared `state/openclaw.sqlite` file is corrupted, including corruption detected by the early WAL setup path.\n- **Real environment tested:** Node 24.x on Linux, actual `loadTaskRegistryStateFromSqlite()` call through the production shared state DB opener (`openOpenClawStateDatabase()`), with a malformed `state/openclaw.sqlite` and WAL/SHM sidecar files.\n- **Exact steps or command run after this patch:**\n  ```bash\n  node --import tsx --input-type=module <<'NODE'\n  import { mkdirSync, readlinkSync, readdirSync, writeFileSync } from 'node:fs';\n  import { dirname, join } from 'node:path';\n\n  const stateDir = `/tmp/proof-openclaw-state-recovery-${Date.now()}`;\n  const sqlitePath = join(stateDir, 'state', 'openclaw.sqlite');\n  mkdirSync(dirname(sqlitePath), { recursive: true });\n  writeFileSync(sqlitePath, Buffer.from('not a sqlite database'));\n  writeFileSync(`${sqlitePath}-wal`, Buffer.from('corrupted wal'));\n  writeFileSync(`${sqlitePath}-shm`, Buffer.from('corrupted shm'));\n  process.env.OPENCLAW_STATE_DIR = stateDir;\n\n  const { loadTaskRegistryStateFromSqlite } = await import('./src/tasks/task-registry.store.sqlite.ts');\n  const { closeOpenClawStateDatabase } = await import('./src/state/openclaw-state-db.ts');\n\n  const snapshot = loadTaskRegistryStateFromSqlite();\n  const files = readdirSync(dirname(sqlitePath)).sort();\n  const quarantineFiles = files.filter((name) => name.startsWith('openclaw.sqlite.corrupted.'));\n  const fdTargets = process.platform === 'linux'\n    ? readdirSync('/proc/self/fd').flatMap((fd) => {\n        try {\n          return [readlinkSync(join('/proc/self/fd', fd))];\n        } catch {\n          return [];\n        }\n      })\n    : [];\n  const staleQuarantineFds = fdTargets.filter((target) =>\n    quarantineFiles.some((name) => target.startsWith(join(dirname(sqlitePath), name))),\n  );\n\n  console.log(JSON.stringify({\n    stateDir,\n    sqlitePath,\n    tasks: snapshot.tasks.size,\n    deliveryStates: snapshot.deliveryStates.size,\n    databaseExists: files.includes('openclaw.sqlite'),\n    quarantineFiles,\n    staleQuarantineFds,\n  }, null, 2));\n\n  closeOpenClawStateDatabase();\n  NODE\n  ```\n- **Evidence after fix:** Terminal output from the real loader path on the updated branch:\n  ```text\n  [openclaw-state-db] Corrupted OpenClaw state database quarantined, creating fresh database\n  {\n    \"stateDir\": \"/tmp/proof-openclaw-state-recovery-1780808040607\",\n    \"sqlitePath\": \"/tmp/proof-openclaw-state-recovery-1780808040607/state/openclaw.sqlite\",\n    \"tasks\": 0,\n    \"deliveryStates\": 0,\n    \"databaseExists\": true,\n    \"quarantineFiles\": [\n      \"openclaw.sqlite.corrupted.1780808041707\"\n    ],\n    \"staleQuarantineFds\": []\n  }\n  ```\n- **Observed result after fix:** The production task-registry restore path returned an empty snapshot instead of throwing, logged the quarantine event, created a fresh `state/openclaw.sqlite`, preserved the malformed main database under `openclaw.sqlite.corrupted.{timestamp}`, and left no open file descriptor pointing at the quarantined corrupted database after the WAL setup failure path.\n- **What was not tested:** Did not test corruption that appears mid-operation after startup. Did not test macOS or Windows locked-file behavior. Maintainers still need to accept the availability-first policy that a malformed shared state database is quarantined and startup continues with fresh empty shared state.\n\n## Regression Test Plan\n\n- Coverage level: Unit tests plus local real-behavior proof.\n- Target test files: `src/state/openclaw-state-db.test.ts` and `src/tasks/task-registry.store.test.ts`.\n- Scenario locked in: Shared state DB corruption triggers quarantine and fresh DB creation; the WAL setup corruption path closes the old database handle before retry; task registry writes and restores records after recovery.\n- Why this is the smallest reliable guardrail: The tests write malformed bytes to the real shared SQLite path and exercise the production opener and task-registry store instead of mocking SQLite corruption.\n\n## Local verification\n\n```text\nnode scripts/run-vitest.mjs src/state/openclaw-state-db.test.ts src/tasks/task-registry.store.test.ts\n# state DB shard: 14 tests passed\n# task registry shard: 28 tests passed\n\ncorepack pnpm format:check -- src/state/openclaw-state-db.ts src/state/openclaw-state-db.test.ts src/tasks/task-registry.store.test.ts\n# All matched files use the correct format.\n\ncorepack pnpm tsgo:core\n# passed\n\ngit diff --check\n# passed\n```\n\n## Root Cause\n\n- Root cause: The task registry now depends on the shared OpenClaw state database opener. That opener could surface SQLite corruption while setting up WAL or schema state, but the recovery path initially did not close every early `DatabaseSync` handle before attempting quarantine and retry.\n- Missing detection / guardrail: Corruption recovery needed to live at the shared state DB boundary, and the WAL setup path needed explicit handle cleanup coverage before rename-based quarantine.",
-        "branch": "feat/issue-71689",
-        "head_sha": "ed1372d0347f4d72146adb7969ba97c47842fa1a",
-        "author": "mushuiyu886",
-        "labels": [
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/state/openclaw-state-db.test.ts",
-            "additions": 34,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/state/openclaw-state-db.ts",
-            "additions": 95,
-            "deletions": 18,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tasks/task-registry.store.test.ts",
-            "additions": 86,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-86744",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-86744.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 156,
-          "counts": {
-            "SUCCESS": 129,
-            "SKIPPED": 25,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-agentic-agents-core-runtime:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-agentic-agents-core-runtime:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3761,
+    "total_ms": 4740,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 418
+        "ms": 580
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1879
+        "ms": 1087
       },
       {
         "name": "classify_commands",
-        "ms": 4
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 1435
+        "ms": 3046
       },
       {
         "name": "append_ledger",
