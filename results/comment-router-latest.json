@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-07T05:11:15.219Z",
+  "generated_at": "2026-06-07T05:12:37.358Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-07T02:11:14.803Z",
+  "since": "2026-06-07T02:12:35.333Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    40768
+    69010
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 4,
-  "commands_seen": 0,
+  "scanned_comments": 8,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,18 +29,151 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:69010:4338178876:2026-06-07T05:12:26Z:clawsweeper_needs_human",
+      "comment_id": "4338178876",
+      "comment_version_key": "4338178876:2026-06-07T05:12:26Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/69010#issuecomment-4338178876",
+      "repo": "openclaw/openclaw",
+      "issue_number": 69010,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-04-28T18:51:18Z",
+      "comment_updated_at": "2026-06-07T05:12:26Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=21a07b17fd60f83ba3841fb0922f55dbae668e54)",
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "21a07b17fd60f83ba3841fb0922f55dbae668e54",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): prefer current route delivery context",
+        "body": "## Summary\n\n- Fixes gateway agent delivery resolution so a concrete current request route (`channel`, `to`, `accountId`, `threadId`) wins over stale persisted session `deliveryContext` fields when the channels conflict.\n- Clears stale route fields on channel switches when the new request does not provide replacement `to`/`accountId`/`threadId` values, avoiding mixed-channel routes.\n- Preserves existing session-route behavior for normal follow-ups, `channel=last`, and same-channel existing-session routes.\n- Compares same-channel targets through the channel parser so equivalent encodings do not clear stored threads.\n- Populates `runContext.currentChannelId` from the resolved delivery target so downstream message-tool fallback inference sees the active route.\n- Adds regression tests for the #68378 shape, channel-only stale-route clearing, same-channel partial updates, and canonical equivalent targets.\n\n## Linked Issue/PR\n\n- Closes #68378\n- Related prior art: #22205 identified the missing `resolvedTo` -> `runContext.currentChannelId` propagation, but that PR is closed unmerged and does not address stale delivery-context precedence.\n- Related but not duplicates: #45514, #65847, #33619, #39557, #51812, #52204 all describe adjacent multi-channel/stale-routing problems or other delivery paths; none is an open satisfactory PR for this gateway agent route-precedence bug.\n\n## Root Cause / Diagnosis\n\n`src/gateway/server-methods/agent.ts` built `requestDeliveryHint` from the active gateway request, but then merged it with the stored session `deliveryContext` in a way that made persisted fields authoritative. That let stale persisted fields, such as Feishu `channel`/`to`, override a current Discord request before the agent command and session update were assembled. The same path also did not pass the resolved target into `runContext.currentChannelId`, so tool fallback routing could miss the current route even when `resolvedTo` was known.\n\nA second edge case appears when the request changes only `channel`: route-field fallback must not pair a new channel with stale `lastTo`/`lastAccountId`/`lastThreadId` from the old channel.\n\nA third edge case appears when the request and session refer to the same target with different channel-owned encodings, such as Slack `C1` and `channel:C1`: raw string comparison can falsely treat that as a target change and clear the stored thread.\n\n## Fix\n\n- Detect when a concrete request channel conflicts with the stored session delivery channel.\n- In that cross-channel conflict case, let the current request delivery hint win and use persisted delivery metadata only as fallback for fields provided by the current route.\n- Clear stale last-route fields when the current channel conflicts and no replacement field is available.\n- For same-channel route conflicts, preserve unchanged target/account/thread fields unless the concrete target itself changes.\n- Compare request/session targets using the channel parser before treating `to` as a target change, preserving stored threads for equivalent target spellings.\n- For non-conflict cases, keep existing session delivery precedence so `channel=last`, normal follow-ups, and existing subagent routes behave as before.\n- Pass `resolvedTo` into `runContext.currentChannelId` alongside the existing channel/account/thread context.\n- Lock the behavior with regression tests that start from stale Feishu metadata, assert Discord wins or stale route fields are cleared, preserve partial same-channel updates, and keep Slack threads when `C1` and `channel:C1` are equivalent.\n\n## Duplicate Sweep\n\nSearched GitHub issues/PRs for combinations of `#68378`, Discord/Feishu wrong-channel delivery, stale `deliveryContext`, gateway agent delivery, `currentChannelId`, and multi-channel session routing. Closest results:\n\n- #22205: overlapping `currentChannelId` propagation only; closed unmerged; no stale context precedence fix or regression for #68378.\n- #35451: broader `chat.send`/cron canonical route derivation; closed unmerged; different call sites.\n- #67508: target-agent bound account propagation for Matrix subagent spawns; adjacent account routing, different bug.\n- #45514, #65847, #33619, #39557, #51812, #52204: related issue reports/bug class, not acceptable duplicate PRs for this exact gateway agent request-route overwrite.\n\nConclusion: no duplicate or already-satisfactory PR found for #68378.\n\n## Attribution\n\n- Thanks @Suidge for the #68378 report and follow-up logs that isolated Discord input being delivered through Feishu outbound.\n- Thanks @Galygious for prior analysis in #22205 around forwarding `resolvedTo` into `runContext.currentChannelId`; this PR incorporates that same missing-context piece and adds the route-precedence fix needed for #68378.\n\n## Testing\n\nFresh `origin/main` base: `64089fd15ed4ba8296612b1a622d11b5662c8b96`\n\n- `pnpm test -- src/gateway/server-methods/agent.test.ts -t \"uses the current request route\"`\n- `pnpm test -- src/gateway/server-methods/agent.test.ts`\n- `pnpm test -- src/gateway/server-methods/agent.test.ts -t \"preserves the stored thread when the request target is canonically equivalent\"`\n- `pnpm test -- src/gateway/server-methods/agent.test.ts src/gateway/server.agent.gateway-server-agent-a.test.ts src/gateway/server.agent.gateway-server-agent-b.test.ts src/gateway/server.agent.subagent-delivery-context.test.ts`\n\nThe final command covers the CI shard failures observed after the first draft and now passes locally with 71 tests.\n\nScoped lint note: `pnpm lint -- src/gateway/server-methods/agent.ts src/gateway/server-methods/agent.test.ts` is currently blocked before linting these files by the existing `src/agents/skills/*` plugin SDK boundary type errors already present on `origin/main`.\n\n## Review Follow-up\n\n- Addressed and resolved Codex review thread about clearing stale route fields on channel-switch merges in `5825aede6c7568f8cec2af2653d4851bf3296d78`.\n- Addressed and resolved Codex review thread about preserving unchanged same-channel route fields in `d8f4d09a343f30d82df2bdeea9541a707923a72d`.\n- Addressed and resolved Codex review thread about canonical target comparison in `af7506771a0fd734024ecc2b51b23b7945f27b21`.\n\n## Security Impact\n\n- New permissions/capabilities? No\n- Secrets/tokens handling changed? No\n- New/changed network calls? No\n- Command/tool execution surface changed? No\n- Data access scope changed? No\n\nThe change narrows routing behavior to prefer the active request route only when it conflicts with stale persisted delivery metadata, and preserves stored thread context for equivalent same-channel target spellings.\n",
+        "branch": "codex/fix-current-route-68378",
+        "head_sha": "21a07b17fd60f83ba3841fb0922f55dbae668e54",
+        "author": "cgdusek",
+        "labels": [
+          "gateway",
+          "size: M",
+          "clawsweeper",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/agent.test.ts",
+            "additions": 390,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/agent.ts",
+            "additions": 98,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-69010",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-69010.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "",
+        "checks": {
+          "total": 72,
+          "counts": {
+            "FAILURE": 16,
+            "CANCELLED": 2,
+            "SKIPPED": 13,
+            "SUCCESS": 41
+          },
+          "blockers": [
+            "Run the OpenAI / Opus 4.6 parity gate against the qa-lab mock:FAILURE",
+            "Real behavior proof:CANCELLED",
+            "checks-fast-bundled:FAILURE",
+            "checks-fast-contracts-plugins:FAILURE",
+            "checks-node-extensions-shard-4:FAILURE",
+            "checks-node-core-runtime-infra:FAILURE",
+            "checks-node-agentic-control-plane:FAILURE",
+            "checks-node-agentic-plugin-sdk:FAILURE",
+            "checks-node-agentic-plugins:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "checks-node-channels:FAILURE",
+            "checks-node-core-support-boundary:FAILURE",
+            "checks-node-extensions:FAILURE",
+            "check:FAILURE",
+            "check-additional:FAILURE",
+            "checks-node-core:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Run the OpenAI / Opus 4.6 parity gate against the qa-lab mock:FAILURE",
+            "Real behavior proof:CANCELLED",
+            "checks-fast-bundled:FAILURE",
+            "checks-fast-contracts-plugins:FAILURE",
+            "checks-node-extensions-shard-4:FAILURE",
+            "checks-node-core-runtime-infra:FAILURE",
+            "checks-node-agentic-control-plane:FAILURE",
+            "checks-node-agentic-plugin-sdk:FAILURE",
+            "checks-node-agentic-plugins:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "checks-node-channels:FAILURE",
+            "checks-node-core-support-boundary:FAILURE",
+            "checks-node-extensions:FAILURE",
+            "check:FAILURE",
+            "check-additional:FAILURE",
+            "checks-node-core:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 714,
+    "total_ms": 2335,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 404
+        "ms": 469
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1536
       },
       {
         "name": "classify_commands",
