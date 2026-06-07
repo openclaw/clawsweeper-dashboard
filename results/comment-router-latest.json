@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-07T08:12:57.540Z",
+  "generated_at": "2026-06-07T08:13:38.801Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-07T05:12:53.061Z",
+  "since": "2026-06-07T05:13:36.649Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4641912902
   ],
-  "status_comment_id": 4641912975,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-07T08:12:10Z",
       "comment_updated_at": "2026-06-07T08:12:10Z",
-      "status_comment_id": 4641912975,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,127 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-07T08:12:58.521Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 88953
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-07T08:12:59.673Z",
-          "response_comment_id": "4641912975",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(exec): auto-approve recognized read-only boolean flags on default safe bins",
-        "body": "## Summary\n\nDefault safe bins (`cut`, `head`, `tail`, `tr`, `uniq`, `wc`) exist to auto-approve **stdin-only text filters** without a manual approval prompt. But the short-option validator only had an *accept* path for **value-consuming** flags: `consumeShortOptionClusterToken` skipped any flag not in `allowedValueFlags` and, if the cluster contained no value flag, fell through to a terminal `return -1` (reject). So a cluster of pure **boolean** short flags was never auto-approved.\n\nNet effect: the most common read-only invocations of these bins — `wc -l`, `wc -w`, `tr -d`, `tr -s`, `uniq -c` (and `sort -n`/`-r` for operators who add `sort`) — were force-routed to manual approval, even though the bins are stdin-only and every dangerous flag is already in `deniedFlags`. The presence of short flags in `deniedFlags` (`sort: -o, -T`; `jq: -L, -f`; `grep: -f, -r, -R`) shows the intended model is a denylist over recognized flags, so rejecting legitimate boolean flags is an oversight, not a deliberate narrowing.\n\n## Fix\n\nAdd an `allowedBooleanFlags` allowlist to the safe-bin profile model and populate it for the six default bins with their read-only, no-side-effect boolean flags:\n\n- `wc`: `-l -w -c -m -L` (+ long forms)\n- `tr`: `-d -s -c -C -t`\n- `uniq`: `-c -d -u -i -z`\n- `cut`: `-s -n -z --complement --only-delimited`\n- `head` / `tail`: `-q -v -z` (+ `--quiet/--silent/--verbose/--zero-terminated`). `tail -f`/`-F`/`--follow`/`--retry` are deliberately **excluded** so the auto-approve path can never stream/hang.\n\nThe validator now treats a recognized boolean flag as \"no value, keep scanning\" and accepts a cluster made entirely of recognized boolean flags, while an **unrecognized** short flag still hits `return -1` (fail-closed). The long-option path needs no logic change: feeding boolean long flags into `knownLongFlags` makes `consumeLongOptionToken`'s existing `if (!expectsValue) return index + 1` branch reachable for the first time. Denied flags are still checked first, so `sort -o`, `wc --files0-from`, etc. remain rejected.\n\nThis is intentionally **not** exposed as a new `tools.exec.safeBinProfiles` config field (root `AGENTS.md`: the config/env surface bar is high). It fixes the curated built-in default-bin profiles only; custom user profiles keep the existing `allowedValueFlags` / `deniedFlags` model. `sort`/`grep`/`jq` are not default safe bins and are left for a follow-up.\n\n## Behavior change\n\n| Invocation | before | after |\n| --- | --- | --- |\n| `wc -l`, `wc -w`, `wc --lines` | needs approval | **auto-approved** |\n| `tr -d abc`, `tr -s ' '` | needs approval | **auto-approved** |\n| `uniq -c`, `cut -s -f 1` | needs approval | **auto-approved** |\n| `tr -S a b` (unknown short flag) | needs approval | needs approval (unchanged) |\n| `sort -o out.txt` (denied) | needs approval | needs approval (unchanged) |\n| `wc --files0-from=list` (denied) | needs approval | needs approval (unchanged) |\n\n## Diff size\n\n```\n docs/tools/exec-approvals-advanced.md       |  4 +-\n src/infra/exec-approvals-safe-bins.test.ts  | 32 +++++++++++++\n src/infra/exec-safe-bin-policy-profiles.ts  | 73 ++++++++++++++++++++++++++++-\n src/infra/exec-safe-bin-policy-validator.ts | 23 +++++----\n src/infra/exec-safe-bin-policy.test.ts      | 30 ++++++++++++\n 5 files changed, 152 insertions(+), 10 deletions(-)\n```\n\n## Test plan\n\n- [x] New validator unit tests (`exec-safe-bin-policy.test.ts`): boolean short flags accepted (`wc -l`, `-lw`, `uniq -c`, `tr -d`), boolean long flags + abbreviations (`wc --lines`, `--word`), value-on-boolean rejected (`wc --lines=5`), unknown short flags rejected (`tr -S`, `wc -Z`), mixed boolean+value cluster preserved (`uniq -cf 2`).\n- [x] New end-to-end-gate tests (`exec-approvals-safe-bins.test.ts`) through `isSafeBinUsage`: `wc -l`, `wc --words`, `uniq -c`, `tr -d abc` auto-allowed; the existing `tr -S a b` -> rejected guard kept.\n- [x] Full `exec-safe-bin-policy.test.ts` + `exec-approvals-safe-bins.test.ts`: 155 passed (incl. denied-flag matrix and docs-parity).\n- [x] `tsgo -p tsconfig.core.json` clean for the changed files; `oxlint` clean on changed files.\n- [ ] CI + clawsweeper re-review.\n\n## Real behavior proof\n\n**Behavior addressed:** default safe bins are documented as auto-approved stdin-only text filters, but the safe-bin argv validator rejected pure boolean short-flag clusters, so `wc -l`, `tr -d`, `uniq -c`, `sort -n` were routed to manual approval. After the patch the real auto-approve gate (`isSafeBinUsage`) returns `true` for those recognized read-only boolean forms, while unknown/denied flags stay fail-closed.\n\n**Real environment tested:** Linux 6.8.0-71-generic, Node v22.19, real repo source at branch head `34cef99a` vs `origin/main` (`ec6ad888`), driving the **real exported** `isSafeBinUsage` / `normalizeSafeBins` from `src/infra/exec-approvals.ts` via `tsx` — not a stub or a re-implementation. Resolutions use `/usr/bin/<bin>` (a default trusted dir) so the full path/trust/profile gate runs.\n\n**Exact steps or command run after this patch:** ran `tsx` over a harness that imports the real `isSafeBinUsage` and calls it for each argv, first on this branch (after) then with the two prod files reset to `origin/main` (before):\n\n```\nnode_modules/.bin/tsx /tmp/safebin-proof.ts          # after = branch head\ngit checkout origin/main -- <profiles> <validator>   # revert prod files only\nnode_modules/.bin/tsx /tmp/safebin-proof.ts          # before = origin/main\n```\n\n**Evidence after fix:**\n\n```\n############ BEFORE (origin/main) ############\n. wc -l                    -> needs approval\n. wc -w                    -> needs approval\n. wc --lines               -> needs approval\n. tr -d abc                -> needs approval\n. tr -s                    -> needs approval\n. uniq -c                  -> needs approval\n. cut -s -f 1              -> needs approval\n. tr -S a b                -> needs approval\n. sort -o out.txt          -> needs approval\n. wc --files0-from=list    -> needs approval\n\n############ AFTER (this branch) ############\n> wc -l                    -> AUTO-APPROVED\n> wc -w                    -> AUTO-APPROVED\n> wc --lines               -> AUTO-APPROVED\n> tr -d abc                -> AUTO-APPROVED\n> tr -s                    -> AUTO-APPROVED\n> uniq -c                  -> AUTO-APPROVED\n> cut -s -f 1              -> AUTO-APPROVED\n. tr -S a b                -> needs approval\n. sort -o out.txt          -> needs approval\n. wc --files0-from=list    -> needs approval\n```\n\n**Observed result after fix:** every recognized read-only boolean form flipped from *needs approval* to *AUTO-APPROVED*; the unknown short flag (`tr -S`) and the denied flags (`sort -o`, `wc --files0-from`) stayed fail-closed. Matches the new unit/gate tests.\n\n**What was not tested:** a full gateway + live agent exec round-trip (model issues `wc -l` -> no approval prompt) — proof was taken at the real `isSafeBinUsage` decision boundary, which is the single gate that turns a safe-bin invocation into an auto-approval. No Windows path (safe bins are disabled on Windows by design).\n",
-        "branch": "fix/safe-bin-boolean-flags",
-        "head_sha": "be124f25a7b9a143c57eb6d24f238553da9e6877",
-        "author": "yetval",
-        "labels": [
-          "docs",
-          "size: S",
-          "proof: supplied",
-          "P2",
-          "rating: 🌊 off-meta tidepool",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 security-boundary"
-        ],
-        "files": [
-          {
-            "path": "docs/tools/exec-approvals-advanced.md",
-            "additions": 3,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/exec-approvals-safe-bins.test.ts",
-            "additions": 32,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/exec-safe-bin-policy-profiles.ts",
-            "additions": 78,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/exec-safe-bin-policy-validator.ts",
-            "additions": 15,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/exec-safe-bin-policy.test.ts",
-            "additions": 49,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88953",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88953.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "SUCCESS": 130,
-            "SKIPPED": 30,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "check-lint:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "check-lint:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 7271,
+    "total_ms": 3565,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2579
+        "ms": 2138
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1885
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 2780
+        "ms": 1413
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
