@@ -1,19 +1,17 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-07T11:40:21.779Z",
+  "generated_at": "2026-06-07T11:40:46.734Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-07T08:40:21.343Z",
+  "since": "2026-06-07T08:40:44.203Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    91020
+    91156
   ],
-  "comment_ids": [
-    4642389323
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -33,62 +31,122 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:91020:4642389323:2026-06-07T11:39:06Z:re_review",
-      "comment_id": "4642389323",
-      "comment_version_key": "4642389323:2026-06-07T11:39:06Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/91020#issuecomment-4642389323",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91156:4642379118:2026-06-07T11:40:41Z:clawsweeper_needs_human",
+      "comment_id": "4642379118",
+      "comment_version_key": "4642379118:2026-06-07T11:40:41Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91156#issuecomment-4642379118",
       "repo": "openclaw/openclaw",
-      "issue_number": 91020,
-      "author": "joshp123",
-      "author_id": 1497361,
+      "issue_number": 91156,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-07T11:39:06Z",
-      "comment_updated_at": "2026-06-07T11:39:06Z",
+      "comment_created_at": "2026-06-07T11:35:14Z",
+      "comment_updated_at": "2026-06-07T11:40:41Z",
       "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] The remaining blocker is contributor or maintainer live Telegram proof for a compatibility-sensitive routing change, not a narrow repair task for ClawSweeper.; Cleared: The diff changes local Telegram account selection and tests only; no dependency, workflow, package, or secret-storage surface is added. (sha=c51c78325899a40c2a0a6a7cd9696e7c93867d7b)",
+      "review_summary": "The PR pre-resolves omitted Telegram outbound account IDs through the configured default account and adds focused unit coverage for omitted-default and explicit-account selection.\n\nPR surface: Source +2, Tests +44. Total +46 across 2 files.\n\nReproducibility: yes. by source inspection: current main resolves omitted Telegram account IDs as the implicit default before consulting the configured default when that implicit account has credentials. I did not run a live Telegram repro in this read-only review.",
+      "review_followup": "- [P1] The remaining blocker is contributor or maintainer live Telegram proof for a compatibility-sensitive routing change, not a narrow repair task for ClawSweeper.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "c51c78325899a40c2a0a6a7cd9696e7c93867d7b",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(telegram): route outbound sends through configured default account (#61012)",
+        "body": "## Summary\n\nWith multiple Telegram bot accounts configured, outbound sends via `openclaw message send --channel telegram` (and proactive/subagent sends) ignored the configured default account and always routed through the implicit env/top-level `\"default\"` bot. This makes the outbound account resolver honor the configured default when no account is specified, so:\n\n1. `message send --channel telegram` with **no** `--account` uses the configured default bot.\n2. `--account <id>` routes to that bot.\n3. Subagent/proactive sends (which omit `--account`) use the correct bot identity.\n\n## Root cause\n\n`extensions/telegram/src/accounts.ts` → `resolveTelegramAccount()` passed the raw (possibly `undefined`) `accountId` straight into the shared `resolveAccountWithDefaultFallback()` helper:\n\n```ts\nreturn resolveAccountWithDefaultFallback({\n  accountId: params.accountId, // undefined when no --account\n  ...\n});\n```\n\nWhen `accountId` is omitted, the helper normalizes `undefined` → the literal `\"default\"` account id and resolves that **first**. If the implicit `\"default\"` account has any credential — e.g. a top-level `channels.telegram.botToken` or `TELEGRAM_BOT_TOKEN` left over from a single-bot setup — the helper returns it immediately and never consults `resolveDefaultTelegramAccountId()`. So `channels.telegram.defaultAccount` (and the default-agent binding) was silently ignored and every send went out under the `\"default\"` bot. The helper's `resolveDefaultAccountId` fallback only fires when the `\"default\"` account has *no* credential — precisely the case where the bug doesn't bite.\n\nThe outbound path confirms this is the deciding point: the durable send adapter (`outbound-adapter.ts`) calls `sendMessageTelegram(to, text, { cfg, accountId })` with **no** explicit token, so `resolveTelegramAccount()` alone decides the bot/token.\n\nThe sibling channel `extensions/nextcloud-talk/src/accounts.ts` already does this correctly — it pre-resolves `params.accountId ?? resolveDefaultNextcloudTalkAccountId(cfg)` before calling the same helper.\n\n## The fix\n\nMirror the nextcloud-talk resolver: resolve the configured default account id up front when none is provided, then pass that into the helper.\n\n```ts\nconst resolvedAccountId = params.accountId ?? resolveDefaultTelegramAccountId(params.cfg);\nreturn resolveAccountWithDefaultFallback({\n  accountId: resolvedAccountId,\n  ...\n});\n```\n\n`resolveDefaultTelegramAccountId()` already encapsulates the correct precedence (default-agent binding → `channels.telegram.defaultAccount` → first listed / implicit `\"default\"`), so single-bot, env-only, explicit `--account`, and inbound routing are unchanged; only the previously-broken multi-bot default selection changes.\n\nScope note: `inspectTelegramAccount()` uses the same helper for capability/status discovery (not send routing). Its omitted-`accountId` callers either branch to the all-accounts union (`channel-actions.ts`) or are diagnostic, so they don't affect which bot sends; left out of this bug-scoped change.\n\n## Verification\n\nDone in an isolated linked worktree on `fix/issue-61012-telegram-default-account` (based on latest `upstream/main`). **OpenClaw was not run locally** — no gateway/CLI/`pnpm dev`/`openclaw …`. Verified by code review + focused Vitest unit tests only.\n\nAdded a focused colocated test in `extensions/telegram/src/accounts.test.ts` covering default-account selection (no flag) and explicit-account selection, and confirmed it fails before the fix and passes after:\n\n- **Before** (fix one-liner reverted): `routes omitted-account sends through the configured defaultAccount (#61012)` fails — `AssertionError: expected 'default' to be 'secondary'` (1 failed | 35 passed).\n- **After**: `node scripts/run-vitest.mjs extensions/telegram/src/accounts.test.ts` → **36 passed**.\n- **Regression** (send/account/outbound path): `node scripts/run-vitest.mjs` over `send.test.ts action-runtime.test.ts outbound-adapter.test.ts bot-message-dispatch.test.ts channel.gateway.test.ts channel.message-adapter.test.ts send.proxy.test.ts` → **345 passed (7 files)**.\n\nNot tested: live multi-bot Telegram delivery (no real bots/tokens exercised). No tokens or secrets are included in the code, tests, or this PR.\n\nFixes #61012\n",
+        "branch": "fix/issue-61012-telegram-default-account",
+        "head_sha": "c51c78325899a40c2a0a6a7cd9696e7c93867d7b",
+        "author": "sumitaich1998",
+        "labels": [
+          "channel: telegram",
+          "size: S",
+          "triage: needs-real-behavior-proof",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/telegram/src/accounts.test.ts",
+            "additions": 44,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/accounts.ts",
+            "additions": 6,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-91156",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91156.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 158,
+          "counts": {
+            "FAILURE": 1,
+            "SUCCESS": 126,
+            "SKIPPED": 30,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1663,
+    "total_ms": 2895,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 423
+        "ms": 330
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2187
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 1227
+        "ms": 353
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
