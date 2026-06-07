@@ -4,33 +4,33 @@ Generated from the durable state branch for [openclaw/clawsweeper](https://githu
 
 ## Sweep Dashboard
 
-Last source update: Jun 7, 2026, 23:10 UTC
+Last source update: Jun 7, 2026, 23:40 UTC
 
 ### Fleet
 
 | Metric | Count |
 | --- | ---: |
 | Covered repositories | 3 |
-| Open review records | 6986 |
+| Open review records | 6987 |
 | Archived closed records | 1688 |
-| Fresh reviews, 7d | 3947 |
+| Fresh reviews, 7d | 3940 |
 | Proposed closes awaiting apply | 49 |
-| Work candidates awaiting promotion | 423 |
-| Failed or stale reviews | 1782 |
+| Work candidates awaiting promotion | 422 |
+| Failed or stale reviews | 1783 |
 
 ### Current Runs
 
 | Repository | State | Updated | Run |
 | --- | --- | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Review in progress | Jun 7, 2026, 23:10 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/27107645926) |
-| [openclaw/clawhub](https://github.com/openclaw/clawhub) | Review in progress | Jun 7, 2026, 23:03 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/27107476156) |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | Review in progress | Jun 7, 2026, 23:37 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/27108238176) |
+| [openclaw/clawhub](https://github.com/openclaw/clawhub) | Review in progress | Jun 7, 2026, 23:24 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/27107954455) |
 | [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | Planning review | Jun 7, 2026, 13:47 UTC | [run](https://github.com/openclaw/clawsweeper/actions/runs/27094350254) |
 
 ### Repositories
 
 | Repository | Open records | Archived | Fresh | Proposed closes | Work candidates | Failed/stale | Last review | Last close |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 6724 | 1613 | 3809 | 49 | 410 | 1765 | Jun 7, 2026, 23:09 UTC | Jun 7, 2026, 23:00 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 6725 | 1613 | 3802 | 49 | 409 | 1766 | Jun 7, 2026, 23:40 UTC | Jun 7, 2026, 23:00 UTC |
 | [openclaw/clawhub](https://github.com/openclaw/clawhub) | 198 | 55 | 117 | 0 | 9 | 17 | Jun 7, 2026, 19:21 UTC | Jun 7, 2026, 05:01 UTC |
 | [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper) | 64 | 20 | 21 | 0 | 4 | 0 | Jun 7, 2026, 17:07 UTC | Jun 5, 2026, 21:38 UTC |
 
@@ -84,21 +84,21 @@ Last source update: Jun 7, 2026, 23:10 UTC
 
 | Repository | Item | Title | Outcome | Status | Reviewed |
 | --- | --- | --- | --- | --- | --- |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#90101](https://github.com/openclaw/openclaw/pull/90101) | feat: add runtime self context config and tool | keep_open / kept_open | complete | Jun 7, 2026, 23:09 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#88796](https://github.com/openclaw/openclaw/pull/88796) | fix(discord): resolve guildId from session channel for search actions | keep_open / kept_open | complete | Jun 7, 2026, 23:08 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#90328](https://github.com/openclaw/openclaw/pull/90328) | Expose model picker agent runtimes | keep_open / kept_open | complete | Jun 7, 2026, 23:08 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#88796](https://github.com/openclaw/openclaw/pull/88796) | fix(discord): resolve guildId from session channel for search actions | keep_open / kept_open | complete | Jun 7, 2026, 23:40 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#89987](https://github.com/openclaw/openclaw/pull/89987) | fix(cron): suppress control diagnostics in delivery | keep_open / kept_open | complete | Jun 7, 2026, 23:39 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#90101](https://github.com/openclaw/openclaw/pull/90101) | feat: add runtime self context config and tool | keep_open / kept_open | complete | Jun 7, 2026, 23:38 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78441](https://github.com/openclaw/openclaw/pull/78441) | feat(subagents): forward toolsAllow from sessions_spawn | keep_open / kept_open | failed | Jun 7, 2026, 23:38 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#89659](https://github.com/openclaw/openclaw/pull/89659) | fix(feishu): retry on send rate-limit errors (230020/230006) | keep_open / kept_open | complete | Jun 7, 2026, 23:35 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#90328](https://github.com/openclaw/openclaw/pull/90328) | Expose model picker agent runtimes | keep_open / kept_open | complete | Jun 7, 2026, 23:33 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#91198](https://github.com/openclaw/openclaw/pull/91198) | fix(daemon): skip pre-existing gateway listeners as schtask launch evidence (#91144) | keep_open / kept_open | complete | Jun 7, 2026, 23:28 UTC |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#91265](https://github.com/openclaw/openclaw/pull/91265) | fix(memory): drop redundant agent-id scoping from QMD collection names | keep_open / kept_open | complete | Jun 7, 2026, 23:17 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#91264](https://github.com/openclaw/openclaw/pull/91264) | fix(skills): stop chokidar from opening persistent FDs on SKILL.md files (fixes #90578) | keep_open / kept_open | complete | Jun 7, 2026, 23:07 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#78441](https://github.com/openclaw/openclaw/pull/78441) | feat(subagents): forward toolsAllow from sessions_spawn | keep_open / kept_open | complete | Jun 7, 2026, 23:04 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#91262](https://github.com/openclaw/openclaw/pull/91262) | fix(build): fall back to tsx for build TypeScript scripts | keep_open / kept_open | failed | Jun 7, 2026, 23:03 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#89659](https://github.com/openclaw/openclaw/pull/89659) | fix(feishu): retry on send rate-limit errors (230020/230006) | keep_open / kept_open | complete | Jun 7, 2026, 23:02 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#89987](https://github.com/openclaw/openclaw/pull/89987) | fix(cron): suppress control diagnostics in delivery | keep_open / kept_open | complete | Jun 7, 2026, 22:58 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#91261](https://github.com/openclaw/openclaw/pull/91261) | fix #78571: [Bug]: Telegram Connection Bot | keep_open / kept_open | complete | Jun 7, 2026, 22:58 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#91257](https://github.com/openclaw/openclaw/pull/91257) | perf: split subagent registry runtime imports | keep_open / kept_open | complete | Jun 7, 2026, 22:53 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#90480](https://github.com/openclaw/openclaw/pull/90480) | feat(whatsapp): expand live QA coverage | keep_open / kept_open | complete | Jun 7, 2026, 22:42 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#91259](https://github.com/openclaw/openclaw/issues/91259) | memory(qmd): drop redundant agent-id scoping from collection names | keep_open / kept_open | complete | Jun 7, 2026, 22:38 UTC |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#83988](https://github.com/openclaw/openclaw/pull/83988) | fix(tts): defer text settlement for final-mode TTS to eliminate churn (#83511) | keep_open / kept_open | complete | Jun 7, 2026, 22:32 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#91255](https://github.com/openclaw/openclaw/pull/91255) | fix(memory-core): enrich collection paths from qmd collection show to enable rebind (fixes #91251) | keep_open / kept_open | complete | Jun 7, 2026, 22:31 UTC |
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | [#90858](https://github.com/openclaw/openclaw/pull/90858) | fix(imessage): gate split-send coalescing on imsg metadata | keep_open / kept_open | complete | Jun 7, 2026, 22:31 UTC |
 
 </details>
 
