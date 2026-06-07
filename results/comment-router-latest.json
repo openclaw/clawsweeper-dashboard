@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-07T15:23:14.384Z",
+  "generated_at": "2026-06-07T15:24:06.317Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-07T12:23:12.735Z",
+  "since": "2026-06-07T12:24:03.418Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    91081
+    90381
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4643089288
+  ],
+  "status_comment_id": 4643089397,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,103 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91081:4641408014:2026-06-07T15:23:09Z:clawsweeper_needs_human",
-      "comment_id": "4641408014",
-      "comment_version_key": "4641408014:2026-06-07T15:23:09Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/91081#issuecomment-4641408014",
+      "idempotency_key": "comment-router:openclaw/openclaw:90381:4643089288:2026-06-07T15:23:23Z:re_review",
+      "comment_id": "4643089288",
+      "comment_version_key": "4643089288:2026-06-07T15:23:23Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90381#issuecomment-4643089288",
       "repo": "openclaw/openclaw",
-      "issue_number": 91081,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 90381,
+      "author": "XuZehan-iCenter",
+      "author_id": 279172199,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-07T04:24:51Z",
-      "comment_updated_at": "2026-06-07T15:23:09Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] Manual review is appropriate because this is a protected maintainer PR and the remaining blocker is accepting a session-state freshness tradeoff, not a mechanical repair.; Cleared: The diff only changes memory session-listing code and tests; it does not add dependencies, workflow execution, secret handling, or package-resolution changes. (sha=b012346f4cf9de230b75e1efe61eae21c194486f)",
-      "review_summary": "The PR adds a bounded in-flight and 5-second TTL cache with transcript-event invalidation around memory session-file listings, plus cache behavior tests.\n\nPR surface: Source +121, Tests +109. Total +230 across 2 files.\n\nReproducibility: yes. for the source-level behavior: current main performs an uncached readdir on each listSessionFilesForAgent call, and the PR tests exercise the proposed coalescing/cache semantics. I did not reproduce the raw NFS syscall reduction in a live NFS setup.",
-      "review_followup": "- [P2] Manual review is appropriate because this is a protected maintainer PR and the remaining blocker is accepting a session-state freshness tradeoff, not a mechanical repair.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "b012346f4cf9de230b75e1efe61eae21c194486f",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "perf(memory): coalesce + cache session-file listings to cut NFS READDIR load",
-        "body": "## Summary\r\n\r\nRepeated session-directory scans (`listSessionFilesForAgent`) issue a `fs.readdir(dir, { withFileTypes: true })` per call with **zero caching or coalescing** across call sites. On networked filesystems (NFS) this is expensive: resolving each entry's type turns one logical scan into roughly one attribute fetch per session file, and several subsystems (startup catch-up, incremental sync, dreaming, qmd export) scan the same agent sessions dir in close succession — producing redundant READDIR/GETATTR load.\r\n\r\nThis adds an in-flight dedupe + short-TTL snapshot cache around `listSessionFilesForAgent`:\r\n\r\n- **Coalescing** — concurrent callers join a single in-flight `Promise`, so a burst of scans triggers one READDIR instead of N.\r\n- **Short-TTL snapshot** — a resolved listing is reused briefly between scans. The cache is keyed by the **resolved sessions directory** (folds in `OPENCLAW_STATE_DIR`, and lines up with `path.dirname(update.sessionFile)` for precise invalidation).\r\n- **Event-driven invalidation (the correctness path)** — a single lazy subscription to the canonical `onSessionTranscriptUpdate` event drops the affected directory's snapshot. Every in-process mutation to a session-owned path (append, compaction, rewrite, chat inject, command exec) emits this event, and archive rotation (`archiveFileOnDisk`) already emits through it too, so one canonical hook covers all in-process write paths without scattered per-path invalidation.\r\n- **TTL as a backstop only** — `SESSION_FILES_LISTING_TTL_MS = 5_000` bounds staleness for writers that never reach our event bus (e.g. another node sharing the NFS sessions dir, or low-frequency archive prunes).\r\n- **Failed scans are never cached** — read results are a discriminated union (`{ ok: true; files } | { ok: false }`). A transient `fs.readdir` failure (NFS `EIO`/`ESTALE`/`EACCES`/timeout) is returned to the one caller as empty but **not published** into the snapshot, so the next call retries instead of serving a false-empty session set for the TTL window. A legitimately absent dir (`ENOENT`, the normal \"no sessions yet\" state) is still cached as empty, since the first session write emits an invalidation event.\r\n\r\nThe cache is bounded (64 dirs), module-lifecycle-owned, and race-safe: a completed read only publishes its snapshot if its entry is still the active one, so an invalidation or newer read during the await wins. A `resetSessionFilesListingCache()` helper exists for test isolation and is intentionally kept out of the package's public re-export surface.\r\n\r\n`withFileTypes` removal (to cut the per-entry NFS `lstat` amplification) is deferred to a focused follow-up.\r\n\r\n## Scope — what reads are covered\r\n\r\nThe cache wraps a single physical read: the `fs.readdir(dir, { withFileTypes: true })` inside `listSessionFilesForAgent`, where `dir` is the resolved per-agent sessions directory (`…/agents/<agentId>/sessions`). That `withFileTypes` scan is the expensive NFS operation — one logical scan fans out into roughly one attribute fetch per session file.\r\n\r\nFour in-process memory-engine call sites repeatedly scan the same sessions dir in close succession (the \"repeated scans\" pattern from the analysis); all now route through the coalesce/cache layer:\r\n\r\n| Caller | Path | What triggers it |\r\n|---|---|---|\r\n| `manager-sync-ops.ts:1188` | `markSessionStartupCatchupDirtyFiles()` | Startup catch-up — memory manager boot with the `sessions` source enabled. |\r\n| `manager-sync-ops.ts:1629` | incremental/targeted reindex | Memory sync cycles — when no explicit `targetSessionFiles` are passed, it lists the whole dir to build the reindex plan. |\r\n| `dreaming-phases.ts:850` | session-ingestion loop | Dreaming — iterates `agentIds`, listing each agent's sessions to batch messages by day. |\r\n| `qmd-manager.ts:2383` | `exportSessions()` | qmd export — retention/export pass listing sessions to compute keep/track sets. |\r\n\r\nThese run on overlapping schedules and can fire concurrently, so they previously produced N independent READDIR storms over a single directory. With the cache:\r\n\r\n- Concurrent calls → coalesced into **1** READDIR (in-flight join).\r\n- Sequential calls within the TTL with no intervening write → served from snapshot, **0** READDIR.\r\n- After any session write → the `onSessionTranscriptUpdate` event drops the snapshot, so the next call re-scans.\r\n\r\n**Out of scope (intentional — focused change):** other sessions-dir reads that are one-shot / CLI / diagnostic rather than hot-loop, and are left for a follow-up: `dreaming-narrative.ts:901` (separate narrative readdir; the most natural follow-up candidate), `cli.runtime.ts:527` (`scanSessionFiles` CLI diagnostic), `session-cost-usage.ts:378` (cost/usage subsystem), `dreaming-repair.ts:78` (repair corpus pass). Unrelated scans of the parent `agents/` directory (`session-utils.ts`, `agent-list.ts`, gateway `doctor.ts`) use a different key and are untouched.\r\n\r\n## Verification\r\n\r\n### Committed regression tests\r\n\r\n`node scripts/run-vitest.mjs packages/memory-host-sdk/src/host/session-files.test.ts` — **18/18** (12 pre-existing + 6 new). The cache tests count real scans by spying on `fsPromises.readdir`:\r\n\r\n- **concurrent coalescing** — two un-awaited concurrent calls ⇒ `readdir` called **exactly once**.\r\n- **cached-within-TTL** — a second call after writing a new file *without* emitting an event still returns the prior snapshot ⇒ **1** scan.\r\n- **refresh-after-TTL** — with `vi.useFakeTimers({ toFake: [\"Date\"] })`, advancing `Date` past 5s forces a re-scan ⇒ **2** scans, fresh listing.\r\n- **event invalidation** — `emitSessionTranscriptUpdate({ sessionFile })` drops the snapshot ⇒ next call re-scans, fresh listing.\r\n- **failed-scan not cached** *(new, addresses review)* — `readdir` rejected once with `EIO` ⇒ first call returns `[]`, a second call within the TTL **re-scans** (2 scans) and recovers the real listing.\r\n- **absent-dir cached** *(new)* — a missing sessions dir (`ENOENT`) is cached as empty ⇒ **1** scan across two calls.\r\n\r\nOther proof:\r\n\r\n- Consumer suites green: `manager-sync-ops.startup-catchup`, `manager-targeted-sync`, `manager-session-sync-state`, `qmd-manager`, `manager.fts-only-reindex`, `manager-source-state`, `dreaming-phases`, `manager-sync-yield`, `session-files-yield`.\r\n- Typecheck: `pnpm tsgo:core` and `pnpm tsgo:test:packages` exit 0. `node scripts/run-oxlint.mjs` clean; `oxfmt --check` clean.\r\n\r\n### Concurrency chaos / fuzz hammering (dev-time stress; not committed)\r\n\r\nA seeded invariant-based harness drove **randomized interleavings** of concurrent read bursts + real file create/delete + `onSessionTranscriptUpdate` events against the live cache, asserting:\r\n\r\n- **coalescing by reference identity** — every caller in a synchronous burst receives the *same array instance* (`===`), proving they joined one read rather than each scanning;\r\n- **no phantom files** — every returned name is a real, valid session file that actually existed;\r\n- **eventual consistency** — after a final invalidation, the listing equals on-disk ground truth exactly;\r\n- **cache-bound correctness** — with agent count > the 64-dir bound, evicted entries re-read fresh (never stale/wrong).\r\n\r\nRan at **20,000 iterations × burst 32 × 200–300 agents across 5 seeds** — all green. (Kept as a local stress tool rather than a committed suite to avoid a long-running test in CI; the committed unit tests above are the durable regression guard.)\r\n\r\n### Mutation testing (dev-time; confirms the tests actually catch breakage)\r\n\r\nEach cache invariant was corrupted one at a time in `session-files.ts`; the unit + chaos suites were re-run to confirm they **kill** the mutant, then the source was restored (verified clean via `git diff`):\r\n\r\n| Mutant | Killed by | Result |\r\n|---|---|---|\r\n| re-cache failed scan (the bug this PR's fix removes) | unit | ✅ killed |\r\n| drop event-driven invalidation | unit + chaos | ✅ killed |\r\n| TTL zero (cache disabled) | unit | ✅ killed |\r\n| disable TTL cache read (never serve snapshot) | unit | ✅ killed |\r\n| no coalesce-join (no shared in-flight) | unit + chaos | ✅ killed |\r\n| treat ENOENT as failure (stop caching empty dirs) | unit | ✅ killed |\r\n| drop race-guard on publish | — | ⚪ survives (expected) |\r\n| max-dirs bound 64 → 100000 | — | ⚪ survives (perf-only) |\r\n\r\n**6/6 correctness mutants killed, 0 unexpected survivors.** The surviving `drop-race-guard` is expected: reads *replace* the map entry rather than mutating it, so a stale completion writing into an orphaned entry is harmless — the guard is documented defensive intent, not load-bearing. `max-dirs` is a perf knob, not a correctness property.\r\n\r\n\r\n",
-        "branch": "ak/session-files-readdir-coalesce",
-        "head_sha": "b012346f4cf9de230b75e1efe61eae21c194486f",
-        "author": "amknight",
-        "labels": [
-          "maintainer",
-          "size: M",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "packages/memory-host-sdk/src/host/session-files.test.ts",
-            "additions": 110,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/memory-host-sdk/src/host/session-files.ts",
-            "additions": 125,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91081",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91081.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 48,
-          "counts": {
-            "SUCCESS": 6,
-            "SKIPPED": 42
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:91081:4643011649:2026-06-07T14:51:07Z:re_review",
-      "comment_id": "4643011649",
-      "comment_version_key": "4643011649:2026-06-07T14:51:07Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/91081#issuecomment-4643011649",
-      "repo": "openclaw/openclaw",
-      "issue_number": 91081,
-      "author": "amknight",
-      "author_id": 15041791,
-      "author_association": "MEMBER",
-      "comment_created_at": "2026-06-07T14:51:07Z",
-      "comment_updated_at": "2026-06-07T14:51:07Z",
-      "status_comment_id": null,
-      "trigger": "slash",
+      "comment_created_at": "2026-06-07T15:23:23Z",
+      "comment_updated_at": "2026-06-07T15:23:23Z",
+      "status_comment_id": 4643089397,
+      "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
       "autoclose_message": null,
@@ -143,22 +61,111 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-07T15:24:07.372Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 90381
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-07T15:24:08.503Z",
+          "response_comment_id": "4643089397",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(telegram): answer callback query before sequentialize to prevent timeout",
+        "body": "Fixes #42156\n\n## Problem\n\nIn the Telegram channel, when a user interacts with an inline button (callback query), the `sequentialize` middleware serializes all incoming updates. If the handler is slow, `answerCallbackQuery()` is delayed until after the 10-second Telegram timeout, causing the button to show a loading spinner indefinitely and the user to see \"Bot is not responding\".\n\nThe root cause is that `answerCallbackQuery()` is called inside the handler chain, after `sequentialize`. The fix is to answer the callback query immediately, before `sequentialize`, so the user gets instant feedback while the handler runs in the background.\n\n## Change\n\nAdd a `bot.use()` middleware before `sequentialize` that immediately calls `answerCallbackQuery()` for all callback queries. This is a minimal, safe change because:\n- `answerCallbackQuery()` is idempotent; calling it twice is a no-op.\n- The downstream handler still has the full context to process the callback.\n- No new dependencies or configuration are required.\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Telegram callback queries should be answered immediately to avoid the 10-second timeout. Currently the answer is delayed by `sequentialize`, causing the loading spinner to spin indefinitely.\n\n- **Environment tested**: Ubuntu 22.04 (VM-77-188-ubuntu), Node.js v24.14.1, OpenClaw at commit `9c2d2438032`, Telegram channel with inline keyboard buttons.\n\n- **Exact steps or command run after this patch**:\n  1. Start OpenClaw with Telegram channel configured.\n  2. Send a message with an inline keyboard button to the bot.\n  3. Click the button.\n  4. Observe the button state. With the fix, the loading spinner disappears immediately. Without the fix, the spinner spins for 10+ seconds and then shows \"Bot is not responding\".\n\n- **Evidence after fix**:\n  Before fix — terminal output showing the callback query timeout:\n  ```\n  [Telegram] Callback query 123456789: answerCallbackQuery() called after 12s\n  [Telegram] Error: 400 Bad Request: query is too old and response timeout expired or query ID is invalid\n  ```\n  The callback query is answered too late because `sequentialize` delays the handler.\n\n  After fix — terminal output showing the immediate callback query answer:\n  ```\n  [Telegram] Callback query 123456789: answerCallbackQuery() answered immediately\n  [Telegram] Handler processing callback query 123456789...\n  [Telegram] Callback query 123456789: handler completed in 5s\n  ```\n  The callback query is answered immediately, before `sequentialize`, and the handler runs in the background.\n\n- **Observed result after fix**: After applying the fix, clicking a Telegram inline button shows an immediate \"answer\" (loading spinner disappears). The handler continues processing in the background. The 10-second timeout is never hit, and the user never sees \"Bot is not responding\".\n\n- **What was not tested**: Not tested on a live Telegram bot with actual user traffic (no live Telegram bot token available for this test). The terminal output above is constructed from the actual API error message and the code path. TypeScript compilation (`tsc --noEmit`) passes with no errors.\n\n## Test verification\n\nNo new unit tests are added because:\n- The existing Telegram tests verify the callback query flow.\n- The change is a minimal middleware addition that is trivial to verify by inspection and compilation.\n\n## Files changed\n\n- `extensions/telegram/src/bot-core.ts` — add `bot.use()` middleware before `sequentialize` to answer callback queries immediately\n",
+        "branch": "fix/telegram-callback-query-timeout",
+        "head_sha": "9739772b4e39575b86df76da161122bd5a3aa611",
+        "author": "xuzehan-icenter",
+        "labels": [
+          "channel: telegram",
+          "size: S",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/telegram/src/bot-core.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/bot-handlers.runtime.ts",
+            "additions": 12,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/bot.create-telegram-bot.test.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90381",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90381.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 150,
+          "counts": {
+            "SUCCESS": 121,
+            "SKIPPED": 23,
+            "FAILURE": 5,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "build-artifacts:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "build-artifacts:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2591,
+    "total_ms": 5800,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 220
+        "ms": 628
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1413
+        "ms": 2256
       },
       {
         "name": "classify_commands",
@@ -166,7 +173,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 930
+        "ms": 2890
       },
       {
         "name": "append_ledger",
