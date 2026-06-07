@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-07T15:00:18.830Z",
+  "generated_at": "2026-06-07T15:01:46.539Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-07T12:00:18.330Z",
+  "since": "2026-06-07T12:01:44.026Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    90706
+    91196
   ],
-  "comment_ids": [
-    4643032463
-  ],
-  "status_comment_id": 4643032574,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 2,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,26 +29,107 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91196:4643015961:2026-06-07T14:59:14Z:clawsweeper_needs_human",
+      "comment_id": "4643015961",
+      "comment_version_key": "4643015961:2026-06-07T14:59:14Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91196#issuecomment-4643015961",
+      "repo": "openclaw/openclaw",
+      "issue_number": 91196,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-07T14:52:51Z",
+      "comment_updated_at": "2026-06-07T14:59:14Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=c1be8a997e3461dcc17e66d7d5ce0f414f4c31cc)",
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "c1be8a997e3461dcc17e66d7d5ce0f414f4c31cc",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(memory-core): force full reindex when index meta is missing with existing chunks (fixes #90338)",
+        "body": "**Summary**: When the gateway auto-syncs and finds chunks exist but the index meta entry (`memory_index_meta_v1`) is missing, it marks dirty and returns without ever writing the meta — creating a permanent dead loop where `memory_search` always returns \"index metadata is missing\" with 0 results.\n\n**Root Cause**: In `manager-sync-ops.ts`, `needsInitialIndex` was only `true` when `indexIdentity.status !== \"valid\" && !hasIndexedChunks`. When the meta was never written (status = \"missing\") but chunks already exist in the DB (`hasIndexedChunks = true`), the condition evaluated to `false`, `needsFullReindex` remained `false`, and the code hit an early return (L1855-1864) that only marked dirty without writing the meta. This created a permanent loop: sync → find missing meta → mark dirty → return → next sync → same state.\n\n**Fix**: Add `indexIdentity.status === \"missing\"` as an explicit trigger for `needsInitialIndex`, forcing a full reindex when the meta entry doesn't exist. The reindex properly writes the meta entry, breaking the dead loop.\n\n**Verification**:\n- `pnpm build` — passes\n- `pnpm test extensions/memory-core/src/memory/manager-sync-ops.startup-catchup.test.ts` — passes\n- `pnpm test extensions/memory-core/src/memory/manager-sync-yield.test.ts` — passes\n- `pnpm test extensions/memory-core/src/memory/manager-reindex-state.test.ts` — 16/16 pass\n\n## Real Behavior Proof\n\n**Behavior or issue addressed**: When memory index meta is missing but chunks exist, the gateway now triggers a full reindex that writes the meta, instead of returning forever without writing it.\n\n**Real environment tested**:\n- OS: Linux 4.19.112-2.el8.x86_64\n- Node: v22.22.0\n- OpenClaw: 2026.6.2 (66b91d78f)\n\n**Exact steps or command run after this patch**:\n1. `pnpm build` — builds cleanly\n2. `pnpm test extensions/memory-core/src/memory/manager-reindex-state.test.ts`\n3. `pnpm test extensions/memory-core/src/memory/manager-sync-yield.test.ts`\n\n**Evidence after fix**: The `resolveMemoryIndexIdentityState` function (`manager-reindex-state.ts`) returns `{ status: \"missing\" }` when no meta entry exists. With this fix, when status is \"missing\", `needsInitialIndex` is forced `true`, ensuring `needsFullReindex` is `true`, and the code proceeds through the full reindex path (L1885-1902) which calls `runSafeReindex` → writes the meta entry. Source: [extensions/memory-core/src/memory/manager-sync-ops.ts](https://github.com/openclaw/openclaw/blob/main/extensions/memory-core/src/memory/manager-sync-ops.ts)\n\nBefore the fix:\n- `needsInitialIndex = false` (status=missing, hasIndexedChunks=true) → early return → meta never written\n\nAfter the fix:\n- `needsInitialIndex = true` (status=missing) → `needsFullReindex = true` → `runSafeReindex` → meta written ✅\n\n**Observed result after fix**: `pnpm test` exits 0, 16/16 tests pass across 3 test files covering the sync and reindex code paths.\n\n**What was not tested**: End-to-end gateway auto-sync with a live memory database was not tested in this environment.\n\n**Regression Test Plan**:\n- `pnpm test extensions/memory-core/src/memory/manager-reindex-state.test.ts`\n- `pnpm test extensions/memory-core/src/memory/manager-sync-ops.startup-catchup.test.ts`\n- `pnpm test extensions/memory-core/src/memory/manager-sync-yield.test.ts`\n\n**Review Findings Addressed**: N/A (new PR)\n\n**Merge Risk**: Low. The change only adds `indexIdentity.status === \"missing\"` as an additional trigger for `needsInitialIndex`. The full reindex path (L1885-1902) is a well-tested code path that already handles meta writing correctly. The change is +2 lines, minimal scope.\n",
+        "branch": "fix/issue-90338-memory-index-meta",
+        "head_sha": "c1be8a997e3461dcc17e66d7d5ce0f414f4c31cc",
+        "author": "zenglingbiao",
+        "labels": [
+          "extensions: memory-core",
+          "size: XS",
+          "proof: supplied",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-core/src/memory/manager-sync-ops.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-91196",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91196.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 157,
+          "counts": {
+            "SUCCESS": 126,
+            "SKIPPED": 31
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "target is not open"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 692,
+    "total_ms": 2752,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 488
+        "ms": 319
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2179
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 191
+        "ms": 228
       },
       {
         "name": "append_ledger",
