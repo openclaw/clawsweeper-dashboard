@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-07T09:07:10.916Z",
+  "generated_at": "2026-06-07T09:07:28.456Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-07T06:07:10.607Z",
+  "since": "2026-06-07T06:07:25.680Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    91127
+    89851
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 13,
+  "commands_seen": 5,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +29,521 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89851:4612933119:2026-06-07T09:07:22Z:clawsweeper_needs_human",
+      "comment_id": "4612933119",
+      "comment_version_key": "4612933119:2026-06-07T09:07:22Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89851#issuecomment-4612933119",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89851,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-03T13:39:36Z",
+      "comment_updated_at": "2026-06-07T09:07:22Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] The open PR should stay in human maintainer review because the remaining blocker is owner acceptance of protocol/session/security semantics, not a narrow automated repair.; Cleared: No concrete security defect was found in the diff; GET and DELETE are bearer-gated and reject browser Origin before auth, while the broader loopback SSE surface remains a maintainer merge-risk decision. (sha=a4e3cedad5a1209e7b69766f1a6838b4dbe05543)",
+      "review_summary": "The PR adds GET `/mcp` SSE handling, DELETE `/mcp` teardown acknowledgement, stateless POST behavior, and focused gateway tests for the MCP loopback HTTP server.\n\nPR surface: Source +57, Tests +87. Total +144 across 2 files.\n\nReproducibility: yes. Current main can be reproduced from source by starting the loopback MCP server and sending GET `/mcp`, which reaches the non-POST 405 path despite the generated `type: \"http\"` Streamable HTTP config.",
+      "review_followup": "- [P2] The open PR should stay in human maintainer review because the remaining blocker is owner acceptance of protocol/session/security semantics, not a narrow automated repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "a4e3cedad5a1209e7b69766f1a6838b4dbe05543",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): support Streamable HTTP MCP transport on loopback server",
+        "body": "## Summary\n\nThe MCP loopback HTTP server generates a config with `\"type\": \"http\"` (Streamable HTTP transport), but only handled POST — a GET to `/mcp` returned 405. Claude Code's Streamable HTTP client opens an SSE notification channel by sending GET `/mcp` during initialization; the 405 left it hanging at \"still connecting\" indefinitely, so the agent got no OpenClaw MCP tools for the whole session.\n\nThis adds the missing transport surface, **kept stateless** (the loopback server owns no session lifecycle):\n\n- **GET `/mcp` → 200 `text/event-stream`** — an auth-gated, browser-origin-rejected idle SSE notification channel (the actual fix for the hang). Closes cleanly when the client disconnects.\n- **DELETE `/mcp` → 200** — auth-gated no-op acknowledgement of Streamable HTTP session teardown, so clients that send DELETE on close get a clean 200 rather than 405.\n- **Stateless POST** — POST responses advertise **no** `Mcp-Session-Id`. The server processes each request independently; advertising a session id it never validates, expires, or owns would be misleading and push clients to echo a session the server ignores. (Per the spec, a stateless server simply omits the session id.)\n- `Allow` now advertises `GET, POST, DELETE`; other methods still 405.\n\n## Session semantics\n\nResolved the stateless-vs-sessionful question in favor of **stateless**: a single-purpose local loopback tool endpoint has no session state to manage, so it stays stateless rather than taking on a session lifecycle. (Maintainer can revisit if sessionful semantics are ever wanted.)\n\n## Tests\n\n`src/gateway/mcp-http.test.ts` — added focused gateway transport tests, all passing:\n- GET valid bearer → 200 + `text/event-stream`\n- GET no auth → 401; GET browser `Origin` → 403\n- DELETE valid bearer → 200; DELETE no auth → 401\n- unsupported method → 405 with `Allow: GET, POST, DELETE`\n- POST stays stateless → no `Mcp-Session-Id` header\n\n## Proof\n\n**Real running loopback MCP server** (built + started from this branch, hit with `curl`):\n\n```\n# GET — Streamable HTTP notification channel (the path Claude Code opens during init)\n$ curl -i -H \"authorization: Bearer <owner-token>\" http://127.0.0.1:PORT/mcp\nHTTP/1.1 200 OK\nContent-Type: text/event-stream\nCache-Control: no-cache\nConnection: keep-alive\n# curl then blocks on the open SSE stream (received the \":\\n\\n\" keepalive) — a live\n# channel, NOT the old 405 that left Claude Code hanging at \"still connecting\".\n\n$ curl -i http://127.0.0.1:PORT/mcp                                        # GET, no auth\nHTTP/1.1 401 Unauthorized\n\n$ curl -i -H \"authorization: Bearer <token>\" -H \"origin: https://evil.example\" .../mcp  # GET, browser origin\nHTTP/1.1 403 Forbidden\n\n$ curl -i -X DELETE -H \"authorization: Bearer <token>\" .../mcp             # DELETE teardown\nHTTP/1.1 200 OK\n\n$ curl -i -X DELETE http://127.0.0.1:PORT/mcp                              # DELETE, no auth\nHTTP/1.1 401 Unauthorized\n\n$ curl -i -X PUT http://127.0.0.1:PORT/mcp                                 # unsupported method\nHTTP/1.1 405 Method Not Allowed\nAllow: GET, POST, DELETE\n```\n\nThe GET notification channel now returns `200 + text/event-stream` (a live SSE channel) instead of the `405` that caused the \"still connecting\" hang — the core fix, demonstrated against a real running server. The same behaviors are pinned by the gateway tests above (real server + `fetch`).\n",
+        "branch": "fix/mcp-streamable-http",
+        "head_sha": "a4e3cedad5a1209e7b69766f1a6838b4dbe05543",
+        "author": "anagnorisis2peripeteia",
+        "labels": [
+          "gateway",
+          "size: S",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/mcp-http.request.ts",
+            "additions": 58,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/mcp-http.test.ts",
+            "additions": 87,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89851",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89851.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 166,
+          "counts": {
+            "FAILURE": 4,
+            "SUCCESS": 129,
+            "SKIPPED": 32,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "build-artifacts:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "build-artifacts:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89851:4640125765:2026-06-06T19:27:10Z:re_review",
+      "comment_id": "4640125765",
+      "comment_version_key": "4640125765:2026-06-06T19:27:10Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89851#issuecomment-4640125765",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89851,
+      "author": "anagnorisis2peripeteia",
+      "author_id": 129746152,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-06T19:27:10Z",
+      "comment_updated_at": "2026-06-06T19:27:10Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): support Streamable HTTP MCP transport on loopback server",
+        "body": "## Summary\n\nThe MCP loopback HTTP server generates a config with `\"type\": \"http\"` (Streamable HTTP transport), but only handled POST — a GET to `/mcp` returned 405. Claude Code's Streamable HTTP client opens an SSE notification channel by sending GET `/mcp` during initialization; the 405 left it hanging at \"still connecting\" indefinitely, so the agent got no OpenClaw MCP tools for the whole session.\n\nThis adds the missing transport surface, **kept stateless** (the loopback server owns no session lifecycle):\n\n- **GET `/mcp` → 200 `text/event-stream`** — an auth-gated, browser-origin-rejected idle SSE notification channel (the actual fix for the hang). Closes cleanly when the client disconnects.\n- **DELETE `/mcp` → 200** — auth-gated no-op acknowledgement of Streamable HTTP session teardown, so clients that send DELETE on close get a clean 200 rather than 405.\n- **Stateless POST** — POST responses advertise **no** `Mcp-Session-Id`. The server processes each request independently; advertising a session id it never validates, expires, or owns would be misleading and push clients to echo a session the server ignores. (Per the spec, a stateless server simply omits the session id.)\n- `Allow` now advertises `GET, POST, DELETE`; other methods still 405.\n\n## Session semantics\n\nResolved the stateless-vs-sessionful question in favor of **stateless**: a single-purpose local loopback tool endpoint has no session state to manage, so it stays stateless rather than taking on a session lifecycle. (Maintainer can revisit if sessionful semantics are ever wanted.)\n\n## Tests\n\n`src/gateway/mcp-http.test.ts` — added focused gateway transport tests, all passing:\n- GET valid bearer → 200 + `text/event-stream`\n- GET no auth → 401; GET browser `Origin` → 403\n- DELETE valid bearer → 200; DELETE no auth → 401\n- unsupported method → 405 with `Allow: GET, POST, DELETE`\n- POST stays stateless → no `Mcp-Session-Id` header\n\n## Proof\n\n**Real running loopback MCP server** (built + started from this branch, hit with `curl`):\n\n```\n# GET — Streamable HTTP notification channel (the path Claude Code opens during init)\n$ curl -i -H \"authorization: Bearer <owner-token>\" http://127.0.0.1:PORT/mcp\nHTTP/1.1 200 OK\nContent-Type: text/event-stream\nCache-Control: no-cache\nConnection: keep-alive\n# curl then blocks on the open SSE stream (received the \":\\n\\n\" keepalive) — a live\n# channel, NOT the old 405 that left Claude Code hanging at \"still connecting\".\n\n$ curl -i http://127.0.0.1:PORT/mcp                                        # GET, no auth\nHTTP/1.1 401 Unauthorized\n\n$ curl -i -H \"authorization: Bearer <token>\" -H \"origin: https://evil.example\" .../mcp  # GET, browser origin\nHTTP/1.1 403 Forbidden\n\n$ curl -i -X DELETE -H \"authorization: Bearer <token>\" .../mcp             # DELETE teardown\nHTTP/1.1 200 OK\n\n$ curl -i -X DELETE http://127.0.0.1:PORT/mcp                              # DELETE, no auth\nHTTP/1.1 401 Unauthorized\n\n$ curl -i -X PUT http://127.0.0.1:PORT/mcp                                 # unsupported method\nHTTP/1.1 405 Method Not Allowed\nAllow: GET, POST, DELETE\n```\n\nThe GET notification channel now returns `200 + text/event-stream` (a live SSE channel) instead of the `405` that caused the \"still connecting\" hang — the core fix, demonstrated against a real running server. The same behaviors are pinned by the gateway tests above (real server + `fetch`).\n",
+        "branch": "fix/mcp-streamable-http",
+        "head_sha": "a4e3cedad5a1209e7b69766f1a6838b4dbe05543",
+        "author": "anagnorisis2peripeteia",
+        "labels": [
+          "gateway",
+          "size: S",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/mcp-http.request.ts",
+            "additions": 58,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/mcp-http.test.ts",
+            "additions": 87,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89851",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89851.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 166,
+          "counts": {
+            "FAILURE": 4,
+            "SUCCESS": 129,
+            "SKIPPED": 32,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "build-artifacts:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "build-artifacts:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89851:4617287084:2026-06-03T22:37:16Z:re_review",
+      "comment_id": "4617287084",
+      "comment_version_key": "4617287084:2026-06-03T22:37:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89851#issuecomment-4617287084",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89851,
+      "author": "anagnorisis2peripeteia",
+      "author_id": 129746152,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-03T22:37:16Z",
+      "comment_updated_at": "2026-06-03T22:37:16Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): support Streamable HTTP MCP transport on loopback server",
+        "body": "## Summary\n\nThe MCP loopback HTTP server generates a config with `\"type\": \"http\"` (Streamable HTTP transport), but only handled POST — a GET to `/mcp` returned 405. Claude Code's Streamable HTTP client opens an SSE notification channel by sending GET `/mcp` during initialization; the 405 left it hanging at \"still connecting\" indefinitely, so the agent got no OpenClaw MCP tools for the whole session.\n\nThis adds the missing transport surface, **kept stateless** (the loopback server owns no session lifecycle):\n\n- **GET `/mcp` → 200 `text/event-stream`** — an auth-gated, browser-origin-rejected idle SSE notification channel (the actual fix for the hang). Closes cleanly when the client disconnects.\n- **DELETE `/mcp` → 200** — auth-gated no-op acknowledgement of Streamable HTTP session teardown, so clients that send DELETE on close get a clean 200 rather than 405.\n- **Stateless POST** — POST responses advertise **no** `Mcp-Session-Id`. The server processes each request independently; advertising a session id it never validates, expires, or owns would be misleading and push clients to echo a session the server ignores. (Per the spec, a stateless server simply omits the session id.)\n- `Allow` now advertises `GET, POST, DELETE`; other methods still 405.\n\n## Session semantics\n\nResolved the stateless-vs-sessionful question in favor of **stateless**: a single-purpose local loopback tool endpoint has no session state to manage, so it stays stateless rather than taking on a session lifecycle. (Maintainer can revisit if sessionful semantics are ever wanted.)\n\n## Tests\n\n`src/gateway/mcp-http.test.ts` — added focused gateway transport tests, all passing:\n- GET valid bearer → 200 + `text/event-stream`\n- GET no auth → 401; GET browser `Origin` → 403\n- DELETE valid bearer → 200; DELETE no auth → 401\n- unsupported method → 405 with `Allow: GET, POST, DELETE`\n- POST stays stateless → no `Mcp-Session-Id` header\n\n## Proof\n\n**Real running loopback MCP server** (built + started from this branch, hit with `curl`):\n\n```\n# GET — Streamable HTTP notification channel (the path Claude Code opens during init)\n$ curl -i -H \"authorization: Bearer <owner-token>\" http://127.0.0.1:PORT/mcp\nHTTP/1.1 200 OK\nContent-Type: text/event-stream\nCache-Control: no-cache\nConnection: keep-alive\n# curl then blocks on the open SSE stream (received the \":\\n\\n\" keepalive) — a live\n# channel, NOT the old 405 that left Claude Code hanging at \"still connecting\".\n\n$ curl -i http://127.0.0.1:PORT/mcp                                        # GET, no auth\nHTTP/1.1 401 Unauthorized\n\n$ curl -i -H \"authorization: Bearer <token>\" -H \"origin: https://evil.example\" .../mcp  # GET, browser origin\nHTTP/1.1 403 Forbidden\n\n$ curl -i -X DELETE -H \"authorization: Bearer <token>\" .../mcp             # DELETE teardown\nHTTP/1.1 200 OK\n\n$ curl -i -X DELETE http://127.0.0.1:PORT/mcp                              # DELETE, no auth\nHTTP/1.1 401 Unauthorized\n\n$ curl -i -X PUT http://127.0.0.1:PORT/mcp                                 # unsupported method\nHTTP/1.1 405 Method Not Allowed\nAllow: GET, POST, DELETE\n```\n\nThe GET notification channel now returns `200 + text/event-stream` (a live SSE channel) instead of the `405` that caused the \"still connecting\" hang — the core fix, demonstrated against a real running server. The same behaviors are pinned by the gateway tests above (real server + `fetch`).\n",
+        "branch": "fix/mcp-streamable-http",
+        "head_sha": "a4e3cedad5a1209e7b69766f1a6838b4dbe05543",
+        "author": "anagnorisis2peripeteia",
+        "labels": [
+          "gateway",
+          "size: S",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/mcp-http.request.ts",
+            "additions": 58,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/mcp-http.test.ts",
+            "additions": 87,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89851",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89851.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 166,
+          "counts": {
+            "FAILURE": 4,
+            "SUCCESS": 129,
+            "SKIPPED": 32,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "build-artifacts:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "build-artifacts:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89851:4617225856:2026-06-03T22:25:56Z:re_review",
+      "comment_id": "4617225856",
+      "comment_version_key": "4617225856:2026-06-03T22:25:56Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89851#issuecomment-4617225856",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89851,
+      "author": "anagnorisis2peripeteia",
+      "author_id": 129746152,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-03T22:25:56Z",
+      "comment_updated_at": "2026-06-03T22:25:56Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): support Streamable HTTP MCP transport on loopback server",
+        "body": "## Summary\n\nThe MCP loopback HTTP server generates a config with `\"type\": \"http\"` (Streamable HTTP transport), but only handled POST — a GET to `/mcp` returned 405. Claude Code's Streamable HTTP client opens an SSE notification channel by sending GET `/mcp` during initialization; the 405 left it hanging at \"still connecting\" indefinitely, so the agent got no OpenClaw MCP tools for the whole session.\n\nThis adds the missing transport surface, **kept stateless** (the loopback server owns no session lifecycle):\n\n- **GET `/mcp` → 200 `text/event-stream`** — an auth-gated, browser-origin-rejected idle SSE notification channel (the actual fix for the hang). Closes cleanly when the client disconnects.\n- **DELETE `/mcp` → 200** — auth-gated no-op acknowledgement of Streamable HTTP session teardown, so clients that send DELETE on close get a clean 200 rather than 405.\n- **Stateless POST** — POST responses advertise **no** `Mcp-Session-Id`. The server processes each request independently; advertising a session id it never validates, expires, or owns would be misleading and push clients to echo a session the server ignores. (Per the spec, a stateless server simply omits the session id.)\n- `Allow` now advertises `GET, POST, DELETE`; other methods still 405.\n\n## Session semantics\n\nResolved the stateless-vs-sessionful question in favor of **stateless**: a single-purpose local loopback tool endpoint has no session state to manage, so it stays stateless rather than taking on a session lifecycle. (Maintainer can revisit if sessionful semantics are ever wanted.)\n\n## Tests\n\n`src/gateway/mcp-http.test.ts` — added focused gateway transport tests, all passing:\n- GET valid bearer → 200 + `text/event-stream`\n- GET no auth → 401; GET browser `Origin` → 403\n- DELETE valid bearer → 200; DELETE no auth → 401\n- unsupported method → 405 with `Allow: GET, POST, DELETE`\n- POST stays stateless → no `Mcp-Session-Id` header\n\n## Proof\n\n**Real running loopback MCP server** (built + started from this branch, hit with `curl`):\n\n```\n# GET — Streamable HTTP notification channel (the path Claude Code opens during init)\n$ curl -i -H \"authorization: Bearer <owner-token>\" http://127.0.0.1:PORT/mcp\nHTTP/1.1 200 OK\nContent-Type: text/event-stream\nCache-Control: no-cache\nConnection: keep-alive\n# curl then blocks on the open SSE stream (received the \":\\n\\n\" keepalive) — a live\n# channel, NOT the old 405 that left Claude Code hanging at \"still connecting\".\n\n$ curl -i http://127.0.0.1:PORT/mcp                                        # GET, no auth\nHTTP/1.1 401 Unauthorized\n\n$ curl -i -H \"authorization: Bearer <token>\" -H \"origin: https://evil.example\" .../mcp  # GET, browser origin\nHTTP/1.1 403 Forbidden\n\n$ curl -i -X DELETE -H \"authorization: Bearer <token>\" .../mcp             # DELETE teardown\nHTTP/1.1 200 OK\n\n$ curl -i -X DELETE http://127.0.0.1:PORT/mcp                              # DELETE, no auth\nHTTP/1.1 401 Unauthorized\n\n$ curl -i -X PUT http://127.0.0.1:PORT/mcp                                 # unsupported method\nHTTP/1.1 405 Method Not Allowed\nAllow: GET, POST, DELETE\n```\n\nThe GET notification channel now returns `200 + text/event-stream` (a live SSE channel) instead of the `405` that caused the \"still connecting\" hang — the core fix, demonstrated against a real running server. The same behaviors are pinned by the gateway tests above (real server + `fetch`).\n",
+        "branch": "fix/mcp-streamable-http",
+        "head_sha": "a4e3cedad5a1209e7b69766f1a6838b4dbe05543",
+        "author": "anagnorisis2peripeteia",
+        "labels": [
+          "gateway",
+          "size: S",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/mcp-http.request.ts",
+            "additions": 58,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/mcp-http.test.ts",
+            "additions": 87,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89851",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89851.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 166,
+          "counts": {
+            "FAILURE": 4,
+            "SUCCESS": 129,
+            "SKIPPED": 32,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "build-artifacts:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "build-artifacts:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:89851:4617123951:2026-06-03T22:08:20Z:re_review",
+      "comment_id": "4617123951",
+      "comment_version_key": "4617123951:2026-06-03T22:08:20Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89851#issuecomment-4617123951",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89851,
+      "author": "anagnorisis2peripeteia",
+      "author_id": 129746152,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-03T22:08:20Z",
+      "comment_updated_at": "2026-06-03T22:08:20Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): support Streamable HTTP MCP transport on loopback server",
+        "body": "## Summary\n\nThe MCP loopback HTTP server generates a config with `\"type\": \"http\"` (Streamable HTTP transport), but only handled POST — a GET to `/mcp` returned 405. Claude Code's Streamable HTTP client opens an SSE notification channel by sending GET `/mcp` during initialization; the 405 left it hanging at \"still connecting\" indefinitely, so the agent got no OpenClaw MCP tools for the whole session.\n\nThis adds the missing transport surface, **kept stateless** (the loopback server owns no session lifecycle):\n\n- **GET `/mcp` → 200 `text/event-stream`** — an auth-gated, browser-origin-rejected idle SSE notification channel (the actual fix for the hang). Closes cleanly when the client disconnects.\n- **DELETE `/mcp` → 200** — auth-gated no-op acknowledgement of Streamable HTTP session teardown, so clients that send DELETE on close get a clean 200 rather than 405.\n- **Stateless POST** — POST responses advertise **no** `Mcp-Session-Id`. The server processes each request independently; advertising a session id it never validates, expires, or owns would be misleading and push clients to echo a session the server ignores. (Per the spec, a stateless server simply omits the session id.)\n- `Allow` now advertises `GET, POST, DELETE`; other methods still 405.\n\n## Session semantics\n\nResolved the stateless-vs-sessionful question in favor of **stateless**: a single-purpose local loopback tool endpoint has no session state to manage, so it stays stateless rather than taking on a session lifecycle. (Maintainer can revisit if sessionful semantics are ever wanted.)\n\n## Tests\n\n`src/gateway/mcp-http.test.ts` — added focused gateway transport tests, all passing:\n- GET valid bearer → 200 + `text/event-stream`\n- GET no auth → 401; GET browser `Origin` → 403\n- DELETE valid bearer → 200; DELETE no auth → 401\n- unsupported method → 405 with `Allow: GET, POST, DELETE`\n- POST stays stateless → no `Mcp-Session-Id` header\n\n## Proof\n\n**Real running loopback MCP server** (built + started from this branch, hit with `curl`):\n\n```\n# GET — Streamable HTTP notification channel (the path Claude Code opens during init)\n$ curl -i -H \"authorization: Bearer <owner-token>\" http://127.0.0.1:PORT/mcp\nHTTP/1.1 200 OK\nContent-Type: text/event-stream\nCache-Control: no-cache\nConnection: keep-alive\n# curl then blocks on the open SSE stream (received the \":\\n\\n\" keepalive) — a live\n# channel, NOT the old 405 that left Claude Code hanging at \"still connecting\".\n\n$ curl -i http://127.0.0.1:PORT/mcp                                        # GET, no auth\nHTTP/1.1 401 Unauthorized\n\n$ curl -i -H \"authorization: Bearer <token>\" -H \"origin: https://evil.example\" .../mcp  # GET, browser origin\nHTTP/1.1 403 Forbidden\n\n$ curl -i -X DELETE -H \"authorization: Bearer <token>\" .../mcp             # DELETE teardown\nHTTP/1.1 200 OK\n\n$ curl -i -X DELETE http://127.0.0.1:PORT/mcp                              # DELETE, no auth\nHTTP/1.1 401 Unauthorized\n\n$ curl -i -X PUT http://127.0.0.1:PORT/mcp                                 # unsupported method\nHTTP/1.1 405 Method Not Allowed\nAllow: GET, POST, DELETE\n```\n\nThe GET notification channel now returns `200 + text/event-stream` (a live SSE channel) instead of the `405` that caused the \"still connecting\" hang — the core fix, demonstrated against a real running server. The same behaviors are pinned by the gateway tests above (real server + `fetch`).\n",
+        "branch": "fix/mcp-streamable-http",
+        "head_sha": "a4e3cedad5a1209e7b69766f1a6838b4dbe05543",
+        "author": "anagnorisis2peripeteia",
+        "labels": [
+          "gateway",
+          "size: S",
+          "proof: sufficient",
+          "P1",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/mcp-http.request.ts",
+            "additions": 58,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/mcp-http.test.ts",
+            "additions": 87,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89851",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89851.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 166,
+          "counts": {
+            "FAILURE": 4,
+            "SUCCESS": 129,
+            "SKIPPED": 32,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "build-artifacts:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "build-artifacts:FAILURE",
+            "check-lint:FAILURE",
+            "check-additional-runtime-topology-architecture:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 525,
+    "total_ms": 3011,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 298
+        "ms": 276
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2483
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 4
       },
       {
         "name": "execute_commands",
-        "ms": 216
+        "ms": 223
       },
       {
         "name": "append_ledger",
