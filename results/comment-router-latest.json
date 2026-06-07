@@ -1,22 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-07T05:13:06.235Z",
+  "generated_at": "2026-06-07T05:14:02.554Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-07T02:13:04.093Z",
+  "since": "2026-06-07T02:14:00.838Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    69486
+    68455
   ],
-  "comment_ids": [
-    4641505825
-  ],
-  "status_comment_id": 4641505908,
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 8,
+  "scanned_comments": 4,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -33,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:69486:4340780301:2026-06-07T05:11:51Z:clawsweeper_needs_human",
-      "comment_id": "4340780301",
-      "comment_version_key": "4340780301:2026-06-07T05:11:51Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/69486#issuecomment-4340780301",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:68455:4356465159:2026-06-07T05:06:59Z:clawsweeper_needs_human",
+      "comment_id": "4356465159",
+      "comment_version_key": "4356465159:2026-06-07T05:06:59Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/68455#issuecomment-4356465159",
       "repo": "openclaw/openclaw",
-      "issue_number": 69486,
+      "issue_number": 68455,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-29T04:24:28Z",
-      "comment_updated_at": "2026-06-07T05:11:51Z",
+      "comment_created_at": "2026-04-30T22:02:57Z",
+      "comment_updated_at": "2026-06-07T05:06:59Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -54,97 +52,92 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=6dc8808bc2a0902fd380e2cf49d47a4efc1fc2bf)",
-      "review_summary": null,
-      "review_followup": null,
+      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=8ea58c317b43aea085d85a5454d685258911fe77)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +79. Total +79 across 3 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "6dc8808bc2a0902fd380e2cf49d47a4efc1fc2bf",
+      "expected_head_sha": "8ea58c317b43aea085d85a5454d685258911fe77",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(runner): ancestry-aware cleanup of rewrite-abandoned transcript entries",
-        "body": "## Problem\n\nEach call to `rewriteTranscriptEntriesInSessionFile` leaves the pre-rewrite\nentries as abandoned sibling branches of the new leaf (append-only session\nsemantics: `branch(parent)` + re-append of the entire suffix). openclaw's\ntranscript reader scans every line in the file, so each successive rewrite\npiles on another generation of the same turn.\n\nThis surfaced in live traces on the main agent session as **real\nlive-write duplication** after auto-compaction retries:\n\n- The same 2312-byte user prompt persisted **12 times** in a single\n  session file, with `parentId` chaining through successive compaction\n  markers (one re-append per compaction attempt + a burst of extras).\n- Assistant responses re-appended in the **same millisecond** after each\n  `truncateOversizedToolResultsInSessionManager` call, because every tool-\n  result truncation triggers a branch-and-reappend of the whole downstream\n  suffix.\n- Auto-compaction saw 169 → 91 → 92 → 93 → 94 messages across three\n  attempts and still overflowed, because the re-appended generations were\n  being counted alongside the live branch. The session was eventually\n  restarted and the chain persisted into the successor, locking in the\n  loop across session-ID boundaries.\n\nRoot cause lives in the rewrite path itself: the session DAG is\nappend-only, but the transcript reader treats the raw file as flat, so\nabandoned branches show up as duplicates.\n\n## Fix\n\nAfter `rewriteTranscriptEntriesInSessionManager` returns `changed: true`,\nreconcile the on-disk state with what was actually abandoned by this\nspecific rewrite — **and nothing else**:\n\n1. Snapshot the active-branch ids via `sessionManager.getBranch()` BEFORE\n   the rewrite. Sibling branches that already exist as alternate paths\n   are not on this branch and are therefore out of scope by construction.\n2. Run the rewrite.\n3. Snapshot the active-branch ids AFTER the rewrite.\n4. Candidate abandoned set = `branchIdsBefore \\\\ branchIdsAfter`.\n5. **Ancestry-reference integrity filter:** walk `parentId` chains\n   backward from every non-abandoned entry in the file and collect every\n   id visited. Those ids are load-bearing even if they are candidates.\n6. Final removable set = `candidates \\\\ ancestry-of(non-abandoned)`.\n7. Drop only those ids, atomically via tmp-file + rename.\n\nIdentity is structural (id and `parentId` chain), not textual.\n\n### Why the ancestry filter matters\n\nA legitimate sibling branch can fork off an entry that the rewrite itself\nreplaces — the sibling's `parentId` still references the pre-rewrite id.\nWithout the ancestry filter the cleanup would remove that id, orphan the\nsibling, break `SessionManager.getTree()`, and destroy shared-history\nsemantics. With the filter the shared-ancestor entry stays in the file\nas long as any non-abandoned entry still references it.\n\nThis is consistent with the repo invariant already asserted at the\ntruncation boundary in\n`src/agents/pi-embedded-runner/session-truncation.test.ts`\n(\\\"preserves unsummarized sibling branches during truncation\\\"), now\nextended to the rewrite boundary as well.\n\n## Tests\n\nNew file: `src/agents/pi-embedded-runner/transcript-rewrite.leaf-branch.test.ts`.\n\nFour targeted tests on real temporary session files:\n\n1. **Linear case** — single rewrite, no duplicate content for downstream\n   messages (unique message ids, content counts exactly 1).\n2. **Repeated rewrites** — two sequential rewrites on the same active\n   path don't pile up cumulative duplicates of the same turn.\n3. **Sibling before rewrite-target** — a legitimate sibling branch that\n   forks before the rewrite target stays intact in\n   `SessionManager.getEntries()` and the raw file.\n4. **Sibling inside the rewritten suffix** — a sibling branch forks\n   directly from the tool-result entry that the rewrite then replaces.\n   Asserts not only entry existence but transitive `parentId` ancestry:\n   every parent id in the sibling's chain must still resolve. Before the\n   ancestry filter this failed with\n   `sibling ancestry broken: parentId <X> of <Y> no longer present`.\n\nAll existing related tests continue to pass alongside the new ones:\n- `src/agents/pi-embedded-runner/session-truncation.test.ts` (preserves siblings)\n- `src/agents/pi-embedded-runner/context-engine-maintenance.test.ts`\n- `src/agents/pi-embedded-runner/run.overflow-compaction.loop.test.ts`\n- `src/gateway/session-compaction-checkpoints.test.ts`\n\nLocal `pnpm check` (tsgo, lint, import-cycle, madge) green.\n\n## Out of scope\n\nDeliberately not touched in this PR:\n\n- Reset/restore epoch semantics on the compaction chain (unrelated,\n  tracked separately on PR #68765).\n- The compaction-chain reader in `readSessionMessages` /\n  `resolveMainSessionTranscriptFiles` (also PR #68765).\n- Historical rewrite debris from sessions created before this fix;\n  only new rewrites self-reconcile. Retroactive cleanup would be a\n  separate change.",
-        "branch": "fix/compaction-loop-no-reappend",
-        "head_sha": "6dc8808bc2a0902fd380e2cf49d47a4efc1fc2bf",
-        "author": "cholaolu-boop",
+        "title": "feat(feishu): allow custom accountId during Feishu channel onboarding",
+        "body": "## Problem\r\n\r\nWhen adding a second Feishu IM channel in the same OpenClaw instance, \r\nthe accountId is always forced to DEFAULT_ACCOUNT_ID (\"default\"), \r\nmaking it impossible to register multiple independent Feishu bots.\r\n\r\n## Changes\r\n\r\n- `extensions/feishu/src/setup-surface.ts`: Changed \r\n  `resolveAccountIdForConfigure` to prompt the user for a custom \r\n  accountId when a Feishu account already exists. Changed \r\n  `resolveShouldPromptAccountIds` to return `true`.\r\n- `extensions/feishu/src/setup-core.ts`: Updated `resolveAccountId` \r\n  to use the provided accountId instead of always returning \r\n  DEFAULT_ACCOUNT_ID.\r\n- `extensions/feishu/src/accounts.ts`: Exported helper for listing \r\n  existing Feishu accountIds.\r\n\r\n## Backward Compatibility\r\n\r\n- First Feishu account still defaults to `default` automatically.\r\n- Existing configurations are not affected.\r\n",
+        "branch": "feat/feishu-custom-accountid",
+        "head_sha": "8ea58c317b43aea085d85a5454d685258911fe77",
+        "author": "ahbi1006-hue",
         "labels": [
-          "agents",
-          "stale",
-          "size: L",
-          "triage: refactor-only",
+          "channel: feishu",
+          "size: S",
           "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
+          "P2",
+          "rating: 🌊 off-meta tidepool",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
+          "merge-risk: 🚨 auth-provider"
         ],
         "files": [
           {
-            "path": "src/agents/pi-embedded-runner/fixtures/repro-69486-lineage-from-production.ts",
-            "additions": 133,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "extensions/feishu/src/accounts.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/pi-embedded-runner/transcript-rewrite.leaf-branch.test.ts",
-            "additions": 598,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "extensions/feishu/src/setup-core.ts",
+            "additions": 4,
+            "deletions": 2,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/pi-embedded-runner/transcript-rewrite.ts",
-            "additions": 179,
-            "deletions": 0,
+            "path": "extensions/feishu/src/setup-surface.ts",
+            "additions": 85,
+            "deletions": 8,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-69486",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-69486.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-68455",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-68455.md",
         "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
         "review_decision": "",
         "checks": {
-          "total": 86,
+          "total": 13,
           "counts": {
-            "FAILURE": 2,
-            "SUCCESS": 72,
-            "SKIPPED": 12
+            "FAILURE": 1,
+            "SUCCESS": 4,
+            "SKIPPED": 8
           },
           "blockers": [
-            "Run the GPT-5.4 / Opus 4.6 parity gate against the qa-lab mock:FAILURE",
             "Real behavior proof:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "Run the GPT-5.4 / Opus 4.6 parity gate against the qa-lab mock:FAILURE",
             "Real behavior proof:FAILURE"
           ]
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
-      "reason": "target is not open"
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2448,
+    "total_ms": 2019,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 414
+        "ms": 386
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1711
+        "ms": 1311
       },
       {
         "name": "classify_commands",
@@ -152,11 +145,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 293
+        "ms": 292
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
