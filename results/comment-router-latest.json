@@ -1,20 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-07T18:30:26.884Z",
+  "generated_at": "2026-06-07T18:33:07.701Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-07T15:30:26.492Z",
+  "since": "2026-06-07T15:33:05.970Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    91223
+    91222
   ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -28,30 +29,124 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91222:4643612652:2026-06-07T18:33:02Z:clawsweeper_needs_human",
+      "comment_id": "4643612652",
+      "comment_version_key": "4643612652:2026-06-07T18:33:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91222#issuecomment-4643612652",
+      "repo": "openclaw/openclaw",
+      "issue_number": 91222,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-07T18:22:38Z",
+      "comment_updated_at": "2026-06-07T18:33:02Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=c395e02c95c5ceb2690f082b8fa4187c62226d07)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +248, Tests +167. Total +415 across 3 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "c395e02c95c5ceb2690f082b8fa4187c62226d07",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(google-vertex): retry transient pre-stream failures and stale ADC",
+        "body": "## Summary\n\nVertex streaming requests currently fail the entire turn on two transient,\nrecoverable conditions:\n\n1. **Pre-stream `429` / `503`** from the Vertex endpoint (rate limiting /\n   backend unavailability), surfaced as a hard error before any SSE chunk is\n   read.\n2. **`401 UNAUTHENTICATED`** caused by a *stale cached ADC token* — the cache\n   can outlive the upstream credential, which currently forces a restart to\n   recover.\n\nThis PR adds narrowly-scoped, Vertex-only recovery for both:\n\n- **Bounded retry for pre-stream `429`/`503`**: exponential backoff with jitter,\n  honoring `Retry-After` (delta-seconds or HTTP-date) when present. Retries only\n  happen **before** the first SSE chunk is parsed — once streaming has started we\n  never retry, so a partially-streamed turn is never replayed.\n- **Single `401` ADC retry**: on a Vertex `401 UNAUTHENTICATED` while using ADC,\n  clear the cached token, re-resolve request headers, and retry exactly once.\n\nNon-Vertex Google (Generative Language API / API-key) behavior is unchanged.\n\n## Why\n\nVertex deployments periodically see `429`/`503` and post-rotation `401`s. Today\neach one aborts a turn that would have succeeded on an immediate retry — the\nsingle largest source of avoidable turn failures we observe against Vertex.\n\n## Configuration (all optional, Vertex-only)\n\n| Env var | Default | Meaning |\n| --- | --- | --- |\n| `OPENCLAW_GOOGLE_VERTEX_STREAM_MAX_RETRIES` | `2` | Max pre-stream retries for 429/503 |\n| `OPENCLAW_GOOGLE_VERTEX_STREAM_RETRY_BASE_DELAY_MS` | `250` | Backoff base |\n| `OPENCLAW_GOOGLE_VERTEX_STREAM_RETRY_MAX_DELAY_MS` | `2000` | Backoff ceiling |\n\nDefaults give ~2 quick retries; `MAX_RETRIES=0` fully disables the new\npre-stream retry path.\n\n## Implementation notes\n\n- New `fetchGooglePreStreamResponse()` wraps the pre-stream POST and is the only\n  place the retry loop lives; both the non-Gemini-3 and Gemini-3 first-response\n  paths route through it, so retry semantics are identical.\n- `Retry-After` parsing supports both integer seconds and HTTP-date.\n- The retry sleep is abort-aware (honors `options.signal`).\n- A `clearGoogleVertexAdcTokenCache()` is exported from `vertex-adc.ts` for the\n  401 path; the existing test-only `resetGoogleVertexAuthorizedUserTokenCacheForTest()`\n  is kept as a thin alias for back-compat.\n- Diagnostics go through `createSubsystemLogger(\"google-vertex/transport\")`\n  (`.debug`, gated by `OPENCLAW_LOG_LEVEL`) — no new stdout/stderr noise.\n\n## Relationship to #61443\n\n#61443 (\"configurable retry for LLM provider API calls\") adds a **generic**\nprovider-retry framework at the agent/provider layer (`src/infra/retry.ts`,\n`src/agents/provider-retry.ts`) and wires it into `openai-transport-stream.ts`.\nThis change is **complementary**, not a duplicate:\n\n- It does not reach the Google extension's own SSE transport\n  (`extensions/google/transport-stream.ts`), where the Vertex pre-stream request\n  is issued and parsed.\n- The **401 stale-ADC recovery** here is auth-cache-specific: it must clear the\n  cached token and re-resolve headers before retrying. A generic status-based\n  retry would replay the *same* stale token and fail again.\n\nIf preferred, the 429/503 portion can later be expressed in terms of #61443's\nframework once it lands; the 401-ADC portion stays Vertex-specific regardless.\n\n## Test plan\n\n`extensions/google/transport-stream.test.ts` — **66/66 pass on latest `main`**.\nNew cases:\n\n- retries pre-stream `503`→`429`→success and returns the recovered stream;\n- does **not** retry once an SSE chunk has arrived (malformed-JSON mid-stream\n  still surfaces, partial content preserved);\n- on `401 UNAUTHENTICATED`, clears the ADC cache, re-fetches the token, and\n  retries once with the fresh `Authorization` header.\n\n```\npnpm exec vitest run extensions/google/transport-stream.test.ts\n# Test Files 1 passed (1) / Tests 66 passed (66)\n```\n\nAdditionally validated against live `gemini-3.1-pro-preview` Vertex traffic in a\nproduction deployment: real `streamGenerateContent` requests flow through the new\npre-stream wrapper and complete normally, confirming the path is non-breaking on\nreal traffic.\n",
+        "branch": "fix/google-vertex-transport-reliability",
+        "head_sha": "c395e02c95c5ceb2690f082b8fa4187c62226d07",
+        "author": "damianfelixpago",
+        "labels": [
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "extensions: google",
+          "rating: 🌊 off-meta tidepool"
+        ],
+        "files": [
+          {
+            "path": "extensions/google/transport-stream.test.ts",
+            "additions": 167,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google/transport-stream.ts",
+            "additions": 266,
+            "deletions": 22,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google/vertex-adc.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-91222",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91222.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 155,
+          "counts": {
+            "FAILURE": 1,
+            "SUCCESS": 123,
+            "SKIPPED": 31
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 740,
+    "total_ms": 1934,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 382
+        "ms": 211
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1505
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 349
+        "ms": 191
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
