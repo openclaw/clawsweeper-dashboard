@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-07T14:57:17.119Z",
+  "generated_at": "2026-06-07T14:57:22.917Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-07T11:57:15.630Z",
+  "since": "2026-06-07T11:57:20.256Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    91081
+    90328
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4643025200
+  ],
+  "status_comment_id": 4643025294,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,107 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91081:4641408014:2026-06-07T14:57:12Z:clawsweeper_needs_human",
-      "comment_id": "4641408014",
-      "comment_version_key": "4641408014:2026-06-07T14:57:12Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/91081#issuecomment-4641408014",
+      "idempotency_key": "comment-router:openclaw/openclaw:90328:4643025200:2026-06-07T14:56:44Z:re_review",
+      "comment_id": "4643025200",
+      "comment_version_key": "4643025200:2026-06-07T14:56:44Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/90328#issuecomment-4643025200",
       "repo": "openclaw/openclaw",
-      "issue_number": 91081,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 90328,
+      "author": "ooiuuii",
+      "author_id": 169449607,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-07T04:24:51Z",
-      "comment_updated_at": "2026-06-07T14:57:12Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] Human review should decide whether to accept the TTL session-state tradeoff and proof level; there is no narrow automated repair to request.; Cleared: The diff only changes memory session-listing code and tests; it does not add dependencies, workflow execution, secret handling, or package-resolution changes. (sha=b012346f4cf9de230b75e1efe61eae21c194486f)",
-      "review_summary": "Adds a bounded in-flight and 5-second TTL cache for `listSessionFilesForAgent`, invalidated by transcript updates, plus regression tests for coalescing, TTL refresh, invalidation, failed scans, and ENOENT caching.\n\nPR surface: Source +121, Tests +109. Total +230 across 2 files.\n\nReproducibility: yes. for the source-level performance behavior: current main performs an uncached `readdir` on each `listSessionFilesForAgent` call, and the PR tests exercise the proposed coalescing/cache semantics. I did not reproduce the raw NFS syscall reduction in a live NFS setup.",
-      "review_followup": "- [P2] Human review should decide whether to accept the TTL session-state tradeoff and proof level; there is no narrow automated repair to request.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "b012346f4cf9de230b75e1efe61eae21c194486f",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "perf(memory): coalesce + cache session-file listings to cut NFS READDIR load",
-        "body": "## Summary\r\n\r\nRepeated session-directory scans (`listSessionFilesForAgent`) issue a `fs.readdir(dir, { withFileTypes: true })` per call with **zero caching or coalescing** across call sites. On networked filesystems (NFS) this is expensive: resolving each entry's type turns one logical scan into roughly one attribute fetch per session file, and several subsystems (startup catch-up, incremental sync, dreaming, qmd export) scan the same agent sessions dir in close succession — producing redundant READDIR/GETATTR load.\r\n\r\nThis adds an in-flight dedupe + short-TTL snapshot cache around `listSessionFilesForAgent`:\r\n\r\n- **Coalescing** — concurrent callers join a single in-flight `Promise`, so a burst of scans triggers one READDIR instead of N.\r\n- **Short-TTL snapshot** — a resolved listing is reused briefly between scans. The cache is keyed by the **resolved sessions directory** (folds in `OPENCLAW_STATE_DIR`, and lines up with `path.dirname(update.sessionFile)` for precise invalidation).\r\n- **Event-driven invalidation (the correctness path)** — a single lazy subscription to the canonical `onSessionTranscriptUpdate` event drops the affected directory's snapshot. Every in-process mutation to a session-owned path (append, compaction, rewrite, chat inject, command exec) emits this event, and archive rotation (`archiveFileOnDisk`) already emits through it too, so one canonical hook covers all in-process write paths without scattered per-path invalidation.\r\n- **TTL as a backstop only** — `SESSION_FILES_LISTING_TTL_MS = 5_000` bounds staleness for writers that never reach our event bus (e.g. another node sharing the NFS sessions dir, or low-frequency archive prunes).\r\n- **Failed scans are never cached** — read results are a discriminated union (`{ ok: true; files } | { ok: false }`). A transient `fs.readdir` failure (NFS `EIO`/`ESTALE`/`EACCES`/timeout) is returned to the one caller as empty but **not published** into the snapshot, so the next call retries instead of serving a false-empty session set for the TTL window. A legitimately absent dir (`ENOENT`, the normal \"no sessions yet\" state) is still cached as empty, since the first session write emits an invalidation event.\r\n\r\nThe cache is bounded (64 dirs), module-lifecycle-owned, and race-safe: a completed read only publishes its snapshot if its entry is still the active one, so an invalidation or newer read during the await wins. A `resetSessionFilesListingCache()` helper exists for test isolation and is intentionally kept out of the package's public re-export surface.\r\n\r\n`withFileTypes` removal (to cut the per-entry NFS `lstat` amplification) is deferred to a focused follow-up.\r\n\r\n## Verification\r\n\r\n### Committed regression tests\r\n\r\n`node scripts/run-vitest.mjs packages/memory-host-sdk/src/host/session-files.test.ts` — **18/18** (12 pre-existing + 6 new). The cache tests count real scans by spying on `fsPromises.readdir`:\r\n\r\n- **concurrent coalescing** — two un-awaited concurrent calls ⇒ `readdir` called **exactly once**.\r\n- **cached-within-TTL** — a second call after writing a new file *without* emitting an event still returns the prior snapshot ⇒ **1** scan.\r\n- **refresh-after-TTL** — with `vi.useFakeTimers({ toFake: [\"Date\"] })`, advancing `Date` past 5s forces a re-scan ⇒ **2** scans, fresh listing.\r\n- **event invalidation** — `emitSessionTranscriptUpdate({ sessionFile })` drops the snapshot ⇒ next call re-scans, fresh listing.\r\n- **failed-scan not cached** *(new, addresses review)* — `readdir` rejected once with `EIO` ⇒ first call returns `[]`, a second call within the TTL **re-scans** (2 scans) and recovers the real listing.\r\n- **absent-dir cached** *(new)* — a missing sessions dir (`ENOENT`) is cached as empty ⇒ **1** scan across two calls.\r\n\r\nOther proof:\r\n\r\n- Consumer suites green: `manager-sync-ops.startup-catchup`, `manager-targeted-sync`, `manager-session-sync-state`, `qmd-manager`, `manager.fts-only-reindex`, `manager-source-state`, `dreaming-phases`, `manager-sync-yield`, `session-files-yield`.\r\n- Typecheck: `pnpm tsgo:core` and `pnpm tsgo:test:packages` exit 0. `node scripts/run-oxlint.mjs` clean; `oxfmt --check` clean.\r\n\r\n### Concurrency chaos / fuzz hammering (dev-time stress; not committed)\r\n\r\nA seeded invariant-based harness drove **randomized interleavings** of concurrent read bursts + real file create/delete + `onSessionTranscriptUpdate` events against the live cache, asserting:\r\n\r\n- **coalescing by reference identity** — every caller in a synchronous burst receives the *same array instance* (`===`), proving they joined one read rather than each scanning;\r\n- **no phantom files** — every returned name is a real, valid session file that actually existed;\r\n- **eventual consistency** — after a final invalidation, the listing equals on-disk ground truth exactly;\r\n- **cache-bound correctness** — with agent count > the 64-dir bound, evicted entries re-read fresh (never stale/wrong).\r\n\r\nRan at **20,000 iterations × burst 32 × 200–300 agents across 5 seeds** — all green. (Kept as a local stress tool rather than a committed suite to avoid a long-running test in CI; the committed unit tests above are the durable regression guard.)\r\n\r\n### Mutation testing (dev-time; confirms the tests actually catch breakage)\r\n\r\nEach cache invariant was corrupted one at a time in `session-files.ts`; the unit + chaos suites were re-run to confirm they **kill** the mutant, then the source was restored (verified clean via `git diff`):\r\n\r\n| Mutant | Killed by | Result |\r\n|---|---|---|\r\n| re-cache failed scan (the bug this PR's fix removes) | unit | ✅ killed |\r\n| drop event-driven invalidation | unit + chaos | ✅ killed |\r\n| TTL zero (cache disabled) | unit | ✅ killed |\r\n| disable TTL cache read (never serve snapshot) | unit | ✅ killed |\r\n| no coalesce-join (no shared in-flight) | unit + chaos | ✅ killed |\r\n| treat ENOENT as failure (stop caching empty dirs) | unit | ✅ killed |\r\n| drop race-guard on publish | — | ⚪ survives (expected) |\r\n| max-dirs bound 64 → 100000 | — | ⚪ survives (perf-only) |\r\n\r\n**6/6 correctness mutants killed, 0 unexpected survivors.** The surviving `drop-race-guard` is expected: reads *replace* the map entry rather than mutating it, so a stale completion writing into an orphaned entry is harmless — the guard is documented defensive intent, not load-bearing. `max-dirs` is a perf knob, not a correctness property.\r\n\r\n",
-        "branch": "ak/session-files-readdir-coalesce",
-        "head_sha": "b012346f4cf9de230b75e1efe61eae21c194486f",
-        "author": "amknight",
-        "labels": [
-          "maintainer",
-          "size: M",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "packages/memory-host-sdk/src/host/session-files.test.ts",
-            "additions": 110,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/memory-host-sdk/src/host/session-files.ts",
-            "additions": 125,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91081",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91081.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 48,
-          "counts": {
-            "SUCCESS": 6,
-            "SKIPPED": 42
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:91081:4643011649:2026-06-07T14:51:07Z:re_review",
-      "comment_id": "4643011649",
-      "comment_version_key": "4643011649:2026-06-07T14:51:07Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/91081#issuecomment-4643011649",
-      "repo": "openclaw/openclaw",
-      "issue_number": 91081,
-      "author": "amknight",
-      "author_id": 15041791,
-      "author_association": "MEMBER",
-      "comment_created_at": "2026-06-07T14:51:07Z",
-      "comment_updated_at": "2026-06-07T14:51:07Z",
-      "status_comment_id": null,
-      "trigger": "slash",
+      "comment_created_at": "2026-06-07T14:56:44Z",
+      "comment_updated_at": "2026-06-07T14:56:44Z",
+      "status_comment_id": 4643025294,
+      "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
       "autoclose_message": null,
@@ -147,22 +61,154 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-07T14:57:23.609Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 90328
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-07T14:57:24.621Z",
+          "response_comment_id": "4639437781",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "Expose model picker agent runtimes",
+        "body": "## Summary\n\n- Adds additive `agentRuntime` metadata to `models.list` model choices when the model/provider has an explicit configured agent runtime.\n- Shows non-default runtime labels in the WebUI model picker (for example `GPT-5.5 · OpenAI Codex`) without changing the canonical model value (`openai/gpt-5.5`).\n- Adds focused gateway helper and UI label regressions for the OpenAI/Codex route split.\n\nRefs #90420 (real 6.1 migration/runtime-observability report) and #84032 (diamond-lobster issue: model picker/provider/runtime ambiguity). Related to #90036 and #90047 because the live Windows 6.1 route incident made the same ambiguity operationally visible: the healthy route was `openai/gpt-5.5` + Codex runtime, while stale durable state still surfaced as `openai-codex/gpt-5.5`.\n\n## Why\n\nAfter the 2026.6.1 Codex migration, a healthy route can be:\n\n```text\nmodel ref: openai/gpt-5.5\nruntime: codex\n```\n\nThe picker previously only exposed/displayed provider/model metadata, so operators could not tell whether an `openai/*` model was configured to run through Codex or through the default OpenClaw route. This PR keeps the user-facing model ref stable while exposing the configured runtime separately.\n\n## Verification\n\n- `node scripts/run-vitest.mjs ui/src/ui/chat-model-ref.test.ts --testNamePattern \"surfaces configured agent runtime metadata\"`\n- `node --import tsx` behavior script for `addConfiguredAgentRuntimeMetadata` → `MODELS_LIST_RUNTIME_METADATA_OK`\n- `git diff --check`\n- `pnpm tsgo:test:ui`\n\nNote: `node scripts/run-vitest.mjs src/gateway/server-methods/models-list-result.test.ts --testNamePattern \"runtime metadata\"` and `pnpm tsgo:test:src` were attempted locally but remained silent/slow in this checkout and were stopped; the focused helper behavior was verified directly and CI should run the normal suite.\n\n\n## Review fix proof\n\nAddressed ClawSweeper's implicit-runtime feedback in `a971a356`.\n\nFocused proof from the patched branch:\n\n```text\nimplicitCodex.agentRuntime = { id: \"codex\", source: \"implicit\", label: \"OpenAI Codex\" }\nimplicitDefault.agentRuntime = omitted\nexplicitOpenClaw.agentRuntime = { id: \"openclaw\", source: \"model\", label: \"OpenClaw Default\" }\nlabels = [\"GPT-5.5 · OpenAI Codex\", \"GPT-5.5 · OpenClaw Default\"]\nRUNTIME_METADATA_REVIEW_FIX_OK\n\nnode scripts/run-vitest.mjs ui/src/ui/chat-model-ref.test.ts --testNamePattern \"agent runtime|OpenClaw runtime\"\n✓ ui/src/ui/chat-model-ref.test.ts (25 tests | 23 skipped)\nTests 2 passed | 23 skipped\n\ngit diff --check\n```\n\nThe picker now distinguishes both default implicit OpenAI → Codex routing and explicit OpenClaw runtime overrides while still omitting compact implicit default/OpenClaw/auto metadata for unrelated providers.\n\n## Real behavior proof (current head: `93c00a0991be148f357f8b0706080883528b210d`)\n\n- Behavior or issue addressed: expose material runtime metadata for canonical `openai/gpt-5.5` choices routed through the Codex runtime, and render that runtime in the WebUI Chat model picker as `gpt-5.5 · OpenAI Codex` without changing the canonical model id/provider.\n- Real environment tested: current PR branch head `93c00a0991be148f357f8b0706080883528b210d` in `/tmp/openclaw-pr-90328-current`, using the PR branch Gateway model-list metadata helper and focused current-head Gateway/UI tests. This proof does **not** use the installed Mac Gateway (`OpenClaw 2026.5.3`) or the Windows/Youyou Gateway; it isolates the current PR head after the alias-preservation rebase.\n- Exact steps or command run after this patch:\n\n```bash\ncd /tmp/openclaw-pr-90328-current\ngit rev-parse HEAD\n# 93c00a0991be148f357f8b0706080883528b210d\n\nnode --import tsx /tmp/pr90328-current-head-proof/models-list-current-head.mjs\n\nnode scripts/run-vitest.mjs \\\n  src/gateway/server-methods/models-list-result.test.ts \\\n  ui/src/ui/chat-model-ref.test.ts \\\n  --testNamePattern=\"models.list|agentRuntime|label|alias|OpenAI Codex\"\n```\n\n- Evidence after fix:\n  - Current-head screenshot: [model-picker-openai-codex-current-head.png](https://raw.githubusercontent.com/ooiuuii/openclaw/refs/heads/proof/90328-model-picker-20260606/proof/90328/model-picker-openai-codex-current-head.png)\n  - Current-head `models.list` metadata JSON: [models-list-current-head.json](https://raw.githubusercontent.com/ooiuuii/openclaw/refs/heads/proof/90328-model-picker-20260606/proof/90328/models-list-current-head.json)\n  - Current-head proof README: [proof/90328 README](https://github.com/ooiuuii/openclaw/tree/proof/90328-model-picker-20260606/proof/90328)\n\nCurrent-head Gateway metadata helper output:\n\n```json\n{\n  \"models\": [\n    {\n      \"id\": \"gpt-5.5\",\n      \"name\": \"GPT-5.5\",\n      \"provider\": \"openai\",\n      \"agentRuntime\": {\n        \"id\": \"codex\",\n        \"source\": \"model\",\n        \"label\": \"OpenAI Codex\"\n      }\n    }\n  ]\n}\n```\n\nCurrent-head focused test output:\n\n```text\nnode scripts/run-vitest.mjs src/gateway/server-methods/models-list-result.test.ts ui/src/ui/chat-model-ref.test.ts --testNamePattern=\"models.list|agentRuntime|label|alias|OpenAI Codex\"\n\n✓ src/gateway/server-methods/models-list-result.test.ts (gateway-client) 5 passed\n✓ src/gateway/server-methods/models-list-result.test.ts (gateway-methods) 5 passed\n✓ ui/src/ui/chat-model-ref.test.ts 6 passed | 19 skipped\n```\n\nPreviously retained current-head local verification after rebasing onto main:\n\n```text\npnpm run lint:plugins:no-extension-test-core-imports\nOK: extension test files, support helpers, and plugin test helpers avoid direct core test/internal imports (2081 extension files, 1 plugin helpers checked).\n\nnode scripts/run-vitest.mjs src/gateway/server-methods/models-list-result.test.ts\n✓ 10 passed\n\nnode scripts/run-vitest.mjs src/gateway/server-methods/models.test.ts --testNamePattern=models.list\n✓ 24 passed\n\nnode scripts/run-vitest.mjs src/gateway/server.models-voicewake-misc.test.ts --testNamePattern=models.list\n✓ 22 passed | 12 skipped\n\nnode scripts/run-vitest.mjs ui/src/ui/chat-model-ref.test.ts\n✓ 25 passed\n\nCI=true pnpm protocol:check\nwrote dist/protocol.schema.json\nwrote apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift\n# exited cleanly with no final diff\n\n./node_modules/.bin/oxlint <changed files>\nFound 0 warnings and 0 errors.\n\ngit diff --check origin/main...HEAD\n# clean\n```\n\n- Observed result after fix: the current PR head preserves the canonical public choice (`provider: \"openai\"`, `id: \"gpt-5.5\"`) while exposing runtime metadata separately as `agentRuntime.id = \"codex\"` / `label = \"OpenAI Codex\"`. The WebUI picker visual proof shows that choice as `gpt-5.5 · OpenAI Codex`, and current-head focused UI/Gateway tests confirm the runtime label/alias behavior at `93c00a0991be148f357f8b0706080883528b210d`.\n- What was not tested: this current-head proof uses the Control UI visual artifact plus the current-head Gateway metadata helper/focused tests instead of a production Gateway hot deploy. It does not test real OAuth inference, channel delivery, commentary/progress streams, native Swift UI display, or session migration behavior; those are intentionally outside this PR's WebUI/Gateway metadata scope.\n\n",
+        "branch": "agent/xiaozhua/model-runtime-observability",
+        "head_sha": "93c00a0991be148f357f8b0706080883528b210d",
+        "author": "ooiuuii",
+        "labels": [
+          "app: web-ui",
+          "gateway",
+          "scripts",
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🌊 off-meta tidepool",
+          "merge-risk: 🚨 compatibility"
+        ],
+        "files": [
+          {
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/gateway-protocol/src/schema/agents-models-skills.ts",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/protocol-gen-swift.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-catalog.types.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/models-list-result.test.ts",
+            "additions": 158,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-methods/models-list-result.ts",
+            "additions": 7,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/models-list-runtime-metadata.ts",
+            "additions": 52,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/server-methods/models.test.ts",
+            "additions": 40,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.models-voicewake-misc.test.ts",
+            "additions": 16,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/chat-model-ref.test.ts",
+            "additions": 48,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/chat-model-ref.ts",
+            "additions": 33,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/types.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-90328",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90328.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 164,
+          "counts": {
+            "SUCCESS": 135,
+            "SKIPPED": 28,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2644,
+    "total_ms": 4850,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 312
+        "ms": 589
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1158
+        "ms": 2050
       },
       {
         "name": "classify_commands",
@@ -170,7 +216,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1142
+        "ms": 2177
       },
       {
         "name": "append_ledger",
