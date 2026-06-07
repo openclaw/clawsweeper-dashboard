@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-07T15:02:40.899Z",
+  "generated_at": "2026-06-07T15:02:47.554Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-07T12:02:38.681Z",
+  "since": "2026-06-07T12:02:47.118Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     88696
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4643037351
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -40,12 +42,12 @@
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-31T16:11:01Z",
-      "comment_updated_at": "2026-06-07T15:02:35Z",
+      "comment_created_at": "2026-06-07T15:01:37Z",
+      "comment_updated_at": "2026-06-07T15:01:37Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -61,90 +63,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix #70559: runUnsafeReindex crashes with \"no such table: chunks_vec\" when sqlite-vec is enabled",
-        "body": "## Summary\n\nWhat problem does this PR solve?\n\n`runUnsafeReindex` crashed with `SqliteError: no such table: chunks_vec` when sqlite-vec was enabled. Root cause: `resetIndex()` could drop the `chunks_vec` virtual table while cached vector readiness still described it as available, so later sync setup prepared vector-table deletes against a missing table.\n\nWhy does this matter now?\n\n#70559 is a user-visible memory-core crash in unsafe reindex. Users with sqlite-vec enabled can lose the ability to rebuild the memory index cleanly, which makes memory recovery/reindex workflows unreliable.\n\nWhat is the intended outcome?\n\nUnsafe full reindex preserves the sqlite-vec table schema on the normal path, clears vector rows in place, and resets cached vector readiness if the delete path fails.\n\nWhat is intentionally out of scope?\n\nOut of scope: safe reindex, embedding provider selection, external embedding transport, config defaults, schema migrations, gateway behavior, and Windows handle-contention behavior. This PR only changes builtin memory-core unsafe reset lifecycle and its regression coverage.\n\nWhat does success look like?\n\nUnsafe reindex completes with sqlite-vec enabled, stale vector rows are removed, `chunks_vec` still exists, new indexed vector rows can be written, and vector metadata remains valid.\n\nWhat should reviewers focus on?\n\nReview focus: the unsafe-reindex vector lifecycle choice, especially whether preserving `chunks_vec` while clearing rows is the desired persisted-index reset contract.\n\nAdditional maintainer fields:\n\n- Fix classification: root-cause fix.\n- Maintainer-ready confidence: high, with the remaining decision points called out under Current review state.\n- Scope boundary: one issue, two files, builtin memory-core unsafe reset lifecycle only.\n- Source of truth boundary: `resetIndex()` owns the full-index reset invariant between persisted SQLite tables and cached vector readiness; downstream vector delete/insert code should not compensate for stale table-availability state.\n- Related open PR scan: this is the existing contributor PR for #70559; this update does not create a competing narrower PR and treats gateway-core CI as outside the memory-core diff unless maintainers decide otherwise.\n\n## Linked context\n\nCloses #70559.\n\nRelated: existing PR #88696 review state and ClawSweeper RF-001 through RF-005.\n\nThis was not requested by a maintainer directly; it addresses the linked user-visible memory-core crash.\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: unsafe full reindex with sqlite-vec enabled no longer crashes at the reset/prepare boundary after stale vector-table state exists.\n- Real environment tested: Linux x64, Node.js 22.22.0, OpenClaw source checkout, real SQLite database, real sqlite-vec Linux x64 extension, builtin memory backend, isolated config/state/workspace, and an in-process local proof embedding provider so no external API key or network provider was required.\n- Exact steps or command run after this patch:\n  - Seeded an isolated SQLite memory index with real `files`, `chunks`, `meta`, and `chunks_vec` (`vec0`) tables.\n  - Loaded the real sqlite-vec extension and inserted one stale vector row with `vectorDims: 4` metadata.\n  - Ran the current-head memory manager sync path with `force: true` and `OPENCLAW_TEST_FAST=1` / `OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX=1`, using a config that resolves to the seeded DB and vector-enabled builtin memory backend.\n  - Re-opened the DB with sqlite-vec loaded and verified the virtual table still exists, stale vector/chunk/file rows are gone, new indexed rows exist, and metadata has `vectorDims: 4`.\n- Evidence after fix (screenshot, recording, terminal capture, console output, redacted runtime log, linked artifact, or copied live output):\n\n  ```text\n  Validation `live-sqlite-vec-proof` (pass, exit_code=0, 7590ms)\n  before: sqliteVecLoadable=true chunksVecExists=true vectorRows=1 seededVectorDims=4\n  resolvedConfig {\"backend\":\"builtin\",\"storePath\":\"[local path redacted]\",\"vectorEnabled\":true,\"provider\":\"proof\"}\n  managerBefore ... \"vector\":{\"enabled\":true,\"dims\":4} ... \"indexIdentity\":{\"status\":\"mismatched\",\"reason\":\"index scope changed\"}\n  managerAfter ... \"vector\":{\"enabled\":true,\"storeAvailable\":true,\"extensionPath\":\"[local path redacted]\",\"dims\":4} ... \"providerState\":{\"mode\":\"active\",\"providerId\":\"proof\"} ... \"indexIdentity\":{\"status\":\"valid\"}\n  after: cliExit=0 chunksVecExists=true vectorRows=1 staleVectorRows=0 chunksRows=1 staleChunkRows=0 filesRows=1 staleFileRows=0 metaWritten=true metaProvider=proof metaModel=proof-embed metaVectorDims=4\n  platform: linux x64 node=22.22.0\n  ```\n\n- Observed result after fix: the unsafe reindex path completed with sqlite-vec enabled, preserved `chunks_vec`, removed the stale `seed-row`, wrote a new vector row for the indexed memory file, and persisted valid vector metadata.\n- What was not tested: the original Windows live-agent handle-contention deployment was not reproduced end to end; this proof isolates the sqlite-vec reset/prepare boundary that causes the `chunks_vec` crash.\n- Proof limitations or environment constraints: the proof uses a local in-process proof embedding provider to avoid external API/network dependency; it validates sqlite-vec table lifecycle and vector writes, not remote embedding transport.\n- Before evidence (optional but encouraged): source inspection and the regression test model the broken pre-fix invariant: cached vector availability can remain true while the physical `chunks_vec` table is missing, which makes later prepared deletes fail with `no such table: chunks_vec`.\n\n## Tests and validation\n\nWhich commands did you run?\n\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.extension-memory.config.ts extensions/memory-core/src/memory/index.test.ts -t 'does not prepare vector deletes after unsafe reset drops a missing vector table'` — passed, 1 test / 38 skipped.\n- `node scripts/run-vitest.mjs run --config test/vitest/vitest.extension-memory.config.ts extensions/memory-core/src/memory/index.test.ts` — passed, 39 tests.\n- `node <evidence>/live-sqlite-vec-proof.mjs` via `daily_fix.sh run-validation --name live-sqlite-vec-proof` — passed; real sqlite-vec table existed before and after unsafe reset, stale rows were removed, new vector rows and `vectorDims: 4` metadata were written.\n- Remote `checks-node-agentic-gateway-core` failure was attributed from the CI log to `src/gateway/gateway-cli-backend.connect.test.ts > gateway cli backend connect > connects a test gateway client through the live helper`, which timed out after 5000ms in the `test/vitest/vitest.gateway-client.config.ts` shard. Local mapping for the shard was attempted with `node scripts/test-projects.mjs test/vitest/vitest.gateway-core.config.ts test/vitest/vitest.gateway-client.config.ts`; it produced repeated no-output/hang messages and was stopped without a local memory-core assertion failure. The failing test is in gateway client/live-helper code and is outside this PR's memory-core diff.\n\nWhat regression coverage was added or updated?\n\n- Added/kept focused memory-core regression coverage for the stale cached-vector state: vector availability and dimensions are cached, the physical `chunks_vec` table is missing, and unsafe reindex must not prepare deletes against a missing table.\n\nWhat failed before this fix, if known?\n\n- The issue path failed with `SqliteError: no such table: chunks_vec` during unsafe reindex when sqlite-vec was enabled and vector-table lifecycle state became inconsistent.\n\nIf no test was added, why not?\n\n- Not applicable; regression coverage and real behavior proof are both included.\n\n## Root cause and patch quality\n\n- Root cause: `resetIndex()` could make the physical SQLite schema and cached vector state disagree by dropping `chunks_vec` while leaving vector availability/readiness cached as usable.\n- Why this is root-cause fix: the fix restores the invariant at the reset boundary itself. When sqlite-vec is available, reset clears vector rows without destroying the virtual table schema. If that path fails, cached vector dimensions/readiness/availability are cleared before later sync setup can prepare statements against stale state.\n- Patch quality notes: production changes remain limited to `extensions/memory-core/src/memory/manager-sync-ops.ts`; regression coverage is limited to `extensions/memory-core/src/memory/index.test.ts`; no public config, protocol, provider API, or schema migration is added.\n- Canonical scope: `resetIndex()` is the canonical owner for unsafe full-index clearing; fixing it there avoids special-casing later vector delete preparation or hiding the problem in search/index callers.\n- Target test file: `extensions/memory-core/src/memory/index.test.ts`.\n\n## Risk checklist\n\nDid user-visible behavior change? (`Yes/No`)\n\nYes. Unsafe full reindex with sqlite-vec enabled should now complete instead of crashing when vector state was stale.\n\nDid config, environment, or migration behavior change? (`Yes/No`)\n\nNo config or environment contract changed. Yes, the persisted sqlite-vec index reset lifecycle changes for unsafe reindex: the normal path now preserves `chunks_vec` schema and clears rows in place, while fallback clears cached vector readiness before future sync work.\n\nDid security, auth, secrets, network, or tool execution behavior change? (`Yes/No`)\n\nNo.\n\nWhat is the highest-risk area?\n\nPersisted memory index/session-state lifecycle for sqlite-vec during unsafe reindex.\n\nHow is that risk mitigated?\n\n- The change is limited to fixed-table memory-core reset logic.\n- Normal sqlite-vec-available reset uses `DELETE FROM chunks_vec` rather than dropping the virtual table, matching the table's existing row-delete usage in vector writes.\n- If vector-table delete fails, cached vector dimensions/readiness/availability are cleared so subsequent sync setup does not treat a missing table as available.\n- Targeted regression, full `index.test.ts`, and live sqlite-vec proof all passed on current head.\n\n## Current review state\n\nWhat is the next action?\n\nContributor side: ready for maintainer review after this PR body update and submit flow. Maintainer side: decide whether to accept the unsafe-reindex sqlite-vec lifecycle contract and whether the Linux sqlite-vec boundary proof is sufficient without Windows live-agent handle-contention proof.\n\nWhat is still waiting on author, maintainer, CI, or external proof?\n\n- RF-001 / RF-005: `checks-node-agentic-gateway-core` was failing on the reviewed remote head. CI log attribution points to `src/gateway/gateway-cli-backend.connect.test.ts` timing out after 5000ms in the gateway-client shard, while this PR only changes memory-core reset/test files. Local shard reproduction attempt hung with no memory-core assertion output. If the check remains required, it needs CI-side resolution, rerun, waiver, or maintainer investigation.\n- RF-002 / RF-003: maintainers should explicitly accept the persisted sqlite-vec lifecycle behavior: preserve `chunks_vec` on normal unsafe reset, clear rows, and reset cached vector state on fallback.\n- RF-004: Windows live-agent handle-contention behavior was not reproduced end to end; current proof covers Linux sqlite-vec reset/prepare boundary with real sqlite-vec and vector writes.\n\nWhich bot or reviewer comments were addressed?\n\n- Addressed ClawSweeper's proof concern with a current-head live sqlite-vec proof that uses the actual builtin memory backend, vector-enabled manager state, real sqlite-vec extension loading, stale vector-row seed, unsafe reindex, and post-run DB assertions.\n- Addressed lifecycle-risk comments by documenting the intended reset contract and calling out the maintainer acceptance decision explicitly.\n- Addressed the failing gateway-core signal by mapping it to `test/vitest/vitest.gateway-core.config.ts` plus `test/vitest/vitest.gateway-client.config.ts`, attempting local validation, and disclosing the no-output/hang limitation instead of treating it as memory-core evidence.\n",
-        "branch": "feat/issue-70559",
-        "head_sha": "840dc9df4b1a1d523774367ebc3f0130e9ed1f7b",
-        "author": "zhangguiping-xydt",
-        "labels": [
-          "extensions: memory-core",
-          "size: XS",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "extensions/memory-core/src/memory/index.test.ts",
-            "additions": 21,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager-sync-ops.ts",
-            "additions": 13,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-88696",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-88696.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 155,
-          "counts": {
-            "SUCCESS": 123,
-            "SKIPPED": 31,
-            "FAILURE": 1
-          },
-          "blockers": [
-            "checks-node-agentic-gateway-core:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-agentic-gateway-core:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2527,
+    "total_ms": 1682,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 335
+        "ms": 423
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1867
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 299
+        "ms": 1246
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
