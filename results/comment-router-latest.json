@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-07T12:08:39.259Z",
+  "generated_at": "2026-06-07T12:09:14.880Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-07T09:08:38.619Z",
+  "since": "2026-06-07T09:09:14.312Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -18,7 +18,7 @@
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-07T12:07:50Z",
       "comment_updated_at": "2026-06-07T12:07:50Z",
-      "status_comment_id": 4642471147,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,105 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-07T12:08:32.381Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 91153
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-07T12:08:33.548Z",
-          "response_comment_id": "4642471147",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): resolve model aliases in compaction model override (fixes #90340)",
-        "body": "## Summary\n\nAuto-compaction does not resolve configured model aliases before dispatch. When `agents.defaults.compaction.model` is set to an alias like `gpt54mini`, the alias is passed to `resolveModelAsync` as the literal model id, resulting in `Unknown model: openai/gpt54mini`.\n\n**Fix**: Resolve alias-only compaction model overrides through the model alias index (`buildModelAliasIndex` + `resolveModelRefFromString`) before dispatch, with **bare model-id precedence**: if the bare override value is already a configured model id for the current provider, shipped literal behavior takes precedence over any alias that shares the same key.\n\n**Changes**: 2 files, +132/-5 — `src/agents/embedded-agent-runner/compaction-runtime-context.ts` (+51/-5), test file (+81)\n\n## Root Cause\n\nIn `resolveEmbeddedCompactionTarget()`, when the compaction model override (`agents.defaults.compaction.model`) doesn't contain a `/` (i.e., it's a plain alias like `gpt54mini` rather than a fully-qualified `openai/gpt-5.4-mini`), the value was used as-is without alias resolution.\n\nThe normal model selection path resolves aliases through `resolveModelRefFromString()` + `buildModelAliasIndex()` (from `model-selection-shared.ts`), which is used by `heartbeat-runner.ts`, `tts-core.ts`, `fallbacks-shared.ts`, and other call sites. The compaction path was missing this resolution step.\n\n**Sibling audit**: All other model ref resolution call sites correctly use `resolveModelRefFromString`. The compaction target resolver was the only call site operating on model aliases without going through the alias index.\n\n**Compatibility safeguard**: Before applying alias resolution, the fix checks whether the bare override value is already a configured model id for the current provider (`isBareModelConfiguredForProvider`). If it is, the shipped bare model-id behavior is preserved to avoid silent model/provider switches on upgrade.\n\n**Scope**:\n- In scope: Compaction model alias resolution, bare model-id precedence\n- Out of scope: Other model resolution paths (already correct), compaction provider routing, fallback model resolution\n\n## Verification\n\n```shell\n$ pnpm build && pnpm check\n✓ built in 1.82s\n[check] all checks passed\n\n$ pnpm test src/agents/embedded-agent-runner/compaction-runtime-context.test.ts src/agents/model-selection.test.ts src/agents/embedded-agent-runner/compact.hooks.test.ts\nTest Files  3 passed (3)\n     Tests  206 passed (206)\n```\n\n## Real Behavior Proof\n\n**Behavior or issue addressed**: Compaction model alias (e.g. `gpt54mini` → `openai/gpt-5.4-mini`) is now resolved through the model alias index before dispatch, with bare model-id taking precedence over colliding alias keys to preserve upgrade compatibility.\n\n**Real environment tested**: Ubuntu 24.04, Node.js v22.22.0, OpenClaw main @ 66b91d78fe, pnpm 11.2.2\n\n**Exact steps or command run after this patch**:\n```shell\ncd ~/openclawProject1\npnpm build\npnpm test src/agents/embedded-agent-runner/compaction-runtime-context.test.ts src/agents/model-selection.test.ts src/agents/embedded-agent-runner/compact.hooks.test.ts\n```\n\n**Evidence after fix**:\n- Source-level: `resolveModelRefFromString` is called with the alias index built from config. When `gpt54mini` matches the alias `openai/gpt-5.4-mini` and does NOT collide with a configured model id, the resolved ref is used. When a bare value collides with a known model id, the shipped literal behavior is preserved.\n- New regression tests (3 tests added to `compaction-runtime-context.test.ts`):\n  - Alias resolution to canonical provider/model\n  - Bare model-id precedence over colliding alias key\n  - Cross-provider alias resolution (with auth profile drop)\n- Terminal output:\n```\n✓ built in 1.82s\n[check] all checks passed (1 non-blocking: npm shrinkwrap stale)\nTest Files  3 passed (3)\n     Tests  206 passed (206)\n```\n\n**Observed result after fix**: All 206 tests pass (203 existing + 3 new regression tests). `resolveEmbeddedCompactionTarget` resolves true aliases while preserving bare model-id behavior when the model is already configured for the current provider.\n\n**What was not tested**: End-to-end auto-compaction with a real gateway session using an aliased compaction model. The alias resolution path is covered by existing `model-selection.test.ts` tests; the compaction target resolution including collision handling is covered by `compaction-runtime-context.test.ts` tests.\n\n## Review Findings Addressed\n\n- **[P1] Preserve ambiguous bare compaction overrides**: Added `isBareModelConfiguredForProvider` check. When the bare override collides with both a known model id and an alias key, the shipped bare model-id takes precedence. Regression tests added for collision case.\n- **[P1] Regression tests**: Added 3 regression tests covering alias resolution, bare model-id precedence, and cross-provider alias resolution.\n\n## Regression Test Plan\n\n- `src/agents/embedded-agent-runner/compaction-runtime-context.test.ts` (21 tests) — covers compaction target resolution including model-only overrides, provider/model overrides, auth profile handling, runtime routing, alias resolution, and collision precedence\n- `src/agents/model-selection.test.ts` — covers alias index building and model ref resolution\n- `src/agents/embedded-agent-runner/compact.hooks.test.ts` — covers compaction lifecycle hooks\n\n## Merge Risk\n\n**Low**. The change is guarded:\n1. If the alias index is empty or the override doesn't match any alias → falls through to existing behavior\n2. If the override matches an alias but collides with a known model id → bare model-id takes precedence\n3. All 206 existing + new tests pass without modification to existing test expectations\n",
-        "branch": "fix/issue-90340-compaction-alias-resolution",
-        "head_sha": "2e566e0b614662d4105ba5ade4f45bf93f4bac00",
-        "author": "zenglingbiao",
-        "labels": [
-          "agents",
-          "size: S",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-runner/compaction-runtime-context.test.ts",
-            "additions": 81,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/compaction-runtime-context.ts",
-            "additions": 76,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91153",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91153.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "SUCCESS": 132,
-            "SKIPPED": 29,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 817,
+    "total_ms": 2384,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 629
+        "ms": 556
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 177
+        "ms": 1816
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
