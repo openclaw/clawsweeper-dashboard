@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-07T04:44:05.064Z",
+  "generated_at": "2026-06-07T04:44:42.979Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-07T01:44:02.523Z",
+  "since": "2026-06-07T01:44:40.756Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     91080
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4641379887
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -61,127 +63,32 @@
       "finding_id": "review-feedback",
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(gateway): startup watchdog dumps in-flight phases on hang",
-        "body": "## Summary\n\nAdd a one-shot startup watchdog to the gateway CLI that dumps the **in-flight** diagnostic phase stack to `stderr` as a single structured line when the HTTP server has not bound within a configurable threshold (default 60s). Diagnostic-only — no behavior change on the happy path.\n\n## Why\n\nWhen the gateway hangs anywhere between `[gateway] starting...` and HTTP listen-success, the only externally visible signal today is \"no log output for N minutes until the orchestrator SIGKILLs the pod.\" Every intervening step already runs inside `withDiagnosticPhase(name, run)` blocks, but those snapshots are only emitted on phase **completion** via the optional `OPENCLAW_GATEWAY_STARTUP_TRACE` logger — so on the hang path nothing is ever flushed. Operators end up having to attach a debugger or guess.\n\nThis change surfaces *which* startup step is stuck, with a per-phase elapsed timer, without altering any production code path on the success path.\n\n## What changes\n\n### `src/logging/diagnostic-phase.ts`\n- Adds `getActiveDiagnosticPhases(): ActiveDiagnosticPhaseSnapshot[]`. Returns a **deep-copy** snapshot of the currently in-flight phase stack, ordered outermost → innermost, with `elapsedMs` computed from `performance.now()` at snapshot time. The returned array/objects are fresh — mutating them does not affect future phase tracking. Safe to call from a synchronous timer callback on a starved event loop (one stack walk + N `performance.now()` reads).\n\n### `src/logging/gateway-startup-watchdog.ts` (new)\n- `armStartupWatchdog({ thresholdMs })` — arms a single `setTimeout`. Idempotent (a second call while armed is a no-op). The handle is `.unref()`'d so the diagnostic timer never keeps the process alive on its own.\n- `cancelStartupWatchdog()` — clears the timer. Safe to call multiple times and safe to call when nothing is armed.\n- `resolveStartupWatchdogThresholdMs(env)` — reads `OPENCLAW_STARTUP_WATCHDOG_MS`. Defaults to `60_000`. `0` disables the watchdog. Non-finite / negative values fall back to the default.\n- On fire: snapshots `getActiveDiagnosticPhases()`, formats a single line, writes it **directly to `process.stderr`** (bypassing the logger so a starved or filtered logging pipeline can't eat the diagnostic on the hang path), and exits. Never re-arms, never retries, never throws.\n\nExample output:\n\n```text\n[startup-watchdog] stuck step=\"cli.server-import\" elapsed=60123.4ms threshold=60000ms pending=[cli.gateway-loop@60125.7ms cli.server-import@60123.4ms]\n```\n\n### `src/cli/gateway-cli/run.ts`\n- Calls `armStartupWatchdog({ thresholdMs: resolveStartupWatchdogThresholdMs() })` right after the existing `startupTrace.mark(\"cli.gateway-loop\")`, immediately after the `[gateway] starting...` log emit.\n- Calls `cancelStartupWatchdog()` at the top of the startup failure `catch` block so the watchdog cannot interleave a \"stuck step\" line on top of a real error message already being reported.\n\n### `src/gateway/server/http-listen.ts`\n- Calls `cancelStartupWatchdog()` inside `onListening` (immediately before `resolve()`), so listen-success is the primary cancel point. The call is idempotent and safe when no watchdog is armed (every caller other than the gateway CLI never arms one).\n\n## Tests\n\n- `src/logging/gateway-startup-watchdog.test.ts` — 15 tests covering:\n  - Env-var threshold parsing (default, blank, `0` disable, positive override, negative/non-numeric fallback)\n  - Arm/no-arm semantics (threshold 0, NaN, negative, double-arm refusal)\n  - Single stderr line on fire, with the in-flight 2-level phase tree captured via real `withDiagnosticPhase` wrappers and `vi.useFakeTimers()`\n  - Cancellation before threshold prevents emit\n  - Fire-at-most-once even past the threshold\n  - Empty-stack rendering as `pending=[]`\n  - Stderr-write-failure tolerated without crashing startup\n- `src/logging/diagnostic-phase.test.ts` — 3 added tests covering `getActiveDiagnosticPhases()`:\n  - Returns `[]` when no phase is active\n  - Snapshots outermost → innermost with `elapsedMs` populated\n  - Deep-copy guarantee (mutating the snapshot does not affect subsequent snapshots)\n- `src/gateway/server/http-listen.test.ts` — re-run, all 3 existing tests still pass with the cancel call in `onListening`.\n\n20/20 new tests pass; existing logging + http-listen tests unaffected. `pnpm tsgo:core:test` clean. `pnpm lint` produces no new errors on the touched files (pre-existing main-branch lint failures in `update-cli`, `extensions/`, `scripts/` are unchanged).\n\n## Configuration\n\n| Env var | Default | Meaning |\n| --- | --- | --- |\n| `OPENCLAW_STARTUP_WATCHDOG_MS` | `60000` | Milliseconds before the watchdog fires. Set to `0` to disable entirely. |\n\n## Non-goals / out of scope\n\n- No change to HTTP/metrics surfaces.\n- No re-arm or retry logic. The watchdog observes once and logs once.\n- No async I/O in the timer callback (no `await`, no promises, no `gatewayLog.*`) — the whole point is to surface diagnostic state when the logger or event loop is starved.\n\n## Layering note\n\n`gateway-startup-watchdog.ts` lives in `src/logging/` (next to `diagnostic-phase.ts`) rather than under `src/cli/gateway-cli/` so the HTTP-listen helper can `import` the cancel hook without adding a `src/gateway/server/ → src/cli/` dependency edge. The watchdog is a singleton owned by whoever arms it (today: the gateway CLI startup loop; nobody else arms one).\n\n## Real behavior proof\n\n**Behavior or issue addressed:** Gateway hang anywhere between the `[gateway] starting...` log emit and HTTP listen-success leaves operators with no externally-visible signal until the orchestrator `SIGKILL`s the pod. This patch surfaces a single structured stderr line naming the stuck phase + its in-flight ancestor stack + per-phase elapsed time when the bind has not happened within `OPENCLAW_STARTUP_WATCHDOG_MS` (default 60000 ms). Tracking: smisy/daily-ai#364 (GH-5814 class).\n\n**Real environment tested:** Local `darwin/arm64` Mac Studio, Node v25.7.0, the production `withDiagnosticPhase` + `diagnostic-phase` + `gateway-startup-watchdog` modules built into this PR. No mock substitution: the live `withDiagnosticPhase` from `src/logging/diagnostic-phase.ts` is the source of the in-flight stack, the live `armStartupWatchdog` from `src/logging/gateway-startup-watchdog.ts` schedules a real `setTimeout`, and the real `process.stderr.write` carries the diagnostic line out of process. Same modules, same code path the gateway uses in production, fired end-to-end.\n\n**Exact steps or command run after this patch:** From a worktree at this PR's HEAD `abd87a8698`:\n\n```bash\ncat > smoke-watchdog.ts <<'EOF'\nimport {\n  withDiagnosticPhase, resetDiagnosticPhasesForTest,\n} from \"./src/logging/diagnostic-phase.ts\";\nimport {\n  armStartupWatchdog, resetStartupWatchdogForTest,\n} from \"./src/logging/gateway-startup-watchdog.ts\";\n\nresetDiagnosticPhasesForTest();\nresetStartupWatchdogForTest();\n\nconst origWrite = process.stderr.write.bind(process.stderr);\nprocess.stderr.write = ((chunk: string | Uint8Array): boolean => {\n  const s = typeof chunk === \"string\" ? chunk : chunk.toString();\n  process.stdout.write(\"STDERR-CAPTURE> \" + s);\n  return true;\n}) as typeof process.stderr.write;\n\narmStartupWatchdog({ thresholdMs: 1500 });\n\nlet resolveInner: (() => void) | undefined;\nconst innerPending = new Promise<void>((res) => { resolveInner = res; });\nconst outer = withDiagnosticPhase(\"cli.config-snapshot\", async () =>\n  withDiagnosticPhase(\"server.import-start\", async () => innerPending),\n);\n\nsetTimeout(() => {\n  process.stderr.write = origWrite;\n  resolveInner?.();\n  outer.then(() => process.exit(0));\n}, 2200);\nEOF\n\nnode_modules/.bin/tsx smoke-watchdog.ts\n```\n\nThe smoke harness arms the real watchdog with a 1500 ms threshold, builds a real two-deep `withDiagnosticPhase` stack (outer `cli.config-snapshot` wraps inner `server.import-start`), and refuses to resolve the inner promise so the inner phase stays in-flight when the watchdog fires. The stderr-capture shim only re-routes the byte stream so the line is visible in the smoke transcript; the watchdog itself still writes via the real `process.stderr.write` it would use in production.\n\n**Evidence after fix:** Literal terminal stderr output captured from the live run above (single line as emitted by `process.stderr.write` in `src/logging/gateway-startup-watchdog.ts:70`):\n\n```\nSTDERR-CAPTURE> [startup-watchdog] stuck step=\"server.import-start\" elapsed=1501.9ms threshold=1500ms pending=[cli.config-snapshot@1502.0ms server.import-start@1501.9ms]\n===smoke complete===\n```\n\nThe `STDERR-CAPTURE> ` prefix is added by the capture shim so the source channel (`stderr` vs `stdout`) is unambiguous in the transcript; the bytes after the prefix are the literal payload the watchdog wrote.\n\n**Observed result after fix:** End-to-end runtime behavior observed from the live stderr capture above, against the real `withDiagnosticPhase` + `armStartupWatchdog` modules shipped in this PR:\n\n- A single newline-terminated line was emitted to `process.stderr` once the 1500 ms `setTimeout` callback ran. No second line ever followed, confirming the once-only fire semantics in the live runtime.\n- The `stuck step=\"server.import-start\"` token correctly identified the deepest currently-in-flight `withDiagnosticPhase` block as the wedged phase, taken from the real `activePhaseStack` at the moment the timer callback executed.\n- The `pending=[cli.config-snapshot@1502.0ms server.import-start@1501.9ms]` tail rendered the full live ancestor chain outermost → innermost with each phase's real wall-clock elapsed time computed from `performance.now()` at snapshot time.\n- The elapsed times read 1501.9 ms / 1502.0 ms against the 1500 ms threshold — roughly 2 ms of real-world scheduling jitter, consistent with a healthy Node `setTimeout` on macOS.\n- The phase name was emitted via `JSON.stringify`, so a future phase name containing a `\"` or `\n` character cannot break the single-line parse contract operators will rely on when greping production stderr.\n- Direct `process.stderr.write` carried the diagnostic out of the process without routing through `gatewayLog.*`, so a starved or filtered logger pipeline in the real hang case cannot eat the diagnostic — operationally exactly what point 3 of the design spec calls for.\n\n**What was not tested:** A live `openclaw gateway` startup with a real Kubernetes pod and a real induced phase hang under `kubectl logs -f` was not exercised here — the smoke harness above runs the watchdog code path end-to-end in process but does not boot the full gateway. A follow-up real-cluster reproduction (deliberately stall one phase in `server.impl.ts:386` then watch `kubectl logs` for the stderr line) is a sensible next step before this is relied on for production triage, but the runtime behavior of the watchdog itself — timer firing, snapshot accuracy, single-line emit, format correctness — is covered above against the production modules.\n",
-        "branch": "task/gh-364-startup-watchdog",
-        "head_sha": "abd87a869852453636b3213a3b1a6ec821e15867",
-        "author": "ttruongatl",
-        "labels": [
-          "gateway",
-          "cli",
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/cli/gateway-cli/run.ts",
-            "additions": 16,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server/http-listen.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/logging/diagnostic-phase.test.ts",
-            "additions": 40,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/logging/diagnostic-phase.ts",
-            "additions": 31,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/logging/gateway-startup-watchdog.test.ts",
-            "additions": 219,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/logging/gateway-startup-watchdog.ts",
-            "additions": 138,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91080",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91080.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 30,
-            "SUCCESS": 126,
-            "FAILURE": 5,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "build-artifacts:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-runtime-topology-architecture:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "build-artifacts:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-runtime-topology-architecture:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2761,
+    "total_ms": 2851,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 275
+        "ms": 2210
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2251
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 208
+        "ms": 628
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
