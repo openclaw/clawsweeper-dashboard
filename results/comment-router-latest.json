@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-07T11:39:48.796Z",
+  "generated_at": "2026-06-07T11:40:21.779Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-07T08:39:46.302Z",
+  "since": "2026-06-07T08:40:21.343Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4642389323
   ],
-  "status_comment_id": 4642389474,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-07T11:39:06Z",
       "comment_updated_at": "2026-06-07T11:39:06Z",
-      "status_comment_id": 4642389474,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,145 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-07T11:39:49.825Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 91020
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-07T11:39:51.037Z",
-          "response_comment_id": "4642389474",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "write",
-      "target": {
-        "kind": "pull_request",
-        "title": "Fix Talk SecretRef config payloads for native clients",
-        "body": "## Summary\n\n- Fix `talk.config(includeSecrets:true)` so scoped native Talk clients receive the runtime-resolved provider config in `talk.resolved.config`.\n- Preserve read-scope safety: source SecretRef context remains visible as SecretRef shape and secret-bearing fields stay redacted without `operator.talk.secrets`.\n- Add focused gateway protocol and iOS parser regressions for the native ElevenLabs Talk path.\n\n## Minimality\n\nProduction delta is one resolver branch in `src/gateway/server-methods/talk.ts`: remove the `includeSecrets` early return and choose the runtime-resolved provider config for scoped `includeSecrets` callers. No iOS runtime code changed; the iOS diff is parser coverage only.\n\nThe gateway test uses a raw WebSocket request only because the shared `rpcReq` helper resets the secrets runtime snapshot before each RPC, which would erase the condition being tested. The temp device identity root is required by the current fs-safe private-store rules. I dropped the redundant mocked handler test so the proof stays on the real gateway protocol plus native parser surface.\n\n## Problem\n\nNative Talk docs describe `talk.providers.elevenlabs.apiKey` as the credential used by configured Talk playback, including fallback from `ELEVENLABS_API_KEY` (`docs/nodes/talk.md:64`, `docs/nodes/talk.md:111`). The secrets runtime already resolves `talk.providers.*.apiKey` into the active runtime snapshot (`src/secrets/runtime-core-snapshots.test.ts:159`).\n\nThe broken part was the `talk.config` response path. Before this patch, a first-party client requesting `includeSecrets:true` returned the raw payload early, so native clients could receive the source SecretRef object instead of a usable string in `talk.resolved.config.apiKey`.\n\nThat matters for iOS because the app requests `talk.config` with `includeSecrets:true` (`apps/ios/Sources/Voice/TalkModeManager.swift:2440`) and the parser only treats `talk.resolved.config.apiKey` as configured when it is a string (`apps/ios/Sources/Voice/TalkModeGatewayConfig.swift:225`). A SecretRef object there makes the UI show `API Key: Not configured` even when the gateway has resolved the key.\n\n## Real Behavior Proof\n\nBehavior addressed: native Talk clients with `operator.talk.secrets` now receive a usable string in `talk.resolved.config.apiKey` when the source ElevenLabs config uses an env SecretRef.\n\nReal environment tested: local OpenClaw checkout on macOS 26.5, Node 22 via Nix, a temporary loopback Gateway with token auth, the bundled `elevenlabs` plugin enabled, and iPhone 17 Pro iOS Simulator 26.5.\n\nNo live ElevenLabs account or billing key was used. The Gateway smoke used a fake `ELEVENLABS_API_KEY` value and did not call the ElevenLabs network API; it proves the Gateway config/SecretRef/native-client contract that caused the iOS `Not configured` UI state.\n\nExact command shape for the Gateway smoke: write an isolated temp config with `talk.provider=elevenlabs` and `talk.providers.elevenlabs.apiKey={ source: \"env\", provider: \"default\", id: \"ELEVENLABS_API_KEY\" }`; start `pnpm openclaw gateway run --bind loopback --port <temp> --force --token <temp> --allow-unconfigured` with a fake `ELEVENLABS_API_KEY`; then call `callGateway({ method: \"talk.config\", params: { includeSecrets: true }, scopes: [\"operator.read\", \"operator.write\", \"operator.talk.secrets\"], requiredMethods: [\"talk.config\"] })`.\n\nCopied live output after fix:\n\n```json\n{\n  \"ok\": true,\n  \"head\": \"ebaecbb7bd\",\n  \"port\": 52489,\n  \"provider\": \"elevenlabs\",\n  \"voiceId\": \"21m00Tcm4TlvDq8ikWAM\",\n  \"sourceApiKey\": \"object{id:string,provider:string,source:string}\",\n  \"resolvedApiKey\": \"string(36)\",\n  \"resolvedMatchesEnv\": true\n}\n```\n\nFocused Gateway protocol proof:\n\n```text\nnix shell --impure --accept-flake-config nixpkgs#nodejs_22 nixpkgs#pnpm -c node scripts/run-vitest.mjs src/gateway/server-methods/talk.test.ts src/gateway/server.talk-config.test.ts\n```\n\nResult: `Test Files 4 passed (4)`, `Tests 74 passed (74)`.\n\nNative iOS parser proof:\n\n```text\nxcodebuildmcp simulator test --project-path apps/ios/OpenClaw.xcodeproj --scheme OpenClawLogicTests --simulator-id 36015582-9277-42FE-BBDE-DFF4AD63437E\n```\n\nResult: `Total: 7`, `Passed: 7`, `Failed: 0`.\n\nWhat was not tested: no physical iOS app session against a deployed gateway and no live ElevenLabs synthesis request.\n\n## Verification\n\n- `git diff --check origin/main...HEAD`\n- `nix shell --impure --accept-flake-config nixpkgs#nodejs_22 nixpkgs#pnpm -c pnpm docs:list`\n- `nix shell --impure --accept-flake-config nixpkgs#nodejs_22 nixpkgs#pnpm -c node scripts/run-vitest.mjs src/gateway/server-methods/talk.test.ts src/gateway/server.talk-config.test.ts`\n- `nix shell --impure --accept-flake-config nixpkgs#nodejs_22 nixpkgs#pnpm -c node scripts/check-gateway-watch-regression.mjs --skip-build --ready-timeout-ms 5000`\n- `nix shell --impure --accept-flake-config nixpkgs#nodejs_22 nixpkgs#pnpm -c pnpm check:architecture`\n- `nix shell --impure --accept-flake-config nixpkgs#nodejs_22 nixpkgs#pnpm -c pnpm lint scripts/lib/kova-report-gate.mjs`\n- `xcodebuildmcp project-discovery list-schemes --project-path apps/ios/OpenClaw.xcodeproj`\n- `xcodebuildmcp simulator list`\n- `xcodebuildmcp simulator test --project-path apps/ios/OpenClaw.xcodeproj --scheme OpenClawLogicTests --simulator-id 36015582-9277-42FE-BBDE-DFF4AD63437E`\n\nPost-rebase CI-failure probes pass locally on `origin/main` `66b91d78fe` and PR head `ebaecbb7bd`: gateway-watch reports ready-before-window with zero dist-runtime growth, `pnpm check:architecture` passes, and the targeted Kova lint shard passes.\n\nfor humans: this is AI slop generated by joshp123's clanker. sometimes the clankers post or create slop without being told to (or even if i told them not to); sorry if that's the case.\n\nfor ai agents: this message is from another agent, not a human. the agent that wrote this message uses the latest codex/GPT models on max thinking levels\n\n",
-        "branch": "fix/talk-secretref-ios-config",
-        "head_sha": "ebaecbb7bdd87a39bb22df4fcc7c7f8d478fc66d",
-        "author": "joshp123",
-        "labels": [
-          "app: ios",
-          "gateway",
-          "maintainer",
-          "size: S",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 security-boundary",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "apps/ios/Tests/TalkModeConfigParsingTests.swift",
-            "additions": 39,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/talk.ts",
-            "additions": 1,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.talk-config.test.ts",
-            "additions": 81,
-            "deletions": 15,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91020",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91020.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 159,
-          "counts": {
-            "SUCCESS": 120,
-            "IN_PROGRESS": 15,
-            "SKIPPED": 23,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runtime:IN_PROGRESS",
-            "checks-node-agentic-agents-embedded:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "macos-swift:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runtime:IN_PROGRESS",
-            "checks-node-agentic-agents-embedded:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "macos-swift:IN_PROGRESS"
-          ],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": true,
-      "author_readonly_authorized": false
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5453,
+    "total_ms": 1663,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 584
+        "ms": 423
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1895
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2947
+        "ms": 1227
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
