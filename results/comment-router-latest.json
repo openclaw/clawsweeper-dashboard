@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-07T15:39:49.272Z",
+  "generated_at": "2026-06-07T15:42:05.462Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-07T12:39:48.203Z",
+  "since": "2026-06-07T12:42:02.178Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    91081
+    78441
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4643132883
+  ],
+  "status_comment_id": 4643133073,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,103 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91081:4641408014:2026-06-07T15:39:45Z:clawsweeper_needs_human",
-      "comment_id": "4641408014",
-      "comment_version_key": "4641408014:2026-06-07T15:39:45Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/91081#issuecomment-4641408014",
+      "idempotency_key": "comment-router:openclaw/openclaw:78441:4643132883:2026-06-07T15:41:24Z:re_review",
+      "comment_id": "4643132883",
+      "comment_version_key": "4643132883:2026-06-07T15:41:24Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/78441#issuecomment-4643132883",
       "repo": "openclaw/openclaw",
-      "issue_number": 91081,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 78441,
+      "author": "guanbear",
+      "author_id": 11829005,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-07T04:24:51Z",
-      "comment_updated_at": "2026-06-07T15:39:45Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] Human maintainer review is the right lane because the remaining blocker is accepting a session-state freshness tradeoff in a protected maintainer PR, not a narrow mechanical repair.; Cleared: The diff changes memory runtime listing code and tests only; I found no CI, dependency, lockfile, script, secret, permission, or external code execution change. (sha=90b93d605a889e7203052054f0c82aac206ccfac)",
-      "review_summary": "The PR adds in-flight coalescing, a 5-second snapshot cache, transcript-update invalidation, and regression tests around memory session-file directory listings.\n\nPR surface: Source +120, Tests +109. Total +229 across 2 files.\n\nReproducibility: not applicable. this is a PR review for a performance/session-state tradeoff rather than a standalone bug report. The PR body and added tests give source-level proof of the intended cache behavior, but I did not run tests because this review is read-only.",
-      "review_followup": "- [P2] Human maintainer review is the right lane because the remaining blocker is accepting a session-state freshness tradeoff in a protected maintainer PR, not a narrow mechanical repair.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "90b93d605a889e7203052054f0c82aac206ccfac",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "perf(memory): coalesce + cache session-file listings to cut NFS READDIR load",
-        "body": "## Summary\r\n\r\nRepeated session-directory scans (`listSessionFilesForAgent`) issue a `fs.readdir(dir, { withFileTypes: true })` per call with **zero caching or coalescing** across call sites. On networked filesystems (NFS) this is expensive: resolving each entry's type turns one logical scan into roughly one attribute fetch per session file, and several subsystems (startup catch-up, incremental sync, dreaming, qmd export) scan the same agent sessions dir in close succession — producing redundant READDIR/GETATTR load.\r\n\r\nThis adds an in-flight dedupe + short-TTL snapshot cache around `listSessionFilesForAgent`:\r\n\r\n- **Coalescing** — concurrent callers join a single in-flight `Promise`, so a burst of scans triggers one READDIR instead of N.\r\n- **Short-TTL snapshot** — a resolved listing is reused briefly between scans. The cache is keyed by the **resolved sessions directory** (folds in `OPENCLAW_STATE_DIR`, and lines up with `path.dirname(update.sessionFile)` for precise invalidation).\r\n- **Event-driven invalidation (the correctness path)** — a single lazy subscription to the canonical `onSessionTranscriptUpdate` event drops the affected directory's snapshot. Every in-process mutation to a session-owned path (append, compaction, rewrite, chat inject, command exec) emits this event, and archive rotation (`archiveFileOnDisk`) already emits through it too, so one canonical hook covers all in-process write paths without scattered per-path invalidation.\r\n- **TTL as a backstop only** — `SESSION_FILES_LISTING_TTL_MS = 5_000` bounds staleness for writers that never reach our event bus (e.g. another node sharing the NFS sessions dir, or low-frequency archive prunes).\r\n- **Failed scans are never cached** — read results are a discriminated union (`{ ok: true; files } | { ok: false }`). A transient `fs.readdir` failure (NFS `EIO`/`ESTALE`/`EACCES`/timeout) is returned to the one caller as empty but **not published** into the snapshot, so the next call retries instead of serving a false-empty session set for the TTL window. A legitimately absent dir (`ENOENT`, the normal \"no sessions yet\" state) is still cached as empty, since the first session write emits an invalidation event.\r\n\r\nThe cache is bounded (64 dirs), module-lifecycle-owned, and race-safe: a completed read only publishes its snapshot if its entry is still the active one, so an invalidation or newer read during the await wins. A `resetSessionFilesListingCache()` helper exists for test isolation and is intentionally kept out of the package's public re-export surface.\r\n\r\n`withFileTypes` removal (to cut the per-entry NFS `lstat` amplification) is deferred to a focused follow-up.\r\n\r\n## Scope — what reads are covered\r\n\r\nThe cache wraps a single physical read: the `fs.readdir(dir, { withFileTypes: true })` inside `listSessionFilesForAgent`, where `dir` is the resolved per-agent sessions directory (`…/agents/<agentId>/sessions`). That `withFileTypes` scan is the expensive NFS operation — one logical scan fans out into roughly one attribute fetch per session file.\r\n\r\nFour in-process memory-engine call sites repeatedly scan the same sessions dir in close succession (the \"repeated scans\" pattern from the analysis); all now route through the coalesce/cache layer:\r\n\r\n| Caller | Path | What triggers it |\r\n|---|---|---|\r\n| `manager-sync-ops.ts:1188` | `markSessionStartupCatchupDirtyFiles()` | Startup catch-up — memory manager boot with the `sessions` source enabled. |\r\n| `manager-sync-ops.ts:1629` | incremental/targeted reindex | Memory sync cycles — when no explicit `targetSessionFiles` are passed, it lists the whole dir to build the reindex plan. |\r\n| `dreaming-phases.ts:850` | session-ingestion loop | Dreaming — iterates `agentIds`, listing each agent's sessions to batch messages by day. |\r\n| `qmd-manager.ts:2383` | `exportSessions()` | qmd export — retention/export pass listing sessions to compute keep/track sets. |\r\n\r\nThese run on overlapping schedules and can fire concurrently, so they previously produced N independent READDIR storms over a single directory. With the cache:\r\n\r\n- Concurrent calls → coalesced into **1** READDIR (in-flight join).\r\n- Sequential calls within the TTL with no intervening write → served from snapshot, **0** READDIR.\r\n- After any session write → the `onSessionTranscriptUpdate` event drops the snapshot, so the next call re-scans.\r\n\r\n**Out of scope (intentional — focused change):** other sessions-dir reads that are one-shot / CLI / diagnostic rather than hot-loop, and are left for a follow-up: `dreaming-narrative.ts:901` (separate narrative readdir; the most natural follow-up candidate), `cli.runtime.ts:527` (`scanSessionFiles` CLI diagnostic), `session-cost-usage.ts:378` (cost/usage subsystem), `dreaming-repair.ts:78` (repair corpus pass). Unrelated scans of the parent `agents/` directory (`session-utils.ts`, `agent-list.ts`, gateway `doctor.ts`) use a different key and are untouched.\r\n\r\n## Verification\r\n\r\n### Committed regression tests\r\n\r\n`node scripts/run-vitest.mjs packages/memory-host-sdk/src/host/session-files.test.ts` — **18/18** (12 pre-existing + 6 new). The cache tests count real scans by spying on `fsPromises.readdir`:\r\n\r\n- **concurrent coalescing** — two un-awaited concurrent calls ⇒ `readdir` called **exactly once**.\r\n- **cached-within-TTL** — a second call after writing a new file *without* emitting an event still returns the prior snapshot ⇒ **1** scan.\r\n- **refresh-after-TTL** — with `vi.useFakeTimers({ toFake: [\"Date\"] })`, advancing `Date` past 5s forces a re-scan ⇒ **2** scans, fresh listing.\r\n- **event invalidation** — `emitSessionTranscriptUpdate({ sessionFile })` drops the snapshot ⇒ next call re-scans, fresh listing.\r\n- **failed-scan not cached** *(new, addresses review)* — `readdir` rejected once with `EIO` ⇒ first call returns `[]`, a second call within the TTL **re-scans** (2 scans) and recovers the real listing.\r\n- **absent-dir cached** *(new)* — a missing sessions dir (`ENOENT`) is cached as empty ⇒ **1** scan across two calls.\r\n\r\nOther proof:\r\n\r\n- Consumer suites green: `manager-sync-ops.startup-catchup`, `manager-targeted-sync`, `manager-session-sync-state`, `qmd-manager`, `manager.fts-only-reindex`, `manager-source-state`, `dreaming-phases`, `manager-sync-yield`, `session-files-yield`.\r\n- Typecheck: `pnpm tsgo:core` and `pnpm tsgo:test:packages` exit 0. `node scripts/run-oxlint.mjs` clean; `oxfmt --check` clean.\r\n\r\n### Concurrency chaos / fuzz hammering (dev-time stress; not committed)\r\n\r\nA seeded invariant-based harness drove **randomized interleavings** of concurrent read bursts + real file create/delete + `onSessionTranscriptUpdate` events against the live cache, asserting:\r\n\r\n- **coalescing by reference identity** — every caller in a synchronous burst receives the *same array instance* (`===`), proving they joined one read rather than each scanning;\r\n- **no phantom files** — every returned name is a real, valid session file that actually existed;\r\n- **eventual consistency** — after a final invalidation, the listing equals on-disk ground truth exactly;\r\n- **cache-bound correctness** — with agent count > the 64-dir bound, evicted entries re-read fresh (never stale/wrong).\r\n\r\nRan at **20,000 iterations × burst 32 × 200–300 agents across 5 seeds** — all green. (Kept as a local stress tool rather than a committed suite to avoid a long-running test in CI; the committed unit tests above are the durable regression guard.)\r\n\r\n### Mutation testing (dev-time; confirms the tests actually catch breakage)\r\n\r\nEach cache invariant was corrupted one at a time in `session-files.ts`; the unit + chaos suites were re-run to confirm they **kill** the mutant, then the source was restored (verified clean via `git diff`):\r\n\r\n| Mutant | Killed by | Result |\r\n|---|---|---|\r\n| re-cache failed scan (the bug this PR's fix removes) | unit | ✅ killed |\r\n| drop event-driven invalidation | unit + chaos | ✅ killed |\r\n| TTL zero (cache disabled) | unit | ✅ killed |\r\n| disable TTL cache read (never serve snapshot) | unit | ✅ killed |\r\n| no coalesce-join (no shared in-flight) | unit + chaos | ✅ killed |\r\n| treat ENOENT as failure (stop caching empty dirs) | unit | ✅ killed |\r\n| drop race-guard on publish | — | ⚪ survives (expected) |\r\n| max-dirs bound 64 → 100000 | — | ⚪ survives (perf-only) |\r\n\r\n**6/6 correctness mutants killed, 0 unexpected survivors.** The surviving `drop-race-guard` is expected: reads *replace* the map entry rather than mutating it, so a stale completion writing into an orphaned entry is harmless — the guard is documented defensive intent, not load-bearing. `max-dirs` is a perf knob, not a correctness property.\r\n\r\n\r\n",
-        "branch": "ak/session-files-readdir-coalesce",
-        "head_sha": "90b93d605a889e7203052054f0c82aac206ccfac",
-        "author": "amknight",
-        "labels": [
-          "maintainer",
-          "size: M",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "packages/memory-host-sdk/src/host/session-files.test.ts",
-            "additions": 110,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/memory-host-sdk/src/host/session-files.ts",
-            "additions": 124,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91081",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91081.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 41,
-          "counts": {
-            "SKIPPED": 35,
-            "SUCCESS": 6
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:91081:4643011649:2026-06-07T14:51:07Z:re_review",
-      "comment_id": "4643011649",
-      "comment_version_key": "4643011649:2026-06-07T14:51:07Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/91081#issuecomment-4643011649",
-      "repo": "openclaw/openclaw",
-      "issue_number": 91081,
-      "author": "amknight",
-      "author_id": 15041791,
-      "author_association": "MEMBER",
-      "comment_created_at": "2026-06-07T14:51:07Z",
-      "comment_updated_at": "2026-06-07T14:51:07Z",
-      "status_comment_id": null,
-      "trigger": "slash",
+      "comment_created_at": "2026-06-07T15:41:24Z",
+      "comment_updated_at": "2026-06-07T15:41:24Z",
+      "status_comment_id": 4643133073,
+      "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
       "autoclose_message": null,
@@ -143,22 +61,225 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-07T15:42:06.452Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 78441
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-07T15:42:07.712Z",
+          "response_comment_id": "4642987917",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(subagents): forward toolsAllow from sessions_spawn",
+        "body": "## Summary\n- Add optional `toolsAllow` to `sessions_spawn` for native subagent runs.\n- Validate it as a string array, trim entries, drop blank/whitespace-only entries, preserve explicit `[]`, and reject unsupported ACP paths instead of silently ignoring the policy.\n- Forward and persist the allowlist through Gateway/session/embedded-attempt surfaces so later native child turns inherit the stored tool policy.\n- Normalize Gateway `agent.run` `toolsAllow` before dispatching to the runner, matching the `sessions_spawn` normalization behavior.\n- Keep CLI-backed runtime handling aligned with current `main`: runtime `toolsAllow` is forwarded to the CLI harness so the harness can fail closed when it cannot enforce the allowlist.\n\n## Current upstream status\nLatest `upstream/main` already includes broad subagent/runtime work and embedded-runner `toolsAllow` support. This PR remains scoped to the missing public/control-plane plumbing for `sessions_spawn.toolsAllow`, plus Gateway normalization for raw `agent.run` inputs.\n\n## Change Type\n- [x] Feature\n\n## Scope\n- [x] Gateway / orchestration\n- [x] Skills / tool execution\n- [x] API / contracts\n- [x] Documentation\n\n## Linked Issue/PR\n- Related #78381\n- [ ] This PR fixes a bug or regression\n\n## Real behavior proof\n\nBehavior addressed: `sessions_spawn` callers can constrain native subagent tools with `toolsAllow`; the policy is applied to the spawned child embedded runtime so the child receives only allowed tool schemas. Gateway `agent.run` also normalizes direct `toolsAllow` input before runner dispatch.\n\nReal environment tested: macOS local OpenClaw source checkout at current PR head `8ffac4d1fc59032d23f7a97a2bf1a03752fbb3e6`, temporary `OPENCLAW_STATE_DIR`, temporary `OPENCLAW_CONFIG_PATH`, local Gateway on loopback token auth, `node scripts/run-node.mjs gateway run`, `node scripts/run-node.mjs agent --json` through Gateway (not `--local`), and a deterministic local OpenAI-compatible mock server that records every `/v1/responses` request tool schema.\n\nExact steps or command run after this patch: Started a local mock OpenAI Responses server on `127.0.0.1:19245`, started OpenClaw Gateway on `127.0.0.1:19246`, then ran the parent agent through Gateway:\n\n```text\nOPENCLAW_STATE_DIR=/tmp/openclaw-78441-proof-current.kEqyfu/state OPENCLAW_CONFIG_PATH=/tmp/openclaw-78441-proof-current.kEqyfu/openclaw.json OPENCLAW_GATEWAY_TOKEN=proof-token-78441 OPENAI_API_KEY=mock node scripts/run-node.mjs agent --json   --session-key agent:default:tools-allow-parent   --message 'SUBAGENT_TOOLS_ALLOW_PARENT_PROOF: call sessions_spawn exactly once with toolsAllow [\"read\"].'   --timeout 90\n```\n\nThe mock model returned a real `sessions_spawn` function call from the parent request with `toolsAllow:[\"read\"]`; the Gateway run accepted it, spawned the child, and the child model request was logged from the same mock provider.\n\nEvidence after fix: copied live terminal output from the current-head Gateway proof summarizer. The parent request had `sessions_spawn`; the spawned child request had only `read`, with `exec`, `sessions_spawn`, and `sessions_yield` absent.\n\n```json\n{\n  \"head\": \"8ffac4d1fc59032d23f7a97a2bf1a03752fbb3e6\",\n  \"gatewayAgentRunStatus\": \"ok\",\n  \"gatewayAgentRunId\": \"ba926aed-4c88-41bf-b00e-166c45c58f5a\",\n  \"finalAssistantVisibleText\": \"CHILD_DONE\",\n  \"parentTools\": [\n    \"exec\",\n    \"read\",\n    \"sessions_spawn\",\n    \"sessions_yield\",\n    \"subagents\"\n  ],\n  \"restrictedChildTools\": [\n    \"read\"\n  ],\n  \"restrictedChildHasRead\": true,\n  \"restrictedChildHasExec\": false,\n  \"restrictedChildHasSessionsSpawn\": false,\n  \"restrictedChildHasSessionsYield\": false,\n  \"proofDir\": \"/tmp/openclaw-78441-proof-current.kEqyfu\"\n}\n```\n\nAdditional current-head verification already run after resolving conflicts:\n\n```text\nnode scripts/run-vitest.mjs run src/gateway/server-methods/agent.test.ts --testNamePattern toolsAllow --reporter=dot\nTest Files  2 passed (2)\nTests  8 passed | 300 skipped (308)\n\nnode scripts/run-vitest.mjs run src/gateway/server-methods/agent.test.ts src/agents/tools/sessions-spawn-tool.test.ts src/agents/openclaw-tools.subagents.sessions-spawn.lifecycle.test.ts src/agents/command/attempt-execution.cli.test.ts --testNamePattern 'toolsAllow|timestamp context|canonical Anthropic' --reporter=dot\nTest Files  8 passed (8)\nTests  30 passed | 488 skipped (518)\n\nnode_modules/.bin/oxfmt --check --threads=1 src/gateway/server-methods/agent.ts src/gateway/server-methods/agent.test.ts src/agents/command/attempt-execution.ts src/agents/command/attempt-execution.cli.test.ts\nAll matched files use the correct format.\n```\n\nObserved result after fix: A real Gateway-backed parent agent run called `sessions_spawn` with `toolsAllow:[\"read\"]`, the child run completed with `CHILD_DONE`, and the child model request only advertised `read`. Disallowed parent/session/runtime tools were not present in the child request.\n\nWhat was not tested: A paid external provider was not used. The proof used a deterministic local OpenAI-compatible mock server to avoid provider cost while exercising the real Gateway, real embedded runner, real `sessions_spawn` tool call, and real child model request construction.\n\n## Regression Test Plan\n- Coverage level that should have caught this:\n  - [x] Unit test\n  - [x] Seam / integration test\n  - [x] Prompt snapshot check\n- Target test or file: `src/agents/tools/sessions-spawn-tool.test.ts`, `src/agents/openclaw-tools.subagents.sessions-spawn.lifecycle.test.ts`, `src/agents/subagent-spawn.model-session.test.ts`, `src/gateway/server-methods/agent.test.ts`, `src/agents/command/attempt-execution.cli.test.ts`, `src/commands/agent.test.ts`, `src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts`, `test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/*`.\n- Scenario locked in: `toolsAllow` is exposed, normalized, validates string arrays, preserves explicit `[]`, rejects unsupported ACP runtime, forwards through Gateway/session state, reaches embedded runs started by the command runner, is inherited by persisted child sessions, and is forwarded to CLI harnesses for fail-closed handling.\n\n## User-visible / Behavior Changes\n`runtime=\"subagent\"` callers may pass `toolsAllow` to narrow a spawned native subagent's tool set. Defaults are unchanged when omitted. `toolsAllow: []` intentionally runs the child without tools. `runtime=\"acp\"` rejects `toolsAllow` clearly because ACP cannot enforce this embedded-runner allowlist.\n\n## Security Impact\n- New permissions/capabilities? `No`\n- Secrets/tokens handling changed? `No`\n- New/changed network calls? `No`\n- Command/tool execution surface changed? `Yes`\n- Data access scope changed? `No`\n\nRisk + mitigation: this only narrows the child tool set for native subagent runs. Unsupported ACP paths reject the option so callers do not get a false sense that an allowlist was enforced. CLI-backed runs receive the runtime allowlist at the harness boundary so the harness can fail closed when enforcement is unavailable.\n\n## Compatibility / Migration\n- Backward compatible? `Yes`\n- Config/env changes? `No`\n- Migration needed? `No`\n\n## Risks and Mitigations\n- Risk: callers may expect `toolsAllow` to affect ACP runtime spawns.\n  - Mitigation: the tool rejects `toolsAllow` for `runtime=\"acp\"` with a clear input error.\n- Risk: callers may expect all CLI harnesses to enforce runtime allowlists.\n  - Mitigation: OpenClaw forwards the allowlist to the CLI harness boundary for fail-closed handling instead of silently dropping it.\n- Risk: public API naming/semantics need maintainer judgment.\n  - Mitigation: the implementation is additive and reuses existing embedded-runner allowlist semantics rather than adding a second filtering mechanism.\n\n\n",
+        "branch": "sessions-spawn-tools-allow-pr2",
+        "head_sha": "8ffac4d1fc59032d23f7a97a2bf1a03752fbb3e6",
+        "author": "guanbear",
+        "labels": [
+          "docs",
+          "app: web-ui",
+          "gateway",
+          "commands",
+          "agents",
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof",
+          "feature: ✨ showcase"
+        ],
+        "files": [
+          {
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/tools/subagents.md",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/gateway-protocol/src/schema/agent.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-command.ts",
+            "additions": 12,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/command/attempt-execution.cli.test.ts",
+            "additions": 52,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts",
+            "additions": 24,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+            "additions": 3,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openclaw-tools.subagents.sessions-spawn.lifecycle.test.ts",
+            "additions": 29,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-spawn.model-session.test.ts",
+            "additions": 33,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-spawn.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/sessions-spawn-tool.test.ts",
+            "additions": 137,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/sessions-spawn-tool.ts",
+            "additions": 35,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/agent.test.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/types.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/agent.test.ts",
+            "additions": 65,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/agent.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/session-entry-slot-keys.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.discord-group.json",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.heartbeat-turn.json",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.telegram-direct.json",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/discord-group-codex-message-tool.md",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-direct-codex-message-tool.md",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-heartbeat-codex-tool.md",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-78441",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-78441.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 135,
+            "SKIPPED": 26,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1981,
+    "total_ms": 6199,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 201
+        "ms": 600
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 849
+        "ms": 2670
       },
       {
         "name": "classify_commands",
@@ -166,7 +287,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 900
+        "ms": 2903
       },
       {
         "name": "append_ledger",
