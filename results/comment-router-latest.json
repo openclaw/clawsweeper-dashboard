@@ -1,19 +1,17 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-08T04:11:05.971Z",
+  "generated_at": "2026-06-08T04:12:37.210Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-08T01:11:04.205Z",
+  "since": "2026-06-08T01:12:34.525Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    89045
+    91318
   ],
-  "comment_ids": [
-    4645364039
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -33,62 +31,146 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:89045:4645364039:2026-06-08T04:09:43Z:re_review",
-      "comment_id": "4645364039",
-      "comment_version_key": "4645364039:2026-06-08T04:09:43Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89045#issuecomment-4645364039",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91318:4645340944:2026-06-08T04:12:31Z:clawsweeper_auto_repair",
+      "comment_id": "4645340944",
+      "comment_version_key": "4645340944:2026-06-08T04:12:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91318#issuecomment-4645340944",
       "repo": "openclaw/openclaw",
-      "issue_number": 89045,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
+      "issue_number": 91318,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-08T04:09:43Z",
-      "comment_updated_at": "2026-06-08T04:09:43Z",
+      "comment_created_at": "2026-06-08T04:06:45Z",
+      "comment_updated_at": "2026-06-08T04:12:31Z",
       "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=8ce745f88de251feb9ceaddf59583ae2343128d6)",
+      "review_summary": "The PR makes cron update patches accept `payload.model: null`, preserves null/empty model clears through normalization, deletes stored model overrides during payload merge, and adds normalize/applyJobPatch tests.\n\nPR surface: Source +15, Tests +80. Total +95 across 6 files.\n\nReproducibility: yes. for source reproduction: current main drops `payload.model: null` during update normalization and then ignores non-string model patches during merge. I did not run a live gateway repro because this was a read-only review.",
+      "review_followup": "- [P1] Needs contributor or maintainer follow-up to fix the patch-scoping regression and add real behavior proof; this should not enter a ClawSweeper repair lane while external PR proof is missing.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "8ce745f88de251feb9ceaddf59583ae2343128d6",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): allow update patches to clear payload.model back to inherit",
+        "body": "## Summary\n\nFixes #91298. The cron `update` action cannot clear `payload.model` back to \"inherit the agent default\". Three patch shapes all silently no-op: `{model: null}`, `{model: \"\"}`, and omitting `model` while patching other fields. By contrast, `toolsAllow` already clears correctly via `null` — so this is a field-level asymmetry, not a design choice.\n\n## Root cause\n\n`toolsAllow` carries a complete clear-on-null contract across all four layers; `model` was missing it at every one:\n\n| Layer | `toolsAllow` (clearable) | `model` (was missing) |\n| --- | --- | --- |\n| gateway-protocol patch schema | `Union([Array, Null])` | `Optional(String)` — no null |\n| `CronAgentTurnPayloadPatch` type | `string[] \\| null` | `string` — no null |\n| `normalize` | `{ allowNull: true }` | dropped null/empty via `delete` |\n| `mergeCronPayload` | `else if (=== null) delete` | only matched `typeof === \"string\"` |\n\nBecause `normalize` deleted the field on null/empty, the clear signal never reached the gateway; and even if it had, the merge step ignored it. The stale override then survived in storage (which already uses field-absence to mean \"inherit\").\n\n## Fix\n\nMirror the existing `toolsAllow` clear semantics for `model`, layer by layer — no new behavior, just parity:\n\n- **gateway-protocol schema**: parameterize `model` so the patch variant accepts `string | null` while create stays non-null.\n- **type**: `model?: string | null` in the patch type.\n- **normalize**: preserve explicit `null`/`\"\"` as a null clear signal instead of dropping it.\n- **merge**: `delete next.model` on a null patch; the kind-switch rebuild path coerces null → undefined (matching `toolsAllow`).\n\nStorage and read-back need no change — a cleared (absent) `model` already inherits the agent default.\n\n## Tests\n\n- normalize: null clear, empty-string clear, non-empty preservation + trim.\n- merge (`applyJobPatch`): clear-on-null, preserve-on-omit, replace-on-new-value.\n\n## Scope note\n\n`fallbacks` has a similar gap (its `[]` clears, but `null` does not). I scoped this PR to `model` as reported. Happy to extend the same parity to `fallbacks`/`thinking` if maintainers prefer a single sweep.\n",
+        "branch": "fix-91298-cron-clear-model",
+        "head_sha": "8ce745f88de251feb9ceaddf59583ae2343128d6",
+        "author": "alkor2000",
+        "labels": [
+          "app: web-ui",
+          "gateway",
+          "size: S",
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "packages/gateway-protocol/src/schema/cron.ts",
+            "additions": 8,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/normalize.test.ts",
+            "additions": 40,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/normalize.ts",
+            "additions": 10,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/jobs.apply-patch.test.ts",
+            "additions": 40,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/jobs.ts",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/types.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-91318",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91318.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 164,
+          "counts": {
+            "CANCELLED": 1,
+            "SUCCESS": 133,
+            "SKIPPED": 29,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 3931,
+    "total_ms": 3004,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1753
+        "ms": 391
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2282
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 2166
+        "ms": 310
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
