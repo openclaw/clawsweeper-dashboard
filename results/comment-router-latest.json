@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-08T06:42:01.670Z",
+  "generated_at": "2026-06-08T06:42:40.539Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-08T03:41:59.564Z",
+  "since": "2026-06-08T03:42:39.954Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,7 +14,7 @@
   "comment_ids": [
     4646075192
   ],
-  "status_comment_id": 4646075528,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-08T06:41:24Z",
       "comment_updated_at": "2026-06-08T06:41:24Z",
-      "status_comment_id": 4646075528,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,446 +61,22 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-08T06:42:02.351Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 91335
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-08T06:42:03.354Z",
-          "response_comment_id": "4646075528",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "write",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(imessage): always-on inbound recovery and dedupe",
-        "body": "## Summary\n\nWhat problem does this PR solve?\n\n- After a bridge/Push recovery, Apple writes the messages that queued during the gap into `chat.db` with fresh ROWIDs but old send dates; `imsg watch` emits them and OpenClaw dispatched them as fresh user requests (#89237, \"backlog bomb\"). Separately, iMessage was the only channel with no inbound replay protection, and messages that arrived while the gateway was down were either lost (catchup off) or recovered by a heavy opt-in subsystem.\n\nWhy does this matter now?\n\n- #89237 is a P1 message-integrity bug. The fix also lets a much smaller, always-on design replace the ~850-LOC opt-in `catchup` subsystem.\n\nWhat is the intended outcome?\n\n- **Persistent claimable GUID dedupe** (`createClaimableDedupe`, the same primitive whatsapp/discord/signal/mattermost/zalo/line/nextcloud-talk use): claim at ingestion, carry the exact claimed key on the debouncer entry, commit on successful flush, release on dispatch failure (per dispatch unit, so a coalesced bucket cannot strand a sibling's claim).\n- **Downtime recovery, rebuilt on the dedupe.** On startup the monitor passes the last dispatched rowid (a persisted per-account cursor) to `imsg watch.subscribe` as `since_rowid`, so imsg replays the rows that landed while the gateway was down, then tails live. The dedupe drops anything already handled, so none of the old cursor/`messages.history`/retry bookkeeping is needed.\n- **Stale-backlog age fence, split on the startup rowid boundary.** Replayed rows (at/below the boundary) use a wide recovery window; genuinely-live rows (above it) use the tight live fence where #89237's Push-flush backlog appears.\n\nWhat is intentionally out of scope?\n\n- The old `chats.list` + `messages.history` catchup mechanism (deleted). Recovery needs local `chat.db` access; over a remote SSH `cliPath` the monitor tails from the current rowid (suppress-and-move-on).\n\nWhat does success look like?\n\n- Missed-during-downtime messages are replayed; the Push-flush backlog is suppressed; duplicates are deduped; **net -710 prod LOC**.\n\nWhat should reviewers focus on?\n\n- The claim/commit/release wiring (per-unit commit so coalesced GUID-less rows cannot leak a claim), the rowid-boundary split of the age fence, and the catchup config retirement + back-compat.\n\n## Linked context\n\nWhich issue does this close?\n\nCloses #89237\n\nWhich issues, PRs, or discussions are related?\n\nRelated #91243 (supersedes the catchup half).\n\nWas this requested by a maintainer or owner?\n\nMaintainer-authored; fixes a `P1` `issue-rating: diamond lobster` report.\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: (a) #89237 stale-backlog suppression on the live path, and (b) recovery of messages missed while the gateway was down.\n- Real environment tested: the patched gateway built from this branch, run from source against real `imsg` 0.11.0 / Messages.app. Empty allowlist so the test gateway sent nothing.\n- Exact steps and evidence (redacted live monitor output):\n  - **#89237 age fence** (real imsg over a remote SSH `cliPath`, the exact setup #89237 was reported on): a real inbound (age ~1.5s) under the 15min fence → `CLAIMED+ENQUEUED` (dispatched); with the fence forced to 1ms the same message → `AGE-FENCE-SUPPRESSED` (no enqueue). The fence gates exactly on send-date age.\n  - **Downtime recovery** (local `imsg`/Messages on the gateway Mac; messages scripted from a second Mac so it is end-to-end):\n    - baseline message → dispatched, recovery cursor persisted at its rowid 127953\n    - gateway stopped; two messages sent while down (chat.db max → 127955)\n    - gateway restarted → `startup cursor(L)=127953 boundary(M)=127955 since_rowid=127953`, then `inbound rowid=127954 recovery=true text=\"DOWNTIME MSG A (sent while gateway down)\" DELIVERED` and `rowid=127955 recovery=true ... MSG B ... DELIVERED`\n- Observed result: both messages sent while the gateway was down were replayed and delivered on restart (`recovery=true`); without the cursor/since_rowid they are skipped by imsg's self-fence. The #89237 backlog (old date, live rowid) is still suppressed.\n- What was not tested: the spontaneous bridge-recovery Push-flush burst is not reproducible on demand; covered by unit tests + imsg source analysis. Remote-cliPath recovery is intentionally not implemented (no local db).\n- Proof limitations: `[PROOF-...]` instrumentation was added only on a throwaway local checkout to capture the traces and has been reverted; no host state was modified.\n\n## Tests and validation\n\nWhich commands did you run?\n\n- `node scripts/run-vitest.mjs extensions/imessage` (537 pass) + config-guard + config-validation\n- `pnpm tsgo:core` / `tsgo:extensions` / `tsgo:extensions:test` / `tsgo:core:test` (clean); `oxlint` / `oxfmt` clean; generated config artifacts + docs format in sync\n\nWhat regression coverage was added or updated?\n\n- `inbound-dedupe.test.ts` (claim/commit/release, retry, in-flight duplicate, composite-key round-trip, age-fence threshold/fail-open), `recovery-cursor.test.ts` (load/advance/monotonic/per-account), `doctor-contract-api.test.ts` (catchup strip), `monitor.last-route.test.ts` (startup since_rowid = cursor, recovery replay delivered vs live old suppressed, stale-vs-fresh). Catchup tests deleted.\n\nWhat failed before this fix, if known?\n\n- Stale backlog dispatched as fresh; no inbound dedupe; missed-during-downtime messages lost unless the opt-in catchup was enabled.\n\n## Risk checklist\n\nDid user-visible behavior change? (`Yes/No`)\n\nYes. Inbound is deduped; the Push-flush backlog is suppressed (logged); downtime recovery is now automatic on local setups (was opt-in catchup).\n\nDid config, environment, or migration behavior change? (`Yes/No`)\n\nYes. `channels.imessage.catchup.*` is retired; existing configs still load (key stripped before validation) and `openclaw doctor --fix` removes it via a new iMessage doctor contract that also reports it.\n\nDid security, auth, secrets, network, or tool execution behavior change? (`Yes/No`)\n\nNo.\n\nWhat is the highest-risk area?\n\nThe catchup config retirement and the claim/commit/release + rowid-boundary recovery wiring.\n\nHow is that risk mitigated?\n\nStrip-before-validation (no load break) + doctor report/migrate; per-unit commit/release and the dual-threshold split are unit-tested; the dedupe backstops cursor imprecision; both behaviors were live-proven on real imsg/Messages.\n\n## Current review state\n\nWhat is the next action?\n\nMaintainer review; Greptile + CI.\n\nWhat is still waiting on author, maintainer, CI, or external proof?\n\nCI + Greptile.\n\nWhich bot or reviewer comments were addressed?\n\nCodex `autoreview` flagged premature replay record, a check-then-record race, a coalesced GUID-less claim leak, and a startup-window message-loss window — all fixed; the branch-level Codex review came back clean.\n",
-        "branch": "fix/imessage-89237-inbound-recovery",
-        "head_sha": "2bf16dc512736a2b5e3c677e3d27d63bae3c61fb",
-        "author": "omarshahine",
-        "labels": [
-          "docs",
-          "channel: imessage",
-          "gateway",
-          "cli",
-          "maintainer",
-          "size: XL",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "docs/.generated/config-baseline.sha256",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/channels/imessage-from-bluebubbles.md",
-            "additions": 16,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/channels/imessage.md",
-            "additions": 12,
-            "deletions": 52,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/gateway/config-channels.md",
-            "additions": 1,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/doctor-contract-api.ts",
-            "additions": 80,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/doctor-contract-api.test.ts",
-            "additions": 52,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor.last-route.test.ts",
-            "additions": 195,
-            "deletions": 353,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/catchup-bridge.test.ts",
-            "additions": 0,
-            "deletions": 434,
-            "changeType": "DELETED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/catchup-bridge.ts",
-            "additions": 0,
-            "deletions": 284,
-            "changeType": "DELETED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/catchup.test.ts",
-            "additions": 0,
-            "deletions": 560,
-            "changeType": "DELETED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/catchup.ts",
-            "additions": 0,
-            "deletions": 566,
-            "changeType": "DELETED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/coalesce.test.ts",
-            "additions": 0,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/coalesce.ts",
-            "additions": 0,
-            "deletions": 21,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/inbound-dedupe.test.ts",
-            "additions": 177,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/inbound-dedupe.ts",
-            "additions": 0,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/monitor-provider.echo-cache.test.ts",
-            "additions": 5,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/monitor-provider.ts",
-            "additions": 173,
-            "deletions": 133,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/persisted-echo-cache.ts",
-            "additions": 6,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/recovery-cursor.test.ts",
-            "additions": 39,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/recovery-cursor.ts",
-            "additions": 49,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/imessage/src/state-migrations.test.ts",
-            "additions": 2,
-            "deletions": 131,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/state-migrations.ts",
-            "additions": 1,
-            "deletions": 161,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/program/config-guard.test.ts",
-            "additions": 0,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/program/config-guard.ts",
-            "additions": 1,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/bundled-channel-config-metadata.generated.ts",
-            "additions": 12,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/validation.ts",
-            "additions": 49,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/zod-schema.providers-core.ts",
-            "additions": 0,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91335",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91335.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 155,
-          "counts": {
-            "FAILURE": 1,
-            "IN_PROGRESS": 96,
-            "SUCCESS": 35,
-            "SKIPPED": 22,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Scan changed paths (precise):FAILURE",
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bundled-protocol:IN_PROGRESS",
-            "Critical Quality (config-boundary):IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "checks-node-core-src-security:IN_PROGRESS",
-            "checks-node-core-ui:IN_PROGRESS",
-            "checks-node-core-support:IN_PROGRESS",
-            "checks-node-core-runtime-infra-approval-exec:IN_PROGRESS",
-            "checks-node-core-runtime-infra-cli-ui:IN_PROGRESS",
-            "checks-node-core-runtime-infra-core-utils:IN_PROGRESS",
-            "checks-node-core-runtime-infra-events-runtime:IN_PROGRESS",
-            "checks-node-core-runtime-infra-file-safety:IN_PROGRESS",
-            "checks-node-core-runtime-infra-files-commands:IN_PROGRESS",
-            "checks-node-core-runtime-infra-gateway-lock-argv:IN_PROGRESS",
-            "checks-node-core-runtime-infra-gateway-watch:IN_PROGRESS",
-            "checks-node-core-runtime-infra-heartbeat-core:IN_PROGRESS",
-            "checks-node-core-runtime-infra-heartbeat-runner:IN_PROGRESS",
-            "checks-node-core-runtime-infra-misc-dedupe-disk:IN_PROGRESS",
-            "checks-node-core-runtime-infra-net-install:IN_PROGRESS",
-            "checks-node-core-runtime-infra-network-platform:IN_PROGRESS",
-            "checks-node-core-runtime-infra-outbound-actions:IN_PROGRESS",
-            "checks-node-core-runtime-infra-storage-state:IN_PROGRESS",
-            "checks-node-core-runtime-infra-system-runtime:IN_PROGRESS",
-            "checks-node-core-runtime-secrets:IN_PROGRESS",
-            "checks-node-core-runtime-infra-process:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-shared:IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-agentic-control-plane-agent-chat:IN_PROGRESS",
-            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-plugin-ws:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-config:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-events:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-server:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-shared-token:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-state:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-ui-tools:IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-core:IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-command-support:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-auth:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-device:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-gateway:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-platform:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-plugins-tools:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-sessions-cron:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-shared:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-whatsapp:IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS",
-            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
-            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
-            "checks-node-agentic-agents-core-auth:IN_PROGRESS",
-            "checks-node-agentic-agents-core-models:IN_PROGRESS",
-            "checks-node-agentic-agents-core-tools:IN_PROGRESS",
-            "checks-node-agentic-agents-core-subagents:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runtime:IN_PROGRESS",
-            "checks-node-agentic-agents-embedded:IN_PROGRESS",
-            "checks-node-agentic-agents-support:IN_PROGRESS",
-            "checks-node-agentic-agents-tools:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
-            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-session:IN_PROGRESS",
-            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (core-auth-secrets):IN_PROGRESS",
-            "Security High (channel-runtime-boundary):IN_PROGRESS",
-            "Security High (network-ssrf-boundary):IN_PROGRESS",
-            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bundled-protocol:IN_PROGRESS",
-            "Critical Quality (config-boundary):IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "checks-node-core-src-security:IN_PROGRESS",
-            "checks-node-core-ui:IN_PROGRESS",
-            "checks-node-core-support:IN_PROGRESS",
-            "checks-node-core-runtime-infra-approval-exec:IN_PROGRESS",
-            "checks-node-core-runtime-infra-cli-ui:IN_PROGRESS",
-            "checks-node-core-runtime-infra-core-utils:IN_PROGRESS",
-            "checks-node-core-runtime-infra-events-runtime:IN_PROGRESS",
-            "checks-node-core-runtime-infra-file-safety:IN_PROGRESS",
-            "checks-node-core-runtime-infra-files-commands:IN_PROGRESS",
-            "checks-node-core-runtime-infra-gateway-lock-argv:IN_PROGRESS",
-            "checks-node-core-runtime-infra-gateway-watch:IN_PROGRESS",
-            "checks-node-core-runtime-infra-heartbeat-core:IN_PROGRESS",
-            "checks-node-core-runtime-infra-heartbeat-runner:IN_PROGRESS",
-            "checks-node-core-runtime-infra-misc-dedupe-disk:IN_PROGRESS",
-            "checks-node-core-runtime-infra-net-install:IN_PROGRESS",
-            "checks-node-core-runtime-infra-network-platform:IN_PROGRESS",
-            "checks-node-core-runtime-infra-outbound-actions:IN_PROGRESS",
-            "checks-node-core-runtime-infra-storage-state:IN_PROGRESS",
-            "checks-node-core-runtime-infra-system-runtime:IN_PROGRESS",
-            "checks-node-core-runtime-secrets:IN_PROGRESS",
-            "checks-node-core-runtime-infra-process:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-shared:IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-agentic-control-plane-agent-chat:IN_PROGRESS",
-            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-plugin-ws:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-config:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-events:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-server:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-shared-token:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-state:IN_PROGRESS",
-            "checks-node-agentic-control-plane-runtime-ui-tools:IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-core:IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-health-runtime:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-command-support:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-auth:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-device:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-gateway:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-platform:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-plugins-tools:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-sessions-cron:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-shared:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-whatsapp:IN_PROGRESS",
-            "checks-node-agentic-commands-models:IN_PROGRESS",
-            "checks-node-agentic-commands-onboard-config:IN_PROGRESS",
-            "checks-node-agentic-commands-status-tools:IN_PROGRESS",
-            "checks-node-agentic-agents-core-auth:IN_PROGRESS",
-            "checks-node-agentic-agents-core-models:IN_PROGRESS",
-            "checks-node-agentic-agents-core-tools:IN_PROGRESS",
-            "checks-node-agentic-agents-core-subagents:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runtime:IN_PROGRESS",
-            "checks-node-agentic-agents-embedded:IN_PROGRESS",
-            "checks-node-agentic-agents-support:IN_PROGRESS",
-            "checks-node-agentic-agents-tools:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
-            "checks-node-auto-reply-core-top-level:IN_PROGRESS",
-            "checks-node-auto-reply-reply-agent-runner:IN_PROGRESS",
-            "checks-node-auto-reply-reply-commands:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "checks-node-auto-reply-reply-session:IN_PROGRESS",
-            "checks-node-auto-reply-reply-state-routing:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "Scan changed paths (precise):FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": true,
-      "author_readonly_authorized": false
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 4316,
+    "total_ms": 1924,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 509
+        "ms": 572
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1582
+        "ms": 0
       },
       {
         "name": "classify_commands",
@@ -508,7 +84,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2200
+        "ms": 1339
       },
       {
         "name": "append_ledger",
