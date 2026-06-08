@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-08T11:50:51.273Z",
+  "generated_at": "2026-06-08T11:51:34.814Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-08T08:50:49.596Z",
+  "since": "2026-06-08T08:51:34.127Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4648681051
   ],
-  "status_comment_id": 4648681378,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "NONE",
       "comment_created_at": "2026-06-08T11:50:15Z",
       "comment_updated_at": "2026-06-08T11:50:15Z",
-      "status_comment_id": 4648681378,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,129 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-08T11:50:52.045Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 91361
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-08T11:50:53.089Z",
-          "response_comment_id": "4648681378",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(compaction): lower default timeout and cap max at 600s",
-        "body": "## Summary\n\nFixes #91358: large-session compaction no longer holds the session write lock for up to 17 minutes by default.\n\n- Lowers the default compaction safety timeout from 900s (15 min) to 180s (3 min).\n- Caps explicit `agents.defaults.compaction.timeoutSeconds` at 600s (10 min) at runtime.\n- Updates help text and public docs to reflect the new default and cap.\n\nWith the previous default, `resolveSessionLockMaxHoldFromTimeout` produced a lock max-hold of 1,020,000ms (17 min), which guaranteed that any client with the default 60s acquire timeout would fail repeatedly while a large-session compaction ran. With the new default, max-hold becomes 300,000ms (5 min), and explicit user values are bounded so the lock cannot grow arbitrarily large.\n\n## Changes\n\n- `src/agents/embedded-agent-runner/compaction-safety-timeout.ts`\n  - `EMBEDDED_COMPACTION_TIMEOUT_MS`: `900_000` → `180_000`.\n  - Adds `MAX_COMPACTION_TIMEOUT_SECONDS = 600`.\n  - `resolveCompactionTimeoutMs` clamps finite positive configured values to the max before converting to milliseconds; non-finite / non-positive values still fall back to the default.\n\n- `src/config/zod-schema.agent-defaults.ts`\n  - Keeps schema accepting positive integers so existing configs above 600 load successfully; runtime clamping enforces the cap.\n\n- `src/config/schema.help.ts`\n  - Updates help text: `(default: 900)` → `(default: 180, max: 600)`.\n\n- `docs/gateway/config-agents.md`\n  - Updates compaction `timeoutSeconds` docs: default `180`, runtime cap `600`.\n\n- `src/agents/embedded-agent-runner.compaction-safety-timeout.test.ts`\n  - Adjusts conversion test to use a value under the cap.\n  - Adds regression test asserting values above 600 are clamped.\n\n## Verification\n\n```bash\npnpm test src/agents/embedded-agent-runner.compaction-safety-timeout.test.ts\n# 22 passed\n\npnpm test src/agents/session-write-lock.test.ts\n# 53 passed\n\nnpx oxlint --import-plugin --config .oxlintrc.json   src/agents/embedded-agent-runner/compaction-safety-timeout.ts   src/agents/embedded-agent-runner.compaction-safety-timeout.test.ts   src/config/zod-schema.agent-defaults.ts   src/config/schema.help.ts   docs/gateway/config-agents.md\n# clean\n```\n\n## Real behavior proof\n\n**Behavior or issue addressed:** The default embedded compaction safety timeout was 900s, which combined with the 120s session write-lock grace produced a ~17-minute lock max-hold. Large-session compactions blocked all other clients with default 60s acquire timeouts for an unbounded duration.\n\n**Real environment tested:** Local OpenClaw source checkout at commit `0cce622df1` on Node v22.22.0, running the actual runtime resolver (not a unit-test wrapper).\n\n**Exact steps or command run after this patch:**\n\n```bash\npnpm exec tsx scripts/repro/91361-compaction-timeout-proof.mjs\n```\n\nScript content: `scripts/repro/91361-compaction-timeout-proof.mjs`\n\n**Evidence after fix:**\n\n```\n=== PR #91361 Compaction timeout proof ===\n\nDefault timeout (no config): 180000 ms\nExpected: 180000 ms (180 seconds)\n\nConfigured 120s -> 120000 ms (expected: 120000 ms)\nConfigured 600s -> 600000 ms (expected: 600000 ms)\nConfigured 900s -> 600000 ms (expected: 600000 ms, clamped)\n\nOld default would have been: 600000 ms (now clamped to 600000 ms)\n\nPASS: timeout default and runtime cap work as intended.\n```\n\n**Observed result after fix:**\n- Unconfigured installs now resolve to `180_000ms` (3 min) instead of `900_000ms` (15 min).\n- `timeoutSeconds: 120` is preserved as `120_000ms`.\n- `timeoutSeconds: 900` is clamped to `600_000ms` (10 min) at runtime.\n- Combined with the existing `120_000ms` lock grace, the session write-lock max-hold drops from ~17 min to ~5 min by default, and is hard-capped at ~12 min even for explicit oversized configs.\n\n**What was not tested:** A live 10–16MB session compaction run end-to-end; this proof exercises the exact runtime resolver that determines the compaction timeout used during real session compactions.\n\nCloses #91358\n",
-        "branch": "fix/91358-compaction-timeout",
-        "head_sha": "99dba24c3a1934912431d363a80b36da33b7522d",
-        "author": "wangmiao0668000666",
-        "labels": [
-          "docs",
-          "gateway",
-          "agents",
-          "size: XS",
-          "proof: supplied",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "docs/gateway/config-agents.md",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner.compaction-safety-timeout.test.ts",
-            "additions": 9,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/compaction-safety-timeout.ts",
-            "additions": 9,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/schema.help.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/types.agent-defaults.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91361",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91361.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 9,
-          "counts": {
-            "CANCELLED": 1,
-            "SKIPPED": 4,
-            "SUCCESS": 4
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4068,
+    "total_ms": 2782,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 499
+        "ms": 674
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1165
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2375
+        "ms": 2096
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
