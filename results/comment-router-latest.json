@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-08T21:01:48.174Z",
+  "generated_at": "2026-06-08T21:02:28.757Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-08T18:01:45.483Z",
+  "since": "2026-06-08T18:02:27.872Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     90759
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4635671394
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -61,139 +63,28 @@
       "finding_id": "review-feedback",
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix #76888: [Bug]: Queued/orphaned user-message merge can produce stale reply",
-        "body": "## Summary\n\nWhat problem does this PR solve?\n\nFixes #76888, where a channel-backed embedded-agent session can leave an older queued user message on the active branch and then process a newer user prompt. If the older turn is still treated as an active user instruction, the model can answer the stale turn and the user sees a stale visible reply.\n\nRoot cause: orphan repair only checked the current session leaf. Real runs can append non-message metadata entries such as thinking/model snapshots after the orphaned user message before prompt submission, so the actual orphaned user message was hidden behind metadata and the repair did not run.\n\nWhy does this matter now?\n\nThe issue is P1 session-state/message-loss behavior: the prompt shown to the model and the reply delivered to the user can disagree about which user turn is active. This is especially confusing in channel-backed sessions because the user only sees the final visible reply, not the queued/orphan merge state.\n\nWhat is the intended outcome?\n\nFix classification: root-cause fix. The embedded runner now finds the trailing message entry for orphan repair by looking past non-message session metadata that does not participate in LLM context, merges the older user text as context-only prompt material, branches away from that orphan, and keeps the already-sanitized active session messages for the provider call.\n\nWhat is intentionally out of scope?\n\nOut of scope: queue semantics, Discord transport behavior, provider routing, model selection, public config/schema/protocol changes, API keys/auth, storage format migrations, and any broad rewrite of session persistence. This PR also does not change how live Discord messages are sent; it fixes the embedded-agent/session/provider boundary that decides which prompt the model should answer.\n\nRelated PR scan / canonical scope: this is an update to the existing PR for #76888, and the current daily-fix PR diagnosis resolved the linked issue to #76888 without unresolved issue references. The canonical owner boundary stays in the embedded runner/session repair path rather than downstream reply text filtering.\n\nWhat does success look like?\n\nA provider-backed embedded run with an orphaned old user leaf plus a newer active channel prompt records `prompt:before` with the queued-context marker, the old turn, and then the latest turn; the visible reply contains the latest target and excludes the old target.\n\nWhat should reviewers focus on?\n\nReview whether the metadata-skipping rule only skips non-message entries that do not contribute LLM content, whether branching away from the orphan preserves the intended active session history, and whether the prompt marker wording is acceptable as the runtime contract.\n\n## Linked context\n\nCloses #76888\n\nRelated: ClawSweeper review on this PR requested stronger proof that the change reaches the embedded-agent/model-input boundary, not only the prompt helper.\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: In a channel-backed embedded-agent run, an older orphaned queued user leaf can sit behind later session metadata and then be followed by a newer active user prompt. The fixed behavior must merge the older text as prior-turn context, remove it from the active session leaf path, and make the provider-visible answer target the later active prompt.\n- Real environment tested: Production `runEmbeddedAgent` with `agent_harness=openclaw`, `messageChannel:discord`, `messageProvider:discord`, `trigger:user`, a real JSONL session seeded with a completed setup turn plus an orphaned queued user leaf, tools disabled, cache trace enabled, and a configured OpenAI-compatible provider. Provider/base URL details are redacted; no API keys or private channel identifiers are included here.\n- Exact steps or command run after this patch: `daily_fix run-validation --name live-orphaned-user-proof-local-provider -- node --import tsx <redacted proof runner>`\n- Evidence after fix (screenshot, recording, terminal capture, console output, redacted runtime log, linked artifact, or copied live output):\n\n  ```text\n  Validation `live-orphaned-user-proof-local-provider` (pass, exit_code=0, 232638ms):\n\n  [live-proof] issue 76888 orphaned queued user live proof: still running (213s)\n  [agent/embedded] [trace:embedded-run] startup stages: runId=issue-76888-live-proof sessionId=issue-76888-live-proof phase=attempt-dispatch ...\n  [agent/embedded] [trace:embedded-run] prep stages: runId=issue-76888-live-proof sessionId=issue-76888-live-proof phase=stream-ready ...\n  [agent/embedded] Merged and removed orphaned user message to prevent consecutive user turns. runId=issue-76888-live-proof sessionId=issue-76888-live-proof trigger=user\n  [live-proof] issue 76888 orphaned queued user live proof: completed (221s)\n  runtime=production runEmbeddedAgent\n  agent_harness=openclaw\n  channel_metadata=messageChannel:discord messageProvider:discord trigger:user\n  provider_model=[redacted configured OpenAI-compatible provider]\n  seeded_orphan_leaf=[redacted] role=user contains=OLD_TURN_TARGET_76888\n  active_prompt_contains=LATEST_TURN_TARGET_76888\n  model_prompt_trace=prompt:before\n  prompt_trace_count=1\n  prompt_trace_match_index=0\n  model_prompt_order=queued-context-marker -> OLD_TURN_76888 -> LATEST_TURN_76888\n  visible_reply=LATEST_TURN_TARGET_76888\n  assert_latest_target_present=true\n  assert_old_target_absent=true\n  post_run_leaf_role=assistant\n  payload_count=1\n  ```\n\n- Observed result after fix: The production embedded runner emitted the orphan repair log, the provider-before prompt trace contained the queued-context marker followed by the older orphaned turn and then the newer active turn, and the provider-backed visible reply was exactly `LATEST_TURN_TARGET_76888` without `OLD_TURN_TARGET_76888`.\n- What was not tested: I did not send an actual Discord message through the live Discord transport, and I did not reproduce the original stochastic production stale reply end-to-end. The proof uses the production embedded runner with Discord channel metadata and a real configured provider, but the session fixture and proof runner are local and deterministic.\n- Proof limitations or environment constraints: Provider identity and local configuration are redacted. This proof covers the embedded-agent/session/provider boundary that decides which user turn is answered; external Discord delivery remains outside this local validation.\n- Before evidence (optional but encouraged): The linked issue includes sanitized production evidence where `prompt.submitted` was the latest user instruction but the visible assistant output answered an earlier user message after an orphaned user-message merge.\n\n## Tests and validation\n\nWhich commands did you run?\n\n```text\ndaily_fix run-validation --name live-orphaned-user-proof-local-provider -- node --import tsx <redacted proof runner>\nnode scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts --project agents-embedded-agent -t \"repairs an orphaned user message behind non-message session metadata before the provider\" --hookTimeout=300000\nnode scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts --project agents-embedded-agent -t \"targets the latest active prompt after orphan repair reaches the embedded provider\" --hookTimeout=300000\n```\n\nEvidence:\n\n```text\nValidation `live-orphaned-user-proof-local-provider` (pass, exit_code=0, 232638ms):\n\n[agent/embedded] Merged and removed orphaned user message to prevent consecutive user turns. runId=issue-76888-live-proof sessionId=issue-76888-live-proof trigger=user\nruntime=production runEmbeddedAgent\nagent_harness=openclaw\nchannel_metadata=messageChannel:discord messageProvider:discord trigger:user\nmodel_prompt_trace=prompt:before\nprompt_trace_count=1\nprompt_trace_match_index=0\nmodel_prompt_order=queued-context-marker -> OLD_TURN_76888 -> LATEST_TURN_76888\nvisible_reply=LATEST_TURN_TARGET_76888\nassert_latest_target_present=true\nassert_old_target_absent=true\npost_run_leaf_role=assistant\npayload_count=1\n\nValidation `non-message-leaf-orphan-green-2` (pass, exit_code=0, 376554ms):\n\n RUN  v4.1.7 [local path redacted]\n\n Test Files  1 passed (1)\n      Tests  1 passed | 58 skipped (59)\n   Start at  04:31:20\n   Duration  94.81s (transform 4.98s, setup 292ms, import 8.91s, tests 85.37s, environment 0ms)\n\nValidation `latest-active-prompt-provider-seam` (pass, exit_code=0, 377348ms):\n\n RUN  v4.1.7 [local path redacted]\n\n Test Files  1 passed (1)\n      Tests  1 passed | 58 skipped (59)\n   Start at  04:37:33\n   Duration  99.77s (transform 4.99s, setup 324ms, import 9.34s, tests 89.84s, environment 0ms)\n```\n\nWhat regression coverage was added or updated?\n\n- Added embedded-runner/context-engine coverage for the real failure shape where a non-message session metadata leaf sits after the orphaned user message, so direct `getLeafEntry()` no longer hides the orphan from repair.\n- Kept the provider-seam coverage proving that the repaired prompt reaches the session/provider boundary and that the answer target remains the latest active prompt.\n- Existing helper, merge strategy, and plugin SDK runtime-contract coverage continue to pin the shared queued-user marker and merge behavior.\n\nWhat failed before this fix, if known?\n\n- Before the final repair, the production live proof loaded the orphaned user message in session history but the provider-before prompt trace still contained only the latest active prompt; the orphan was hidden behind session metadata and was not merged into the repaired prompt.\n\nIf no test was added, why not?\n\n- Tests were added.\n\n## Risk checklist\n\nDid user-visible behavior change? (`Yes/No`)\n\nYes. When an active channel prompt follows an orphaned queued user turn, the older turn is now explicitly preserved as context only and the latest active prompt remains the answer target, even if session metadata was appended after the orphan.\n\nDid config, environment, or migration behavior change? (`Yes/No`)\n\nNo.\n\nDid security, auth, secrets, network, or tool execution behavior change? (`Yes/No`)\n\nNo.\n\nWhat is the highest-risk area?\n\nEmbedded-runner session-state/prompt-shape compatibility for orphaned queued user repair.\n\nHow is that risk mitigated?\n\nThe change does not drop user text, alter channel/provider routing, or change storage format. It only looks past non-message metadata entries that do not participate in LLM context, branches away from the orphaned user entry, and keeps the already-sanitized active session messages instead of rebuilding raw transcript messages.\n\nPatch-quality notes: the `return undefined` path is a defensive stop for malformed/cyclic session ancestry while walking parent entries, so the runner refuses to repair rather than guessing. The `return false` path in content comparison is also conservative: if message content cannot be serialized for an exact match, the runner does not remove any active-session message. The SDK runtime-contract helper touched in this PR mirrors the shared marker text; it is not a public config/schema/protocol change, and the model-consumed source-of-truth path is the production embedded runner repair.\n\n## Current review state\n\nWhat is the next action?\n\nReady for maintainer review.\n\nWhat is still waiting on author, maintainer, CI, or external proof?\n\n- Maintainer still needs to accept the prompt wording and SDK contract marker change.\n- CI should rerun on the updated head after submit.\n- A live Discord transport replay was not run; local validation covers the production embedded-runner/session/provider boundary with Discord channel metadata.\n\nWhich bot or reviewer comments were addressed?\n\n- RF-002: Addressed with provider-boundary evidence showing older queued text is context-only while the latest prompt is the provider-visible answer target.\n- RF-003: Addressed by keeping the repo-local SDK runtime-contract marker aligned and preserving helper/contract coverage.\n- RF-004: Addressed with production `runEmbeddedAgent` proof using a real configured provider and a channel-backed session fixture.\n- RF-001: Disclosed as maintainer acceptance still needed for prompt wording and SDK marker compatibility.\n",
-        "branch": "feat/issue-76888",
-        "head_sha": "70280c22bb0e9dbe70907d3f9d473eff0296650c",
-        "author": "zhangguiping-xydt",
-        "labels": [
-          "agents",
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.prompt-helpers.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts",
-            "additions": 119,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.test-support.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.test.ts",
-            "additions": 4,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 66,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/message-merge-strategy.test.ts",
-            "additions": 7,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/test-helpers/agents/transcript-repair-runtime-contract.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90759",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90759.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 164,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 28,
-            "SUCCESS": 123,
-            "FAILURE": 10,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "build-artifacts:FAILURE",
-            "check-guards:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-dependencies:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-boundaries-bcd:FAILURE",
-            "check-additional-extension-channels:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "build-artifacts:FAILURE",
-            "check-guards:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-dependencies:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-boundaries-bcd:FAILURE",
-            "check-additional-extension-channels:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2962,
+    "total_ms": 1876,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 305
+        "ms": 873
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2370
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 260
+        "ms": 992
       },
       {
         "name": "append_ledger",
