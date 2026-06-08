@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-08T08:55:07.845Z",
-  "repo": "steipete/CodexBar",
+  "generated_at": "2026-06-08T08:55:18.320Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-08T05:55:06.464Z",
+  "since": "2026-06-08T05:55:17.806Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -12,9 +12,9 @@
     1351
   ],
   "comment_ids": [
-    4646954044
+    4646886598
   ],
-  "status_comment_id": 4646954323,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -59,123 +59,36 @@
       "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-08T08:55:08.519Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 1351
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-08T08:55:09.538Z",
-          "response_comment_id": "4646954323",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "perf: cut menu readiness signature cost on store changes",
-        "body": "## Summary\n\nTargets the popup-menu lag reported in #1321. Multiple users confirmed the lag appeared in the 0.32 series and that downgrading to 0.31.0 restores responsiveness, so this focuses on a 0.32-era main-thread regression that still exists on `main`.\n\nThe menu *readiness signature* (`menuAdjunctReadinessSignature()`) serializes every enabled provider's token snapshot plus its 30-day daily breakdown (and the OpenAI dashboard per-service breakdown) into a string on **every** store mutation, via `observeStoreChanges`. This runs on the main actor on each background refresh tick and scales with provider/account count.\n\nThree changes:\n\n- **Skip the signature entirely when no menu is open.** `observeStoreChanges` always computed `didMenuAdjunctReadinessChange()` to pass as `refreshOpenMenus`, but `invalidateMenus` only consults that argument while a menu is open. When the menu is closed (the common case during background refresh) the result was computed and discarded.\n- **Re-anchor the baseline when a root menu opens and actually shows current data (correctness for the skip).** Because the baseline is no longer recomputed on every closed-menu store change, it can drift from live store data. Without re-anchoring, a menu reopened from new data followed by an open-menu change that *reverts* to the previous baseline value would compare equal and skip the rebuild, leaving stale content visible. The baseline is now resynced when a **root** menu opens **and** `!menuNeedsRefresh(menu)` after `refreshMenuForOpenIfNeeded` — i.e. the menu was rebuilt or was already fresh for the current `menuContentVersion`. If an in-flight provider refresh causes `refreshMenuForOpenIfNeeded` to preserve stale content, resync is skipped so the refresh-completion update is not masked. Nested submenu opens intentionally do **not** resync, so a pending parent refresh can't be masked. Thanks to @clawsweeper for catching both the original drift case and the in-flight stale-preservation case.\n- **Make the signature cheaper.** Replace `String(format: \"%.8f\", …)` (a hot per-value cost run for every daily/service value of every provider) with the raw `Double` bit pattern. The signature is only ever compared for equality against the previous signature, so the bit pattern is both exact (no rounding collisions) and far cheaper. This also helps while a menu *is* open, where the signature is recomputed on each tick.\n\nNet effect: less main-thread work both at idle (closed) and during interaction (open), which is the responsiveness path that regressed in 0.32.\n\n## Proof\n\n**Real app — freshly built ad-hoc bundle of this branch, 7 providers enabled** (codex, claude, cursor, gemini, antigravity, minimax, deepseek), `refreshFrequency = oneMinute`, menu **closed**. A 65 s `sample` of the running `CodexBar` process — spanning at least one background refresh tick — shows the menu signature/rebuild path never lands on the main thread:\n\n```\n$ sample CodexBar 65\n# grep across ALL threads:\nmenuAdjunctReadinessSignature | formatDoubleForSignature | populateMenu\n  | updateMenuContentPreservingSwitcher | sizeThatFits  -> 0 hits\nobserveStoreChanges | invalidateMenus                   -> 0 hits\n\nmain thread: 54126/54126 samples parked in App.main -> __CFRunLoopRun -> mach_msg\nidle CPU: ~0.3%\n```\n\nSo with a multi-provider setup and the menu closed, the readiness/rebuild work is no longer a sustained main-thread cost. (Honest caveat: `sample` is 1 ms-coarse and a single per-tick signature call is ~tens of µs, so this demonstrates the path is not a sustained closed-path cost rather than a precise per-call delta; and I could not automate the menu-*open* capture on this machine — no Accessibility grant / Peekaboo.)\n\n**Runtime cost of the work skipped when closed**, measured on the real `menuAdjunctReadinessSignature()` with a realistic multi-provider store (4 providers, each with a 30-day token daily breakdown, 5000 calls, warm):\n\n```\nmenuAdjunctReadinessSignature(): 0.391s / 5000 = ~78 us/call\n```\n\nThat full ~78 µs call ran on the main actor on **every** store mutation pre-fix, even with all menus closed (i.e. on each background refresh tick). It now runs only when a menu is actually open, and the cost grows with enabled providers/accounts.\n\n**Why the per-call cost itself also dropped — signature double-formatting micro-benchmark** (`swiftc -O`, 60 doubles/iter × 200k iters):\n\n```\nold(%.8f):       10.799s\nnew(bitPattern):  1.166s\nspeedup: 9.3x\n```\n\n**Regression tests are negative-validated.**\n\n`reopening root menu resyncs readiness baseline so reverted store data still refreshes` — fails when resync is disabled, passes with it:\n\n```\n# resync disabled:\n✘ Expectation failed: controller.didMenuAdjunctReadinessChange()\n# resync enabled:\n✔ Test \"reopening root menu resyncs readiness baseline …\" passed\n```\n\n`root open during in flight refresh preserves stale content and does not resync baseline` — fails when baseline resync is unconditional on root open, passes when gated on `!menuNeedsRefresh(menu)`:\n\n```\n# unconditional resync on root open:\n✘ Expectation failed: controller.didMenuAdjunctReadinessChange()\n# gated resync (only when menu is fresh):\n✔ Test \"root open during in flight refresh …\" passed\n```\n\n## Test plan\n\n- [x] `swift build`\n- [x] `make check` (SwiftFormat + SwiftLint, 0 violations, 1018 files)\n- [x] `swift test --filter StatusMenuTests` — includes existing open-menu refresh coverage plus both baseline-resync regression tests (closed reopen revert + in-flight stale preservation)\n- [x] Negative validation of both regression tests (each fails without its respective fix)\n- [x] Runtime measurement of the skipped signature call + the formatting speedup (see Proof)\n- [x] Real-app 65 s `sample`, 7 providers, menu closed — no main-thread signature/rebuild churn (see Proof)\n- [ ] Maintainer/reporter confirmation of menu-*open* responsiveness on a multi-account machine (couldn't automate menu-open locally)\n\n## Notes / follow-ups (not in this PR)\n\n- Chart submenus still `removeAllItems` + rebuild their `NSHostingView` when underlying data changes; gating that on a per-provider content fingerprint is a possible follow-up (overlaps active menu-card-height work).\n- The multi-account \"freeze on open\" reports appear largely mitigated on current `main` by the recent Codex token-scan budget commits.\n\nMade with [Cursor](https://cursor.com)\n",
-        "branch": "perf/menu-readiness-signature",
-        "head_sha": "37c8e8c82ee239643de940d0f489efe5662c869c",
-        "author": "yuxin-qiao",
-        "labels": [
-          "rating: 🧂 unranked krab",
-          "P2",
-          "proof: sufficient",
-          "status: ⏳ waiting on author",
-          "merge-risk: 🚨 availability"
-        ],
-        "files": [
-          {
-            "path": "Sources/CodexBar/StatusItemController+Menu.swift",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Sources/CodexBar/StatusItemController+MenuRefreshScheduling.swift",
-            "additions": 19,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Sources/CodexBar/StatusItemController.swift",
-            "additions": 8,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Tests/CodexBarTests/StatusMenuReadinessBaselineTests.swift",
-            "additions": 163,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-steipete-codexbar-1351",
-        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1351.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 4,
-          "counts": {
-            "IN_PROGRESS": 3,
-            "SUCCESS": 1
-          },
-          "blockers": [
-            "lint-build-test:IN_PROGRESS",
-            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
-            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
-          ],
-          "pending": [
-            "lint-build-test:IN_PROGRESS",
-            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
-            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
-          ],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "expected_head_sha": "422a8eeae6e8fd2f022d2ef622e99baf1a111b6e",
+      "finding_id": "review-feedback",
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3574,
+    "total_ms": 1023,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 510
+        "ms": 502
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 854
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 2182
+        "ms": 509
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
