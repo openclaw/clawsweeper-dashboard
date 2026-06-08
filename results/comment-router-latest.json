@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-08T08:57:35.024Z",
+  "generated_at": "2026-06-08T08:57:38.826Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-08T05:57:31.921Z",
+  "since": "2026-06-08T05:57:36.874Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    91371
+    91366
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91371:4646930726:2026-06-08T08:57:24Z:clawsweeper_needs_human",
-      "comment_id": "4646930726",
-      "comment_version_key": "4646930726:2026-06-08T08:57:24Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/91371#issuecomment-4646930726",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91366:4646873920:2026-06-08T08:57:33Z:clawsweeper_auto_repair",
+      "comment_id": "4646873920",
+      "comment_version_key": "4646873920:2026-06-08T08:57:33Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91366#issuecomment-4646873920",
       "repo": "openclaw/openclaw",
-      "issue_number": 91371,
+      "issue_number": 91366,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-08T08:51:18Z",
-      "comment_updated_at": "2026-06-08T08:57:24Z",
+      "comment_created_at": "2026-06-08T08:43:06Z",
+      "comment_updated_at": "2026-06-08T08:57:33Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -52,76 +52,95 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=01b99d63330104c7681c8100fa1f5efc34a8bc71)",
-      "review_summary": null,
-      "review_followup": null,
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=04c711e9fd9abeb28feaef2a8a8f8483ead12a24)",
+      "review_summary": "The branch changes yielded exec result wording and adds heartbeat prompt detection/tests for retained background exec sessions.\n\nPR surface: Source +33, Tests +56. Total +89 across 3 files.\n\nReproducibility: yes. source inspection gives a high-confidence reproduction path: local background exec completion events are emitted as `Exec completed/failed (...)`, then current heartbeat prompt selection falls through to the existing HEARTBEAT_OK or relay prompt.",
+      "review_followup": "- [P1] Needs contributor or maintainer follow-up for blocking code findings plus real behavior proof; ClawSweeper should not take over while contributor proof is still missing.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "01b99d63330104c7681c8100fa1f5efc34a8bc71",
+      "expected_head_sha": "04c711e9fd9abeb28feaef2a8a8f8483ead12a24",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(sessions): append new entry when file exists in persist() no-assistant guard (fixes #89206)",
-        "body": "## Summary\n\nFix the session persist path so resuming a `header + user-only` file no longer triggers a full in-memory buffer rewrite on the next assistant entry. The change is a narrow guard in `persist()` that appends the new entry immediately when the file already exists, keeping the `flushed` invariant true.\n\n**Scope**: 1 source file (`session-manager.ts`), 1 test file\n**Changes**: `src/agents/sessions/session-manager.ts` (+10/-2), `session-manager.test.ts` (+73)\n\n## Root Cause\n\n`persist()` has a `no-assistant` guard that sets `flushed = false` for all call paths, deferring the first disk write until an assistant entry arrives. Prior commit 2c48dd2277 swapped `appendJsonlEntriesSync` for `writeJsonlEntriesSync` in the `!flushed` branch to avoid appending a duplicate header, but the root cause — the unnecessary reset of the flushed invariant — remained.\n\nWhen `setSessionFile` loads an existing file (resume / corrupt-header recovery), the file already contains a session header on disk. Resetting `flushed = false` on the next user-only turn means the assistant-triggered `persist()` will rewrite the entire in-memory buffer (header included) over the existing file. The overwrite is safe with `writeFileSync` today but is fragile: if the write strategy changes back to append for performance, the duplicate-header bug returns.\n\nThe fix checks `existsSync(this.sessionFile)`: when the file already exists, the header is already on disk so we can safely `appendJsonlEntrySync` the new entry immediately and keep `flushed = true`. Only when the file does not exist (newSession path) do we defer to the assistant arrival so the header is written first.\n\n### Violated invariant\n\n`flushed` tracks whether the on-disk session file matches `fileEntries`. The `no-assistant` guard breaks this invariant when the file already exists on disk by marking it out of sync even though the only change is a new entry that could have been appended.\n\n### Code path\n\n`setSessionFile()` (resume/recovery) → `flushed = true` →\n`appendMessage(user)` → `appendEntry()` → `persist()` →\n`!hasAssistant` → `flushed = false` (BUG: file already on disk) →\n`appendMessage(assistant)` → `!flushed` → `writeJsonlEntriesSync(fullBuffer)`\n\n## Verification\n\n```\npnpm build  # passed\npnpm test src/agents/sessions/session-manager.test.ts  # 3 tests passed\npnpm test src/agents/sessions/session-manager.test.ts src/agents/sessions/auth-storage.test.ts src/agents/sessions/sdk.test.ts  # 11 tests passed (3 files)\n```\n\n## Real Behavior Proof\n\n**Behavior or issue addressed**: Session persist was rewriting the full in-memory buffer on the next assistant entry after a resume/recovery path, risking duplicate headers if the write strategy changed. Now new entries are appended immediately when the file already exists, preserving the flushed invariant.\n\n**Real environment tested**: Ubuntu 24.04, Node v22.22.0, OpenClaw main @ fc6400ede3\n\n**Exact steps or command run after this patch**:\n1. `pnpm build` — project compiles cleanly\n2. `pnpm test src/agents/sessions/session-manager.test.ts` — 3 tests pass including the new `\"does not duplicate header or user turn when resuming a header+user-only file\"` regression test\n3. `pnpm test src/agents/sessions/session-manager.test.ts src/agents/sessions/auth-storage.test.ts src/agents/sessions/sdk.test.ts` — 11 tests pass across 3 session test files\n\n**Evidence after fix**:\n- Test file: [src/agents/sessions/session-manager.test.ts](https://github.com/openclaw/openclaw/blob/fix/issue-89206-persist-flush-resume/src/agents/sessions/session-manager.test.ts) — new test at L80–L146 covers Case 2 (resume header+user-only file)\n- Source fix: [src/agents/sessions/session-manager.ts](https://github.com/openclaw/openclaw/blob/fix/issue-89206-persist-flush-resume/src/agents/sessions/session-manager.ts) — `persist()` L904–L916\n- Regression test output:\n```\nTest Files  3 passed (3)\n     Tests  11 passed (11)\n```\n\n**Observed result after fix**: All 3 session-manager tests pass, including the new regression test for Case 2. The `persist()` method now correctly appends new entries when the file already exists and keeps `flushed = true`, eliminating the need for a full buffer rewrite that could duplicate entries.\n\n**What was not tested**: Long-running session with many user-then-assistant cycles across multiple resume/restart boundaries; concurrent write scenarios (single-process assumption unchanged).\n\n## Review Findings Addressed\n\nN/A — this is a new PR targeting an open issue with no prior review findings.\n\n## Regression Test Plan\n\n- `pnpm test src/agents/sessions/session-manager.test.ts` — session-manager unit tests (3 tests)\n- `pnpm test src/agents/sessions/` — full session test suite\n- Manual smoke: `openclaw --continue` after a user-only turn in a previous session\n\n## Merge Risk\n\n🔹 **Low**. The change is a narrow guard (8 lines of logic) in a single function. The `existsSync` check is deterministic; the `appendJsonlEntrySync` path mirrors the existing `else` branch at L914. No new dependencies, no API changes, no behavioral changes for callers.\n",
-        "branch": "fix/issue-89206-persist-flush-resume",
-        "head_sha": "01b99d63330104c7681c8100fa1f5efc34a8bc71",
-        "author": "zenglingbiao",
+        "title": "fix(exec): handle background exec completion without poll race",
+        "body": "## Summary\n\n- Problem: when an exec yields/backgrounds (via `background: true`, `yieldMs`, or default 10s auto-yield), the tool result says \"Use process poll\" instead of telling the agent to wait for auto-notification. And when the background exec completes, the heartbeat-injected prompt says \"HEARTBEAT_OK only, do not reuse command output\" (no delivery channel) or \"relay to user\" (with a channel), instead of telling the agent to check the result and continue the original task.\n- Why it matters: the agent either abandons the task (HEARTBEAT_OK path) or gets confused by \"relay to user\" when it should continue working. The polling guidance also creates a race with the auto-notification path.\n- What changed: (1) background exec tool result now says \"running in background, will notify\" instead of \"Use process poll\". (2) `buildExecEventPrompt` detects backgrounded execs via `bash-process-registry.finishedSessions` and uses a task-continuation prompt instead of HEARTBEAT_OK / relay-to-user.\n- What did NOT change (scope boundary): no changes to the gateway event pipeline, heartbeat wake mechanism, or process tool internals. The existing `deliverToUser` branches for foreground exec completions are preserved exactly.\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor required for the fix\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all touched areas)\n\n- [ ] Gateway / orchestration\n- [x] Skills / tool execution\n- [ ] Auth / tokens\n- [ ] Memory / storage\n- [ ] Integrations\n- [ ] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- Closes #\n- Related #\n- [x] This PR fixes a bug or regression\n\n## Root Cause (if applicable)\n\n- Root cause: `buildExecEventPrompt` was written for the periodic heartbeat poll scenario, where exec completions are stale events the agent has already processed via tool result. For background/yielded execs, the agent has NOT seen the result yet, but the same HEARTBEAT_OK/relay-to-user prompt was used. Additionally, `resolveRunning()` in the exec tool always recommended polling regardless of whether the exec was backgrounded.\n- Missing detection / guardrail: no distinction between \"stale foreground exec completion\" and \"first-time background exec completion\" in the prompt builder.\n- Contributing context (if known): `heartbeat.target` defaults to `\"none\"`, so exec-event wakes without explicit heartbeat config always hit the `!deliverToUser` (HEARTBEAT_OK) branch.\n\n## Regression Test Plan (if applicable)\n\n- Coverage level that should have caught this:\n  - [x] Unit test\n  - [ ] Seam / integration test\n  - [ ] End-to-end test\n  - [ ] Existing coverage already sufficient\n- Target test or file: `src/infra/heartbeat-events-filter.test.ts`\n- Scenario the test should lock in: backgrounded exec sessions produce a task-continuation prompt; non-backgrounded sessions still use the existing prompt.\n- Why this is the smallest reliable guardrail: the fix is entirely within `buildExecEventPrompt` prompt text selection, so prompt assertions at the unit level are the direct seam.\n- Existing test that already covers this (if any): existing tests cover foreground exec prompt paths (relay, HEARTBEAT_OK, missing output).\n- If no new test is added, why not: N/A — two new tests added.\n\n## User-visible / Behavior Changes\n\nAgents should now:\n- See \"running in background, will notify\" instead of \"Use process poll\" when exec yields/backgrounds,\n- See \"examine the result, continue your original task\" instead of \"HEARTBEAT_OK only, do not reuse\" or \"relay to user\" when a background exec completes.\n\n## Diagram (if applicable)\n\n```text\nBefore:\n[agent calls exec(cmd, {background: true})] → [\"Use process poll\"] → [agent polls] → [heartbeat injects \"HEARTBEAT_OK only, do not reuse\"] → [agent replies NO_REPLY, task lost]\n\nAfter:\n[agent calls exec(cmd, {background: true})] → [\"running in background, will notify\"] → [agent continues other work] → [heartbeat injects \"examine result, continue task\"] → [agent uses process poll, continues original task]\n```\n\n## Security Impact (required)\n\n- New permissions/capabilities? (No)\n- Secrets/tokens handling changed? (No)\n- New/changed network calls? (No)\n- Command/tool execution surface changed? (No)\n- Data access scope changed? (No)\n- If any `Yes`, explain risk + mitigation:\n\n## Repro + Verification\n\n### Environment\n\n- OS: Linux\n- Runtime/container: Node 22\n- Model/provider: N/A\n- Integration/channel (if any): N/A\n- Relevant config (redacted): N/A\n\n### Steps\n\n1. Start a background exec or let a foreground exec auto-yield after 10s.\n2. Observe the tool result text.\n3. When the exec completes, observe the heartbeat-injected prompt.\n\n### Expected\n\n- The tool result says \"running in background, will notify\".\n- The completion prompt says \"examine the result, continue your original task\".\n\n### Actual\n\n- With this patch, both show the corrected text.\n\n## Evidence\n\nAttach at least one:\n\n- [x] Failing test/log before + passing after\n- [x] Trace/log snippets\n- [ ] Screenshot/recording\n- [ ] Perf numbers (if relevant)\n\n## Human Verification (required)\n\n- Verified scenarios: `pnpm test src/infra/heartbeat-events-filter.test.ts` — 51 passed (49 existing + 2 new). New test validates background exec detection via ProcessSession in finishedSessions.\n- Edge cases checked: foreground exec completions (no matching finishedSession) still use existing prompt. Empty events still use HEARTBEAT_OK fallback.\n- What you did **not** verify: full E2E with real exec processes.\n\n## Review Conversations\n\n- [x] I replied to or resolved every bot review conversation I addressed in this PR.\n- [x] I left unresolved only the conversations that still need reviewer or maintainer judgment.\n\n## Compatibility / Migration\n\n- Backward compatible? (Yes)\n- Config/env changes? (No)\n- Migration needed? (No)\n- If yes, exact upgrade steps:\n\n## Risks and Mitigations\n\n- Risk: if the session ID format in `exec.finished` events changes, the regex in `isBackgroundExecEvent` might not match, causing background execs to fall back to the old HEARTBEAT_OK prompt.\n  - Mitigation: the fallback behavior is the same as before this patch; no regression.\n- Risk: the `getFinishedSession` import from `bash-process-registry` creates a new dependency in `heartbeat-events-filter.ts`.\n  - Mitigation: this is a read-only lookup, no mutation. The module is already used downstream in agent tool execution.\n",
+        "branch": "fix/background-exec-dual-delivery",
+        "head_sha": "04c711e9fd9abeb28feaef2a8a8f8483ead12a24",
+        "author": "solodmd",
         "labels": [
           "agents",
           "size: S",
-          "proof: supplied",
-          "P2",
+          "triage: needs-real-behavior-proof",
+          "P1",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/sessions/session-manager.test.ts",
-            "additions": 68,
+            "path": "src/agents/bash-tools.exec.ts",
+            "additions": 12,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/heartbeat-events-filter.test.ts",
+            "additions": 56,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/sessions/session-manager.ts",
-            "additions": 12,
-            "deletions": 2,
+            "path": "src/infra/heartbeat-events-filter.ts",
+            "additions": 27,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91371",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91371.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-91366",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91366.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 161,
+          "total": 163,
           "counts": {
             "CANCELLED": 2,
-            "SKIPPED": 30,
-            "SUCCESS": 125,
-            "IN_PROGRESS": 3,
+            "SKIPPED": 31,
+            "SUCCESS": 120,
+            "IN_PROGRESS": 8,
+            "FAILURE": 1,
             "NEUTRAL": 1
           },
           "blockers": [
             "Real behavior proof:CANCELLED",
+            "checks-node-core-fast:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
             "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
             "checks-node-agentic-commands-status-tools:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runtime:IN_PROGRESS"
+            "checks-node-agentic-agents-core-runtime:IN_PROGRESS",
+            "checks-node-agentic-agents-embedded:IN_PROGRESS",
+            "check-lint:FAILURE",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS"
           ],
           "pending": [
+            "checks-node-core-fast:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
             "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
             "checks-node-agentic-commands-status-tools:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runtime:IN_PROGRESS"
+            "checks-node-agentic-agents-core-runtime:IN_PROGRESS",
+            "checks-node-agentic-agents-embedded:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS"
           ],
           "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
+            "Real behavior proof:CANCELLED",
+            "check-lint:FAILURE"
           ]
         }
       },
@@ -132,23 +151,23 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3478,
+    "total_ms": 2141,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 463
+        "ms": 272
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2623
+        "ms": 1664
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 360
+        "ms": 176
       },
       {
         "name": "append_ledger",
