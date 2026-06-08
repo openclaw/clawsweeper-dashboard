@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-08T12:28:18.100Z",
+  "generated_at": "2026-06-08T12:28:37.710Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-08T09:28:17.811Z",
+  "since": "2026-06-08T09:28:35.451Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    91415
+    91370
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,148 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91370:4646886598:2026-06-08T12:28:32Z:clawsweeper_auto_repair",
+      "comment_id": "4646886598",
+      "comment_version_key": "4646886598:2026-06-08T12:28:32Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91370#issuecomment-4646886598",
+      "repo": "openclaw/openclaw",
+      "issue_number": 91370,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-08T08:44:57Z",
+      "comment_updated_at": "2026-06-08T12:28:32Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=424a4bd374b8f7b118199493d59bcbfa4fdd6f31)",
+      "review_summary": "The PR adds a persisted `completedFromYieldPause` marker, forwards it through subagent announce delivery, and guards text-direct/message-tool-missing fallback paths for `sessions_yield` completions.\n\nPR surface: Source +25, Tests +171. Total +196 across 6 files.\n\nReproducibility: yes. The issue is source-reproducible: current main clears `pauseReason` before announce cleanup and retains direct-text fallback behavior when gateway payload evidence is missing, though I did not run a live Feishu or Discord round trip.",
+      "review_followup": "- [P2] The remaining blocker is a maintainer-level repair choice between the new yield suppression and the existing no-reoutput direct-message fallback contract.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "424a4bd374b8f7b118199493d59bcbfa4fdd6f31",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): skip text-direct fallback for sessions_yield completions",
+        "body": "### Summary\n\n- **Problem**: Issue #90944 reports that when a `sessions_yield`-paused subagent completes, raw child text is delivered directly to the DM channel before the parent's intended resume reply. Users see a duplicate/out-of-order message: child output appears ahead of the parent's reply.\n- **Root cause**: `completeSubagentRun` in `subagent-registry-lifecycle.ts` clears `entry.pauseReason` before triggering the announce cleanup flow. By the time `sendSubagentAnnounceDirectly` runs, `pauseReason` is already `undefined` and the flag cannot be derived from the entry. Four fallback delivery paths — the `isIncompleteAnnounceAgentResultError` catch block, the `shouldDeliverAgentFinal` text-direct path, the `requiresMessageToolDelivery` message-tool-missing path, and the `visible_reply_missing` return — all fire when the announce response carries no gateway payload evidence. For `sessions_yield` runs the parent's resume reply travels through the normal session output path, never the gateway payload, so these fallbacks fire unconditionally and send the raw child text to the DM channel.\n- **Fix**: Stamp `entry.completedFromYieldPause = true` on the run record before clearing `pauseReason`. The field is stored in `payload_json` (no new SQLite column) and survives process restart, so announce retry paths that call `startSubagentAnnounceCleanupFlow` directly also get the correct value. All four fallback paths in `sendSubagentAnnounceDirectly` now check `requesterPausedForYield`; for yield-paused runs each path falls through to the final `return { delivered: true, path: \"direct\" }`, leaving the actual reply to the session output path.\n- **What changed**:\n  - `src/agents/subagent-registry.types.ts` — add `completedFromYieldPause?: boolean` to `SubagentRunRecord`.\n  - `src/agents/subagent-registry-lifecycle.ts` — stamp `completedFromYieldPause = true` before clearing `pauseReason` in `completeSubagentRun`; read it from `entry` in `startSubagentAnnounceCleanupFlow` and forward to `runSubagentAnnounceFlow`.\n  - `src/agents/subagent-announce.ts` — add `requesterPausedForYield?: boolean` param to `runSubagentAnnounceFlow`; pass it through to `deliverSubagentAnnouncement`.\n  - `src/agents/subagent-announce-delivery.ts` — add `requesterPausedForYield?: boolean` param to `deliverSubagentAnnouncement` and `sendSubagentAnnounceDirectly`; guard all four fallback paths; the `isIncompleteAnnounceAgentResultError` catch block returns `{ delivered: true, path: \"direct\" }` immediately when the flag is set, skipping the text-direct send.\n  - Tests in `subagent-announce-delivery.test.ts`: yield DM + no payload → `sendMessage` not called; yield DM + `incomplete_result` throw → `sendMessage` not called; non-yield DM + no payload → `sendMessage` called with `:text-direct` (baseline unaffected).\n  - Test in `subagent-registry-lifecycle.test.ts`: `completeSubagentRun` with `pauseReason: \"sessions_yield\"` propagates `requesterPausedForYield: true` to `runSubagentAnnounceFlow` and stamps `completedFromYieldPause: true` on the entry after the clear.\n- **What did NOT change (scope boundary)**:\n  - Config surface unchanged (no schema, defaults, doctor migrations, `docs/reference/config`).\n  - Plugin surface unchanged (no plugin SDK, manifest, `extensions/*` api/runtime-api, registry/loader).\n  - Gateway protocol unchanged.\n  - The `directDeliveryFailure` return path is intentionally unguarded — a hard delivery failure should still surface regardless of yield state.\n  - The `resumeSubagentRun` and `ackPendingAgentSteeringItems` retry paths call `startSubagentAnnounceCleanupFlow` with only `(runId, entry)` — no signature change needed; they read `entry.completedFromYieldPause` directly from the persisted entry.\n\n### Reproduction\n\n1. An agent A spawns agent B using `sessions_yield`, suspending A with `pauseReason: \"sessions_yield\"` on B's run record.\n2. Agent B completes; `completeSubagentRun` clears `entry.pauseReason` and triggers the announce flow.\n3. The announce flow's direct dispatch call finds no gateway payload evidence (the parent's resume reply is in the session output queue, not the gateway response).\n4. **Before this PR**: the text-direct fallback fires unconditionally, sending B's raw output text to the DM channel ahead of A's resume reply; users see a duplicate/out-of-order message.\n5. **After this PR**: all four fallback guard checks short-circuit because `entry.completedFromYieldPause === true`; the function returns `{ delivered: true }` without touching the channel. Only A's resume reply reaches the user.\n\n### Real behavior proof\n\n**Behavior addressed (#90944)**: after a `sessions_yield` subagent completes, the DM channel no longer receives a duplicate raw-child-text message ahead of the parent's resume reply; the text-direct and message-tool-missing fallback paths are suppressed for the duration of the yield completion.\n\n**Real environment tested (Linux, Node 22 — Vitest against the production announce-delivery and lifecycle functions)**: `deliverSubagentAnnouncement` driving the real `sendSubagentAnnounceDirectly` path with a Discord DM origin for both the no-payload and `incomplete_result` scenarios, and `completeSubagentRun` in `createLifecycleController` driving the real `startSubagentAnnounceCleanupFlow` → `runSubagentAnnounceFlow` wiring.\n\n**Exact steps or command run after this patch**: `pnpm test src/agents/subagent-announce-delivery.test.ts src/agents/subagent-announce.test.ts src/agents/subagent-registry-lifecycle.test.ts`; `pnpm run format` and `node scripts/run-oxlint.mjs` on changed files.\n\n**Evidence after fix**:\n\n```text\nTest Files  3 passed (3)\n     Tests  141 passed (141)\n```\n\nThree new delivery tests cover the yield paths: (1) yield DM + no payload → `sendMessage` not called, `delivered: true`; (2) yield DM + `incomplete_result` error → `sendMessage` not called, `delivered: true`; (3) non-yield DM + no payload → `sendMessage` called with `:text-direct` idempotency key. The lifecycle test confirms `requesterPausedForYield: true` reaches `runSubagentAnnounceFlow` when the entry had `pauseReason: \"sessions_yield\"`, and `completedFromYieldPause: true` is stamped on the entry after the clear.\n\n**Observed result after fix**: for a `sessions_yield` DM completion with no gateway payload evidence or an `incomplete_result` error, `sendSubagentAnnounceDirectly` skips all four fallback delivery blocks and returns `{ delivered: true, path: \"direct\" }` — no `sendMessage` call, no raw child text to the channel.\n\n**What was not tested**: live Feishu/Discord DM round-trip with a real `sessions_yield` agent pair. The announce-dispatch, delivery-guard, and lifecycle wiring are covered deterministically against the production functions.\n\n### Risk / Mitigation\n\n- **Risk**: `completedFromYieldPause` persists in `payload_json` indefinitely. **Mitigation**: the field is only read in `startSubagentAnnounceCleanupFlow`, which runs once per run at completion; after `cleanupCompletedAt` is set the entry is archived and the field is inert.\n- **Risk**: Guard suppresses a legitimate missing-delivery error for a non-yield run. **Mitigation**: `requesterPausedForYield` is `=== true` only when `completedFromYieldPause` is explicitly set; all existing non-yield paths are unchanged.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] agents\n\n### Linked Issue/PR\n\nFixes #90944",
+        "branch": "fix/90944-sessions-yield-text-direct",
+        "head_sha": "424a4bd374b8f7b118199493d59bcbfa4fdd6f31",
+        "author": "openperf",
+        "labels": [
+          "agents",
+          "size: S",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/agents/subagent-announce-delivery.test.ts",
+            "additions": 146,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce-delivery.ts",
+            "additions": 16,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-lifecycle.test.ts",
+            "additions": 25,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-lifecycle.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.types.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-91370",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91370.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 31,
+            "SUCCESS": 127,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-commands-agent-channel:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED",
+            "checks-node-agentic-commands-agent-channel:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 487,
+    "total_ms": 2474,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 278
+        "ms": 283
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1962
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 198
+        "ms": 203
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
