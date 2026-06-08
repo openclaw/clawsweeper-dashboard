@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-08T16:41:21.841Z",
+  "generated_at": "2026-06-08T16:41:21.577Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-08T13:41:19.746Z",
+  "since": "2026-06-08T13:41:20.990Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     91463
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4617511240
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -61,92 +63,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix #63343: Browser bridge tab not found race",
-        "body": "Fixes #63343.\n\n## Summary\n\n- Preserve the `openTab(\"about:blank\")` result in `ensureTabAvailable()` so a newly created target remains selectable while CDP `/json/list` is still catching up.\n- For local-managed profiles, wait through the existing tab discovery window when the `wsUrl` filter would otherwise remove every selectable tab.\n- Add regression coverage for the discarded-opened-target race, delayed `webSocketDebuggerUrl` discovery, and the bounded unfiltered fallback.\n\n## Root Cause\n\n- **Fix classification:** Root-cause browser selection bug fix for the shared `ensureTabAvailable()` state resolver.\n- **Maintainer-ready confidence:** High. The change is limited to one source file and one focused regression test file, and it is backed by local production-path proof plus the two ClawSweeper-requested browser test commands.\n- **Root cause:** The source of the crash-loop is that `ensureTabAvailable()` opened a valid `about:blank` target when the first list was empty, then discarded that returned target and immediately rebuilt candidates only from the next `/json/list` snapshot. For local-managed profiles, that second snapshot was also filtered by `wsUrl`, so a target that existed but had not yet appeared in `/json/list` or had not yet received `webSocketDebuggerUrl` was treated as no tab at all.\n- **Why this is root-cause fix:** The invariant that was broken is shared tab selection state: after `ensureTabAvailable()` creates or sees a selectable target, the resolver must not lose that target solely because CDP target metadata is lagging. Preserving the opened snapshot, polling for delayed `wsUrl`, and only then falling back to the unfiltered selectable snapshot fixes the source selection invariant rather than masking individual browser actions downstream.\n- **Why it matters / User impact:** This removes a false `BrowserTabNotFoundError` path that can stop browser tools during cold start or after a transient Playwright/CDP hiccup even though Chrome has a usable tab target.\n\n## What changed\n\n- `extensions/browser/src/browser/server-context.selection.ts` now keeps the opened tab snapshot and merges it into the next selection snapshot when CDP has not listed it yet.\n- The local-managed `wsUrl` candidate filter now performs bounded polling using the existing browser tab discovery constants.\n- If polling expires and selectable tabs still exist without `wsUrl`, selection falls back to those unfiltered tabs so downstream paths can continue with the known target id.\n- `extensions/browser/src/browser/server-context.tab-selection-state.test.ts` adds focused regressions for the three timing states reported in the issue.\n\n## What did NOT change\n\n- **What did NOT change:** Out of scope: no browser route API, config, schema, protocol, wire format, defaults, navigation policy, or public command behavior changed. `focusTab()` and `closeTab()` still resolve against the current tab list, remote Playwright profiles and Chrome MCP existing-session profiles keep their prior behavior, and browser-internal target filtering remains owned by `listTabs()` / `isSelectableCdpBrowserTarget()`.\n\n## Architecture / source-of-truth check\n\n- **Architecture / source-of-truth check:** The canonical source-of-truth for default browser target selection is `createProfileSelectionOps()` in `server-context.selection.ts`, so the fix stays in that resolver instead of adding catch/fallback behavior to individual browser actions. Public contract scanning found no related open PR for #63343, and this patch does not introduce schema, config, migration, or protocol changes.\n- **Patch quality notes:** The patch changes one production selection invariant and one regression test file. The `as unknown as Response` values are test-only fetch fixtures matching the existing harness style in this file; they do not add production type escapes. The public-contract and merge-risk signals are explained here and below because the touched selection path affects browser availability/session state, but no public contract surface is expanded.\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** `ensureTabAvailable()` no longer reports `BrowserTabNotFoundError` when CDP target discovery or `webSocketDebuggerUrl` discovery lags a valid local-managed browser tab.\n- **Real environment tested:** Linux local OpenClaw worktree at `/media/vdc/code/ai/aispace/openclaw-worktrees/issue-63343`, Node with repository dependencies installed from the frozen lockfile.\n- **Exact steps or command run after this patch:** `node --import tsx /media/vdc/code/ai/aispace/openclaw-issue-63343-evidence/local-browser-selection-proof.mjs`\n- **Evidence after fix:**\n\n```json\n{\n  \"issue\": 63343,\n  \"proof\": \"production createProfileSelectionOps local behavior\",\n  \"scenarios\": [\n    {\n      \"name\": \"openTab_return_preserved_when_json_list_lags\",\n      \"selectedTargetId\": \"OPENED_FROM_JSON_NEW\",\n      \"selectedHasWsUrl\": true,\n      \"listCount\": 2,\n      \"openCount\": 1\n    },\n    {\n      \"name\": \"wsUrl_discovery_poll_keeps_local_candidate\",\n      \"selectedTargetId\": \"WS_DISCOVERED_AFTER_POLL\",\n      \"selectedHasWsUrl\": true,\n      \"listCount\": 3\n    },\n    {\n      \"name\": \"unfiltered_fallback_after_wsUrl_poll_exhaustion\",\n      \"selectedTargetId\": \"UNFILTERED_AFTER_POLL_EXHAUSTED\",\n      \"selectedHasWsUrl\": false,\n      \"listCount\": 22,\n      \"elapsedMs\": 2009\n    }\n  ],\n  \"result\": \"passed\"\n}\n```\n\n- **Observed result after fix:** All three local selection race scenarios selected a concrete target id and updated `lastTargetId`; none produced `BrowserTabNotFoundError`.\n- **What was not tested:** I did not run a live macOS Chrome session. The reported failure is in the shared TypeScript selection path, and the local proof above calls the production `createProfileSelectionOps()` code directly for the relevant CDP timing states.\n\n## Regression Test Plan\n\n- **Target test file:** `extensions/browser/src/browser/server-context.tab-selection-state.test.ts` locks the local-managed race behavior; `extensions/browser/src/browser/server-context.remote-profile-tab-ops.playwright.test.ts` was rerun to verify remote Playwright tab selection remains unchanged.\n- **Scenario locked in:** The regression tests cover cold start where `/json/list` remains empty after `openTab()`, delayed `webSocketDebuggerUrl` population where the third list call supplies `wsUrl`, and a persistent `wsUrl` lag where the bounded polling window expires and the unfiltered selectable target is returned.\n- **Why this is the smallest reliable guardrail:** The tests exercise `ensureTabAvailable()` through the existing browser route harness and the production selection resolver, so they fail on the original discarded-target/filtering race without adding a broader browser integration harness or changing unrelated tab operations.\n\n## Verification\n\n- `node --import tsx /media/vdc/code/ai/aispace/openclaw-issue-63343-evidence/local-browser-selection-proof.mjs` — passed.\n- `node scripts/run-vitest.mjs extensions/browser/src/browser/server-context.tab-selection-state.test.ts` — 17 tests passed.\n- `node scripts/run-vitest.mjs extensions/browser/src/browser/server-context.remote-profile-tab-ops.playwright.test.ts` — 11 tests passed.\n- `pnpm exec oxfmt --check --threads=1 extensions/browser/src/browser/server-context.selection.ts extensions/browser/src/browser/server-context.tab-selection-state.test.ts` — passed.\n- `node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions/browser/src/browser/server-context.selection.ts extensions/browser/src/browser/server-context.tab-selection-state.test.ts` — passed.\n\n## Merge risk\n\n- **Risk labels considered:** `merge-risk: availability` and `merge-risk: session-state` are the relevant categories because this code chooses the browser target used by subsequent tool actions and updates `lastTargetId`.\n- **Risk explanation:** The changed path only runs inside `ensureTabAvailable()`. It preserves a target that was just opened by the same resolver, waits for CDP to fill in `wsUrl` only when the local-managed filter would otherwise leave zero candidates, and falls back only to selectable tabs already returned by `listTabs()`.\n- **Why acceptable:** The patch narrows the failure mode from false `tab not found` to selecting an already-created or already-listed selectable tab. It does not alter route inputs, config defaults, target creation, target filtering, or remote-driver behavior, and the regression tests plus local production-path proof cover the availability/session-state edge cases introduced by the change.",
-        "branch": "feat/issue-63343",
-        "head_sha": "d678f06dd258c1b671a6fd3af511681995d86ce9",
-        "author": "mushuiyu886",
-        "labels": [
-          "size: S",
-          "proof: supplied",
-          "proof: sufficient",
-          "rating: 🐚 platinum hermit",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "extensions/browser/src/browser/server-context.selection.ts",
-            "additions": 48,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/browser/src/browser/server-context.tab-selection-state.test.ts",
-            "additions": 124,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91463",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91463.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 154,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 31,
-            "SUCCESS": 118,
-            "IN_PROGRESS": 2,
-            "FAILURE": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "check-prod-types:IN_PROGRESS",
-            "check-additional-boundaries-a:FAILURE",
-            "check-additional-extension-bundled:IN_PROGRESS"
-          ],
-          "pending": [
-            "check-prod-types:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "check-additional-boundaries-a:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2326,
+    "total_ms": 1355,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 307
+        "ms": 574
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1774
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 217
+        "ms": 768
       },
       {
         "name": "append_ledger",
