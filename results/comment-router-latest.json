@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-08T05:37:03.301Z",
+  "generated_at": "2026-06-08T05:37:55.845Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-08T02:37:02.917Z",
+  "since": "2026-06-08T02:37:53.686Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    51394
+    89503
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,123 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:89503:4603753266:2026-06-08T05:37:48Z:clawsweeper_needs_human",
+      "comment_id": "4603753266",
+      "comment_version_key": "4603753266:2026-06-08T05:37:48Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/89503#issuecomment-4603753266",
+      "repo": "openclaw/openclaw",
+      "issue_number": 89503,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-02T15:04:43Z",
+      "comment_updated_at": "2026-06-08T05:37:48Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] The remaining action is maintainer acceptance of the public SDK rejection contract plus normal merge checks, not an automated code repair.; Cleared: The diff only changes SDK TypeScript and SDK tests; it does not touch workflows, dependencies, package metadata, secrets, generated files, or other supply-chain execution paths. (sha=8c8db2ab83c84d276baa09adbf6bcd68adc7d4c6)",
+      "review_summary": "This PR changes the SDK EventHub and normalized event pump so event-pump failures reject `oc.events()` / `Run.events()` streams and adds focused SDK regression tests.\n\nPR surface: Source +32, Tests +140. Total +172 across 3 files.\n\nReproducibility: yes. Source inspection on current main shows pump failures close the normalized EventHub without preserving the cause, and the linked issue plus PR body provide a focused transport-boundary reproduction.",
+      "review_followup": "- [P2] The remaining action is maintainer acceptance of the public SDK rejection contract plus normal merge checks, not an automated code repair.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "8c8db2ab83c84d276baa09adbf6bcd68adc7d4c6",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(sdk): surface event-pump failures to SDK stream consumers",
+        "body": "## Summary\n\nFixes #89492.\n\n`@openclaw/sdk` app and run event streams silently ended with a clean end-of-stream when the background event pump failed (a throwing `transport.events()` iterator or a `normalizeGatewayEvent` failure). Consumers of `oc.events()` / `Run.events()` could not distinguish a normal close from a transport, gateway-event, or normalization failure, and would silently stop receiving updates.\n\n## Changes\n\nFollowing the fix shape outlined in the issue:\n\n1. `EventHub.close(error?)` records the first failure cause (even if the hub was already closed without one) and is idempotent.\n2. `EventHub.stream()` rejects the active/next iterator with the stored error — after draining any events already queued before the failure — instead of reporting `done: true`. The cause is checked independently of the `closed` flag so both active **and future** iterators reject.\n3. `OpenClaw.startEventPump()` captures the caught cause and closes the normalized hub with it instead of swallowing it in the outer `.catch()`.\n\n## Real behavior proof\n\n**Behavior or issue addressed**: App SDK event streams (`oc.events()` / `Run.events()`) silently ended as a clean end-of-stream when the background event pump failed, so consumers could not tell a transport/normalization failure apart from a normal close (#89492).\n\n**Real environment tested**: Local source checkout of `@openclaw/sdk` (`packages/sdk/src`) on macOS, Node v26, driven through a real injected `OpenClawTransport` whose event iterator throws — the exact boundary the fix operates on. Ran on `main` and on this branch.\n\n**Exact steps or command run after the patch**: Saved the reproduction script from the issue body as `repro.mjs` (a `ThrowingEventsTransport` whose `events()` iterator throws, then `await oc.events()[Symbol.asyncIterator]().next()`), and executed it against the SDK source:\n\n```\nnode ./repro.mjs\n```\n\n**Evidence after fix**: Live console output copied from the two runs (real SDK code path driven by `node`, no harness):\n\n```\n# BEFORE (main) — failure hidden as a normal end-of-stream:\nRESULT (clean end-of-stream): {\"done\":true}\n\n# AFTER (this branch) — pump failure surfaced to the consumer:\nRESULT (stream rejected): synthetic transport event failure\n```\n\n**Observed result after fix**: The consumer's `iterator.next()` now rejects with the underlying cause (`synthetic transport event failure`) instead of resolving to `{\"done\":true}`. The bug behavior reported in the issue is gone; a transport/normalization failure can no longer masquerade as a clean end-of-stream.\n\n**What was not tested**: End-to-end against a live Gateway WebSocket transport; the reproduction injects a custom `OpenClawTransport`, which is exactly the boundary this fix changes.\n\n## Supplemental checks\n\nAdded focused regression coverage for: a transport iterator that throws before yielding and after a successful event; a late failure cause recorded on an already-closed hub; and a failure arriving while a consumer is parked. All 33 SDK suite cases pass via `node scripts/run-vitest.mjs packages/sdk/src/index.test.ts` (29 existing + 4 new). These are supplemental to the real-run proof above.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+        "branch": "fix/sdk-event-stream-error-propagation",
+        "head_sha": "8c8db2ab83c84d276baa09adbf6bcd68adc7d4c6",
+        "author": "dreamhunter2333",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "packages/sdk/src/client.ts",
+            "additions": 11,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/sdk/src/event-hub.ts",
+            "additions": 29,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/sdk/src/index.test.ts",
+            "additions": 140,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-89503",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89503.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 144,
+          "counts": {
+            "SUCCESS": 129,
+            "SKIPPED": 14,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 678,
+    "total_ms": 2352,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 369
+        "ms": 299
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 4367
+        "ms": 1847
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 294
+        "ms": 181
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
