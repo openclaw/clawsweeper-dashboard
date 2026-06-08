@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-08T19:05:33.546Z",
+  "generated_at": "2026-06-08T19:06:19.115Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-08T16:05:30.174Z",
+  "since": "2026-06-08T16:06:18.740Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    91488
+    91489
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,122 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91488:4652412853:2026-06-08T19:05:25Z:clawsweeper_auto_repair",
-      "comment_id": "4652412853",
-      "comment_version_key": "4652412853:2026-06-08T19:05:25Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/91488#issuecomment-4652412853",
-      "repo": "openclaw/openclaw",
-      "issue_number": 91488,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-08T18:58:55Z",
-      "comment_updated_at": "2026-06-08T19:05:25Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=6f3efa145050ced8ffaca06f3ade8c28c313fd9b)",
-      "review_summary": "The PR changes `runPreflightCompactionIfNeeded` to project fresh persisted tokens through the next-input token estimator and updates one adjacent regression expectation.\n\nPR surface: Source +14, Tests 0. Total +14 across 2 files.\n\nReproducibility: yes. Source inspection shows current main skips transcript usage reads in the fresh-token path, and the PR proof supplies before/after terminal output for the production preflight decision path.",
-      "review_followup": "- [P2] There is a narrow mechanical blocker in the PR branch: fresh preflight projection needs a reliable previous-output source and a focused regression test.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "6f3efa145050ced8ffaca06f3ade8c28c313fd9b",
-      "finding_id": "review-feedback",
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(reply): project preflight compaction gate by next-input size on fresh tokens",
-        "body": "## Summary\n\nOn the embedded runtime, proactive **preflight** compaction under-triggers on long-lived sessions. The pre-send gate (`runPreflightCompactionIfNeeded`) decides whether to compact *before* the next request, but in the common fresh-tokens path it sizes the next request using only the prompt-only `entry.totalTokens` snapshot, dropping both the current user prompt and the previous turn's output. As a result the gate skips compaction on a turn whose request actually crosses the context budget, and the session falls into the overflow-and-retry recovery path instead of a clean proactive checkpoint.\n\nThis is distinct from #63892 / #64384 (the gate not *running at all* after the first compaction, which current `main` already reaches): this is the token count the gate uses *once it runs*.\n\n## Root cause\n\n`entry.totalTokens` is, by design, a prompt-only context snapshot that excludes completion/output tokens (`src/agents/usage.ts`, `deriveSessionTotalTokens`). The intended projection for \"what will the next request weigh\" is `base + previous output + current prompt estimate`, encoded in `resolveEffectivePromptTokens` (`src/auto-reply/reply/agent-runner-memory.ts`).\n\nTwo paths apply that projection correctly and one did not:\n\n- The sibling memory-flush gate (`runMemoryFlushIfNeeded`, same file) projects `base + output + estimate`, and reads the transcript for output tokens even when persisted tokens are fresh, gated by `TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS` when near the threshold.\n- The stale branch of `runPreflightCompactionIfNeeded` itself projects `base + output + estimate`.\n- The **fresh** branch of `runPreflightCompactionIfNeeded` set `transcriptUsageTokens` to `undefined` whenever `freshPersistedTokens` was a number (so output was never read), and fed the raw prompt-only `entry.totalTokens` into the threshold check. The `promptTokenEstimate` was computed and then discarded in this branch.\n\nSo with the same threshold formula as the sibling, the preflight gate under-counted the next request by `previousOutput + currentPrompt` on every fresh turn.\n\n## Fix\n\nMake the fresh preflight path project the next-input the same way the memory-flush sibling and the stale branch already do:\n\n- Read transcript output tokens in the fresh case when within `TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS` of the threshold (`freshNeedsOutputRead`), mirroring the sibling.\n- Project the fresh persisted base through `resolveEffectivePromptTokens(freshPersistedTokens, transcriptOutputTokens, promptTokenEstimate)` and feed that into the gate.\n\nThe threshold computation is hoisted above the transcript read so the read gate can use it. No config, schema, or public surface changes. Net +14 lines, single function.\n\n## Real behavior proof\n\nBehavior addressed: On the embedded runtime, `runPreflightCompactionIfNeeded` skips proactive compaction for a session whose `totalTokens` snapshot is fresh and just below the budget threshold, even though the request about to be sent (history + current user prompt, plus the previous turn's output) crosses the threshold. The turn is then sent over budget and only recovers via overflow-retry.\n\nReal environment tested: Local checkout on a branch off `origin/main` 105d77d486b, Node 22.19. Drove the production `runPreflightCompactionIfNeeded` decision path directly with `node` (tsx loader) for an Anthropic embedded followup run; a fresh `SessionEntry` (`totalTokens: 985`, `totalTokensFresh: true`), context window 1000, reserve 10, soft 0 (threshold 990), and a real user prompt of ~106 tokens. The compaction call was routed to an in-process recorder so the real gate decision is observed without performing an actual compaction. Same script, same inputs, run once before the patch and once after.\n\nExact steps or command run after this patch: ran the production preflight decision path for the fresh-snapshot session described above and printed whether the gate requested compaction, before vs after the change.\n\nEvidence after fix: copied live terminal output from the production preflight decision path.\n\nBefore (origin/main, no patch):\n```\ncontext=1000 reserve=10 soft=0 threshold=990\nsession totalTokens(prompt-only,fresh)=985  next user prompt=~106 tokens\nactual next request input >= 1091 (exceeds threshold 990 by >= 101)\npreflight decision => NOT REQUESTED (request sent over budget)\n```\n\nAfter:\n```\ncontext=1000 reserve=10 soft=0 threshold=990\nsession totalTokens(prompt-only,fresh)=985  next user prompt=~106 tokens\nactual next request input >= 1091 (exceeds threshold 990 by >= 101)\npreflight decision => COMPACTION REQUESTED\n```\n\nObserved result after fix: with the next request projected as base + previous output + current prompt (matching the memory-flush sibling), the fresh-snapshot session now triggers proactive compaction before the over-budget request is sent. A session safely below the threshold (no output/prompt projection pushing it over) is unaffected and still proceeds without compaction.\n\nWhat was not tested: a live model round-trip over a real provider API (decision path only, no network call); the stale-tokens and transcript-byte-size branches were already projecting correctly and are unchanged.\n\n## Verification\n\nLocal (Node 22.19.0): `oxfmt --check` on the changed file clean; type-aware oxlint on the changed file clean; `tsgo:core` exit 0; existing `src/auto-reply/reply/agent-runner-memory.test.ts` suite green.\n\n## Related (not duplicates)\n\n- #63892 / #64384 — preflight gate not re-firing at all after the first compaction (fresh-tokens fast-path early return). Current `main` reaches the threshold check; this PR fixes the count that check consumes.\n- #45360 / #45424 / #55722 — the same \"omit output / current prompt\" undercount, fixed previously for the **memory-flush** gate only. This PR brings the preflight gate to parity.\n- #81916 (#81178) — bounds stale transcript usage and post-compaction tail pressure inside the transcript estimator (the stale-tokens path). It does not touch the fresh `entry.totalTokens` projection this PR fixes (the estimator is not even called when tokens are fresh), so the two are complementary, not duplicates.\n",
-        "branch": "fix/preflight-fresh-token-undercount",
-        "head_sha": "6f3efa145050ced8ffaca06f3ade8c28c313fd9b",
-        "author": "yetval",
-        "labels": [
-          "size: XS",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 session-state",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/auto-reply/reply/agent-runner-memory.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-memory.ts",
-            "additions": 24,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91488",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91488.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 30,
-            "SUCCESS": 129,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3662,
+    "total_ms": 612,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 459
+        "ms": 362
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2900
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 278
+        "ms": 238
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
