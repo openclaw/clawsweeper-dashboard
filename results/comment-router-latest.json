@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-08T09:30:12.322Z",
+  "generated_at": "2026-06-08T09:30:54.241Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-08T06:30:09.602Z",
+  "since": "2026-06-08T06:30:53.670Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     91379
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4647249096
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -61,110 +63,32 @@
       "finding_id": "review-feedback",
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): inherit default fallbacks for string agent jobs",
-        "body": "## Summary\n\n- Fixes isolated cron runs where an agent's plain string model matched `agents.defaults.model.primary` but the run still received an empty fallback chain instead of inheriting `agents.defaults.model.fallbacks`.\n- Keeps the shared agent model fallback contract strict: string per-agent models and object-style `{ primary }` configs still disable global fallbacks unless the cron prep path explicitly proves this is the default-primary shorthand case.\n- Threads a cron-local inheritance signal from raw runtime config through preflight and execution so the decision is not inferred from `cfgWithAgentDefaults` after cron rewrites defaults.\n- Intentionally does not change `src/agents/agent-scope.ts`, docs, config schema, provider routing, auth, or non-cron agent runs.\n\n## Linked context\n\nCloses #91362\n\nRelated #91373\n\nWas this requested by a maintainer or owner?\n\n- Not directly. This follows #91362 and ClawSweeper's issue guidance recommending a cron-scoped repair instead of changing normal agent-primary strictness. It also addresses the compatibility concern ClawSweeper raised on #91373.\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: Isolated cron runs now inherit `agents.defaults.model.fallbacks` when the selected agent uses a plain string model equal to the configured default primary, while object-style primaries and differing string agent primaries remain strict.\n- Real environment tested: macOS arm64 local OpenClaw worktree from `upstream/main` at `fc6400ede3`, Node v24.15.0, pnpm v11.2.2.\n- Exact steps or command run after this patch:\n\n```sh\nnode --import tsx - <<'EOF_NODE'\nimport { resolveCronFallbacksOverride } from './src/cron/isolated-agent/run-fallback-policy.ts';\nconst job = { id: 'cron-91362', name: 'cron 91362', schedule: { kind: 'cron', expr: '0 9 * * *', tz: 'UTC' }, sessionTarget: 'isolated', payload: { kind: 'agentTurn', message: 'summarize' }, state: {} };\nconst defaults = { model: { primary: 'deepseek/deepseek-v4-pro', fallbacks: ['deepseek/deepseek-v4-flash', 'moonshot/kimi-k2.6'] } };\nconst cfg = { agents: { defaults, list: [{ id: 'main', model: 'deepseek/deepseek-v4-pro' }] } };\nconst rewrittenDifferentStringCfg = { agents: { defaults: { model: { primary: 'anthropic/claude-sonnet-4-6', fallbacks: ['deepseek/deepseek-v4-flash', 'moonshot/kimi-k2.6'] } }, list: [{ id: 'main', model: 'anthropic/claude-sonnet-4-6' }] } };\nconst objectCfg = { agents: { defaults, list: [{ id: 'main', model: { primary: 'deepseek/deepseek-v4-pro' } }] } };\nconsole.log(JSON.stringify({\n  inheritedFallbacks: resolveCronFallbacksOverride({ cfg, agentId: 'main', job, inheritDefaultFallbacksForAgentStringModel: true }),\n  rewrittenWithoutSignal: resolveCronFallbacksOverride({ cfg: rewrittenDifferentStringCfg, agentId: 'main', job }),\n  objectPrimaryFallbacks: resolveCronFallbacksOverride({ cfg: objectCfg, agentId: 'main', job }),\n}, null, 2));\nEOF_NODE\nnode scripts/run-vitest.mjs src/cron/isolated-agent/run-fallback-policy.test.ts src/agents/agent-scope.test.ts src/cron/isolated-agent/run.cron-model-override-forwarding.test.ts\npnpm tsgo:core:test\n.agents/skills/autoreview/scripts/autoreview --mode local\n```\n\n- Evidence after fix (screenshot, recording, terminal capture, console output, redacted runtime log, linked artifact, or copied live output):\n\n```text\n{\n  \"inheritedFallbacks\": [\n    \"deepseek/deepseek-v4-flash\",\n    \"moonshot/kimi-k2.6\"\n  ],\n  \"rewrittenWithoutSignal\": [],\n  \"objectPrimaryFallbacks\": []\n}\n\nnode scripts/run-vitest.mjs src/cron/isolated-agent/run-fallback-policy.test.ts src/agents/agent-scope.test.ts src/cron/isolated-agent/run.cron-model-override-forwarding.test.ts\nTest Files  2 passed (2)\nTests  30 passed (30)\nTest Files  1 passed (1)\nTests  44 passed (44)\n[test] passed 2 Vitest shards\n\npnpm tsgo:core:test\n$ node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test.tsbuildinfo\n(exit 0)\n\n.agents/skills/autoreview/scripts/autoreview --mode local\nautoreview clean: no accepted/actionable findings reported\noverall: patch is correct (0.79)\n```\n\n- Observed result after fix: the #91362 cron fallback shape resolves the configured default fallback list; the guard cases that ClawSweeper called out remain strict, including rewritten defaults without the cron-local inheritance signal and object-style agent primaries.\n- What was not tested: a live provider-backed scheduled cron execution against real model APIs. The proof exercises the cron fallback policy plus `runCronIsolatedAgentTurn` regression tests that verify the actual `runWithModelFallback` override passed after cron prepares `cfgWithAgentDefaults`.\n- Proof limitations or environment constraints: `pnpm check:test-types` was attempted first and timed out after 240s while still in the core test-type phase; `pnpm tsgo:core:test`, the touched core test-type lane, was then run directly and exited 0.\n- Before evidence (optional but encouraged): current `upstream/main` returns an empty cron fallback override for the reporter's string-agent/default-fallback setup, so `resolveModelCandidateChain` never consults `agents.defaults.model.fallbacks` for that isolated cron run.\n\n## Tests and validation\n\nWhich commands did you run?\n\n- `pnpm install --frozen-lockfile`\n- `node scripts/run-vitest.mjs src/cron/isolated-agent/run-fallback-policy.test.ts src/agents/agent-scope.test.ts src/cron/isolated-agent/run.cron-model-override-forwarding.test.ts`\n- `node --import tsx ...` behavior proof shown above\n- `pnpm exec oxfmt --write src/cron/isolated-agent/run-fallback-policy.ts src/cron/isolated-agent/run-fallback-policy.test.ts src/cron/isolated-agent/run.ts src/cron/isolated-agent/run-executor.ts src/cron/isolated-agent/run.cron-model-override-forwarding.test.ts`\n- `git diff --check`\n- `pnpm tsgo:core:test`\n- `.agents/skills/autoreview/scripts/autoreview --mode local`\n\nWhat regression coverage was added or updated?\n\n- `src/cron/isolated-agent/run-fallback-policy.test.ts` covers the direct fallback policy: matching string default-primary inheritance, rewritten-default strictness without the explicit signal, object primary strictness, and differing string model strictness.\n- `src/cron/isolated-agent/run.cron-model-override-forwarding.test.ts` covers the runtime preparation path, including explicit agent and implicit default-agent cron runs passing inherited fallbacks to `runWithModelFallback`, and differing string agent models staying strict after defaults are rewritten.\n- `src/agents/agent-scope.test.ts` remains unchanged and passing, proving shared string-model strictness was preserved.\n\nWhat failed before this fix, if known?\n\n- The #91362 source path produced `[]` for the cron fallback override when the selected agent used a plain string model, blocking fallthrough to `agents.defaults.model.fallbacks`.\n\nIf no test was added, why not?\n\n- Tests were added.\n\n## Risk checklist\n\nDid user-visible behavior change? (`Yes/No`)\n\nYes. Isolated cron jobs in the narrow default-primary string shorthand case can now retry configured fallback models.\n\nDid config, environment, or migration behavior change? (`Yes/No`)\n\nNo. This changes runtime fallback resolution only; no schema, env var, config migration, or docs contract change.\n\nDid security, auth, secrets, network, or tool execution behavior change? (`Yes/No`)\n\nNo.\n\nWhat is the highest-risk area?\n\n- Accidentally changing strict model selection semantics for non-cron or intentionally strict cron agents.\n\nHow is that risk mitigated?\n\n- The shared `agent-scope` helper is untouched.\n- The inheritance decision is computed from raw cron runtime config before `cfgWithAgentDefaults` rewrites defaults.\n- Tests cover object-style strict primaries, differing string primaries, rewritten defaults without the explicit signal, and the actual runtime `runWithModelFallback` parameter.\n\n## Current review state\n\nWhat is the next action?\n\n- Waiting for CI and ClawSweeper review on this PR.\n\nWhat is still waiting on author, maintainer, CI, or external proof?\n\n- CI and ClawSweeper. Maintainers may also decide whether to close or supersede #91373 because that PR takes the broader shared-helper approach ClawSweeper flagged as a compatibility risk.\n\nWhich bot or reviewer comments were addressed?\n\n- Addresses the #91362 ClawSweeper issue guidance: cron-scoped repair, preserve strict user-selected session behavior, and avoid globally changing normal agent-primary strictness.\n- Addresses the #91373 ClawSweeper compatibility finding by not changing `resolveSelectedModelFallbacksOverride`.\n\nAI-assisted: yes. I understand the code change and ran the validation above.\n",
-        "branch": "fix/91362-cron-model-fallbacks",
-        "head_sha": "4b5cb68d39e3803a81f78041979dcab32e5220dc",
-        "author": "849261680",
-        "labels": [
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/cron/isolated-agent/run-executor.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run-fallback-policy.test.ts",
-            "additions": 116,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run-fallback-policy.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run.cron-model-override-forwarding.test.ts",
-            "additions": 123,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run.ts",
-            "additions": 12,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91379",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91379.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 161,
-          "counts": {
-            "FAILURE": 1,
-            "CANCELLED": 1,
-            "SUCCESS": 127,
-            "SKIPPED": 31,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Scan changed paths (precise):FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Scan changed paths (precise):FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2936,
+    "total_ms": 1161,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 289
+        "ms": 559
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2416
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 204
+        "ms": 590
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
