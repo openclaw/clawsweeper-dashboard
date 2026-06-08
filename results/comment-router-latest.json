@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-08T05:57:37.598Z",
+  "generated_at": "2026-06-08T05:57:49.090Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-08T02:57:35.401Z",
+  "since": "2026-06-08T02:57:48.381Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     91335
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4645836381
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -36,16 +38,16 @@
       "comment_version_key": "4645772492:2026-06-08T05:57:31Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/91335#issuecomment-4645772492",
       "repo": "openclaw/openclaw",
-      "issue_number": 91335,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-08T05:41:47Z",
-      "comment_updated_at": "2026-06-08T05:57:31Z",
+      "issue_number": 91117,
+      "author": "Pommelle",
+      "author_id": 26337314,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-08T05:56:15Z",
+      "comment_updated_at": "2026-06-08T05:56:15Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -61,246 +63,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(imessage): always-on inbound recovery, deprecate catchup",
-        "body": "## Summary\n\nWhat problem does this PR solve?\n\n- After a bridge/Push recovery, Apple writes the messages that queued during the gap into `chat.db` with fresh ROWIDs but their original (old) send dates; `imsg watch` emits them as new rows and OpenClaw dispatched them as fresh user requests (#89237, \"backlog bomb\").\n\nWhy does this matter now?\n\n- It is a P1 message-integrity bug (stale messages answered as if live), and iMessage was the only channel with no inbound replay protection at all.\n\nWhat is the intended outcome?\n\n- Always-on, no-config inbound recovery: **persistent claimable GUID dedupe** (the same `createClaimableDedupe` primitive whatsapp/discord/signal/mattermost/zalo/line/nextcloud-talk use) plus a **stale-backlog age fence** that suppresses live rows whose send date is materially older than arrival (default 15 min, logged so it is never silent).\n- Replay protection is wired through the monitor: claim at ingestion, carry the exact claimed key on the debouncer entry, commit on successful flush, release on dispatch failure (per dispatch unit so a coalesced bucket cannot strand a sibling's claim). The local startup `since_rowid` watermark is kept so startup-window rows are not skipped by imsg's self-fence.\n\nWhat is intentionally out of scope?\n\n- Replaying messages missed while the gateway was down. The recovery model is deliberately \"suppress and move on\", which retires the opt-in `catchup` subsystem.\n\nWhat does success look like?\n\n- Stale backlog after recovery is suppressed (logged); fresh inbound dispatches once; duplicates/re-emits are deduped; net **-947 prod LOC**.\n\nWhat should reviewers focus on?\n\n- The claim/commit/release wiring (per-unit commit so coalesced GUID-less rows cannot leak a claim) and the catchup config retirement + back-compat (strip-before-validation and the `doctor --fix` migration).\n\n## Linked context\n\nWhich issue does this close?\n\nCloses #89237\n\nWhich issues, PRs, or discussions are related?\n\nRelated #91243 (this supersedes the catchup half of that teardown)\n\nWas this requested by a maintainer or owner?\n\nMaintainer-authored; fixes a `P1` `issue-rating: diamond lobster` report.\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: stale inbound backlog dispatched as fresh after bridge recovery (#89237); plus the new always-on dedupe + age fence on the live path.\n- Real environment tested: the patched gateway built from this branch, run from source against real `imsg` 0.11.0 / Messages.app on a macOS host over a remote SSH `cliPath` (the exact remote setup #89237 was reported on). Empty allowlist so the test gateway sent nothing and could not interfere with live conversations; the host's production gateway was left running (imsg `watch` is read-only, so two watchers coexist).\n- Exact steps or command run after this patch:\n  - `node scripts/run-node.mjs gateway --port 18799` with `OPENCLAW_CONFIG_PATH`/`OPENCLAW_STATE_DIR` isolated and `channels.imessage.cliPath` pointed at an `ssh <host> imsg` wrapper, `dmPolicy: allowlist`, `allowFrom: []`.\n  - Sent a real iMessage to the monitored account, observed the monitor decision, then restarted with the stale threshold forced to 1 ms and sent another.\n- Evidence after fix (redacted live monitor output):\n  - Normal threshold (15 min): `inbound guid=9C05... rowid=5900 created_at=05:33:39 ageMs=1540 stale=false text=\"proof test 1\"` then `CLAIMED+ENQUEUED key=default:guid:9C05...`\n  - Threshold forced to 1 ms: `inbound guid=35F2... rowid=5902 created_at=05:36:18 ageMs=920 text=\"proof test 2\"` then `AGE-FENCE-SUPPRESSED suppressed stale inbound backlog account=default (1 suppressed since start)` (no enqueue).\n- Observed result after fix: the same ~1s-old real message dispatches under the normal threshold and is suppressed under the lowered threshold; the fence gates exactly on send-date age, end to end through the patched monitor + claim/dedupe path.\n- What was not tested: the exact bridge-recovery Push-flush burst is not reproducible on demand (imsg self-fences at `MAX(ROWID)`), so the genuinely-old-dated live row is covered by unit tests plus imsg source analysis rather than a staged live burst; the released-`imsg` config-strip path was not run against a released build.\n- Proof limitations or environment constraints: instrumentation (`[PROOF-89237]` logs + a temporary stale-threshold env override) was added only on a throwaway local checkout to capture the trace and has been reverted; no host state was modified.\n\n## Tests and validation\n\nWhich commands did you run?\n\n- `node scripts/run-vitest.mjs extensions/imessage` (529 pass) + `src/cli/program/config-guard.test.ts` + config validation tests\n- `pnpm tsgo:core`, `pnpm tsgo:extensions`, `pnpm tsgo:extensions:test`, `pnpm tsgo:core:test` (clean)\n- `oxlint` / `oxfmt` (clean); `check:bundled-channel-config-metadata` + config-doc baseline `--check` (in sync); `format-docs --check` (clean)\n- `.agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main` (Codex): clean, no accepted/actionable findings\n\nWhat regression coverage was added or updated?\n\n- New `inbound-dedupe.test.ts`: claim/commit/release, released-claim retry, in-flight duplicate, composite-key round-trip for GUID-less rows, age-fence threshold/fail-open.\n- New `doctor-contract-api.test.ts`: detect + strip retired `catchup` (top-level and per-account).\n- `monitor.last-route.test.ts`: stale-backlog suppression vs fresh dispatch, and the startup `since_rowid` watermark guard. Updated coalesce/state-migration/config-guard tests; deleted the catchup tests.\n\nWhat failed before this fix, if known?\n\n- Stale backlog rows (old send date, fresh rowid) were dispatched as fresh; there was no inbound GUID dedupe.\n\nIf no test was added, why not?\n\n- N/A.\n\n## Risk checklist\n\nDid user-visible behavior change? (`Yes/No`)\n\nYes. Catchup replay is removed (suppress-and-move-on); inbound is now deduped and age-fenced. Suppressed backlog is logged at default level.\n\nDid config, environment, or migration behavior change? (`Yes/No`)\n\nYes. `channels.imessage.catchup.*` is retired. Existing configs still load (the key is stripped before validation) and `openclaw doctor --fix` removes it via a new iMessage doctor contract that also reports it.\n\nDid security, auth, secrets, network, or tool execution behavior change? (`Yes/No`)\n\nNo.\n\nWhat is the highest-risk area?\n\nThe catchup config retirement (existing opt-in users lose downtime replay) and the claim/commit/release dedupe wiring.\n\nHow is that risk mitigated?\n\nStrip-before-validation prevents load breaks; doctor reports + migrates the key. The dedupe commit/release is per dispatch unit and unit-tested across claim/duplicate/inflight/release/composite-key paths. Codex branch review is clean and the behavior was live-proven on real imsg/Messages.\n\n## Current review state\n\nWhat is the next action?\n\nMaintainer review; Greptile + CI.\n\nWhat is still waiting on author, maintainer, CI, or external proof?\n\nCI + Greptile.\n\nWhich bot or reviewer comments were addressed?\n\nCodex `autoreview` during iteration flagged three issues — premature replay record (transient-failure loss), check-then-record race, and a coalesced GUID-less claim leak — all fixed; the branch-level Codex review is now clean.\n",
-        "branch": "fix/imessage-89237-inbound-recovery",
-        "head_sha": "e9b5b23ea0b3013cd956b65ba90ae3f6f883b457",
-        "author": "omarshahine",
-        "labels": [
-          "docs",
-          "channel: imessage",
-          "gateway",
-          "cli",
-          "maintainer",
-          "size: XL",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "docs/.generated/config-baseline.sha256",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/channels/imessage-from-bluebubbles.md",
-            "additions": 16,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/channels/imessage.md",
-            "additions": 28,
-            "deletions": 62,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/gateway/config-channels.md",
-            "additions": 1,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/doctor-contract-api.ts",
-            "additions": 80,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/doctor-contract-api.test.ts",
-            "additions": 52,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor.last-route.test.ts",
-            "additions": 108,
-            "deletions": 355,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/catchup-bridge.test.ts",
-            "additions": 0,
-            "deletions": 434,
-            "changeType": "DELETED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/catchup-bridge.ts",
-            "additions": 0,
-            "deletions": 284,
-            "changeType": "DELETED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/catchup.test.ts",
-            "additions": 0,
-            "deletions": 560,
-            "changeType": "DELETED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/catchup.ts",
-            "additions": 0,
-            "deletions": 566,
-            "changeType": "DELETED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/coalesce.test.ts",
-            "additions": 50,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/coalesce.ts",
-            "additions": 54,
-            "deletions": 21,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/inbound-dedupe.test.ts",
-            "additions": 154,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/inbound-dedupe.ts",
-            "additions": 141,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/monitor-provider.echo-cache.test.ts",
-            "additions": 5,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/monitor-provider.ts",
-            "additions": 135,
-            "deletions": 141,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/parse-notification.test.ts",
-            "additions": 22,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/parse-notification.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/persisted-echo-cache.ts",
-            "additions": 6,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/monitor/types.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/state-migrations.test.ts",
-            "additions": 2,
-            "deletions": 131,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/state-migrations.ts",
-            "additions": 1,
-            "deletions": 161,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/program/config-guard.test.ts",
-            "additions": 0,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/program/config-guard.ts",
-            "additions": 1,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/bundled-channel-config-metadata.generated.ts",
-            "additions": 12,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/validation.ts",
-            "additions": 49,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/zod-schema.providers-core.ts",
-            "additions": 0,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91335",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91335.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 16,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 11,
-            "SUCCESS": 3
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2562,
+    "total_ms": 2684,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 422
+        "ms": 695
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1760
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 354
+        "ms": 1973
       },
       {
         "name": "append_ledger",
