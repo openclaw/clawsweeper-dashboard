@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-08T02:56:06.999Z",
+  "generated_at": "2026-06-08T02:56:13.645Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-07T23:56:06.791Z",
+  "since": "2026-06-07T23:56:11.017Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    91307
+    91306
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,123 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91306:4645046839:2026-06-08T02:56:08Z:clawsweeper_needs_human",
+      "comment_id": "4645046839",
+      "comment_version_key": "4645046839:2026-06-08T02:56:08Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91306#issuecomment-4645046839",
+      "repo": "openclaw/openclaw",
+      "issue_number": 91306,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-08T02:50:00Z",
+      "comment_updated_at": "2026-06-08T02:56:08Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Human merge review and live Telegram proof remain; there is no narrow automated code repair because no blocking patch defect was found.; Cleared: The diff only changes Telegram polling-session control flow and a test; it does not touch dependencies, workflows, token handling, permissions, or supply-chain surfaces. (sha=7eee83a6ea2a36919b2b9ca2edca53775bd7099c)",
+      "review_summary": "The PR wakes the Telegram isolated polling drain after worker-spooled updates are written or reported, and adds a regression test for dispatch before the next drain interval.\n\nPR surface: Source +6, Tests +73. Total +79 across 2 files.\n\nReproducibility: yes. at source level: current main writes worker updates into `channel_ingress_events` without waking the drain, and the linked issue comment corroborates pending unclaimed rows after a second DM. I did not run live Telegram in this read-only review.",
+      "review_followup": "- [P1] Human merge review and live Telegram proof remain; there is no narrow automated code repair because no blocking patch defect was found.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "7eee83a6ea2a36919b2b9ca2edca53775bd7099c",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix #86957: [Bug]: Telegram Ingress Routing Bug",
+        "body": "## Summary\n- Wake the Telegram isolated polling drain immediately after a worker-spooled update is written to `channel_ingress_events`.\n- Keep the existing durable queue, claim, completion, and interval-drain behavior unchanged.\n- Add a regression test covering worker-spooled inbound delivery without waiting for the next drain interval.\n\n## Issue\nFixes #86957.\n\n## Root Cause\n- **Root cause:** The root source of this state lifecycle bug is that the isolated Telegram ingress worker asks the main polling session to write inbound updates into `channel_ingress_events`, but the main session only drained that spool at cycle start and on the periodic drain timer. Because the worker-write lifecycle did not wake the queue drain, a subsequent worker-spooled inbound update could remain `pending` with `attempts = 0`, `claim_owner = null`, and no delivery queue entry until a later timer-driven drain.\n- **Why this is root-cause fix:** The missing invariant was that a successful worker write must wake the production drain path that claims, dispatches, and completes the queued update. This patch requests a drain immediately after the main session persists a worker update, and again when the worker reports the update as spooled; the existing `drainActive`, abort, restart, claim, and completion guards still own ordering and concurrency.\n- **Fix classification:** Minimal root-cause fix in the Telegram isolated ingress dispatcher wakeup path.\n- **Maintainer-ready confidence:** High. The diff is limited to `extensions/telegram/src/polling-session.ts` and a focused regression in `extensions/telegram/src/polling-session.test.ts`; it does not change queue schema, channel policy, outbound Telegram behavior, access control, provider routing, or token handling.\n\n## Why it matters / User impact\n- **Why it matters / User impact:** Issue #86957 reports Telegram inbound routing wedging after a successful first Telegram turn: outbound Telegram still works, polling still starts, and the next inbound row reaches `channel_ingress_events`, but it stays pending/unclaimed with no delivery queue entry. This leaves users with an apparently live Telegram integration that stops responding to later DMs.\n- **What did NOT change:** This PR only changes the isolated Telegram polling session's wakeup after worker-spooled updates. It does not change Telegram outbound delivery, non-isolated polling, channel authorization, DM allow/deny policy, queue schema, retry accounting, or completion semantics.\n- **Architecture / source-of-truth check:** The source of truth for durable inbound delivery remains the existing `channel_ingress_events` queue plus the existing Telegram drain path in `polling-session.ts`. The patch does not introduce a second dispatcher, bypass queue claiming, or mutate public configuration/schema defaults.\n- **Related open PR scan:** The daily-fix public-contract scan for this issue found no related open PRs competing on this contract surface.\n\n## Real behavior proof\n- **Behavior or issue addressed:** A second inbound Telegram DM written by the isolated polling worker should route through the main Telegram polling session immediately instead of remaining pending/unclaimed in `channel_ingress_events` until the next drain interval.\n- **Real environment tested:** Linux local OpenClaw worktree with production `TelegramPollingSession`, production Telegram ingress spool adapter, and the SQLite-backed `createChannelIngressQueue`. The proof used a local fake Telegram Bot runtime to avoid sending real Telegram network traffic or exposing a bot token.\n- **Exact steps or command run after this patch:**\n\n```bash\ncd /media/vdc/code/ai/aispace/openclaw-worktrees/issue-86957\nnode --import tsx /media/vdc/code/ai/aispace/openclaw-issue-86957-evidence/local-telegram-ingress-proof.mjs\n```\n\n- **Evidence after fix:**\n\n```json\n{\n  \"issue\": 86957,\n  \"scenario\": \"isolated Telegram polling writes two inbound DMs into channel_ingress_events with drainIntervalMs=60000\",\n  \"checks\": {\n    \"workerListenerRegistered\": true,\n    \"firstInboundAcked\": true,\n    \"firstInboundDispatched\": true,\n    \"secondInboundAcked\": true,\n    \"secondInboundDispatchedBeforeDrainInterval\": true,\n    \"pendingQueueEmptyAfterSecondDispatch\": true,\n    \"noRealTelegramNetworkRequired\": true\n  },\n  \"observed\": {\n    \"handledUpdateIds\": [100, 101],\n    \"ackedRequestIds\": [\"first-write\", \"second-write\"],\n    \"pendingAfterSecond\": [],\n    \"drainIntervalMs\": 60000\n  }\n}\n```\n\n- **Observed result after fix:** Both worker-spooled inbound updates were acked and handled by the main polling session before the 60s drain interval elapsed, and the pending spool was empty after the second dispatch.\n- **What was not tested:** I did not use a live Telegram bot, real Telegram DM, or remote hosted gateway in this environment. The proof validates the local production routing path from worker update write to SQLite-backed ingress spool drain to `bot.handleUpdate` without network traffic.\n\n## Regression Test Plan\n- **Target test file:** `extensions/telegram/src/polling-session.test.ts`\n- **Scenario locked in:** The new test starts an isolated polling session with `drainIntervalMs: 60_000`, injects a worker `update` message, waits for the main session to ack the queue write, sends the worker `spooled` activity message, and verifies `bot.handleUpdate` receives the update before the next drain interval could fire.\n- **Why this is the smallest reliable guardrail:** The long drain interval makes the regression test fail if delivery depends only on the periodic timer. The assertion that `pendingUpdateIds(tempDir, \"all\")` is empty guards the issue's reported stuck state: a row left `pending` with no claim/dispatch after the worker write.\n\n## Verification\n- `pnpm vitest extensions/telegram/src/polling-session.test.ts --run` — 54 tests passed.\n- `pnpm vitest extensions/telegram/src/telegram-ingress-spool.test.ts --run` — 8 tests passed.\n- `pnpm tsgo:extensions` — passed.\n- `pnpm tsgo:test:extensions` — passed.\n- `pnpm lint:extensions:bundled` — passed.\n- `pnpm exec oxfmt --check extensions/telegram/src/polling-session.ts extensions/telegram/src/polling-session.test.ts` — passed.\n- `git diff --check` — passed.\n\nEvidence files are stored under `/media/vdc/code/ai/aispace/openclaw-issue-86957-evidence/`:\n- `local-telegram-ingress-proof.log`\n- `polling-session-vitest.log`\n- `telegram-ingress-spool-vitest.log`\n- `tsgo-extensions.log`\n- `tsgo-extensions-test.log`\n- `lint-extensions-bundled.log`\n- `format-check-changed.log`\n- `git-diff-check.log`\n\n## Patch quality notes\n- **Patch quality notes:** The implementation adds a wakeup call only after a successful worker queue write and after the existing worker activity notification. The existing `drainOnce()` implementation still handles stale backlog recovery, claim ordering, `drainActive` re-entry prevention, abort checks, restart checks, dispatch, completion, release, and failure handling.\n- **Canonical scope:** The fix stays at the production session that receives worker messages and owns the drain loop. It intentionally does not add a fallback dispatcher in the queue adapter or alter durable receive journal behavior, because those layers already list/claim pending records when invoked.\n- **Compatibility/default behavior:** No public config, schema, protocol payload, queue record format, default interval, or migration behavior changes.\n\n## Merge risk\n- **Risk labels considered:** `message-delivery`, `availability`, `session-state`.\n- **Risk explanation:** This PR affects Telegram message delivery timing and the Telegram polling session's drain wakeup path. The main risk would be duplicate or concurrent drain attempts, but the existing `drainActive` guard keeps drain execution single-flight and the existing queue claim/complete path remains the only dispatch path.\n- **Why acceptable:** The change narrows latency/stall behavior without bypassing durable queue semantics. If a worker writes an update while a drain is already active, the immediate request is ignored by the existing re-entry guard and the active drain continues using the same pending queue source of truth.\n- **Not changed:** No database schema changes, no Telegram outbound changes, no policy/default/config changes, no provider/auth changes, and no token handling changes.",
+        "branch": "feat/issue-86957",
+        "head_sha": "7eee83a6ea2a36919b2b9ca2edca53775bd7099c",
+        "author": "mushuiyu886",
+        "labels": [
+          "channel: telegram",
+          "size: S",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/telegram/src/polling-session.test.ts",
+            "additions": 73,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/telegram/src/polling-session.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-91306",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91306.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 158,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 30,
+            "SUCCESS": 125,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 324,
+    "total_ms": 2945,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 196
+        "ms": 346
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 2272
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 117
+        "ms": 307
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
