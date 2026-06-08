@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-08T06:06:17.718Z",
+  "generated_at": "2026-06-08T06:07:00.163Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-08T03:06:15.184Z",
+  "since": "2026-06-08T03:06:59.399Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     91325
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4645541483
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -61,91 +63,32 @@
       "finding_id": "review-feedback",
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(skill-workshop): bound lifecycle approval timeout below Codex dynamic-tool watchdog",
-        "body": "### Summary\n\n- **Problem**: `skill_workshop` lifecycle tool calls (apply/reject/quarantine) invoked from a Codex agent session fail with \"OpenClaw dynamic tool call timed out after 90000ms while running tool skill_workshop\" before the operator approval prompt can resolve. The proposal is left pending and unmodified.\n- **Root Cause**: The Codex dynamic-tool bridge wraps every tool call with a per-tool watchdog (`CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 90_000`, `dynamic-tool-execution.ts`). Skill Workshop lifecycle calls return a `requireApproval` payload that can wait up to `DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS = 120_000` plus 10s gateway grace (130s total, `plugin-approvals.ts`, `agent-tools.before-tool-call.ts`). The 90s watchdog fires first, surfacing a generic bridge timeout instead of a clean approval denial; the approval is never completed.\n- **Fix**: Add `CODEX_DYNAMIC_SKILL_WORKSHOP_TOOL_TIMEOUT_MS = 150_000` to `readConfiguredDynamicToolTimeoutMs`, matching the existing per-tool deadline pattern used for `message` and `image` tools. The 150s deadline exceeds the 130s approval ceiling, so the approval can now complete or expire cleanly before the Codex watchdog fires. Per-call `timeoutMs` overrides still take precedence. Non-Codex Skill Workshop callers are unaffected.\n- **What changed**:\n  - `extensions/codex/src/app-server/dynamic-tool-execution.ts` — exported `CODEX_DYNAMIC_SKILL_WORKSHOP_TOOL_TIMEOUT_MS = 150_000` constant; added `skill_workshop` branch in `readConfiguredDynamicToolTimeoutMs`.\n  - `extensions/codex/src/app-server/dynamic-tool-execution.test.ts` — three new tests: resolver returns the constant for `skill_workshop`; fake-timer proof that the 90s watchdog fires before a 120s approval (before); fake-timer proof that the 120s approval completes within the 150s deadline (after).\n- **What did NOT change (scope boundary)**:\n  - Skill Workshop approval policy (`src/skills/workshop/policy.ts`) is unchanged; the 120s approval window is preserved for all callers.\n  - Config surface unchanged (no schema, defaults, doctor migrations, or `docs/reference/config`).\n  - Plugin surface unchanged (no plugin SDK, manifest, `extensions/api.ts`, registry/loader).\n  - Gateway protocol unchanged.\n\n### Reproduction\n\n1. Configure Skill Workshop with default `approvalPolicy: pending`.\n2. Start a Codex agent session and prompt it to apply a pending skill proposal.\n3. The agent invokes `skill_workshop(action=\"apply\", proposal_id=\"...\")`.\n4. **Before this PR**: the Codex dynamic-tool watchdog fires at 90s with \"OpenClaw dynamic tool call timed out after 90000ms while running tool skill_workshop\"; the approval prompt is never shown; the proposal stays pending.\n5. **After this PR**: the 150s Codex deadline lets the approval flow reach its natural 120s expiry; if the operator does not respond the approval times out with a clean denial; if the operator responds the apply proceeds normally.\n\n### Real behavior proof\n\n**Behavior addressed (#91266)**: `skill_workshop(action=\"apply\")` from a Codex agent session no longer surfaces a generic 90s dynamic-tool timeout; the 150s extended deadline gives the approval path (up to 130s total) room to resolve.\n\n**Real environment tested (Linux, Node 22 — Vitest with fake timers against `handleDynamicToolCallWithTimeout` and `resolveDynamicToolCallTimeoutMs`, the two production functions on the timed-out path)**: fake-timer tests drive `handleDynamicToolCallWithTimeout` directly with a mock `toolBridge` that simulates the approval wait duration, confirming the watchdog fires at 90s before the approval can complete and that the same 120s approval succeeds within the 150s deadline.\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs extensions/codex/src/app-server/dynamic-tool-execution.test.ts`\n\n**Evidence after fix**:\n\n```text\n Test Files  1 passed (1)\n      Tests  15 passed (15)\n```\n\nThree new tests: (1) \"uses an extended deadline for skill_workshop lifecycle tool calls\" — `resolveDynamicToolCallTimeoutMs` returns `CODEX_DYNAMIC_SKILL_WORKSHOP_TOOL_TIMEOUT_MS` (150s). (2) \"fires the 90s watchdog before a skill_workshop lifecycle approval can resolve\" — `handleDynamicToolCallWithTimeout` at `timeoutMs: 90_000` with a never-resolving bridge mock fails with the exact timeout message at 90s; this is the before state. (3) \"lets a skill_workshop lifecycle approval complete within the extended 150s deadline\" — `handleDynamicToolCallWithTimeout` at `timeoutMs: 150_000` with a mock that resolves after 120s (DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS) succeeds; this is the after state.\n\n**Observed result after fix**: the before test confirms the 90s watchdog fires while the approval is still pending; the after test confirms a full 120s approval wait completes successfully within the 150s window; both use the same `handleDynamicToolCallWithTimeout` entry point that Codex reaches in production.\n\n**What was not tested**: live Gateway + Codex agent session with an active operator approval prompt in the UI.\n\n**Repro confirmation**: the before test fails if `timeoutMs` is raised to 150_000 (approval would complete); the after test fails if `timeoutMs` is lowered to 90_000 (watchdog fires at 90s before the 120s approval). The two tests together pin the exact boundary the fix crosses.\n\n### Risk / Mitigation\n\n- **Risk**: `skill_workshop` non-lifecycle calls (list, inspect) also receive the 150s Codex deadline instead of the 90s default. **Mitigation**: non-lifecycle calls complete in milliseconds and are not affected by the wider window; per-call `timeoutMs` can still narrow this for any call.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Agent runtime\n- [x] Codex extension\n\n### Linked Issue/PR\n\nFixes #91266",
-        "branch": "fix/91266-skill-workshop-approval-timeout",
-        "head_sha": "7ebb72376831da78f59fd99d9eeba8c4adf0d6e9",
-        "author": "openperf",
-        "labels": [
-          "size: S",
-          "extensions: codex",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "extensions/codex/src/app-server/dynamic-tool-execution.test.ts",
-            "additions": 76,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/dynamic-tool-execution.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91325",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91325.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 155,
-          "counts": {
-            "SUCCESS": 122,
-            "SKIPPED": 31,
-            "FAILURE": 2
-          },
-          "blockers": [
-            "check-lint:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "check-lint:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2801,
+    "total_ms": 1519,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 336
+        "ms": 753
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2183
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 254
+        "ms": 755
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
