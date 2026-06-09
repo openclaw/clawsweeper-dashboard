@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-09T14:35:23.512Z",
+  "generated_at": "2026-06-09T14:35:33.357Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-09T11:35:21.118Z",
+  "since": "2026-06-09T11:35:32.548Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     91699
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4660842403
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 2,
@@ -40,12 +42,12 @@
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-09T12:52:18Z",
-      "comment_updated_at": "2026-06-09T14:35:17Z",
+      "comment_created_at": "2026-06-09T14:34:00Z",
+      "comment_updated_at": "2026-06-09T14:34:00Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -61,96 +63,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): publish embedded transcript writes",
-        "body": "Opened on behalf of Onur Solmaz (`osolmaz`). This is in progress; this draft PR is now the implementation vehicle for the full embedded transcript mutation ownership refactor.\n\nAI-assisted change.\n\n# PR Plan: 2026-06-09: Embedded Transcript Mutation Ownership Refactor Plan\n\n## Goal\n\nEliminate the recurring OpenClaw embedded-session takeover failures caused by\nOpenClaw-owned embedded transcript writes that are invisible to the embedded\nsession fence.\n\nThe target end state is simple:\n\n```text\nIf OpenClaw changes an active transcript file, the write lock and session fence\nare updated in the same operation.\n```\n\nThis is an OpenClaw core fix. Hugging Face Spaces are the production-like\nverification environment, not the cause of the bug.\n\n## Problem\n\nThe embedded runner correctly protects active transcript files from external\nconcurrent writes. It does this by remembering an active transcript-file\nfingerprint while the prompt lock is released and checking that fingerprint\nlater.\n\nThe problem is that OpenClaw itself mutates the same active transcript file from\nmultiple places:\n\n```text\nmessage_end persistence\ntool call / tool result persistence\nauto-compaction\norphaned user-message repair\ntranscript rewrites\nhook and maintenance writes\ncleanup/finalization writes\n```\n\nSome of those writes publish the new owned fingerprint. Some do not. When they\ndo not, OpenClaw later mistakes its own write for an external takeover and sends\nthe generic channel error after a model response.\n\n## Design Rule\n\nRaw embedded transcript mutation must not be available inside embedded runs.\n\nThis is about transcript mutation ownership, not session metadata storage.\nOpenClaw has related work that moves session metadata to SQLite, but that does\nnot remove the active transcript mutation problem by itself. The controller\nshould be storage-neutral: it should work for the current JSONL transcript files\nand still be the right boundary if transcript storage later moves behind a\nSQLite-backed implementation.\n\n## Relationship To Existing Session Work\n\nThis plan should compose with the existing session/accessor seam work instead\nof replacing it.\n\nRelevant nearby work:\n\n```text\n#90775: compaction-specific prompt-fence fix\n#91322: session metadata moved to SQLite on main\n#89124: auto-reply sessions through session seam\n#89201: transcript runtime identity contract\n#89519: session entry lifecycle seam\n#90439: embedded run session target seam\n```\n\nThe distinction is:\n\n```text\nmetadata storage answers where session metadata lives\nruntime identity seams answer how callers name session targets\ntranscript mutation ownership answers who is allowed to mutate active transcript state\n```\n\nThe controller should use the best available session/accessor seam if it lands\nfirst. It should not duplicate the SQLite metadata migration or depend on a\nspecific transcript storage backend.\n\nEmbedded code should not call these directly:\n\n```text\nsessionManager.appendMessage(...)\nsessionManager.appendCustomEntry(...)\nsessionManager.branch(...)\nsessionManager.resetLeaf()\nflushSessionManagerFile(...)\nrewriteTranscript(...)\n```\n\nInstead, embedded code should call one transcript mutation API that owns:\n\n```text\n1. acquire or reuse the session write lock\n2. assert the current active transcript-file fence\n3. read the pre-write fingerprint\n4. apply the mutation\n5. flush the active transcript file if needed\n6. publish the OpenClaw-owned fingerprint\n7. refresh in-memory session state\n8. release the lock\n```\n\n## Proposed API\n\nIntroduce a controller near the embedded runner lock code:\n\n```text\nsrc/agents/embedded-agent-runner/run/embedded-transcript-mutation-controller.ts\n```\n\nWorking shape:\n\n```ts\nawait transcriptMutations.run(\"repair-orphaned-user-message\", async (session) => {\n  session.branch(parentId);\n  session.appendMessage(userMessage);\n});\n```\n\nThe caller provides the reason and the mutation body. The controller handles\nlocking, fingerprint publication, file flush, and state refresh.\n\nThe mutation reason should be structured enough for logs and tests:\n\n```text\nmessage_end\ntool_result\nauto_compaction\norphan_user_repair\ntranscript_rewrite\nhook_write\nmaintenance\ncleanup\n```\n\n## Implementation Plan\n\nThis should be implemented as one coherent refactor, not as a sequence of\npartial fixes. The pull request is not complete until the controller exists,\nall embedded mutation paths have moved through it, misuse is blocked or\ntest-detected, regression coverage exists, and the Hugging Face Space has been\nverified.\n\n### One-Pass Scope\n\nAudit, implement, migrate, harden, test, and verify in the same workstream.\n\nAudit direct and indirect mutation call sites under:\n\n```text\nsrc/agents/embedded-agent-runner/\nsrc/agents/sessions/\nsrc/agents/context-engine/\n```\n\nSearch targets:\n\n```text\nappendMessage(\nappendCustomEntry(\nbranch(\nresetLeaf(\nflushSessionManagerFile(\nrewriteTranscript\nwithSessionWriteLock(\npublishOwnedWrite\n```\n\nClassify each mutation while migrating it:\n\n```text\nprompt-time write\npost-prompt write\ncleanup write\nmaintenance write\ntest-only write\nnon-embedded write\n```\n\nThe PR notes should include the final migration inventory:\n\n```text\nevery embedded mutation path and its final controller-backed status\n```\n\n### Controller\n\nBuild the controller on top of the existing session lock controller instead of\nadding a second lock system.\n\nRequired behavior:\n\n```text\nrun(reason, mutation)\nrunSync(reason, mutation)\nrefreshActiveSessionState()\nlog mutation reason, runId, sessionId\npublish owned-write fence after successful mutation\npreserve takeover detection for non-owned external writes\n```\n\nNested writes must be safe. If a mutation is already inside an active write\nlock, the controller should reuse it and still publish the owned fingerprint\nonce the mutation changes the file.\n\n### Required Migration Coverage\n\nMigrate every embedded transcript mutation path in the same PR.\n\nKnown production-failing paths:\n\n```text\nauto-compaction transcript append\nmessage_end persistence\norphaned trailing user-message repair\ntool call / tool result persistence\n```\n\nOther embedded runner write paths that must be covered:\n\n```text\nbefore_agent_run blocked-message persistence\nprompt cache custom entries\nsession yield artifacts\nmid-turn precheck cleanup\ncontext-engine maintenance rewrites\nbootstrap completion entries\nagent steering lease/session entries\nmanual compaction boundary writes\ntranscript rewrite helpers\ncleanup/finalization writes\n```\n\nDo not leave mixed ownership where some embedded writes use the controller and\nnearby writes still call `SessionManager` directly.\n\n### Misuse Prevention\n\nDirect embedded mutations must be visibly wrong before the PR is considered\ncomplete.\n\nOptions, from lightest to strongest:\n\n```text\nadd comments and tests around forbidden direct writes\nadd a repo-local lint/script check for direct SessionManager transcript writes in embedded runner files\nhide raw SessionManager behind a narrower embedded-session interface\nmake the controller the only object passed into mutation-heavy embedded code\n```\n\nPreferred production path:\n\n```text\nUse a narrow embedded transcript mutation interface and add a script test that\nfails if new direct mutation calls are introduced under embedded runner code.\n```\n\n### Regression Tests\n\nAdd tests that prove the class is fixed, not only the latest incident.\n\nMinimum regression cases:\n\n```text\n1. OpenClaw-owned prompt-time append while prompt lock is released does not trip takeover.\n2. Auto-compaction append during prompt execution does not trip takeover.\n3. message_end persistence during prompt execution does not trip takeover.\n4. Orphaned trailing user repair followed by a new prompt does not trip takeover.\n5. Tool call / tool result persistence does not trip takeover.\n6. External file mutation still trips takeover.\n```\n\nThe last case is critical. The refactor must not disable real takeover\nprotection.\n\n### Production Verification on Hugging Face\n\nBuild an OpenClaw image from the fixed branch and pin the test Space to it.\n\nVerify with:\n\n```text\nSpace: osolmaz/onurclawtest\nTelegram bot: existing private test bot\nModel: huggingface/Qwen/Qwen3-8B\nPersistent bucket: osolmaz/onurclawtest-data\n```\n\nTest messages:\n\n```text\nwhich model are you\nplease continue\ncan you search online? tell me what you can find about gemma 4\n/new\nplease continue\n```\n\nPass criteria:\n\n```text\nNo EmbeddedAttemptSessionTakeoverError in Space logs.\nNo generic channel error appended after a successful model response.\nSession JSONL contains coherent user/assistant turns.\nExternal-write takeover regression test still passes locally.\n```\n\n## Expected Size\n\nThis is a large but bounded refactor:\n\n```text\n3-5 focused engineering days for implementation\n1-2 weeks if including careful review, hardening, and production verification\n20-40 files touched\n1,000-2,500 changed lines, mostly tests and call-site migration\n```\n\n## Risks\n\nThe main risk is weakening real concurrency protection. The controller must make\nOpenClaw-owned writes safe without accepting arbitrary file changes.\n\nSecondary risks:\n\n```text\nchanging local CLI behavior\nbreaking compaction or transcript branching\nmissing an indirect write path\nintroducing deadlocks through nested write locks\npublishing a fence for a failed or partial write\n```\n\n## Non-Goals\n\nThis plan does not require:\n\n```text\nrewriting the active transcript file format\nremoving append-only transcript semantics\nreplacing the session metadata SQLite migration\nchanging Hugging Face storage\nchanging Telegram delivery\nchanging model provider\ndisabling tools\n```\n\n## Definition of Done\n\nThe refactor is complete when:\n\n```text\n1. Embedded transcript mutations go through the controller.\n2. Direct embedded `SessionManager` writes are blocked or test-detected.\n3. Regression tests cover owned writes and real external takeover.\n4. The Hugging Face Space completes repeated Telegram prompts without the\n   generic post-response error.\n5. The implementation is merged into OpenClaw core and the Space is pinned to a\n   fixed image.\n```\n",
-        "branch": "fix/hf-auto-compaction-session-fence",
-        "head_sha": "6563de6459c62e3be5ac4e701d9609654f6a7b2d",
-        "author": "osolmaz",
-        "labels": [
-          "agents",
-          "maintainer",
-          "size: S",
-          "mantis: telegram-visible-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts",
-            "additions": 52,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sessions/agent-session.ts",
-            "additions": 23,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sessions/sdk.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91699",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91699.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 48,
-          "counts": {
-            "SUCCESS": 6,
-            "SKIPPED": 41,
-            "FAILURE": 1
-          },
-          "blockers": [
-            "Run agentic native Telegram proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Run agentic native Telegram proof:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2674,
+    "total_ms": 3066,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 379
+        "ms": 797
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1998
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 269
+        "ms": 2256
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
