@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-09T13:31:57.002Z",
+  "generated_at": "2026-06-09T13:31:55.415Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-09T10:31:54.093Z",
+  "since": "2026-06-09T10:31:54.864Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
@@ -13,6 +13,9 @@
   ],
   "comment_ids": [
     4660240490
+  ],
+  "comment_ids": [
+    4660245312
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,17 +36,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:91705:4660240490:2026-06-09T13:30:17Z:re_review",
-      "comment_id": "4660240490",
-      "comment_version_key": "4660240490:2026-06-09T13:30:17Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/91705#issuecomment-4660240490",
-      "repo": "openclaw/openclaw",
-      "issue_number": 91705,
-      "author": "zenglingbiao",
-      "author_id": 290951975,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-09T13:30:17Z",
-      "comment_updated_at": "2026-06-09T13:30:17Z",
+      "idempotency_key": "clawsweeper-repair:steipete/homebrew-tap:42:4660214180:2026-06-09T13:31:48Z:clawsweeper_needs_human",
+      "comment_id": "4660214180",
+      "comment_version_key": "4660214180:2026-06-09T13:31:48Z",
+      "comment_url": "https://github.com/steipete/homebrew-tap/pull/42#issuecomment-4660214180",
+      "repo": "steipete/homebrew-tap",
+      "issue_number": 42,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-09T13:30:42Z",
+      "comment_updated_at": "2026-06-09T13:30:42Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -63,160 +66,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(diagnostics): prune ghost session entries after failed recovery (fixes #91697)",
-        "body": "### Summary\n\n- **Problem**: `pruneDiagnosticSessionStates()` in `src/logging/diagnostic-session-state.ts` only deletes entries where `state.state === \"idle\"`. When `requestStuckSessionRecovery()` fails (status `\"failed\"`), the session state is never reset to idle, causing ghost entries to accumulate indefinitely in the in-memory `diagnosticSessionStates` Map, leaking V8 heap memory.\n- **Root Cause**: `recoveryOutcomeMutatesSessionState()` in `src/logging/diagnostic-session-recovery.ts` returns `true` for `aborted`, `released`, and `noop` outcomes — but not for `failed`. When recovery fails, `applyRecoveryOutcomeToDiagnosticState()` calls `emitSessionRecoveryCompleted({ stale: true })` and returns early without setting `state.state = \"idle\"`, so the prune function skips the entry permanently.\n- **Fix**: Add `outcome.status === \"failed\"` to the `recoveryOutcomeMutatesSessionState()` guard so that failed recovery outcomes also trigger the state transition to idle, allowing the periodic prune to clean up stale entries.\n- **What changed**:\n  - `src/logging/diagnostic-session-recovery.ts` — added `outcome.status === \"failed\"` to `recoveryOutcomeMutatesSessionState()`\n- **What did NOT change (scope boundary)**:\n  - `recoveryOutcomeClearsQueuedSessionState()` — failed recoveries may still have queued state; clearing the queue on failure is a separate concern\n  - The prune TTL and interval constants in `diagnostic-session-state.ts`\n  - The recovery coordinator's abort/heartbeat logic\n\n### Reproduction\n\n1. A session triggers the stuck-session diagnostic via `stuckSessionAbortMs`\n2. Recovery is attempted but fails (e.g., session already closed, generation check fails)\n3. `recoveryOutcomeMutatesSessionState()` receives `{ status: \"failed\", action: \"none\", reason: \"exception\" }` and returns `false`\n4. **Before this PR**: The entry stays at `state: \"processing\"` permanently; `pruneDiagnosticSessionStates()` skips it because `isIdle` is `false`; ghost entries leak in the Map\n5. **After this PR**: The entry transitions to `state: \"idle\"`; after 30+ minutes of inactivity the periodic prune removes it\n\n### Real behavior proof\n\n**Behavior or issue addressed (91697)**: When a stuck-session recovery attempt fails (status `\"failed\"`), the diagnostic session state now transitions to idle so the periodic `pruneDiagnosticSessionStates()` can eventually clean it up, preventing unbounded Map growth from ghost entries.\n\n**Real environment tested**: Linux, Node 22 — Vitest with the logging vitest config against diagnostic session recovery integration and runtime tests\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs src/logging/diagnostic-stuck-session-recovery.integration.test.ts src/logging/diagnostic-stuck-session-recovery.runtime.test.ts src/logging/diagnostic.test.ts`\n\n**Evidence after fix**:\n```text\nTest Files  3 passed (3)\n     Tests  92 passed (92)\n  Start at  21:01:41\n  Duration  7.01s (transform 9.88s, setup 1.38s, import 11.26s, tests 832ms, environment 0ms)\n```\n\n**Observed result after fix**: The `recoveryOutcomeMutatesSessionState` function now recognizes `status: \"failed\"` as a session-state-mutating outcome alongside `aborted`, `released`, and `noop`. The diagnostic recovery coordinator's `applyRecoveryOutcomeToDiagnosticState` will set the state to idle on failed recovery, enabling the prune function to clean up the entry after the TTL window. All 92 existing diagnostic tests continue to pass.\n\n**What was not tested**: A live session that actually triggers a stuck-session recovery failure and lets the 30-minute prune TTL expire. The unit tests exercise the recovery coordinator and state mutation logic but not the full end-to-end prune cycle with real time.\n\n**Repro confirmation**: Before this patch, `recoveryOutcomeMutatesSessionState({ status: \"failed\", action: \"none\", reason: \"exception\", error: \"...\" })` returns `false`, causing `applyRecoveryOutcomeToDiagnosticState` to skip the idle transition. After this patch, it returns `true`, and the coordinator proceeds to set `state.state = \"idle\"`.\n\n### Risk / Mitigation\n\n- **Risk**: A failed recovery that leaves a genuinely active session in a bad state could now be pruned after 30 minutes\n  **Mitigation**: A failed recovery with `status: \"failed\"` means the recovery itself could not complete — the run is already aborted or the session is closed. The diagnostic state entry is no longer useful for monitoring. The prune only fires after `SESSION_STATE_TTL_MS` (30 min) of inactivity, giving ample time for any follow-up diagnostics.\n- **Risk**: `recoveryOutcomeClearsQueuedSessionState` was not modified, so `queueDepth` may remain > 0 after a failed recovery\n  **Mitigation**: The `queueDepth` field is set separately via `setDiagnosticQueueDepth`. Even if `queueDepth > 0` after a failed recovery, the entry will be cleaned up by the size-based cap (`SESSION_STATE_MAX_ENTRIES = 2000`) which falls back to LRU eviction regardless of state.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] logging / diagnostics\n\n### Regression Test Plan\n\n- `node scripts/run-vitest.mjs src/logging/diagnostic-stuck-session-recovery.integration.test.ts`\n- `node scripts/run-vitest.mjs src/logging/diagnostic-stuck-session-recovery.runtime.test.ts`\n- `node scripts/run-vitest.mjs src/logging/diagnostic.test.ts`\n\n### Review Findings Addressed\n\nN/A (initial submission)\n\n### Linked Issue/PR\n\nFixes #91697\n",
-        "branch": "fix/issue-91697-prune-ghost-entries",
-        "head_sha": "fc0ba01e21a6f23d5c6a526084d08d0a8338e7bf",
-        "author": "zenglingbiao",
-        "labels": [
-          "size: XS",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/logging/diagnostic-session-recovery.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91705",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91705.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 157,
-          "counts": {
-            "SUCCESS": 92,
-            "SKIPPED": 23,
-            "IN_PROGRESS": 41,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "checks-node-core-runtime-infra-gateway-processes:IN_PROGRESS",
-            "checks-node-core-runtime-infra-heartbeat-runner:IN_PROGRESS",
-            "checks-node-core-runtime-infra-storage-state:IN_PROGRESS",
-            "checks-node-core-runtime-secrets:IN_PROGRESS",
-            "checks-node-core-runtime-infra-process:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-agentic-control-plane-agent-chat:IN_PROGRESS",
-            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-core:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-command-support:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-sessions-cron:IN_PROGRESS",
-            "checks-node-agentic-agents-core-models:IN_PROGRESS",
-            "checks-node-agentic-agents-core-tools:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runtime:IN_PROGRESS",
-            "checks-node-agentic-agents-embedded:IN_PROGRESS",
-            "checks-node-agentic-agents-support:IN_PROGRESS",
-            "checks-node-agentic-agents-tools:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-core-fast:IN_PROGRESS",
-            "checks-node-core-runtime-infra-gateway-processes:IN_PROGRESS",
-            "checks-node-core-runtime-infra-heartbeat-runner:IN_PROGRESS",
-            "checks-node-core-runtime-infra-storage-state:IN_PROGRESS",
-            "checks-node-core-runtime-secrets:IN_PROGRESS",
-            "checks-node-core-runtime-infra-process:IN_PROGRESS",
-            "checks-node-core-runtime-media-ui:IN_PROGRESS",
-            "checks-node-core-runtime-cron-isolated-agent:IN_PROGRESS",
-            "checks-node-agentic-control-plane-agent-chat:IN_PROGRESS",
-            "checks-node-agentic-control-plane-auth-node:IN_PROGRESS",
-            "checks-node-agentic-control-plane-http-models:IN_PROGRESS",
-            "checks-node-agentic-control-plane-startup-core:IN_PROGRESS",
-            "checks-node-agentic-cli:IN_PROGRESS",
-            "checks-node-agentic-command-support:IN_PROGRESS",
-            "checks-node-agentic-commands-agent-channel:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
-            "checks-node-agentic-commands-doctor-sessions-cron:IN_PROGRESS",
-            "checks-node-agentic-agents-core-models:IN_PROGRESS",
-            "checks-node-agentic-agents-core-tools:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runner:IN_PROGRESS",
-            "checks-node-agentic-agents-core-runtime:IN_PROGRESS",
-            "checks-node-agentic-agents-embedded:IN_PROGRESS",
-            "checks-node-agentic-agents-support:IN_PROGRESS",
-            "checks-node-agentic-agents-tools:IN_PROGRESS",
-            "checks-node-agentic-gateway-core:IN_PROGRESS",
-            "checks-node-agentic-gateway-methods:IN_PROGRESS",
-            "checks-node-agentic-plugin-sdk:IN_PROGRESS",
-            "checks-node-auto-reply-reply-dispatch:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3114,
+    "total_ms": 2125,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 491
+        "ms": 537
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2401
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 204
+        "ms": 1574
       },
       {
         "name": "append_ledger",
