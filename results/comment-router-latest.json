@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-09T05:30:11.653Z",
+  "generated_at": "2026-06-09T05:30:15.517Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-09T02:30:11.245Z",
+  "since": "2026-06-09T02:30:13.214Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    91622
+    91590
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4656428129
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -29,18 +31,131 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:91590:4656428129:2026-06-09T05:28:46Z:re_review",
+      "comment_id": "4656428129",
+      "comment_version_key": "4656428129:2026-06-09T05:28:46Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91590#issuecomment-4656428129",
+      "repo": "openclaw/openclaw",
+      "issue_number": 91590,
+      "author": "joshavant",
+      "author_id": 830519,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-09T05:28:46Z",
+      "comment_updated_at": "2026-06-09T05:28:46Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "write",
+      "target": {
+        "kind": "pull_request",
+        "title": "Fix context-engine compaction ownership for Codex sessions",
+        "body": "## Summary\n\n- keep owning context-engine compaction primary for queued budget compaction when a Codex/native harness is also selected\n- request Codex native `thread/compact/start` only as a bounded secondary follow-up after successful owning context-engine compaction\n- clear stale Codex thread-bootstrap projection metadata before that native follow-up mutates the bound thread\n- add focused regression coverage for the queued handoff and the real Codex app-server bridge path\n\nRefs #90496. This addresses the live-reproduced context-engine/native-compaction breakage from the issue, but it does not claim to close every reported symptom around provider 4xxs, scheduled-session metadata, or automatic transcript rotation policy.\n\n## Real behavior proof\n\nBehavior addressed: Budget auto-compaction can be short-circuited by the Codex app-server native path before an owning context engine compacts the session.\n\nReal environment tested: Final-head local runtime proof on `2e24ceab886a1999d4dbc0d74854c8e3e27dcbbd`, using the queued compaction entry point plus a proof harness that calls the real Codex app-server compact bridge with a fake client at the socket boundary. Live Discord lane was also tested with a Convex-leased `discord` credential and gateway started from this branch.\n\nExact steps or command run after this patch: `pnpm tsx /private/tmp/openclaw-90496-final-head-proof.ts`. Then ran the live Discord proof with 1Password-injected Convex broker credentials: `op-with-service-account run --env-file /private/tmp/openclaw-90496-op.env -- pnpm tsx /private/tmp/openclaw-90496-discord-proof.ts`.\n\nEvidence after fix: Final-head proof output showed queued context-engine compaction succeeded and the secondary Codex bridge sent `thread/compact/start` with `request:\"after_context_engine\"`:\n\n```json\n{\n  \"sha\": \"2e24ceab886a1999d4dbc0d74854c8e3e27dcbbd\",\n  \"compactResult\": {\n    \"ok\": true,\n    \"compacted\": true,\n    \"reason\": \"proof-context-engine-compacted\",\n    \"result\": {\n      \"details\": {\n        \"engine\": \"proof-context-engine\",\n        \"nativeHarnessCompaction\": {\n          \"ok\": true,\n          \"compacted\": false,\n          \"result\": {\n            \"details\": {\n              \"backend\": \"codex-app-server\",\n              \"signal\": \"thread/compact/start\",\n              \"pending\": true,\n              \"request\": \"after_context_engine\",\n              \"trigger\": \"budget\"\n            }\n          }\n        }\n      }\n    }\n  },\n  \"bridgeRequests\": [\n    {\n      \"method\": \"thread/compact/start\",\n      \"params\": {\n        \"threadId\": \"thread-proof-final-head\"\n      }\n    }\n  ],\n  \"bindingAfter\": {\n    \"contextEngine\": {\n      \"schemaVersion\": 1,\n      \"engineId\": \"proof-context-engine\",\n      \"policyFingerprint\": \"proof-policy\"\n    }\n  },\n  \"assertions\": {\n    \"contextEngineCompacted\": true,\n    \"contextEngineMarkerWritten\": true,\n    \"secondaryCodexResultOk\": true,\n    \"secondaryCodexRequestMarked\": true,\n    \"secondaryCodexBridgeSignal\": true,\n    \"outboundBridgeRequest\": true,\n    \"projectionCleared\": true,\n    \"didNotTakeOldNonManualSkip\": true\n  }\n}\n```\n\nObserved result after fix: The owning context engine compacts first. Only after that succeeds, the secondary Codex bridge sends `thread/compact/start` with `request:\"after_context_engine\"`, clears the stale context-engine projection marker, and does not take the old `reason:\"non_manual_trigger\"` skip path.\n\nWhat was not tested live: A real production Codex provider `provider_error_4xx`, scheduled/reminder stale model metadata recreation, and a new automatic transcript-rotation product policy for genuinely unrecoverable compaction.\n\n## Live Discord proof\n\nThe live Discord proof on final head leased a `discord` credential from Convex, sent a real marker mention, observed the SUT bot reply, reset a seeded stale session entry, and invoked queued budget compaction for the Discord channel session.\n\nRedacted live output:\n\n```json\n{\n  \"credential\": {\n    \"kind\": \"discord\",\n    \"source\": \"convex\",\n    \"id\": \"<redacted>\"\n  },\n  \"discord\": {\n    \"guildId\": \"<redacted>\",\n    \"channelId\": \"<redacted>\",\n    \"sentMessageId\": \"<redacted>\",\n    \"replyMessageId\": \"<redacted>\",\n    \"markerObserved\": true\n  },\n  \"reset\": {\n    \"rpcOk\": true,\n    \"before\": {\n      \"providerOverride\": \"codex\",\n      \"modelOverride\": \"gpt-5.4\",\n      \"fallbackOriginProvider\": \"openai\",\n      \"fallbackOriginModel\": \"gpt-5.5\"\n    },\n    \"after\": {}\n  },\n  \"compaction\": {\n    \"result\": {\n      \"ok\": true,\n      \"compacted\": true,\n      \"reason\": \"proof-context-engine-compacted\"\n    },\n    \"markerWritten\": true,\n    \"markerEvents\": [\n      {\n        \"sessionKey\": \"agent:qa:discord:channel:<redacted>\",\n        \"target\": \"budget\",\n        \"force\": false\n      }\n    ]\n  }\n}\n```\n\n## Regression proof\n\nOn current `origin/main` at `80f1ae6ffe`, the same live Discord proof reproduced the narrowed failure: Discord marker observed, reset clean, but budget compaction returned `compacted:false`, `reason:\"codex app-server owns automatic compaction\"`, and `markerWritten:false`.\n\n## Verification\n\n- `.agents/skills/autoreview/scripts/autoreview --mode local` passed with no accepted/actionable findings after the secondary Codex bridge repair.\n- `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/compact.hooks.test.ts extensions/codex/src/app-server/compact.test.ts` passed, 68/68 agent tests and 19/19 Codex bridge tests.\n- `pnpm tsx /private/tmp/openclaw-90496-final-head-proof.ts` passed on `2e24ceab886a1999d4dbc0d74854c8e3e27dcbbd`.\n- Live Discord proof passed on final head with a Convex-leased `discord` credential.\n- `git diff --check` passed.\n",
+        "branch": "fix/reset-stale-model-provenance-90496",
+        "head_sha": "2e24ceab886a1999d4dbc0d74854c8e3e27dcbbd",
+        "author": "joshavant",
+        "labels": [
+          "agents",
+          "maintainer",
+          "size: M",
+          "extensions: codex",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/codex/harness.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/compact.test.ts",
+            "additions": 58,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/compact.ts",
+            "additions": 59,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compact.hooks.test.ts",
+            "additions": 78,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compact.queued.ts",
+            "additions": 87,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compact.types.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-91590",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91590.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 163,
+          "counts": {
+            "SUCCESS": 133,
+            "SKIPPED": 29,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 761,
+    "total_ms": 2501,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 396
+        "ms": 586
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1702
       },
       {
         "name": "classify_commands",
@@ -48,7 +163,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 353
+        "ms": 199
       },
       {
         "name": "append_ledger",
