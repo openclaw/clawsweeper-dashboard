@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-09T03:07:20.288Z",
-  "repo": "openclaw/plugin-inspector",
+  "generated_at": "2026-06-09T03:07:52.114Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-09T00:07:19.800Z",
+  "since": "2026-06-09T00:07:49.819Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    34
+    85823
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 7,
+  "commands_seen": 3,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +29,443 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:85823:4526451795:2026-06-09T02:55:33Z:clawsweeper_needs_human",
+      "comment_id": "4526451795",
+      "comment_version_key": "4526451795:2026-06-09T02:55:33Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85823#issuecomment-4526451795",
+      "repo": "openclaw/openclaw",
+      "issue_number": 85823,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-23T20:28:31Z",
+      "comment_updated_at": "2026-06-09T02:55:33Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] No automated code repair is indicated; the remaining blocker is contributor or maintainer-provided real WhatsApp behavior proof before merge.; Cleared: No supply-chain, dependency, workflow, or secret-handling regression was found; the auth-sensitive socket handoff is guarded by same-identity checks. (sha=db97b76ecea7c966b63803950dd076327e0e4e31)",
+      "review_summary": "The PR extends the WhatsApp connection-controller registry with current-socket and self-identity access, then routes captured inbound reply/media sends through a same-identity successor controller after restart with regression tests.\n\nPR surface: Source +283, Tests +2. Total +285 across 5 files.\n\nReproducibility: Do we have a high-confidence way to reproduce the issue? Source inspection and the PR's production before-logs make the failure path credible, but I did not reproduce it in a live WhatsApp setup; current main shows the captured reply closure remains tied to the old socketRef.",
+      "review_followup": "- [P1] No automated code repair is indicated; the remaining blocker is contributor or maintainer-provided real WhatsApp behavior proof before merge.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "db97b76ecea7c966b63803950dd076327e0e4e31",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(whatsapp): route captured replies through successor controller after restart",
+        "body": "## Summary\n\nWhen the gateway's `channel-health-monitor` tears down a WhatsApp `ConnectionController` mid-run, any in-flight inbound message's captured `reply()` closure is left bound to the now-stale `socketRef` of the shutdown controller. `sendTrackedMessage`'s retry loop only knows how to wait for that same controller's `socketRef` to be repopulated, but the successor controller constructs its own fresh `socketRef` object — so the captured reply throws `RECONNECT_IN_PROGRESS_ERROR` indefinitely.\n\n**Visible symptom:** the agent silently fails to reply to a WhatsApp message after a transient 408 disconnect that triggered a health-monitor restart. The user's message shows \"read\", then nothing.\n\n## Forensic reproducer\n\nObserved in production 2026-05-22:\n\n```\n12:00:39.242  [whatsapp] inbound message in group <redacted>@g.us\n12:02:27.820  [whatsapp] Web connection closed (status 408 Request Time-out). Retry 1/12 in 2.14s…\n12:02:27.934  [health-monitor] [whatsapp:default] health-monitor: restarting (reason: disconnected)\n                    ↑ controller A shutdown ~114ms after the 408 close\n12:02:34.182  → 12:02:35.650  controller B boots on a fresh socket\n12:04:44.419  auto-reply delivery failed (correlationId=<redacted>)\n12:04:44.421  auto-reply delivery failed (correlationId=<redacted>)\n                    ↑ A's captured reply finally times out: no active socket - reconnection in progress\n```\n\n## Fix\n\n* Extend `WhatsAppConnectionControllerHandle` (`extensions/whatsapp/src/connection-controller-registry.ts`) with `getCurrentSock()` and `getSelfIdentity()`.\n* `WhatsAppConnectionController` implements both from its `socketRef`.\n* `attachWebInboxToSocket`'s `getCurrentSock()` helper falls back to the registered successor's socket when the local `socketRef.current` is null, AND `identitiesOverlap()` confirms the successor's `{jid, lid}` self-identity matches the original socket's self-identity captured at attach time. If the registered controller is for a different WhatsApp identity (in-place relink), it's not authenticated, or the original socket was never authenticated, the fallback returns null and the caller fails closed.\n\nThe fallback fires only when the local socket is gone, so the steady-state hot path is unchanged. All current `getCurrentSock()` callers — `sendTrackedMessage`, `groupMetadata`, `readMessages` — benefit, so post-restart group mentions and read receipts also recover, not just plain text sends.\n\n## Real behavior proof\n\nTwo regression tests demonstrate the fix end-to-end through the production code path (`attachWebInboxToSocket` → `sendTrackedMessage` → `getCurrentSock` → registry → `sock.sendMessage`):\n\n```\n$ pnpm test extensions/whatsapp/src/monitor-inbox.behavior.test.ts -t \"successor\"\n\n ✓ web monitor inbox > routes the captured reply through a successor controller when the original controller's socket is gone (14ms)\n ✓ web monitor inbox > refuses successor-controller fallback when the registered controller's self JID does not match (8ms)\n\n      Tests  2 passed | 61 skipped (63)\n```\n\nThe first test reproduces the full lifecycle of the production forensic above (controller A handles inbound → shutdown → B registered → captured reply routes through B's socket). The second test asserts the session-safety guard: when B is registered under the same `accountId` but logged in as a different number, the captured reply throws `RECONNECT_IN_PROGRESS_ERROR` and B's `sendMessage` is never called.\n\nThese are not mocks of the changed function — they exercise the real `attachWebInboxToSocket` → `sendTrackedMessage` → `getCurrentSock` → `getRegisteredWhatsAppConnectionController` chain.\n\n## Trade-off worth maintainer eyes\n\n`identitiesOverlap()` compares `{jid, lid, e164}` directly without consulting the auth-dir-backed PN↔LID reverse mapping. If the original socket exposed only one form (PN JID) and the successor exposes only the other (LID), the overlap would be false-negative — captured replies would still throw rather than route through the new socket. The common case is that `sock.user` has both `id` and `lid` populated, so the overlap succeeds.\n\nIf maintainers want belt-and-suspenders here, I can wire `resolveComparableIdentity(authDir)` into the handle so the e164 derivation is identical on both sides — happy to do that in a follow-up.\n\n## Test plan\n\n- [x] `pnpm test extensions/whatsapp/src/monitor-inbox.behavior.test.ts` — 63/63 passed (2 new VE-513 tests)\n- [x] `pnpm test extensions/whatsapp/src/connection-controller-registry.test.ts` — 1/1 passed\n- [x] `pnpm exec oxfmt --check` — clean\n- [x] `pnpm lint:extensions` — clean\n- [x] `pnpm check:changed` — full lane green (typecheck, lint, import cycles, deps guards)\n- [x] `codex review --base upstream/main` — 5 iterations addressed. Iter 1 (group meta + read receipts) fixed by lifting fallback into `getCurrentSock`. Iter 2 (authDir match insufficient) fixed by switching to self-identity. Iter 3 (self id raw string compare) fixed by switching to `identitiesOverlap()` helper. Iter 4 + Iter 5 (P2 PN/LID edge case) documented as trade-off above.\n\n## Note on existing CI failures\n\n`checks-node-core-fast` and `inbound.media.test.ts` failures are preexisting on `upstream/main` (`fcb9c46af0`), not caused by this PR. The `inbound.media` failures (`WhatsApp runtime not initialized`) reproduce on a clean stash of upstream/main with no diff applied. The `Real behavior proof` and `checks-node-agentic-control-plane-runtime` failures are the standard fork-PR secret-availability issues (also seen on PR #85777).\n\n## AI disclosure\n\nAuthored with Claude Code (Opus 4.7) assistance. Fully tested. Author confirms understanding of the change.",
+        "branch": "fix/whatsapp-outbound-stale-socket-after-restart",
+        "head_sha": "5df8c79654d5aaed54d696249250db83894fe5ac",
+        "author": "itsuzef",
+        "labels": [
+          "channel: whatsapp-web",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/whatsapp/src/connection-controller-registry.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/connection-controller-registry.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/connection-controller.ts",
+            "additions": 25,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/inbound/monitor.ts",
+            "additions": 25,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/monitor-inbox.streams-inbound-messages.test-support.ts",
+            "additions": 223,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85823",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85823.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 149,
+          "counts": {
+            "FAILURE": 1,
+            "SUCCESS": 111,
+            "IN_PROGRESS": 13,
+            "SKIPPED": 23,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "security-fast:IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-node-core-fast:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
+            "checks-node-agentic-agents-embedded:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
+          ],
+          "pending": [
+            "security-fast:IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-node-core-fast:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
+            "checks-node-agentic-agents-embedded:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "target is not open"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:85823:4526614949:2026-05-23T21:50:10Z:re_review",
+      "comment_id": "4526614949",
+      "comment_version_key": "4526614949:2026-05-23T21:50:10Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85823#issuecomment-4526614949",
+      "repo": "openclaw/openclaw",
+      "issue_number": 85823,
+      "author": "itsuzef",
+      "author_id": 53057646,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-23T21:50:10Z",
+      "comment_updated_at": "2026-05-23T21:50:10Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(whatsapp): route captured replies through successor controller after restart",
+        "body": "## Summary\n\nWhen the gateway's `channel-health-monitor` tears down a WhatsApp `ConnectionController` mid-run, any in-flight inbound message's captured `reply()` closure is left bound to the now-stale `socketRef` of the shutdown controller. `sendTrackedMessage`'s retry loop only knows how to wait for that same controller's `socketRef` to be repopulated, but the successor controller constructs its own fresh `socketRef` object — so the captured reply throws `RECONNECT_IN_PROGRESS_ERROR` indefinitely.\n\n**Visible symptom:** the agent silently fails to reply to a WhatsApp message after a transient 408 disconnect that triggered a health-monitor restart. The user's message shows \"read\", then nothing.\n\n## Forensic reproducer\n\nObserved in production 2026-05-22:\n\n```\n12:00:39.242  [whatsapp] inbound message in group <redacted>@g.us\n12:02:27.820  [whatsapp] Web connection closed (status 408 Request Time-out). Retry 1/12 in 2.14s…\n12:02:27.934  [health-monitor] [whatsapp:default] health-monitor: restarting (reason: disconnected)\n                    ↑ controller A shutdown ~114ms after the 408 close\n12:02:34.182  → 12:02:35.650  controller B boots on a fresh socket\n12:04:44.419  auto-reply delivery failed (correlationId=<redacted>)\n12:04:44.421  auto-reply delivery failed (correlationId=<redacted>)\n                    ↑ A's captured reply finally times out: no active socket - reconnection in progress\n```\n\n## Fix\n\n* Extend `WhatsAppConnectionControllerHandle` (`extensions/whatsapp/src/connection-controller-registry.ts`) with `getCurrentSock()` and `getSelfIdentity()`.\n* `WhatsAppConnectionController` implements both from its `socketRef`.\n* `attachWebInboxToSocket`'s `getCurrentSock()` helper falls back to the registered successor's socket when the local `socketRef.current` is null, AND `identitiesOverlap()` confirms the successor's `{jid, lid}` self-identity matches the original socket's self-identity captured at attach time. If the registered controller is for a different WhatsApp identity (in-place relink), it's not authenticated, or the original socket was never authenticated, the fallback returns null and the caller fails closed.\n\nThe fallback fires only when the local socket is gone, so the steady-state hot path is unchanged. All current `getCurrentSock()` callers — `sendTrackedMessage`, `groupMetadata`, `readMessages` — benefit, so post-restart group mentions and read receipts also recover, not just plain text sends.\n\n## Real behavior proof\n\nTwo regression tests demonstrate the fix end-to-end through the production code path (`attachWebInboxToSocket` → `sendTrackedMessage` → `getCurrentSock` → registry → `sock.sendMessage`):\n\n```\n$ pnpm test extensions/whatsapp/src/monitor-inbox.behavior.test.ts -t \"successor\"\n\n ✓ web monitor inbox > routes the captured reply through a successor controller when the original controller's socket is gone (14ms)\n ✓ web monitor inbox > refuses successor-controller fallback when the registered controller's self JID does not match (8ms)\n\n      Tests  2 passed | 61 skipped (63)\n```\n\nThe first test reproduces the full lifecycle of the production forensic above (controller A handles inbound → shutdown → B registered → captured reply routes through B's socket). The second test asserts the session-safety guard: when B is registered under the same `accountId` but logged in as a different number, the captured reply throws `RECONNECT_IN_PROGRESS_ERROR` and B's `sendMessage` is never called.\n\nThese are not mocks of the changed function — they exercise the real `attachWebInboxToSocket` → `sendTrackedMessage` → `getCurrentSock` → `getRegisteredWhatsAppConnectionController` chain.\n\n## Trade-off worth maintainer eyes\n\n`identitiesOverlap()` compares `{jid, lid, e164}` directly without consulting the auth-dir-backed PN↔LID reverse mapping. If the original socket exposed only one form (PN JID) and the successor exposes only the other (LID), the overlap would be false-negative — captured replies would still throw rather than route through the new socket. The common case is that `sock.user` has both `id` and `lid` populated, so the overlap succeeds.\n\nIf maintainers want belt-and-suspenders here, I can wire `resolveComparableIdentity(authDir)` into the handle so the e164 derivation is identical on both sides — happy to do that in a follow-up.\n\n## Test plan\n\n- [x] `pnpm test extensions/whatsapp/src/monitor-inbox.behavior.test.ts` — 63/63 passed (2 new VE-513 tests)\n- [x] `pnpm test extensions/whatsapp/src/connection-controller-registry.test.ts` — 1/1 passed\n- [x] `pnpm exec oxfmt --check` — clean\n- [x] `pnpm lint:extensions` — clean\n- [x] `pnpm check:changed` — full lane green (typecheck, lint, import cycles, deps guards)\n- [x] `codex review --base upstream/main` — 5 iterations addressed. Iter 1 (group meta + read receipts) fixed by lifting fallback into `getCurrentSock`. Iter 2 (authDir match insufficient) fixed by switching to self-identity. Iter 3 (self id raw string compare) fixed by switching to `identitiesOverlap()` helper. Iter 4 + Iter 5 (P2 PN/LID edge case) documented as trade-off above.\n\n## Note on existing CI failures\n\n`checks-node-core-fast` and `inbound.media.test.ts` failures are preexisting on `upstream/main` (`fcb9c46af0`), not caused by this PR. The `inbound.media` failures (`WhatsApp runtime not initialized`) reproduce on a clean stash of upstream/main with no diff applied. The `Real behavior proof` and `checks-node-agentic-control-plane-runtime` failures are the standard fork-PR secret-availability issues (also seen on PR #85777).\n\n## AI disclosure\n\nAuthored with Claude Code (Opus 4.7) assistance. Fully tested. Author confirms understanding of the change.",
+        "branch": "fix/whatsapp-outbound-stale-socket-after-restart",
+        "head_sha": "5df8c79654d5aaed54d696249250db83894fe5ac",
+        "author": "itsuzef",
+        "labels": [
+          "channel: whatsapp-web",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/whatsapp/src/connection-controller-registry.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/connection-controller-registry.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/connection-controller.ts",
+            "additions": 25,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/inbound/monitor.ts",
+            "additions": 25,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/monitor-inbox.streams-inbound-messages.test-support.ts",
+            "additions": 223,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85823",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85823.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 149,
+          "counts": {
+            "FAILURE": 1,
+            "SUCCESS": 111,
+            "IN_PROGRESS": 13,
+            "SKIPPED": 23,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "security-fast:IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-node-core-fast:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
+            "checks-node-agentic-agents-embedded:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
+          ],
+          "pending": [
+            "security-fast:IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-node-core-fast:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
+            "checks-node-agentic-agents-embedded:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:85823:4526543135:2026-05-23T21:15:03Z:re_review",
+      "comment_id": "4526543135",
+      "comment_version_key": "4526543135:2026-05-23T21:15:03Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/85823#issuecomment-4526543135",
+      "repo": "openclaw/openclaw",
+      "issue_number": 85823,
+      "author": "itsuzef",
+      "author_id": 53057646,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-05-23T21:15:03Z",
+      "comment_updated_at": "2026-05-23T21:15:03Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(whatsapp): route captured replies through successor controller after restart",
+        "body": "## Summary\n\nWhen the gateway's `channel-health-monitor` tears down a WhatsApp `ConnectionController` mid-run, any in-flight inbound message's captured `reply()` closure is left bound to the now-stale `socketRef` of the shutdown controller. `sendTrackedMessage`'s retry loop only knows how to wait for that same controller's `socketRef` to be repopulated, but the successor controller constructs its own fresh `socketRef` object — so the captured reply throws `RECONNECT_IN_PROGRESS_ERROR` indefinitely.\n\n**Visible symptom:** the agent silently fails to reply to a WhatsApp message after a transient 408 disconnect that triggered a health-monitor restart. The user's message shows \"read\", then nothing.\n\n## Forensic reproducer\n\nObserved in production 2026-05-22:\n\n```\n12:00:39.242  [whatsapp] inbound message in group <redacted>@g.us\n12:02:27.820  [whatsapp] Web connection closed (status 408 Request Time-out). Retry 1/12 in 2.14s…\n12:02:27.934  [health-monitor] [whatsapp:default] health-monitor: restarting (reason: disconnected)\n                    ↑ controller A shutdown ~114ms after the 408 close\n12:02:34.182  → 12:02:35.650  controller B boots on a fresh socket\n12:04:44.419  auto-reply delivery failed (correlationId=<redacted>)\n12:04:44.421  auto-reply delivery failed (correlationId=<redacted>)\n                    ↑ A's captured reply finally times out: no active socket - reconnection in progress\n```\n\n## Fix\n\n* Extend `WhatsAppConnectionControllerHandle` (`extensions/whatsapp/src/connection-controller-registry.ts`) with `getCurrentSock()` and `getSelfIdentity()`.\n* `WhatsAppConnectionController` implements both from its `socketRef`.\n* `attachWebInboxToSocket`'s `getCurrentSock()` helper falls back to the registered successor's socket when the local `socketRef.current` is null, AND `identitiesOverlap()` confirms the successor's `{jid, lid}` self-identity matches the original socket's self-identity captured at attach time. If the registered controller is for a different WhatsApp identity (in-place relink), it's not authenticated, or the original socket was never authenticated, the fallback returns null and the caller fails closed.\n\nThe fallback fires only when the local socket is gone, so the steady-state hot path is unchanged. All current `getCurrentSock()` callers — `sendTrackedMessage`, `groupMetadata`, `readMessages` — benefit, so post-restart group mentions and read receipts also recover, not just plain text sends.\n\n## Real behavior proof\n\nTwo regression tests demonstrate the fix end-to-end through the production code path (`attachWebInboxToSocket` → `sendTrackedMessage` → `getCurrentSock` → registry → `sock.sendMessage`):\n\n```\n$ pnpm test extensions/whatsapp/src/monitor-inbox.behavior.test.ts -t \"successor\"\n\n ✓ web monitor inbox > routes the captured reply through a successor controller when the original controller's socket is gone (14ms)\n ✓ web monitor inbox > refuses successor-controller fallback when the registered controller's self JID does not match (8ms)\n\n      Tests  2 passed | 61 skipped (63)\n```\n\nThe first test reproduces the full lifecycle of the production forensic above (controller A handles inbound → shutdown → B registered → captured reply routes through B's socket). The second test asserts the session-safety guard: when B is registered under the same `accountId` but logged in as a different number, the captured reply throws `RECONNECT_IN_PROGRESS_ERROR` and B's `sendMessage` is never called.\n\nThese are not mocks of the changed function — they exercise the real `attachWebInboxToSocket` → `sendTrackedMessage` → `getCurrentSock` → `getRegisteredWhatsAppConnectionController` chain.\n\n## Trade-off worth maintainer eyes\n\n`identitiesOverlap()` compares `{jid, lid, e164}` directly without consulting the auth-dir-backed PN↔LID reverse mapping. If the original socket exposed only one form (PN JID) and the successor exposes only the other (LID), the overlap would be false-negative — captured replies would still throw rather than route through the new socket. The common case is that `sock.user` has both `id` and `lid` populated, so the overlap succeeds.\n\nIf maintainers want belt-and-suspenders here, I can wire `resolveComparableIdentity(authDir)` into the handle so the e164 derivation is identical on both sides — happy to do that in a follow-up.\n\n## Test plan\n\n- [x] `pnpm test extensions/whatsapp/src/monitor-inbox.behavior.test.ts` — 63/63 passed (2 new VE-513 tests)\n- [x] `pnpm test extensions/whatsapp/src/connection-controller-registry.test.ts` — 1/1 passed\n- [x] `pnpm exec oxfmt --check` — clean\n- [x] `pnpm lint:extensions` — clean\n- [x] `pnpm check:changed` — full lane green (typecheck, lint, import cycles, deps guards)\n- [x] `codex review --base upstream/main` — 5 iterations addressed. Iter 1 (group meta + read receipts) fixed by lifting fallback into `getCurrentSock`. Iter 2 (authDir match insufficient) fixed by switching to self-identity. Iter 3 (self id raw string compare) fixed by switching to `identitiesOverlap()` helper. Iter 4 + Iter 5 (P2 PN/LID edge case) documented as trade-off above.\n\n## Note on existing CI failures\n\n`checks-node-core-fast` and `inbound.media.test.ts` failures are preexisting on `upstream/main` (`fcb9c46af0`), not caused by this PR. The `inbound.media` failures (`WhatsApp runtime not initialized`) reproduce on a clean stash of upstream/main with no diff applied. The `Real behavior proof` and `checks-node-agentic-control-plane-runtime` failures are the standard fork-PR secret-availability issues (also seen on PR #85777).\n\n## AI disclosure\n\nAuthored with Claude Code (Opus 4.7) assistance. Fully tested. Author confirms understanding of the change.",
+        "branch": "fix/whatsapp-outbound-stale-socket-after-restart",
+        "head_sha": "5df8c79654d5aaed54d696249250db83894fe5ac",
+        "author": "itsuzef",
+        "labels": [
+          "channel: whatsapp-web",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/whatsapp/src/connection-controller-registry.test.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/connection-controller-registry.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/connection-controller.ts",
+            "additions": 25,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/inbound/monitor.ts",
+            "additions": 25,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/whatsapp/src/monitor-inbox.streams-inbound-messages.test-support.ts",
+            "additions": 223,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-85823",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-85823.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 149,
+          "counts": {
+            "FAILURE": 1,
+            "SUCCESS": 111,
+            "IN_PROGRESS": 13,
+            "SKIPPED": 23,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "security-fast:IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-node-core-fast:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
+            "checks-node-agentic-agents-embedded:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
+          ],
+          "pending": [
+            "security-fast:IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-node-core-fast:IN_PROGRESS",
+            "checks-node-core-runtime-media-ui:IN_PROGRESS",
+            "checks-node-agentic-commands-doctor-config-state:IN_PROGRESS",
+            "checks-node-agentic-agents-embedded:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 830,
+    "total_ms": 2640,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 475
+        "ms": 416
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1862
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 342
+        "ms": 332
       },
       {
         "name": "append_ledger",
