@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-09T11:21:48.622Z",
+  "generated_at": "2026-06-09T11:22:27.380Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-09T08:21:45.339Z",
+  "since": "2026-06-09T08:22:26.781Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     91674
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4658458901
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -61,117 +63,32 @@
       "finding_id": "review-feedback",
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(heartbeat): allow exec-event wakes to bypass interval cooldown",
-        "body": "## Summary\r\n\r\nBackground exec completion events (`exec-event`) are silently dropped when a second background process exits within the heartbeat interval window. The agent never receives the completion notification for the second process.\r\n\r\n- **Why it matters:** users who start multiple background exec commands only get notified about the first one. Subsequent completions are lost until the next scheduled heartbeat interval (up to 30 minutes later).\r\n- **What changed:** three coordinated fixes in the heartbeat cooldown/wake mechanism:\r\n  1. `advanceAgentSchedule`: non-interval reasons no longer push `nextDueMs` forward (prevents event-driven wakes from blocking each other)\r\n  2. `shouldDeferWake`: exec-event wakes skip the `nextDueMs` check, bypassing interval cooldown; other event sources (cron, hook, acp-spawn) retain existing behavior\r\n  3. `heartbeat-wake`: `\"min-spacing\"` added to retryable skip reasons, so deferred exec-event wakes are retried rather than silently dropped\r\n\r\n## Change Type (select all)\r\n\r\n- [x] Bug fix\r\n- [ ] Feature\r\n- [ ] Refactor required for the fix\r\n- [ ] Docs\r\n- [ ] Security hardening\r\n- [ ] Chore/infra\r\n\r\n## Scope (select all touched areas)\r\n\r\n- [x] Gateway / orchestration\r\n- [ ] Skills / tool execution\r\n- [ ] Auth / tokens\r\n- [ ] Memory / storage\r\n- [ ] Integrations\r\n- [ ] API / contracts\r\n- [ ] UI / DX\r\n- [ ] CI/CD / infra\r\n\r\n## Linked Issue/PR\r\n\r\n- [x] This PR fixes a bug or regression\r\n\r\n## Root Cause\r\n\r\nTwo interacting issues:\r\n\r\n1. **`advanceAgentSchedule`** pushed `nextDueMs` to `now + intervalMs` (e.g. 30 minutes) for non-interval wakes like exec-event. This caused any subsequent exec-event wake to be deferred as `\"not-due\"` — a non-retryable skip — because `now` was always less than the far-future `nextDueMs`.\r\n\r\n2. **`shouldDeferWake`** checked `nextDueMs` for event-driven wakes. Even without issue 1 (the advanceAgentSchedule problem), the interval scheduler's initial `nextDueMs` (~20 minutes from startup) was already far enough in the future to block all exec-event wakes after the first one.\r\n\r\n3. **`\"min-spacing\"` was not retryable**: even when a wake was deferred for min-spacing (30s cooldown), the deferral was non-retryable, so it was silently dropped instead of retried after the cooldown expired.\r\n\r\n## Regression Test Plan\r\n\r\n- Coverage level:\r\n  - [x] Unit test\r\n  - [ ] Seam / integration test\r\n  - [ ] End-to-end test\r\n  - [x] Existing coverage already sufficient\r\n- Target test or file:\r\n  - `src/infra/heartbeat-cooldown.test.ts` (34 tests, 3 updated + 2 new)\r\n  - `src/infra/heartbeat-wake.test.ts` (22 tests, 5 new)\r\n- Scenario the test should lock in: exec-event wakes skip the interval cooldown but still respect min-spacing; min-spacing deferrals are retryable.\r\n- Tests added/changed:\r\n  - `heartbeat-cooldown.test.ts` (34 tests): updated exec-event assertions to verify `\"not-due\"` is skipped; added tests for exec-event running when `nextDueMs` is in the future but min-spacing has elapsed; confirmed other sources (cron, hook, acp-spawn) still defer by `nextDueMs`.\r\n  - `heartbeat-wake.test.ts` (22 tests): added 5 tests verifying `HEARTBEAT_SKIP_MIN_SPACING` is in `RETRYABLE_BUSY_SKIP_REASONS` and non-retryable reasons are not.\r\n  - `heartbeat-runner.scheduler.test.ts` (25 tests): updated exec-event scheduler test to reflect new min-spacing-based cooldown behavior; added test verifying non-exec event wakes (acp-spawn) still preserve `nextDueMs` advancement.\r\n\r\n## User-visible / Behavior Changes\r\n\r\n- Multiple background `exec background=true` processes that exit in quick succession (within 30s) now all deliver completion notifications, instead of only the first one firing and subsequent ones being silently dropped.\r\n\r\n## Diagram\r\n\r\n```\r\nBefore:\r\nProcess A exits → exec-event → heartbeat runs → nextDueMs pushed +30min\r\nProcess B exits 3s later → exec-event → shouldDeferWake: now < nextDueMs → \"not-due\" → ❌ DROPPED\r\n\r\nAfter:\r\nProcess A exits → exec-event → heartbeat runs (nextDueMs unchanged)\r\nProcess B exits 3s later → exec-event → shouldDeferWake: source=exec-event → skip nextDueMs\r\n  → min-spacing: 3s < 30s → defer \"min-spacing\" → RETRYABLE → 1s retry\r\n  → ... retry until 30s elapsed → exec-event runs → ✅ NOTIFIED\r\n```\r\n\r\n## Security Impact (required)\r\n\r\n- New permissions/capabilities? (No)\r\n- Secrets/tokens handling changed? (No)\r\n- New/changed network calls? (No)\r\n- Command/tool execution surface changed? (No)\r\n- Data access scope changed? (No)\r\n\r\n## Real behavior proof\r\n\r\n- **Behavior addressed:** background exec completion events (`exec-event`) are silently dropped when the heartbeat cooldown gate rejects them with a non-retryable `\"not-due\"` deferral.\r\n- **Real environment tested:** local Linux OpenClaw gateway, interactive agent session in dashboard channel.\r\n- **Exact steps or command run after this patch:**\r\n\r\n  In an interactive agent conversation, send:\r\n  ```\r\n  Run this background exec command:\r\n  exec background=true command=\"sleep 10 && echo 'first done'\"\r\n  ```\r\n\r\n  The agent invokes `exec` with `background=true`. After ~10s the process exits, triggering an exec-event wake. Three `HB_DIAG` diagnostic log points were inserted (removed before commit) at `advanceAgentSchedule`, `shouldDeferWake`, and `heartbeat-wake` to confirm the deferral chain.\r\n\r\n- **Diagnostic instrumentation added to confirm the bug:**\r\n\r\n  Three `HB_DIAG` log points were inserted (removed before commit):\r\n  - `heartbeat-runner.ts:advanceAgentSchedule` — logs when non-interval reason pushes `nextDueMs` forward\r\n  - `heartbeat-cooldown.ts:shouldDeferWake` — logs when event-driven wake is deferred with `\"not-due\"`\r\n  - `heartbeat-wake.ts` — logs when an exec-event wake is skipped with a non-retryable reason\r\n\r\n- **Evidence before fix (gateway log trace):**\r\n\r\n  ```\r\n  ① First exec-event advances nextDueMs by the full interval:\r\n     advanceAgentSchedule non-interval: reason=exec-event\r\n       intervalMs=1800000\r\n       prevNextDueMs=<initial> → newNextDueMs=<now + 1800s>\r\n\r\n  ② Second exec-event 96s later is deferred by nextDueMs (1704s remaining):\r\n     shouldDeferWake event intent defer \"not-due\":\r\n       now=<T+96s> nextDueMs=<T+1800s>  delta=1704s\r\n\r\n  ③ The deferral returns to heartbeat-wake with a non-retryable skip:\r\n     exec-event wake deferred: defer=not-due delta=1704s\r\n     heartbeat-wake exec-event skipped (non-retryable): skip=not-due\r\n  ```\r\n\r\n  Root cause chain: `advanceAgentSchedule` pushed `nextDueMs` 1800s into the future → next exec-event hit `now < nextDueMs` → `shouldDeferWake` returned `\"not-due\"` → `\"not-due\"` is not in `RETRYABLE_BUSY_SKIP_REASONS` → wake silently dropped. The agent never saw the second completion.\r\n\r\n- **Evidence after fix (real OpenClaw session transcript + gateway diagnostics):**\r\n\r\n  **① Session transcript — from session JSONL file on the same gateway**\r\n\r\n  The operator sends a single `exec background=true` command. The process runs, exits, and the completion event triggers a heartbeat wake that successfully delivers `HEARTBEAT_OK`:\r\n\r\n  ```jsonl\r\n  {\"role\":\"user\",\"content\":\"Run this background exec command:\\nexec background=true command=\\\"sleep 10 && echo 'first done'\\\"\"}\r\n  {\"role\":\"assistant\",\"content\":[{\"type\":\"toolCall\",\"name\":\"exec\",\"arguments\":{\"command\":\"sleep 10 && echo 'first done'\",\"background\":true}}]}\r\n  {\"role\":\"toolResult\",\"toolName\":\"exec\",\"content\":[{\"type\":\"text\",\"text\":\"Command still running (session wild-shell, pid 2864052)...\"}],\"details\":{\"status\":\"running\"}}\r\n  {\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"The background command has been started...\"}]}\r\n\r\n  # Process exits ~10s later → exec-event → heartbeat processes the completion\r\n  {\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"\\nHEARTBEAT_OK\"}]}\r\n  ```\r\n\r\n  The `HEARTBEAT_OK` response proves the exec-event wake successfully reached the agent. Before the fix, this wake would have been dropped by the `\"not-due\"` cooldown gate and never processed.\r\n\r\n  **② Gateway log diagnostics — HB_DIAG comparison**\r\n\r\n  | Phase | Log trace |\r\n  |---|---|\r\n  | **Before fix** | `advanceAgentSchedule` pushed nextDueMs +1800s → `shouldDeferWake` returned \"not-due\" → `heartbeat-wake` skipped (non-retryable) → **wake dropped** ❌ |\r\n  | **After fix** | `advanceAgentSchedule` returns early (exec-event only) → `shouldDeferWake` skips nextDueMs check → min-spacing deferral is retryable → **agent notified** ✅ |\r\n\r\n  After the fix, no `\"not-due\"` deferral logs appeared for exec-event wakes across three separate interactive sessions. The diagnostic logs confirmed the fix works at every layer of the cooldown gate.\r\n\r\n- **Observed result after fix:** the `\"not-due\"` deferral is eliminated for exec-event wakes. `\"min-spacing\"` deferrals are now retryable (1s retry), so deferred wakes are not silently dropped. Multiple background exec completions in quick succession all deliver notifications.\r\n- **What was not tested:** heartbeat scheduling for cron/hook/acp-spawn sources with concurrent exec-events was not tested (the fix is scoped to `source === \"exec-event\"` only, and other sources retain full existing behavior). Crabbox/Testbox full `check:changed` was not run.\r\n\r\n## Tests and validation\r\n\r\n- Verified scenarios: `pnpm test src/infra/heartbeat-cooldown.test.ts` (34 passed), `pnpm test src/infra/heartbeat-wake.test.ts` (22 passed); live verification on local gateway with two sequential `exec background=true command=\"sleep 10 && echo 'done'\"` commands — both completions produced agent notifications after the fix (before the fix, only the first one would arrive).\r\n- Edge cases checked:\r\n  - exec-event with future `nextDueMs` → no longer deferred ✅\r\n  - exec-event within min-spacing → deferred with retry, eventually fires ✅\r\n  - cron/hook/acp-spawn → still check `nextDueMs`, behavior unchanged ✅\r\n  - no source specified → still checks `nextDueMs`, behavior unchanged ✅\r\n  - `\"min-spacing\"` recognized as retryable skip ✅\r\n  - `\"not-due\"` / `\"flood\"` still non-retryable ✅\r\n\r\n## Review Conversations\r\n\r\n- [ ] I replied to or resolved every bot review conversation I addressed in this PR.\r\n- [ ] I left unresolved only the conversations that still need reviewer or maintainer judgment.\r\n\r\n## Compatibility / Migration\r\n\r\n- Backward compatible? (Yes — this only reduces false deferrals for exec-event wakes)\r\n- Config/env changes? (No)\r\n- Migration needed? (No)\r\n\r\n## Risks and Mitigations\r\n\r\n- **Risk:** removing the `nextDueMs` check for exec-event wakes could, in theory, allow more frequent heartbeat runs.\r\n  - **Mitigation:** min-spacing (30s) and flood guard (5 wakes in 60s) remain active for all event sources, including exec-event. The `running` flag in `heartbeat-wake` and `isReplyRunActive` check in `heartbeat-runner` prevent concurrent runs for the same session.\r\n- **Risk:** `\"min-spacing\"` retries could add latency when many exec events fire in rapid succession.\r\n  - **Mitigation:** retry interval is 1s (`DEFAULT_RETRY_MS`), and the actual heartbeat only runs after min-spacing (30s) is satisfied — a bounded delay acceptable for background process notifications.",
-        "branch": "fix/exec-background-wake",
-        "head_sha": "f336b081cd191c667e9675c48c7fe129311138ea",
-        "author": "solodmd",
-        "labels": [
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 message-delivery",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/infra/heartbeat-cooldown.test.ts",
-            "additions": 19,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/heartbeat-cooldown.ts",
-            "additions": 12,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/heartbeat-runner.scheduler.test.ts",
-            "additions": 52,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/heartbeat-runner.ts",
-            "additions": 13,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/heartbeat-wake.test.ts",
-            "additions": 31,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/heartbeat-wake.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91674",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91674.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "FAILURE": 2,
-            "SUCCESS": 128,
-            "SKIPPED": 31,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "build-artifacts:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "build-artifacts:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3606,
+    "total_ms": 1205,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 456
+        "ms": 587
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2812
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 312
+        "ms": 606
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
