@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-09T08:30:15.899Z",
-  "repo": "openclaw/clownfish",
+  "generated_at": "2026-06-09T08:32:46.402Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-09T05:30:15.483Z",
+  "since": "2026-06-09T05:32:43.739Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    20
+    91663
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,117 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91663:4657814069:2026-06-09T08:32:39Z:clawsweeper_auto_repair",
+      "comment_id": "4657814069",
+      "comment_version_key": "4657814069:2026-06-09T08:32:39Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91663#issuecomment-4657814069",
+      "repo": "openclaw/openclaw",
+      "issue_number": 91663,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-09T08:26:46Z",
+      "comment_updated_at": "2026-06-09T08:32:39Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=f2546468393aa8d17cd5ce86a057db752d423776)",
+      "review_summary": "The PR adds a backup-output directory scan that removes matching `<archive>.<uuid>.tmp` files before writing a new backup and adds unit tests for that helper.\n\nPR surface: Source +70, Tests +117. Total +187 across 2 files.\n\nReproducibility: yes. source-level reproduction is clear: current main writes backups through an adjacent `<output>.<uuid>.tmp` and only cleans that exact file during normal unwinding. I did not run an end-to-end timeout scenario in this read-only review.",
+      "review_followup": "- [P1] Needs contributor branch updates and real behavior proof; automation should not take over while proof is insufficient and the cleanup scope needs maintainer-visible agreement.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "f2546468393aa8d17cd5ce86a057db752d423776",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(backup): clean up stale .tmp archives from interrupted runs before creating new backup",
+        "body": "## Summary\n\nWhen `openclaw backup create` is interrupted (timeout, SIGKILL, process crash), the temporary `.tar.gz.<uuid>.tmp` file created by `buildTempArchivePath()` is left on disk. On successive runs, each interrupted backup leaves a new `.tmp` file, accumulating and consuming significant disk space (12.6GB across 6 files reported in #50442).\n\nThis PR adds `cleanupStaleTempArchives()` that scans the output directory for files matching the backup temp pattern (`<basename>.<uuid>.tmp`) and removes them **before** creating a new archive. The cleanup is non-fatal — errors from missing directories or permission issues are gracefully caught and logged without blocking the backup.\n\n## Changes\n\n- **`src/infra/backup-create.ts`**: Added `buildTempArchiveGlobPattern()` and `cleanupStaleTempArchives()` functions. Called in `createBackupArchive()` before creating the new temp archive (after the overwrite guard, in the non-dry-run path). Exported via `testApi` for testing.\n- **`src/infra/backup-create.test.ts`**: Added 5 tests covering:\n  - Removal of stale `.tmp` files matching the UUID pattern\n  - Preservation of non-tmp files and the final archive\n  - Graceful handling of non-existent directories\n  - Scoping to only the target archive (not differently-named archives in the same directory)\n  - Human-readable size reporting in log output\n\n## Verification\n\n- Existing backup tests (`createBackupArchive`, `writeTarArchiveWithRetry`, `buildExtensionsNodeModulesFilter`) remain unchanged and continue to pass\n- New cleanup tests are isolated and use temporary directories\n- TypeScript compilation passes cleanly\n\n## Real behavior proof\n\n**Behavior addressed:** Stale `.tmp` files from interrupted `openclaw backup create` runs accumulate on disk (up to 12.6GB reported), because the process has no mechanism to discover and remove leftovers from previous runs before starting a new backup.\n\n**Real environment tested:** Node v22.22.0, Linux 4.19.112-2.el8.x86_64, commit f254646839.\n\n**Exact steps or command run after this patch:**\n\n1. Created a temp directory simulating the backup output directory\n2. Created 3 fake stale `.tmp` files matching the pattern `backup.tar.gz.<uuid>.tmp` with sizes 5MB, 3MB, and 2MB\n3. Also created non-matching files: `backup.tar.gz` (the final archive) and `backup.tar.gz.not-a-tmp`\n4. Invoked `cleanupStaleTempArchives({ outputPath, log })`\n5. Verified all 3 stale `.tmp` files were removed, while non-matching files were preserved\n\n**Evidence after fix (terminal capture):**\n\n$ node --input-type=module -e '\nimport fs from \"node:fs/promises\"; import os from \"node:os\"; import path from \"node:path\";\n\nconst dir = await fs.mkdtemp(path.join(os.tmpdir(), \"oc-backup-proof-\"));\nconst outputPath = path.join(dir, \"backup.tar.gz\");\n\n// Simulate 3 interrupted backup runs, each leaving a .tmp file\nconst uuid1 = \"b2baf024-2900-41a9-8046-d5164204dce6\";\nconst uuid2 = \"47052371-099c-4ee1-a431-5e59c7f75850\";\nconst uuid3 = \"5ae92e42-d32d-470e-b706-943ecd7ec608\";\nawait fs.writeFile(`${outputPath}.${uuid1}.tmp`, Buffer.alloc(5_242_880, \"x\"));  // 5MB\nawait fs.writeFile(`${outputPath}.${uuid2}.tmp`, Buffer.alloc(3_145_728, \"y\"));  // 3MB\nawait fs.writeFile(`${outputPath}.${uuid3}.tmp`, Buffer.alloc(2_097_152, \"z\"));  // 2MB\nawait fs.writeFile(`${outputPath}.not-a-tmp`, \"keep me\");\nawait fs.writeFile(outputPath, \"final archive\");\n\nconsole.log(\"Before cleanup:\");\nfor (const f of await fs.readdir(dir)) console.log(\" \", f, `(${(await fs.stat(path.join(dir, f))).size} bytes)`);\n\n// Run cleanup logic (same as src/infra/backup-create.ts)\nconst randomUUID = () => { const h=\"0123456789abcdef\"; let u=\"\"; for(let i=0;i<36;i++){if(i===8||i===13||i===18||i===23)u+=\"-\";else if(i===14)u+=\"4\";else if(i===19)u+=h[Math.floor(Math.random()*4)|8];else u+=h[Math.floor(Math.random()*16)];} return u; };\nconst buildTempArchiveGlobPattern = (out) => { const e=path.basename(out).replace(/[.*+?^${}()|[\\]\\\\]/g,\"\\\\$&\"); return new RegExp(\"^\"+e+\"\\\\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\\\.tmp$\"); };\nconst cleanupStaleTempArchives = async ({ outputPath, log }) => { const d=path.dirname(outputPath); const p=buildTempArchiveGlobPattern(outputPath); let entries; try{entries=await fs.readdir(d,{withFileTypes:true});}catch(err){if(err.code===\"ENOENT\")return;log?.(\"Backup could not list directory: \"+String(err)+\". Continuing.\");return;} let c=0,b=0; for(const e of entries){if(!e.isFile()||!p.test(e.name))continue; const fp=path.join(d,e.name); try{const s=await fs.stat(fp);if(!s.isFile())continue;b+=s.size;await fs.rm(fp);c+=1;}catch(err){if(err.code!==\"ENOENT\")log?.(\"Backup could not remove stale temp archive \"+fp+\": \"+String(err)+\". Continuing.\");}} if(c>0){const l=b>=1073741824?(b/1073741824).toFixed(1)+\"GB\":b>=1048576?(b/1048576).toFixed(1)+\"MB\":b+\" bytes\";log?.(\"Backup cleaned up \"+c+\" stale temp archive\"+(c===1?\"\":\"s\")+\" (\"+l+\") from a previous interrupted run.\");}};\n\nconst logs = [];\nawait cleanupStaleTempArchives({ outputPath, log: (msg) => logs.push(msg) });\n\nconsole.log(\"\\nAfter cleanup:\");\nfor (const f of await fs.readdir(dir)) console.log(\" \", f);\nconsole.log(\"\\nLog:\", logs[0]);\nawait fs.rm(dir, { recursive: true, force: true });\n'\n\nOutput:\nBefore cleanup:\n  backup.tar.gz (12 bytes)\n  backup.tar.gz.47052371-099c-4ee1-a431-5e59c7f75850.tmp (3145728 bytes)\n  backup.tar.gz.5ae92e42-d32d-470e-b706-943ecd7ec608.tmp (2097152 bytes)\n  backup.tar.gz.b2baf024-2900-41a9-8046-d5164204dce6.tmp (5242880 bytes)\n  backup.tar.gz.not-a-tmp (7 bytes)\n\nAfter cleanup:\n  backup.tar.gz\n  backup.tar.gz.not-a-tmp\n\nLog: Backup cleaned up 3 stale temp archives (10.0MB) from a previous interrupted run.\nexit code: 0\n\n**Observed result after fix:** All 3 stale `.tmp` files (totaling 10.0MB) were removed. Non-matching files (`backup.tar.gz` and `backup.tar.gz.not-a-tmp`) were preserved. The log message correctly reports the count and human-readable size.\n\n**What was not tested:** The interaction with a real `openclaw backup create` command on a system with an actual OpenClaw state directory. The cleanup function is unit-tested in isolation. The full integration path (backup create → cleanup → archive write) has not been end-to-end tested with a real state directory.\n",
+        "branch": "fix/50442-backup-tmp-cleanup",
+        "head_sha": "f2546468393aa8d17cd5ce86a057db752d423776",
+        "author": "chengzhichao-xydt",
+        "labels": [
+          "size: S",
+          "proof: supplied",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/infra/backup-create.test.ts",
+            "additions": 117,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/backup-create.ts",
+            "additions": 71,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-91663",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91663.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 164,
+          "counts": {
+            "CANCELLED": 1,
+            "SUCCESS": 131,
+            "SKIPPED": 31,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 675,
+    "total_ms": 2907,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 404
+        "ms": 348
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2301
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 259
+        "ms": 230
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
