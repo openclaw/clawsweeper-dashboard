@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-09T21:00:08.981Z",
+  "generated_at": "2026-06-09T21:02:04.201Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-09T18:00:06.335Z",
+  "since": "2026-06-09T18:02:03.875Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    90946
+    91766
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,134 +29,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:90946:4639349608:2026-06-09T21:00:01Z:clawsweeper_needs_human",
-      "comment_id": "4639349608",
-      "comment_version_key": "4639349608:2026-06-09T21:00:01Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/90946#issuecomment-4639349608",
-      "repo": "openclaw/openclaw",
-      "issue_number": 90946,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-06T15:05:57Z",
-      "comment_updated_at": "2026-06-09T21:00:01Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- No automated repair remains; the PR needs normal maintainer merge judgment for an availability-sensitive cleanup path.; Cleared: No concrete security or supply-chain concern found; the diff changes PID parsing/filtering and tests, with no dependencies, workflows, secrets, or downloaded execution paths. (sha=6b98fff8e2200e1a2ab635b31707ce16f3c79e56)",
-      "review_summary": "The PR captures a pre-overwrite gateway service PID, threads it through stale-process cleanup as an optional protected PID on Unix/Windows, and adds parser plus reparent regression tests.\n\nPR surface: Source +95, Tests +104. Total +199 across 4 files.\n\nReproducibility: yes. Source inspection shows current main overwrites the inherited service PID before service-mode cleanup and cleanup excludes only self/ancestors, while the contributor supplied real-host logs for the reparented launchd case.",
-      "review_followup": "- No automated repair remains; the PR needs normal maintainer merge judgment for an availability-sensitive cleanup path.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "6b98fff8e2200e1a2ab635b31707ce16f3c79e56",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(infra): preserve inherited gateway PID across reparent during cleanup",
-        "body": "## Summary\n\nResubmit of #90802 (which was closed because the source branch carried unrelated WIP commits). This PR is now a single commit on top of `main` touching exactly 3 files.\n\n`cleanStaleGatewayProcessesSync` already excludes the caller and its ancestor chain from kill candidates (#68451). That protection breaks when the caller has been reparented to the supervisor (PID 1 / launchd) before the cleanup runs: the ancestor walk stops at the supervisor, the running launchd-managed gateway becomes an unrelated sibling on the port, and the cleanup SIGKILLs it.\n\nThe fix captures `OPENCLAW_GATEWAY_SERVICE_PID` from inherited env before the gateway-cli overwrites it with its own PID, then threads the captured value into the exclusion set so the launchd-managed parent is kept out of the kill list even across a reparent boundary.\n\nThe protection is opt-in per call site. `openclaw update`, `openclaw doctor`, and the daemon restart helpers do not pass the inherited PID, so they retain their ability to intentionally terminate a running gateway.\n\n## Real-world reproduction\n\nA user `~/.zshrc` containing this legacy pre-launchd auto-start block:\n\n```bash\nif ! pgrep -x \"openclaw-gateway\" > /dev/null; then\n  (openclaw gateway >/dev/null 2>&1 &)\nfi\n```\n\ncombined with codex 0.135.0 spawning `/bin/zsh -c \"set -e; . shell_snapshot\"` per turn (codex uses zsh shell snapshots to capture user environment for tool execution context). Each turn:\n\n1. Gateway A receives a chat request, spawns codex.\n2. Codex spawns the per-turn shell snapshot. zsh sources `~/.zshrc`, hits the legacy block, the `pgrep -x openclaw-gateway` does not match A's process title in time, and the subshell starts a new `openclaw gateway` B in background.\n3. The subshell exits; B is reparented to launchd.\n4. B enters `runGatewayCommand`. `process.env[OPENCLAW_GATEWAY_SERVICE_PID]` still holds A's PID (inherited from gateway A through codex through zsh), but is immediately overwritten with B's own PID.\n5. B calls `cleanStaleGatewayProcessesSync`. Ancestor walk sees `process.ppid === 1` (launchd) and stops there. A appears on lsof for the port as an unrelated PID. B SIGKILLs A.\n6. launchd `KeepAlive: { Crashed: true }` respawns A. Cycle repeats on the next chat request.\n\nA forensic launchd unified-log tracker on the affected host captured 33 such kill events between 2026-05-30 and 2026-06-05, each `gateway [PID] exited due to SIGKILL | sent by node[PID]` with the killer always being a new openclaw gateway instance whose env carried `OPENCLAW_GATEWAY_SERVICE_PID` matching the victim. Symptom on the user side: every chat request returned `HTTP 000` in 2-3 seconds.\n\nThe host-side fix was deleting the legacy zshrc block. After deletion, gateway PID stayed stable across 15+ hours of continuous use with zero kill events. The openclaw cleanup primitive should not be reachable into a suicide-kill state via that path in the first place — that is what this PR addresses.\n\n## Verification\n\n```\n$ node scripts/run-vitest.mjs src/infra/restart-stale-pids.test.ts\n Test Files  1 passed (1)\n      Tests  52 passed | 2 skipped (54)\n\n$ node scripts/run-vitest.mjs src/cli/gateway-cli/run.option-collisions.test.ts src/cli/update-cli.test.ts\n Test Files  2 passed (2)\n      Tests  150 passed (150)\n\n$ pnpm tsgo --noEmit -p tsconfig.json\n(clean)\n```\n\nThe two new tests in `src/infra/restart-stale-pids.test.ts`:\n\n- `excludes the inherited gateway service PID when the caller has been reparented to launchd` stubs `process.ppid` to 1 so the ancestor walk cannot reach the running gateway, and asserts the inherited PID is omitted from the kill list while an unrelated stale PID is still returned.\n- `ignores a non-positive inherited gateway PID rather than poisoning the kill list` documents the undefined/0/negative input contract so a future refactor cannot silently start excluding pid 0.\n\nExisting #68451 ancestor-exclusion tests still pass and continue to cover the non-reparent path.\n\n## Out of scope\n\n- The legacy auto-start block in user `~/.zshrc` is host config; not addressed here.\n- No `openclaw update` / `openclaw doctor` behavior changes. Those call sites still pass no inherited PID, so a maintainer-initiated `openclaw update` continues to terminate the running gateway as expected.\n- Windows code path also accepts the new parameter but the suicide-kill scenario this fixes is shell-driven and Unix-only; the Windows path keeps API symmetry but the behavioral change is dormant there.\n",
-        "branch": "fix/stale-pid-cleanup-reparent-protection",
-        "head_sha": "6b98fff8e2200e1a2ab635b31707ce16f3c79e56",
-        "author": "amittell",
-        "labels": [
-          "cli",
-          "size: M",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦞 diamond lobster",
-          "merge-risk: 🚨 availability",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/cli/gateway-cli/run.parse-inherited-pid.test.ts",
-            "additions": 42,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/cli/gateway-cli/run.ts",
-            "additions": 39,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/restart-stale-pids.test.ts",
-            "additions": 62,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/restart-stale-pids.ts",
-            "additions": 73,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-90946",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-90946.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 31,
-            "SUCCESS": 128,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2847,
+    "total_ms": 573,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 312
+        "ms": 314
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2319
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 188
+        "ms": 247
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
