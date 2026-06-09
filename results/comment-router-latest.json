@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-09T18:18:53.883Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-09T18:19:10.511Z",
+  "repo": "openclaw/kitchen-sink",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-09T15:18:50.684Z",
+  "since": "2026-06-09T15:19:10.203Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    91742
+    44
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 0,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,164 +29,26 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91742:4662623387:2026-06-09T18:18:47Z:clawsweeper_auto_repair",
-      "comment_id": "4662623387",
-      "comment_version_key": "4662623387:2026-06-09T18:18:47Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/91742#issuecomment-4662623387",
-      "repo": "openclaw/openclaw",
-      "issue_number": 91742,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-09T18:09:56Z",
-      "comment_updated_at": "2026-06-09T18:18:47Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=5b66457744ad3af9541ae4ff9f998849e181f998)",
-      "review_summary": "Threads a tool-owned AbortSignal from memory_search through the memory manager, embedding retry loop, and provider timeout path, with regression tests and an optional MemorySearchManager.search signal option.\n\nPR surface: Source +36, Tests +53. Total +89 across 9 files.\n\nReproducibility: yes. source-reproducible: current main races memory_search against a timeout without cancellation, while the embedding query retry path can continue under its own provider timeout and retry policy. I did not run tests because this review is read-only.",
-      "review_followup": "- [P1] Manual review is needed because the external PR has mock-only proof, a public SDK surface change, and a narrow code finding that the author should address before merge.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "5b66457744ad3af9541ae4ff9f998849e181f998",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(memory): abort orphaned embedding work when memory_search times out",
-        "body": "## Summary\n\nFixes #91718.\n\n`memory_search` raced its 15s tool deadline with a bare `Promise.race`: the agent got a clean \"timed out\" result, but the underlying `embedQueryWithRetry` loop kept running orphaned (up to 3 attempts x 60s against the embedding backend) with no consumer for the result, holding HTTP connections to a possibly wedged backend (e.g. Ollama).\n\nThis threads a tool-owned `AbortSignal` through the existing seams, keeping the change additive and optional at every contract boundary (no config, no result-shape change):\n\n- `runMemorySearchToolWithDeadline` (`extensions/memory-core/src/tools.ts`) now owns an `AbortController` and aborts it when the deadline fires; the signal is passed into `manager.search(...)` via `searchOptions`.\n- `MemorySearchManager.search` opts gain an optional `signal` (`packages/memory-host-sdk/src/host/types.ts`) — additive; the qmd backend may ignore it (its search shells out to the `qmd` subprocess and has its own exit handling; it never enters the builtin embedding retry loop this issue is about).\n- `MemoryIndexManager.search` forwards the signal to both `embedQueryWithRetry` call sites and skips fallback-provider activation when the caller already aborted, so an abandoned search stops instead of re-embedding on the fallback provider.\n- `embedQueryWithRetry` accepts the signal and merges it with the existing per-call watchdog in `runEmbeddingOperationWithTimeout` via `AbortSignal.any`, so the provider `embedQuery` fetch is actually cancelled.\n- `runMemoryEmbeddingRetryLoop` checks the signal before retrying. This check must win over message-pattern matching: abort reasons carry \"timed out\" text, which matches the retryable transport pattern and would otherwise keep the loop retrying for an absent caller.\n\n## Verification\n\nLocal (macOS, Node 22, normal source checkout):\n\n- `pnpm test extensions/memory-core/src/tools.test.ts extensions/memory-core/src/tools.citations.test.ts extensions/memory-core/src/memory/manager-embedding-timeout.test.ts extensions/memory-core/src/memory/search-manager.test.ts extensions/memory-core/src/memory/manager-embedding-policy.test.ts` — 5 files, 95 tests passed (the acceptance file set named in the ClawSweeper review, plus the retry-policy file this PR touches).\n- `pnpm test extensions/memory-core` — 870 passed; the only 2 failures (`dreaming-shadow-trial.test.ts` date rollover, `manager-sync-ops.startup-catchup.test.ts`) fail identically on unmodified `upstream/main` (verified via `git stash` baseline run) and are unrelated.\n- `pnpm tsgo:core`, `pnpm tsgo:extensions`, `pnpm tsgo:extensions:test`, `pnpm tsgo:test:packages` — clean.\n- `pnpm format:check` + `node scripts/run-oxlint.mjs` on all touched files — clean.\n\nNew regression coverage:\n\n- `tools.test.ts`: the existing 15s-deadline test now asserts the orphaned search's `signal.aborted === true` (fake timers; embedding never settles, advance 15s).\n- `manager-embedding-timeout.test.ts`: an external caller signal aborts the provider operation signal before the watchdog fires.\n- `manager-embedding-policy.test.ts`: an aborted caller stops the retry loop even when the failure message matches the retryable \"timed out\" transport pattern.\n\n## Real behavior proof\n\nBehavior addressed: `memory_search` tool timeout orphans the background embedding query (retry loop + HTTP fetch keep running after the tool returned \"timed out\").\nReal environment tested: macOS (Darwin 25.5.0), Node 22, normal source checkout of this branch; Vitest fake-timer reproduction of a never-settling embedding backend.\nExact steps or command run after this patch: `pnpm test extensions/memory-core/src/tools.test.ts extensions/memory-core/src/tools.citations.test.ts extensions/memory-core/src/memory/manager-embedding-timeout.test.ts extensions/memory-core/src/memory/search-manager.test.ts extensions/memory-core/src/memory/manager-embedding-policy.test.ts`\nEvidence after fix: the deadline test drives a search that never settles past the 15s deadline and asserts the threaded `AbortSignal` is aborted; the policy test proves no further retry attempts and no retry wait occur after abort; the operation test proves the provider-facing signal aborts when the caller signal aborts.\nObserved result after fix: 95/95 tests pass across the 5 files; full `extensions/memory-core` suite has no new failures vs unmodified `upstream/main`.\nWhat was not tested: a live wedged embedding backend (e.g. a real stalled Ollama instance sharing a GPU); the symptom is proven at the source/test level, matching the reproduction scope in the ClawSweeper review.\n",
-        "branch": "fix/memory-search-timeout-abort",
-        "head_sha": "5b66457744ad3af9541ae4ff9f998849e181f998",
-        "author": "dreamhunter2333",
-        "labels": [
-          "extensions: memory-core",
-          "size: S",
-          "triage: mock-only-proof",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/memory-core/src/memory-tool-manager-mock.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager-embedding-ops.ts",
-            "additions": 12,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager-embedding-policy.test.ts",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager-embedding-policy.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager-embedding-timeout.test.ts",
-            "additions": 25,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager.ts",
-            "additions": 9,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/tools.test.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/tools.ts",
-            "additions": 15,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/memory-host-sdk/src/host/types.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91742",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91742.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 163,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 30,
-            "SUCCESS": 129,
-            "IN_PROGRESS": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "checks-node-agentic-agents-embedded:IN_PROGRESS"
-          ],
-          "pending": [
-            "checks-node-agentic-agents-embedded:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3527,
+    "total_ms": 523,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 464
+        "ms": 298
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2725
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 318
+        "ms": 216
       },
       {
         "name": "append_ledger",
