@@ -2,19 +2,19 @@
 repo: "openclaw/clawhub"
 cluster_id: "automerge-openclaw-clawhub-2549"
 mode: "autonomous"
-run_id: "27136663622"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27136663622"
-head_sha: "413ef258a1ef328ab7fd1cdab266124a0b0ebd17"
+run_id: "27182767122"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27182767122"
+head_sha: "205a27a9d70ddd72b0bd1c72229a435b88e9a06e"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-06-08T12:34:10.610Z"
+published_at: "2026-06-09T04:08:50.913Z"
 canonical: "#2549"
 canonical_issue: null
 canonical_pr: "#2549"
 actions_total: 1
 fix_executed: 0
 fix_failed: 0
-fix_blocked: 0
+fix_blocked: 1
 apply_executed: 0
 apply_blocked: 1
 apply_skipped: 0
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/clawhub
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/27136663622](https://github.com/openclaw/clawsweeper/actions/runs/27136663622)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/27182767122](https://github.com/openclaw/clawsweeper/actions/runs/27182767122)
 
 Workflow conclusion: success
 
@@ -44,7 +44,7 @@ Make PR #2549 merge-ready for ClawSweeper automerge. Rebase onto latest main, ad
 | Worker actions | 1 |
 | Fix executed | 0 |
 | Fix failed | 0 |
-| Fix blocked | 0 |
+| Fix blocked | 1 |
 | Applied executions | 0 |
 | Apply blocked | 1 |
 | Apply skipped | 0 |
@@ -54,13 +54,14 @@ Make PR #2549 merge-ready for ClawSweeper automerge. Rebase onto latest main, ad
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | pushed | https://github.com/openclaw/clawhub/pull/2549 |  |  |
+| repair_contributor_branch | blocked | https://github.com/openclaw/clawhub/pull/2549 |  | GitHub rejected the repair branch push because it updates workflow files and the ClawSweeper app token does not have workflows permission |
+| open_fix_pr | opened | https://github.com/openclaw/clawhub/pull/2564 | clawsweeper/automerge-openclaw-clawhub-2549 |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #2549 | merge_canonical | blocked | fix_pr | job does not allow merge |
+| #2564 | merge_canonical | blocked | fix_pr | job does not allow merge |
 
 ## Worker Action Matrix
 
