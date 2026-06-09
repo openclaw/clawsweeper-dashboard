@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-09T21:54:22.583Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-09T21:57:18.004Z",
+  "repo": "openclaw/wacli",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-09T18:54:22.375Z",
+  "since": "2026-06-09T18:57:16.398Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    91772
+    278
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4664422309
+  ],
+  "status_comment_id": 4664422563,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
-  "actionable": 0,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,26 +31,197 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/wacli:278:4664422309:2026-06-09T21:56:39Z:re_review",
+      "comment_id": "4664422309",
+      "comment_version_key": "4664422309:2026-06-09T21:56:39Z",
+      "comment_url": "https://github.com/openclaw/wacli/pull/278#issuecomment-4664422309",
+      "repo": "openclaw/wacli",
+      "issue_number": 278,
+      "author": "thedavidweng",
+      "author_id": 95214375,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-09T21:56:39Z",
+      "comment_updated_at": "2026-06-09T21:56:39Z",
+      "status_comment_id": 4664422563,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-09T21:57:18.643Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 278
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-09T21:57:19.691Z",
+          "response_comment_id": "4664422563",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: add stale-stream detection to sync --follow",
+        "body": "## What changed\n\nAdd built-in stale detection so `sync --follow` automatically reconnects when the WhatsApp connection is alive but no events are arriving.\n\n### Changes\n\n- **`--stale-threshold` flag** on `sync` command (default: 0 = disabled). When set, the follow loop checks whether any events have been received within the threshold window; if not, it emits a `stale` NDJSON event and forces a reconnect via `ReconnectWithBackoff`.\n- **`HEARTBEAT` file** written to the store directory (throttled to once per minute) on every event. This lets external processes monitor sync freshness without querying the database.\n- **`store.last_activity_at`** in `doctor --json` output, read from the heartbeat file. Enables automation to distinguish \"connected but stale\" from healthy.\n\n### Why\n\nIssue #268: `wacli sync --follow` can remain active/connected under systemd while the local store freshness stops advancing. Downstream automations miss messages even though the sync service appears healthy.\n\n### How it was tested\n\n**Gate checks** (all pass):\n\n```\ngo test ./...                     — PASS (14 packages)\ngo test -tags sqlite_fts5 ./...   — PASS\ngo vet ./...                      — clean\ngofmt                             — clean\ngo build -tags sqlite_fts5        — OK\n```\n\n**Unit tests** (all PASS):\n\n```\nTestSyncFollowReconnectsWhenStaleThresholdExceeded\nTestSyncFollowDoesNotReconnectWhenActivityIsRecent\nTestSyncFollowStaleReconnectResetsIdleDuration\nTestSyncFollowEmitsStaleEvent\nTestSyncWritesHeartbeatFileOnActivity\nTestHeartbeatFileHasOwnerOnlyPermissions\nTestReadHeartbeatReturnsZeroForMissingFile\nTestReadHeartbeatReturnsTimestampFromFile\nTestDoctorReportsLastActivityFromHeartbeat\n```\n\n**Live runtime verification** (macOS, arm64, built from this branch):\n\nHeartbeat file — sync creates and updates the store heartbeat automatically:\n\n```\n$ wacli sync --follow --stale-threshold 10m --events\n{\"event\":\"connected\",...}\n{\"event\":\"history_sync\",\"data\":{\"conversations\":0},...}\n{\"event\":\"stopping\",\"data\":{\"messages_synced\":1},...}\n\n$ ls -la ~/.wacli/HEARTBEAT\n-rw-------  1 user  staff  20 Jun  8 18:41 ~/.wacli/HEARTBEAT\n\n$ cat ~/.wacli/HEARTBEAT\n2026-06-09T01:41:55Z\n```\n\n- File created automatically on first event\n- Permissions are `0600` (owner-only, via `WritePrivateFile`)\n- `doctor --json` picks it up as `last_activity_at`\n\nStale detection — stale event fires after threshold, reconnect loop is stable across multiple stale cycles:\n\n```\n$ wacli sync --follow --stale-threshold 5s --events\n{\"event\":\"connected\",...}\n{\"event\":\"stale\",\"data\":{\"idle_duration\":\"5.001s\",\"threshold\":\"5s\"},...}\n{\"event\":\"stale\",\"data\":{\"idle_duration\":\"5.001s\",\"threshold\":\"5s\"},...}\n{\"event\":\"stale\",\"data\":{\"idle_duration\":\"5.001s\",\"threshold\":\"5s\"},...}\n{\"event\":\"stopping\",...}\n```\n\n- Stale event fires correctly after threshold with no activity\n- `idle_duration` stays at ~5s each cycle (timer reset works, no accumulation)\n- Each stale cycle triggers `wa.Close()` → `ReconnectWithBackoff` → reset timer (matching the `StreamReplaced` handler pattern)\n\nDoctor output:\n\n```json\n{\n  \"store\": {\n    \"last_sync_at\": \"2026-06-09T01:39:52Z\",\n    \"last_activity_at\": \"2026-06-09T01:41:55Z\"\n  }\n}\n```\n\n`last_activity_at` correctly reflects the heartbeat timestamp from the sync session, distinct from `last_sync_at`.\n\n### Usage\n\n```bash\n# Auto-reconnect when no events arrive for 10 minutes\nwacli sync --follow --stale-threshold 10m\n\n# Monitor freshness\nwacli doctor --json | jq \".data.store.last_activity_at\"\n```\n\n### New flags\n\n| Flag | Default | Description |\n|------|---------|-------------|\n| `--stale-threshold` | `0` (disabled) | Force reconnect when no events arrive for this long in follow mode |\n\n### New event\n\n| Event | Data | When |\n|-------|------|------|\n| `stale` | `{threshold, idle_duration}` | Stale threshold exceeded, about to reconnect |\n\nCloses #268",
+        "branch": "fix/sync-stale-detection",
+        "head_sha": "3d22e44669f1f43087daf344dd5b113011715413",
+        "author": "thedavidweng",
+        "labels": [
+          "status: 📣 needs proof",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 message-delivery"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "cmd/wacli/doctor.go",
+            "additions": 12,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "cmd/wacli/doctor_test.go",
+            "additions": 38,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "cmd/wacli/sync.go",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/doctor.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/spec.md",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/sync.md",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/app/fake_wa_test.go",
+            "additions": 4,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/app/heartbeat.go",
+            "additions": 43,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "internal/app/heartbeat_test.go",
+            "additions": 230,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "internal/app/sync.go",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/app/sync_events.go",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/app/sync_idle.go",
+            "additions": 26,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/app/sync_test.go",
+            "additions": 112,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-wacli-278",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-wacli-278.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 3,
+          "counts": {
+            "SUCCESS": 3
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 332,
+    "total_ms": 3786,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 196
+        "ms": 586
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1006
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 124
+        "ms": 2167
       },
       {
         "name": "append_ledger",
