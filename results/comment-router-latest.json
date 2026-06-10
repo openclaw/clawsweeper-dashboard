@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T05:11:13.961Z",
+  "generated_at": "2026-06-10T05:10:29.841Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-10T02:11:12.701Z",
+  "since": "2026-06-10T02:10:27.840Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    57825
+    58244
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 4,
+  "scanned_comments": 6,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:57825:4336637015:2026-06-10T05:08:06Z:clawsweeper_needs_human",
-      "comment_id": "4336637015",
-      "comment_version_key": "4336637015:2026-06-10T05:08:06Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/57825#issuecomment-4336637015",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:58244:4357135773:2026-06-10T05:10:04Z:clawsweeper_needs_human",
+      "comment_id": "4357135773",
+      "comment_version_key": "4357135773:2026-06-10T05:10:04Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/58244#issuecomment-4357135773",
       "repo": "openclaw/openclaw",
-      "issue_number": 57825,
+      "issue_number": 58244,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-28T15:17:44Z",
-      "comment_updated_at": "2026-06-10T05:08:06Z",
+      "comment_created_at": "2026-05-01T00:43:50Z",
+      "comment_updated_at": "2026-06-10T05:10:04Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -52,105 +52,104 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=ce338d23b204911ccc73f7b0fa432ef68cf15cc7)",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=2ce4ef16b59e424748f2f02e16d28e29c9b8f107)",
       "review_summary": null,
       "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "ce338d23b204911ccc73f7b0fa432ef68cf15cc7",
+      "expected_head_sha": "2ce4ef16b59e424748f2f02e16d28e29c9b8f107",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "Preserve session model overrides on generic persistence",
-        "body": "## Summary\nGeneric session persistence was clearing omitted override fields by default. That can drop a previously selected `/model` session override when a later non-model session write merges a partial entry.\n\n## Repro\n1. Set a per-session model with `/model`.\n2. Persist a later session update that does not touch model/provider override fields.\n3. The merged session entry can lose `providerOverride` and `modelOverride` because omitted fields are treated as deletions.\n\n## Fix\n- Make `persistSessionEntry()` preserve omitted fields by default.\n- Only clear missing override fields on explicit reset paths.\n- Keep Claude CLI expiry cleanup on the explicit-clear path.\n\n## Tests\n- Added regression coverage for preserving omitted cleared fields by default.\n- Added regression coverage for explicit field clearing when requested.\n- Re-ran focused agent + CLI provider tests.\n\n## Validation\n```bash\ncorepack pnpm exec vitest run --config vitest.config.ts \\\n  src/agents/command/attempt-execution.test.ts \\\n  src/commands/agent.test.ts \\\n  src/commands/agent.cli-provider.test.ts\n```\n",
-        "branch": "fix/preserve-session-model-overrides",
-        "head_sha": "ce338d23b204911ccc73f7b0fa432ef68cf15cc7",
-        "author": "realkim93",
+        "title": "fix(process): prune idle dynamic lanes from command queue Map to prevent memory leak",
+        "body": "## Summary\n\nFix a memory leak in `src/process/command-queue.ts` where the module-level `lanes` Map grows monotonically — every unique dynamic lane name (e.g. `session:<key>`, `auth-probe:<provider>:<profileId>`) creates a `LaneState` entry that is **never removed** after all tasks complete, causing unbounded memory growth over the gateway lifetime.\n\n## Type of Change\n\n- [x] Bug fix (non-breaking change which fixes an issue)\n\n## Scope\n\n- [x] Gateway / orchestration (command queue)\n\n## Problem\n\nThe command queue uses a module-level `Map<string, LaneState>` (stored on `globalThis` via `resolveGlobalSingleton`) to track per-lane execution state. Lanes are created on-demand by `getLaneState()` when work is enqueued or concurrency is configured.\n\n**The bug**: There is no code path that removes a lane entry from the Map after all its tasks complete. The only deletion is in `resetCommandQueueStateForTest()`, which is test-only.\n\n### Dynamic lane sources\n\nTwo call sites create **dynamic, per-session/per-probe lane names**:\n\n1. **Session lanes** (`src/agents/pi-embedded-runner/lanes.ts`):\n   ```typescript\n   export function resolveSessionLane(key: string) {\n     const cleaned = key.trim() || CommandLane.Main;\n     return cleaned.startsWith(\"session:\") ? cleaned : `session:${cleaned}`;\n   }\n   ```\n   Every unique session key creates a `session:<sessionKey>` lane.\n\n2. **Auth probe lanes** (`src/commands/models/list.probe.ts`):\n   ```typescript\n   lane: `auth-probe:${target.provider}:${target.profileId ?? target.source}`,\n   ```\n   Every unique provider/profile combination creates an `auth-probe:…` lane.\n\n### Memory impact per orphaned lane\n\nEach idle `LaneState` object contains:\n- `lane: string` — the lane name (variable length, typically 30-80 chars)\n- `queue: []` — empty array (64 bytes)\n- `activeTaskIds: Set(0)` — empty Set (64 bytes)\n- `maxConcurrent: 1` — number (8 bytes)\n- `draining: false` — boolean (8 bytes)\n- `generation: number` — number (8 bytes)\n- Plus Map entry overhead (~50 bytes)\n\n**Total: ~200-300 bytes per orphaned lane.**\n\n### Growth rate\n\nOn a gateway with active session churn:\n- 100 unique sessions/day × 300 bytes = **30 KB/day**\n- 1,000 unique sessions/day × 300 bytes = **300 KB/day**\n- Over 30 days: **9 MB** (at 1K sessions/day)\n\nWhile each individual entry is small, the **monotonic growth** means the Map never shrinks, and on long-running gateways with high session churn, this accumulates into a significant memory leak.\n\n## Severity\n\n🟡 **Medium** — Unbounded memory growth on long-running gateway instances.\n\n- **Attack vector**: Normal operation — no malicious input required; every session that connects and does work contributes to the leak\n- **Impact**: Monotonically growing Map that never shrinks\n- **Scope**: Any long-running gateway process with session churn\n\n## Scope of Impact\n\n- **File**: `src/process/command-queue.ts` — functions `drainLane` (pump), `clearCommandLane`, `resetAllLanes`\n- **Runtime**: Any long-running gateway process\n- **Risk of regression**: Zero — the pruned entries are fully idle (empty queue, no active tasks) and serve no purpose. Re-enqueueing work to the same lane name will transparently re-create the entry via `getLaneState()`\n- **Functional behavior change**: None — `getQueueSize()` already handles missing lanes by returning 0, and `enqueueCommandInLane()` re-creates lanes on demand\n\n## How I Fixed It\n\nAdded pruning logic in **three** places to cover all consumption paths:\n\n### 1. `drainLane` / `pump()` — after task completion\n\n```typescript\nif (\n  afterTaskCompletion &&\n  state.queue.length === 0 &&\n  state.activeTaskIds.size === 0 &&\n  !PERSISTENT_LANES.has(lane) &&\n  state.maxConcurrent <= 1\n) {\n  getQueueState().lanes.delete(lane);\n}\n```\n\nThe `afterTaskCompletion` guard ensures we only prune after an actual task has completed — not on the initial `drainLane` call from `setCommandLaneConcurrency` or `enqueueCommandInLane`. This prevents discarding concurrency settings that were configured before any work was enqueued.\n\n### 2. `clearCommandLane` — after clearing pending work\n\n```typescript\nif (\n  state.activeTaskIds.size === 0 &&\n  !PERSISTENT_LANES.has(cleaned) &&\n  state.maxConcurrent <= 1\n) {\n  queueState.lanes.delete(cleaned);\n}\n```\n\n### 3. `resetAllLanes` — during SIGUSR1 in-process restart\n\n```typescript\n} else if (!PERSISTENT_LANES.has(state.lane) && state.maxConcurrent <= 1) {\n  lanesToPrune.push(state.lane);\n}\n```\n\n### Concurrency-tuned lanes are preserved\n\nLanes with `maxConcurrent > 1` (set via `setCommandLaneConcurrency`) are excluded from pruning so their concurrency tuning is not silently lost after an idle period. This is a defensive measure — currently no dynamic lanes use custom concurrency in production, but the guard prevents future regressions if that changes.\n\n### Well-known lanes are never pruned\n\nA `PERSISTENT_LANES` set contains the four well-known lanes (`main`, `cron`, `subagent`, `nested`) that are reused across the entire gateway lifetime. These are never pruned to avoid re-allocation churn.\n\n## Testing\n\nAll 25 tests pass (18 existing + 7 new):\n\n```\n✓ src/process/command-queue.test.ts (25 tests) 92ms\n```\n\n### New test cases\n\n| Test | Description |\n|------|-------------|\n| `prunes dynamic lane from Map after its last task completes` | Enqueues a task in a `session:*` lane, awaits completion, asserts lane count returns to baseline |\n| `does not prune well-known lanes after tasks complete` | Enqueues a task in the `main` lane, asserts the lane is preserved after completion |\n| `prunes dynamic lane via clearCommandLane when idle` | Creates a dynamic lane via `setCommandLaneConcurrency`, clears it, asserts it is pruned |\n| `prunes idle dynamic lanes during resetAllLanes` | Creates a dynamic lane via `setCommandLaneConcurrency`, calls `resetAllLanes`, asserts it is pruned |\n| `preserves dynamic lane with custom concurrency after task completion` | Sets `maxConcurrent=3` on a dynamic lane, completes a task, asserts lane is NOT pruned |\n| `preserves dynamic lane with custom concurrency via clearCommandLane` | Sets `maxConcurrent=2` on a dynamic lane, clears it, asserts lane is NOT pruned |\n| `preserves dynamic lane with custom concurrency during resetAllLanes` | Sets `maxConcurrent=4` on a dynamic lane, resets all lanes, asserts lane is NOT pruned |\n\n## Files Changed\n\n| File | Change | Lines |\n|------|--------|-------|\n| `src/process/command-queue.ts` | Add `PERSISTENT_LANES` set | +7 |\n| `src/process/command-queue.ts` | Add pruning in `pump()` after task completion (with `maxConcurrent` guard) | +13 |\n| `src/process/command-queue.ts` | Add pruning in `clearCommandLane` (with `maxConcurrent` guard) | +6 |\n| `src/process/command-queue.ts` | Add pruning in `resetAllLanes` (with `maxConcurrent` guard) | +8 |\n| `src/process/command-queue.ts` | Add `getLaneCountForTest` helper | +6 |\n| `src/process/command-queue.test.ts` | Add 7 regression tests for lane pruning | +49 |\n\n## Checklist\n\n- [x] I have performed a self-review of my code\n- [x] I have added tests that prove my fix is effective\n- [x] New and existing unit tests pass locally with my changes\n- [x] My changes generate no new warnings or lint errors\n- [x] This change is backwards compatible\n- [x] All three pruning paths (task completion, clear, reset) are covered\n- [x] Well-known lanes are preserved to avoid re-allocation churn\n- [x] Concurrency-tuned lanes are preserved to avoid losing custom settings",
+        "branch": "fix/prune-idle-command-queue-lanes",
+        "head_sha": "2ce4ef16b59e424748f2f02e16d28e29c9b8f107",
+        "author": "gavyngong",
         "labels": [
-          "agents",
           "stale",
           "size: S",
           "triage: needs-real-behavior-proof",
           "P2",
           "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/agent-command.ts",
-            "additions": 3,
-            "deletions": 0,
+            "path": "src/process/command-queue.test.ts",
+            "additions": 83,
+            "deletions": 4,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/command/attempt-execution.test.ts",
-            "additions": 87,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/command/attempt-execution.ts",
-            "additions": 8,
-            "deletions": 3,
+            "path": "src/process/command-queue.ts",
+            "additions": 58,
+            "deletions": 5,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-57825",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-57825.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-58244",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-58244.md",
         "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 44,
+          "total": 107,
           "counts": {
-            "FAILURE": 5,
-            "SUCCESS": 23,
-            "SKIPPED": 15,
-            "CANCELLED": 1
+            "FAILURE": 9,
+            "SUCCESS": 70,
+            "SKIPPED": 27,
+            "NEUTRAL": 1
           },
           "blockers": [
             "Real behavior proof:FAILURE",
-            "checks-fast-extensions:FAILURE",
-            "checks-windows-node-test-3:FAILURE",
-            "checks-windows-node-test-4:FAILURE",
-            "checks-windows-node-test-5:CANCELLED",
-            "checks-windows-node-test-6:FAILURE"
+            "checks-node-core-runtime-infra:FAILURE",
+            "checks-node-agentic-cli:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-boundaries:FAILURE",
+            "checks-node-core-support-boundary:FAILURE",
+            "check:FAILURE",
+            "check-additional:FAILURE",
+            "checks-node-core:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
             "Real behavior proof:FAILURE",
-            "checks-fast-extensions:FAILURE",
-            "checks-windows-node-test-3:FAILURE",
-            "checks-windows-node-test-4:FAILURE",
-            "checks-windows-node-test-5:CANCELLED",
-            "checks-windows-node-test-6:FAILURE"
+            "checks-node-core-runtime-infra:FAILURE",
+            "checks-node-agentic-cli:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-boundaries:FAILURE",
+            "checks-node-core-support-boundary:FAILURE",
+            "check:FAILURE",
+            "check-additional:FAILURE",
+            "checks-node-core:FAILURE"
           ]
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "target is not open"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1455,
+    "total_ms": 2197,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 303
+        "ms": 349
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 940
+        "ms": 1634
       },
       {
         "name": "classify_commands",
