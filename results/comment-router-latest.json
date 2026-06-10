@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T01:27:01.897Z",
+  "generated_at": "2026-06-10T01:29:15.632Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-09T22:27:01.483Z",
+  "since": "2026-06-09T22:29:13.608Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    91799
+    91721
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 5,
+  "commands_seen": 3,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,303 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91721:4661021744:2026-06-10T01:29:10Z:clawsweeper_auto_repair",
+      "comment_id": "4661021744",
+      "comment_version_key": "4661021744:2026-06-10T01:29:10Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91721#issuecomment-4661021744",
+      "repo": "openclaw/openclaw",
+      "issue_number": 91721,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-09T14:53:20Z",
+      "comment_updated_at": "2026-06-10T01:29:10Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=76ab549c684bf071f9d35af74d5cf972ab39bb81)",
+      "review_summary": "The branch changes diagnostic recovery to set non-idle diagnostic session entries to idle with `queueDepth = 0` when a recovery outcome does not mutate session state, while keeping pruning idle-only.\n\nPR surface: Source +9. Total +9 across 2 files.\n\nReproducibility: yes. Source inspection shows current main leaves `status: \"failed\"` outcomes non-idle because they return through the non-mutating branch; I did not execute tests in this read-only review.",
+      "review_followup": "- [P1] The branch needs author or maintainer revision because the concrete code blocker changes a session-state invariant and the contributor proof must be refreshed after the fix.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "76ab549c684bf071f9d35af74d5cf972ab39bb81",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(logging): prune non-idle stale diagnostic session states",
+        "body": "## Summary\n\nWhen `requestStuckSessionRecovery()` fails (e.g. session already closed, generation mismatch, exception), the outcome `status: \"failed\"` causes `recoveryOutcomeMutatesSessionState()` to return `false`. This makes `applyRecoveryOutcomeToDiagnosticState()` return early **without** transitioning the diagnostic state to `\"idle\"`. The entry stays non-idle forever — accumulating as a ghost entry in the `diagnosticSessionStates` Map until the 2000-entry FIFO cap is hit.\n\nThis PR fixes the root cause: when recovery does not mutate session state, the diagnostic entry is explicitly transitioned to `\"idle\"` with `queueDepth = 0`, so the existing stale-idle prune logic can remove it after the TTL expires.\n\nFixes #91697\n\n## Changes\n\n- **`src/logging/diagnostic-session-recovery-coordinator.ts`**: In `applyRecoveryOutcomeToDiagnosticState()`, when `recoveryOutcomeMutatesSessionState()` returns false, transition the diagnostic entry to `\"idle\"` with `queueDepth = 0` before returning. 1 file, +8 lines.\n- **`src/logging/diagnostic-session-state.ts`**: Reverted the broad prune fallback (v1/v2). The existing idle-stale prune logic handles cleanup once the recovery path properly marks failed-recovery entries as idle. 1 file, −3 lines.\n\n## Real behavior proof\n\n**Behavior addressed:** Failed stuck-session recovery leaves diagnostic entries permanently non-idle. After the fix, failed-recovery entries are transitioned to idle, making them eligible for removal by the existing stale-idle prune logic.\n\n**Real environment tested:** Node v22.22.0, Linux 4.19.112-2.el8.x86_64, openclaw commit 76ab549c68. tsx v4.22.3.\n\n**Exact steps or command run after this patch:**\n\n1. Wrote proof script at `scripts/proof-91721-v3.mjs` that imports the real `diagnosticSessionStates`, `pruneDiagnosticSessionStates`, `getDiagnosticSessionState`, `peekDiagnosticSessionState` from `src/logging/diagnostic-session-state.js` and `recoveryOutcomeMutatesSessionState` from `src/logging/diagnostic-session-recovery.js`\n2. Script creates a diagnostic entry with state `\"processing\"` + `queueDepth=2` + age 31min, simulates a failed recovery (status `\"failed\"`), applies the new ghost-idle transition, then calls prune to verify cleanup\n3. Ran `npx tsx scripts/proof-91721-v3.mjs`\n\n**Evidence after fix (terminal capture):**\n\n```\n$ npx tsx scripts/proof-91721-v3.mjs\n\n============================================================\nrecovery-path ghost state fix — proof\n============================================================\nnow  = 2026-06-09T12:00:00.000Z\nTTL  = 30 minutes\n\n--- recoveryOutcomeMutatesSessionState ---\noutcome.status = \"failed\"\nmutates state = false\n(false → code enters the new ghost-idle transition path)\n\n--- BEFORE FIX (current main) ---\nstate before recovery: state=processing age=31min\nrecovery fails → state UNCHANGED (ghost entry accumulates)\n\n--- AFTER FIX (this patch) ---\nstate after recovery: state=idle\nrecovery fails → state → idle (eligible for prune)\n\n--- After prune (simulated) ---\nentries remaining: 0\n\n--- Verification ---\nrecovery fails → state → idle:           ✓ (via ghost transition)\nidle + stale → pruned by existing logic:  ✓\nghost entry prevented from accumulating:  ✓\n\n✓ All checks passed.\nexit code: 0\n```\n\n**Observed result after fix:** Before fix: recovery failure → entry stays `\"processing\"` forever (ghost). After fix: recovery failure → entry transitions to `\"idle\"` with `queueDepth=0` → naturally cleaned up by the existing stale-idle prune logic. No changes to the prune function itself — the fix is in the recovery-owned path where recovery failure outcomes are processed.\n\n**What was not tested:** Full gateway restart with stuck-session recovery, interaction with heartbeat-driven stuck-session detection, the `scheduleOrphanRecovery` path.",
+        "branch": "fix/91697-prune-non-idle-diagnostic-states",
+        "head_sha": "76ab549c684bf071f9d35af74d5cf972ab39bb81",
+        "author": "chengzhichao-xydt",
+        "labels": [
+          "size: XS",
+          "proof: supplied",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/logging/diagnostic-session-recovery-coordinator.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/logging/diagnostic-session-state.ts",
+            "additions": 1,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-91721",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91721.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 130,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:91721:4665597272:2026-06-10T01:21:10Z:re_review",
+      "comment_id": "4665597272",
+      "comment_version_key": "4665597272:2026-06-10T01:21:10Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91721#issuecomment-4665597272",
+      "repo": "openclaw/openclaw",
+      "issue_number": 91721,
+      "author": "chengzhichao-xydt",
+      "author_id": 264300353,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-10T01:21:10Z",
+      "comment_updated_at": "2026-06-10T01:21:10Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(logging): prune non-idle stale diagnostic session states",
+        "body": "## Summary\n\nWhen `requestStuckSessionRecovery()` fails (e.g. session already closed, generation mismatch, exception), the outcome `status: \"failed\"` causes `recoveryOutcomeMutatesSessionState()` to return `false`. This makes `applyRecoveryOutcomeToDiagnosticState()` return early **without** transitioning the diagnostic state to `\"idle\"`. The entry stays non-idle forever — accumulating as a ghost entry in the `diagnosticSessionStates` Map until the 2000-entry FIFO cap is hit.\n\nThis PR fixes the root cause: when recovery does not mutate session state, the diagnostic entry is explicitly transitioned to `\"idle\"` with `queueDepth = 0`, so the existing stale-idle prune logic can remove it after the TTL expires.\n\nFixes #91697\n\n## Changes\n\n- **`src/logging/diagnostic-session-recovery-coordinator.ts`**: In `applyRecoveryOutcomeToDiagnosticState()`, when `recoveryOutcomeMutatesSessionState()` returns false, transition the diagnostic entry to `\"idle\"` with `queueDepth = 0` before returning. 1 file, +8 lines.\n- **`src/logging/diagnostic-session-state.ts`**: Reverted the broad prune fallback (v1/v2). The existing idle-stale prune logic handles cleanup once the recovery path properly marks failed-recovery entries as idle. 1 file, −3 lines.\n\n## Real behavior proof\n\n**Behavior addressed:** Failed stuck-session recovery leaves diagnostic entries permanently non-idle. After the fix, failed-recovery entries are transitioned to idle, making them eligible for removal by the existing stale-idle prune logic.\n\n**Real environment tested:** Node v22.22.0, Linux 4.19.112-2.el8.x86_64, openclaw commit 76ab549c68. tsx v4.22.3.\n\n**Exact steps or command run after this patch:**\n\n1. Wrote proof script at `scripts/proof-91721-v3.mjs` that imports the real `diagnosticSessionStates`, `pruneDiagnosticSessionStates`, `getDiagnosticSessionState`, `peekDiagnosticSessionState` from `src/logging/diagnostic-session-state.js` and `recoveryOutcomeMutatesSessionState` from `src/logging/diagnostic-session-recovery.js`\n2. Script creates a diagnostic entry with state `\"processing\"` + `queueDepth=2` + age 31min, simulates a failed recovery (status `\"failed\"`), applies the new ghost-idle transition, then calls prune to verify cleanup\n3. Ran `npx tsx scripts/proof-91721-v3.mjs`\n\n**Evidence after fix (terminal capture):**\n\n```\n$ npx tsx scripts/proof-91721-v3.mjs\n\n============================================================\nrecovery-path ghost state fix — proof\n============================================================\nnow  = 2026-06-09T12:00:00.000Z\nTTL  = 30 minutes\n\n--- recoveryOutcomeMutatesSessionState ---\noutcome.status = \"failed\"\nmutates state = false\n(false → code enters the new ghost-idle transition path)\n\n--- BEFORE FIX (current main) ---\nstate before recovery: state=processing age=31min\nrecovery fails → state UNCHANGED (ghost entry accumulates)\n\n--- AFTER FIX (this patch) ---\nstate after recovery: state=idle\nrecovery fails → state → idle (eligible for prune)\n\n--- After prune (simulated) ---\nentries remaining: 0\n\n--- Verification ---\nrecovery fails → state → idle:           ✓ (via ghost transition)\nidle + stale → pruned by existing logic:  ✓\nghost entry prevented from accumulating:  ✓\n\n✓ All checks passed.\nexit code: 0\n```\n\n**Observed result after fix:** Before fix: recovery failure → entry stays `\"processing\"` forever (ghost). After fix: recovery failure → entry transitions to `\"idle\"` with `queueDepth=0` → naturally cleaned up by the existing stale-idle prune logic. No changes to the prune function itself — the fix is in the recovery-owned path where recovery failure outcomes are processed.\n\n**What was not tested:** Full gateway restart with stuck-session recovery, interaction with heartbeat-driven stuck-session detection, the `scheduleOrphanRecovery` path.",
+        "branch": "fix/91697-prune-non-idle-diagnostic-states",
+        "head_sha": "76ab549c684bf071f9d35af74d5cf972ab39bb81",
+        "author": "chengzhichao-xydt",
+        "labels": [
+          "size: XS",
+          "proof: supplied",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/logging/diagnostic-session-recovery-coordinator.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/logging/diagnostic-session-state.ts",
+            "additions": 1,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-91721",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91721.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 130,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:91721:4661251600:2026-06-09T15:19:21Z:re_review",
+      "comment_id": "4661251600",
+      "comment_version_key": "4661251600:2026-06-09T15:19:21Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91721#issuecomment-4661251600",
+      "repo": "openclaw/openclaw",
+      "issue_number": 91721,
+      "author": "chengzhichao-xydt",
+      "author_id": 264300353,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-09T15:19:21Z",
+      "comment_updated_at": "2026-06-09T15:19:21Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(logging): prune non-idle stale diagnostic session states",
+        "body": "## Summary\n\nWhen `requestStuckSessionRecovery()` fails (e.g. session already closed, generation mismatch, exception), the outcome `status: \"failed\"` causes `recoveryOutcomeMutatesSessionState()` to return `false`. This makes `applyRecoveryOutcomeToDiagnosticState()` return early **without** transitioning the diagnostic state to `\"idle\"`. The entry stays non-idle forever — accumulating as a ghost entry in the `diagnosticSessionStates` Map until the 2000-entry FIFO cap is hit.\n\nThis PR fixes the root cause: when recovery does not mutate session state, the diagnostic entry is explicitly transitioned to `\"idle\"` with `queueDepth = 0`, so the existing stale-idle prune logic can remove it after the TTL expires.\n\nFixes #91697\n\n## Changes\n\n- **`src/logging/diagnostic-session-recovery-coordinator.ts`**: In `applyRecoveryOutcomeToDiagnosticState()`, when `recoveryOutcomeMutatesSessionState()` returns false, transition the diagnostic entry to `\"idle\"` with `queueDepth = 0` before returning. 1 file, +8 lines.\n- **`src/logging/diagnostic-session-state.ts`**: Reverted the broad prune fallback (v1/v2). The existing idle-stale prune logic handles cleanup once the recovery path properly marks failed-recovery entries as idle. 1 file, −3 lines.\n\n## Real behavior proof\n\n**Behavior addressed:** Failed stuck-session recovery leaves diagnostic entries permanently non-idle. After the fix, failed-recovery entries are transitioned to idle, making them eligible for removal by the existing stale-idle prune logic.\n\n**Real environment tested:** Node v22.22.0, Linux 4.19.112-2.el8.x86_64, openclaw commit 76ab549c68. tsx v4.22.3.\n\n**Exact steps or command run after this patch:**\n\n1. Wrote proof script at `scripts/proof-91721-v3.mjs` that imports the real `diagnosticSessionStates`, `pruneDiagnosticSessionStates`, `getDiagnosticSessionState`, `peekDiagnosticSessionState` from `src/logging/diagnostic-session-state.js` and `recoveryOutcomeMutatesSessionState` from `src/logging/diagnostic-session-recovery.js`\n2. Script creates a diagnostic entry with state `\"processing\"` + `queueDepth=2` + age 31min, simulates a failed recovery (status `\"failed\"`), applies the new ghost-idle transition, then calls prune to verify cleanup\n3. Ran `npx tsx scripts/proof-91721-v3.mjs`\n\n**Evidence after fix (terminal capture):**\n\n```\n$ npx tsx scripts/proof-91721-v3.mjs\n\n============================================================\nrecovery-path ghost state fix — proof\n============================================================\nnow  = 2026-06-09T12:00:00.000Z\nTTL  = 30 minutes\n\n--- recoveryOutcomeMutatesSessionState ---\noutcome.status = \"failed\"\nmutates state = false\n(false → code enters the new ghost-idle transition path)\n\n--- BEFORE FIX (current main) ---\nstate before recovery: state=processing age=31min\nrecovery fails → state UNCHANGED (ghost entry accumulates)\n\n--- AFTER FIX (this patch) ---\nstate after recovery: state=idle\nrecovery fails → state → idle (eligible for prune)\n\n--- After prune (simulated) ---\nentries remaining: 0\n\n--- Verification ---\nrecovery fails → state → idle:           ✓ (via ghost transition)\nidle + stale → pruned by existing logic:  ✓\nghost entry prevented from accumulating:  ✓\n\n✓ All checks passed.\nexit code: 0\n```\n\n**Observed result after fix:** Before fix: recovery failure → entry stays `\"processing\"` forever (ghost). After fix: recovery failure → entry transitions to `\"idle\"` with `queueDepth=0` → naturally cleaned up by the existing stale-idle prune logic. No changes to the prune function itself — the fix is in the recovery-owned path where recovery failure outcomes are processed.\n\n**What was not tested:** Full gateway restart with stuck-session recovery, interaction with heartbeat-driven stuck-session detection, the `scheduleOrphanRecovery` path.",
+        "branch": "fix/91697-prune-non-idle-diagnostic-states",
+        "head_sha": "76ab549c684bf071f9d35af74d5cf972ab39bb81",
+        "author": "chengzhichao-xydt",
+        "labels": [
+          "size: XS",
+          "proof: supplied",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/logging/diagnostic-session-recovery-coordinator.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/logging/diagnostic-session-state.ts",
+            "additions": 1,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-91721",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91721.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 29,
+            "SUCCESS": 130,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 736,
+    "total_ms": 2212,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 403
+        "ms": 234
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1768
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 323
+        "ms": 176
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
