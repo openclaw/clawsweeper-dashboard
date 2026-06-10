@@ -504,7 +504,7 @@ source ~/.profile
 corepack enable
 pnpm install
 pnpm run build
-pnpm run plan -- --target-repo openclaw/openclaw --batch-size 5 --shard-count 39 --max-pages 250 --codex-model internal --codex-reasoning-effort high
+pnpm run plan -- --target-repo openclaw/openclaw --batch-size 5 --shard-count 7 --max-pages 250 --codex-model internal --codex-reasoning-effort high
 pnpm run review -- --target-repo openclaw/openclaw --target-dir ../openclaw --batch-size 5 --max-pages 250 --artifact-dir artifacts/reviews --codex-model internal --codex-reasoning-effort high --codex-timeout-ms 600000
 pnpm run apply-artifacts -- --target-repo openclaw/openclaw --artifact-dir artifacts/reviews --skip-dashboard
 pnpm run audit -- --target-repo openclaw/openclaw --max-pages 250 --sample-limit 25 --update-dashboard
@@ -561,25 +561,26 @@ default, subject to the selected repository profile; pass `target_repo`,
 `apply_kind=issue`, or `apply_kind=pull_request` to narrow a manual run.
 
 Scheduled runs cover the configured product profiles. `openclaw/openclaw` runs
-normal backfill every 5 minutes with up to 27 review shards when the system is
+normal backfill every 5 minutes with up to 6 review shards when the system is
 quiet; `openclaw/clawhub` runs on offset review/apply/audit crons so its reports
 live under `records/openclaw-clawhub/` without colliding with default repo
 records. `openclaw/clawsweeper` has a scheduled read-only audit row and is
 available for manual and event self-review smoke tests. Broad hot-intake sweeps
-cap scheduled fan-out at 19 one-item shards per run when quiet; exact event
-reviews still use one shard. Normal review, hot intake, and commit review are
-background lanes, so they shrink automatically while repair or exact-item work
-is active. Throughput defaults live in
+cap scheduled fan-out at 3 one-item shards per run when quiet; exact event
+reviews still use one globally serialized job. Normal review, hot intake, and
+commit review are background lanes, so they shrink automatically while repair
+or exact-item work is active. Throughput defaults live in
 [docs/limits.md](docs/limits.md) and `config/automation-limits.json`.
 
 ### Worker Budget
 
 ClawSweeper has one main capacity knob:
-`config/automation-limits.json` -> `workers.max`. The current value is `57`.
-Lane limits are derived from that number: normal review defaults to 39 shards
-for manual/backstop runs, scheduled normal review gets up to 27 after reserves,
-hot intake up to 19 shards, commit review 2 commits per page, and existing
-repair/issue implementation lanes use 40% of `workers.max`, currently 22 live
+`config/automation-limits.json` -> `workers.max`. The temporary rate-limit
+value is `10`.
+Lane limits are derived from that number: normal review defaults to 7 shards
+for manual/backstop runs, scheduled normal review gets up to 6 after reserves,
+hot intake up to 3 shards, commit review 1 commit per page, and existing
+repair/issue implementation lanes use 40% of `workers.max`, currently 4 live
 workers. Imported gitcrawl cluster repair stays at 1 live worker by default.
 Exact-item review, repair, and issue implementation are priority work; normal
 review, hot intake, and commit review are background work and automatically
@@ -592,8 +593,8 @@ lane-specific exceptions.
 Target repositories can opt into event-level latency by installing the
 dispatcher workflow in [docs/target-dispatcher.md](docs/target-dispatcher.md).
 The dispatcher sends `repository_dispatch` events to this repository with the
-target repo and exact item number; ClawSweeper then runs one event job that
-reviews, comments, and checks immediate safe apply instead of waiting for the
+target repo and exact item number; ClawSweeper then queues one globally
+serialized event job that reviews, comments, and checks immediate safe apply instead of waiting for the
 next hot-intake cron or bulk publish lane.
 
 Main-branch commit review is manual-only in production. See
