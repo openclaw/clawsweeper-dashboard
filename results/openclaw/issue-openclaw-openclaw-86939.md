@@ -2,21 +2,21 @@
 repo: "openclaw/openclaw"
 cluster_id: "issue-openclaw-openclaw-86939"
 mode: "autonomous"
-run_id: "26457825821"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/26457825821"
-head_sha: "6c66b2c97fcc69b5653700a50b976e199bcedea8"
-workflow_conclusion: "success"
+run_id: "27258681206"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27258681206"
+head_sha: "fc19c926f04cee78383e0bacb7a884725bdaabc5"
+workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-05-26T15:47:14.248Z"
-canonical: "https://github.com/openclaw/openclaw/issues/86939"
+published_at: "2026-06-10T07:00:47.589Z"
+canonical: null
 canonical_issue: "https://github.com/openclaw/openclaw/issues/86939"
 canonical_pr: null
-actions_total: 4
+actions_total: 3
 fix_executed: 0
 fix_failed: 0
 fix_blocked: 0
 apply_executed: 0
-apply_blocked: 1
+apply_blocked: 0
 apply_skipped: 0
 needs_human_count: 0
 ---
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/26457825821](https://github.com/openclaw/clawsweeper/actions/runs/26457825821)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/27258681206](https://github.com/openclaw/clawsweeper/actions/runs/27258681206)
 
-Workflow conclusion: success
+Workflow conclusion: failure
 
 Worker result: planned
 
@@ -35,18 +35,18 @@ Canonical: https://github.com/openclaw/openclaw/issues/86939
 
 ## Summary
 
-Verified #86939 remains a narrow Control UI webchat session-state bug on current main 5ef812293b08be065badac552c5656aaaf34093d. No security signal or viable existing PR is present, so the canonical path is a new narrow fix PR on clawsweeper/issue-openclaw-openclaw-86939.
+Verified latest main at a3d5e5bc already contains the webchat stale-running fix and regression coverage. No new fix PR is appropriate. The open ClawSweeper PR #86954 is covered by current main, but this job blocks close actions, so it is kept as a non-mutating related item. Security-sensitive linked PR #87017 is quarantined with route_security only.
 
 ## Impact
 
 | Metric | Count |
 | --- | ---: |
-| Worker actions | 4 |
+| Worker actions | 3 |
 | Fix executed | 0 |
 | Fix failed | 0 |
 | Fix blocked | 0 |
 | Applied executions | 0 |
-| Apply blocked | 1 |
+| Apply blocked | 0 |
 | Apply skipped | 0 |
 | Needs human | 0 |
 
@@ -54,23 +54,21 @@ Verified #86939 remains a narrow Control UI webchat session-state bug on current
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| open_fix_pr | opened | https://github.com/openclaw/openclaw/pull/86954 | clawsweeper/issue-openclaw-openclaw-86939 |  |
-| issue_implementation_status_comment | updated | #86939 |  |  |
+| _None_ |  |  |  |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #86954 | merge_canonical | blocked | fix_pr | checks are not clean: check-guards: FAILURE |
+| _None_ |  |  |  |  |
 
 ## Worker Action Matrix
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #86939 | keep_canonical | planned | canonical |  |
-| cluster:issue-openclaw-openclaw-86939 | fix_needed | planned |  | A narrow UI reconciliation fix is needed before opening the implementation PR. |
-| cluster:issue-openclaw-openclaw-86939 | build_fix_artifact | planned |  | Build a new narrow fix PR; no existing candidate PR is available. |
-| cluster:issue-openclaw-openclaw-86939 | open_fix_pr | planned |  | Job allows fix and raise_pr, but blocks merge and issue close. |
+| #86939 | keep_closed | skipped | fixed_by_candidate | Already closed and fixed on current main; no close or implementation action is valid for this item. |
+| #86954 | keep_related | planned | related | The PR is covered by current main, but this job's close restrictions make a close action unsafe. Keep it related without mutation. |
+| #87017 | route_security | planned | security_sensitive | Security-sensitive hydrated item must be quarantined out of ClawSweeper Repair mutation paths. |
 
 ## Needs Human
 
