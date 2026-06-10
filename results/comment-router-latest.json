@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T02:20:10.882Z",
+  "generated_at": "2026-06-10T02:20:52.850Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-09T23:20:08.469Z",
+  "since": "2026-06-09T23:20:48.675Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    91810
+    91091
   ],
   "comment_ids": [
-    4665857264
+    4665859208
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91810:4665842222:2026-06-10T02:20:05Z:clawsweeper_needs_human",
-      "comment_id": "4665842222",
-      "comment_version_key": "4665842222:2026-06-10T02:20:05Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/91810#issuecomment-4665842222",
+      "idempotency_key": "comment-router:openclaw/openclaw:91091:4665859208:2026-06-10T02:19:11Z:re_review",
+      "comment_id": "4665859208",
+      "comment_version_key": "4665859208:2026-06-10T02:19:11Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91091#issuecomment-4665859208",
       "repo": "openclaw/openclaw",
-      "issue_number": 89721,
-      "author": "xiaobao-k8s",
-      "author_id": 80738902,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-10T02:18:50Z",
-      "comment_updated_at": "2026-06-10T02:18:50Z",
+      "issue_number": 91091,
+      "author": "amknight",
+      "author_id": 15041791,
+      "author_association": "MEMBER",
+      "comment_created_at": "2026-06-10T02:19:11Z",
+      "comment_updated_at": "2026-06-10T02:19:11Z",
       "status_comment_id": null,
-      "trigger": "mention",
+      "trigger": "slash",
       "command": "re-review",
       "intent": "re_review",
       "autoclose_message": null,
@@ -63,28 +63,161 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "write",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(memory): do not prune session index from a failed directory scan",
+        "body": "## Summary\n\nA full memory sync treats source enumerations as the source of truth for **destructive** maintenance: stale-row pruning of the session and memory-file indexes (`files` + `chunks` + vectors + FTS), full reindex rebuilds, and exported-session reconciliation. These enumerations swallowed filesystem errors and returned an empty listing, so a single transient scan failure (NFS `EIO`/`ESTALE`, permission blip) was indistinguishable from an empty directory and wiped the corresponding index — followed by an expensive full re-read/re-embed after the next successful scan. The failed-scan prune test in this PR fails on current `main` (the indexed row gets deleted), confirming the hazard is live.\n\n### Sessions (original scope)\n\n- `packages/memory-host-sdk`: add `scanSessionFilesForAgent(agentId): { ok, files }`. `ok: true` means the directory was actually read or authoritatively does not exist (see below); `ok: false` means the scan failed. `listSessionFilesForAgent` delegates to it and is unchanged for its non-destructive callers.\n- `resolveMemorySessionSyncPlan` takes a required `scanOk` and returns `pruneStaleRows`, true only for a full enumeration that authoritatively read the directory.\n- `syncSessionFiles` gates the stale-row prune on `pruneStaleRows`. A failed scan skips the prune (with a warning) and leaves the index intact for the next successful enumeration.\n\n### Follow-up hardening (from review)\n\n- A missing sessions dir is authoritative-empty only when the parent agent dir exists: fresh agents (the dir appears on first transcript write) prune orphans without log noise, while an unreachable state tree (e.g. unmounted volume) counts as a failed scan.\n- `MemorySourceSyncPlan` carries `scanOk`; `runSync` no longer clears `dirty`/`sessionsDirty`/`sessionsDirtyFiles` after a failed scan, so the next eligible sync retries instead of reporting a clean sync that indexed nothing.\n- The memory-file sibling gets the same guard: new `scanMemoryFiles(): { ok, files }` (exported via `engine-storage` and the plugin SDK barrel) with explicit root `readdir` probes — fs-safe `walkDirectory` swallows readdir errors even at the walk root, so an lstat-only check would still report `ok` on the exact failure class this PR targets. `syncMemoryFiles` skips its stale-row prune on a failed enumeration.\n- Full reindexes abort (`assertReindexScanOk`) instead of swapping in an empty index built from a failed scan; the safe path restores the original DB on throw, the unsafe path skips `writeMeta` so the next sync retries the rebuild.\n- `exportSessions` skips its reconcile-delete pass on a failed listing so one blip cannot delete the exported session-markdown corpus.\n- Renamed the local CLI diagnostics in `cli.runtime.ts` (`scanMemoryFiles` → `diagnoseMemoryFiles`, `scanSessionFiles` → `diagnoseSessionFiles`) to avoid colliding with the new SDK export surfaced through the same barrel.\n- Fixed a stale assertion in `manager-sync-ops.startup-catchup.test.ts` that fails on `main` today: it still expects the pre-#89138 `void` return of `syncSessionFiles`.\n\n### Why skip on *failed*, not on *empty*\n\nDeletions/resets archive to usage-counted `.deleted.`/`.reset.` artifacts that still appear in the listing, and `disk-budget` can physically remove the last archive — so an **authoritatively empty** directory with a non-empty index is legitimately reachable. In that case we must still prune, or deleted-session content would linger in search forever. Skipping only on a *failed* scan prevents the wipe without introducing persistent orphan rows.\n\n### Known residual gaps (follow-ups)\n\n- Subtree readdir failures below the probed roots remain invisible (`@openclaw/fs-safe` `walkDirectory` reports no errors); blast radius is the affected subtree, not the whole index. A clean fix needs an additive fs-safe API (e.g. `WalkDirectoryResult.failedDirCount`).\n- `resolveCanonicalRootMemoryFile` swallows workspace-root readdir errors; bounded to the single root memory file.\n\n## Verification\n\nWorktree rebased on `origin/main` (`48ec58a584`).\n\n- `node scripts/run-vitest.mjs extensions/memory-core/src` — **860/860 passing**, including the new `manager-sync-ops.prune-guard.test.ts` (both sources: failed scan ⇒ no rows pruned and `scanOk: false`; authoritatively-empty / absent-dir ⇒ orphan rows pruned) and `manager-session-sync-state.test.ts` (`pruneStaleRows` matrix).\n- `node scripts/run-vitest.mjs` on touched host-sdk files (`session-files.test.ts`, `internal.test.ts`) — passing (scan ok / authoritatively-empty / absent-dir-with-parent / unreachable-tree / failed readdir-after-lstat / failed extra path; `listSessionFilesForAgent` and `listMemoryFiles` unchanged on failure). Full `packages/memory-host-sdk` run has one unrelated under-load timeout flake in untouched `retry-utils.test.ts`; it passes in isolation.\n- `pnpm tsgo:core`, `pnpm tsgo:extensions`, `pnpm tsgo:test:packages`, `pnpm tsgo:test:extensions` — clean.\n- `pnpm build:plugin-sdk:dts`, plugin-sdk boundary lints (`no-plugin-sdk-wildcard-reexports`, `no-src-outside-plugin-sdk`), `sync-plugin-sdk-exports --check` — clean.\n- `oxfmt --check` + oxlint on all changed files — clean.\n- Hazard proof on `main`: running this PR's failed-scan prune test against clean `origin/main` deletes the indexed session row (`expected ['sessions/main/thread.jsonl'] to deeply equal []`).\n\n### Known gaps (CI/Testbox)\n\n- Full `pnpm build` not run locally in the worktree — recommend CI coverage.\n- `plugin-sdk:surface:check` / `plugin-sdk:api:check` not re-run locally after the final rebase (both were failing on pre-rebase `main` against stale baselines; `main` has since regenerated them). If CI flags the two intentional new exports (`scanSessionFilesForAgent`, `scanMemoryFiles`), a `pnpm plugin-sdk:api:gen` baseline bump can ride along.\n\n## Notes\n\n- #91081 (session-listing cache perf PR, still open) is complementary: it reduces READDIR load; this PR makes the destructive consumers stop trusting failed listings. No conflicts beyond both touching `session-files.ts` (additive here).\n",
+        "branch": "ak/memory-sync-prune-guard",
+        "head_sha": "31c77194beee481cc812360814f86d01c151c096",
+        "author": "amknight",
+        "labels": [
+          "extensions: memory-core",
+          "maintainer",
+          "size: L",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-core/src/cli.runtime.ts",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/index.test.ts",
+            "additions": 3,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-session-sync-state.test.ts",
+            "additions": 45,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-session-sync-state.ts",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-sync-ops.prune-guard.test.ts",
+            "additions": 225,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-sync-ops.startup-catchup.test.ts",
+            "additions": 1,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-sync-ops.ts",
+            "additions": 114,
+            "deletions": 30,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/qmd-manager.ts",
+            "additions": 9,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/memory-host-sdk/src/engine-qmd.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/memory-host-sdk/src/engine-storage.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/memory-host-sdk/src/host/internal.test.ts",
+            "additions": 73,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/memory-host-sdk/src/host/internal.ts",
+            "additions": 41,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/memory-host-sdk/src/host/session-files.test.ts",
+            "additions": 71,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/memory-host-sdk/src/host/session-files.ts",
+            "additions": 33,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/memory-core-host-engine-storage.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-91091",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91091.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 167,
+          "counts": {
+            "SUCCESS": 136,
+            "SKIPPED": 30,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 4100,
+    "total_ms": 4382,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2400
+        "ms": 2283
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1875
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 1688
+        "ms": 208
       },
       {
         "name": "append_ledger",
