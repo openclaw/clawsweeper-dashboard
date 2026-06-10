@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T20:14:00.192Z",
+  "generated_at": "2026-06-10T20:14:54.851Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-10T17:13:56.699Z",
+  "since": "2026-06-10T17:14:54.030Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4674045826
   ],
-  "status_comment_id": 4674046202,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-10T20:13:13Z",
       "comment_updated_at": "2026-06-10T20:13:13Z",
-      "status_comment_id": 4674046202,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,154 +61,30 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-10T20:14:00.965Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 92002
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-10T20:14:02.099Z",
-          "response_comment_id": "4674046202",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(lmstudio): deliver thinking \"off\" to binary-thinking models",
-        "body": "## Summary\n\n- On the embedded run path (what active-memory and other plugin-driven subagent runs use), thinking `off` never reached LM Studio: the runtime contract resolves \"off\" to *no reasoning option*, the completions transport then defaults `reasoning_effort` to `high`, and binary-thinking models (advertising `allowed_options: [\"off\", \"on\"]`) log a warning and force thinking back on. This is the latency/timeout blowup reported in #91913.\n- Root cause is delivery, not vocabulary: the thinking-level payload wrapper that knows how to suppress reasoning on \"off\" is only composed for providers riding the shared OpenAI hook stack. LM Studio's stream hook never composed it, and the wrapper's off-branch only deleted the responses-style `reasoning` object, not the completions `reasoning_effort` scalar.\n- Fix: compose the thinking-level wrapper inside the LM Studio provider stream hook (where the requested thinking level is still visible), teach the wrapper's off-branch to rewrite the completions scalar through the model's reasoning-effort compat map, and alias `none`/`off` as fallback-map lookup keys so maps written in either vocabulary resolve the configured disabled value.\n- Intentionally out of scope: the transport's `?? \"high\"` default (cross-provider blast radius), the catalog-overlay compat merge semantics, and any change to LM Studio discovery normalization (see correction below — the existing normalization is correct).\n- Success: with thinking off, the request body carries `reasoning_effort: \"none\"`, the server logs no fallback warning, and the model does not think. Verified live, before/after, against a real LM Studio.\n\n**Correction to the issue's suggested fix (verified on a live server).** The issue (and the bot review on it) suggested sending the model's native `\"off\"`/`\"on\"` values. A live LM Studio 0.4.16 + llama.cpp rejects that at the API schema layer:\n\n```\n400 Invalid 'reasoning_effort' value: 'off'. Supported values: none, minimal, low, medium, high, xhigh.\n```\n\nThe `Supported settings: 'on', 'off'` text in the server warning describes the model's internal reasoning *setting*, not valid `reasoning_effort` field values. `reasoning_effort: \"none\"` is the value that cleanly disables thinking on binary models (no warning, no reasoning output). OpenClaw's existing binary-discovery normalization (`off`/`on` → `none`/`minimal`/…/`xhigh` + map) is therefore kept untouched; this PR fixes only the delivery path. For the same reason, the resolver alias is restricted to fallback-map *lookup keys* — it never invents a wire value from advertised model metadata.\n\nWhat reviewers should focus on: the new plugin-SDK re-export of `createOpenAIThinkingLevelWrapper` (API baseline regenerated), the wrapper composition point in `extensions/lmstudio/src/stream.ts`, and the off-branch rewrite semantics in `src/llm/providers/stream-wrappers/openai.ts`.\n\n## Linked context\n\nCloses #91913\n\nRelated #32638 (commit 252c63429e — made the newer completions transport honor `compat.reasoningEffortMap`; this PR fixes the path that still missed it)\n\nWas this requested by a maintainer or owner? No — issue triage; the issue is reporter-filed with an actionable repro, and the bot review on the issue confirmed it actionable on current main.\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: embedded agent run with `--thinking off` against an LM Studio binary-thinking model sends `reasoning_effort: \"high\"`, the server warns and forces thinking on.\n- Real environment tested: LM Studio 0.4.16 (llama.cpp engine) running headless on Linux x86_64, model `qwen/qwen3-0.6b` (Q8_0 GGUF), which advertises the issue's exact binary discovery shape `\"reasoning\": { \"allowed_options\": [\"off\", \"on\"], \"default\": \"on\" }` on `/api/v1/models`. Provider configured via `models.providers.lmstudio.baseUrl`, model resolved through live discovery (no hand-written compat).\n- Exact steps or command run after this patch:\n  ```\n  openclaw agent --local --agent main --model \"lmstudio/qwen/qwen3-0.6b\" \\\n    --thinking off --message \"Reply with the single word OK.\" --json\n  ```\n- Evidence after fix (screenshot, recording, terminal capture, console output, redacted runtime log, linked artifact, or copied live output): copied live output from the LM Studio runtime log after running `openclaw agent --local ... --thinking off` — the request body as received by the server:\n  ```\n  \"reasoning_effort\": \"none\"\n  ```\n  Zero `[WARN]` lines in the runtime log for the run; the response carries no reasoning output.\n- Observed result after fix: model answers directly with thinking disabled.\n- Before evidence (same command, parent commit e24c3df27d):\n  ```\n  \"reasoning_effort\": \"high\"\n  [WARN][qwen/qwen3-0.6b] Reasoning setting 'high' is not supported by model 'qwen/qwen3-0.6b'.\n  Supported settings: 'on', 'off'. Falling back to reasoning setting 'on'.\n  ```\n- What was not tested: the reporter's exact model (`google/gemma-4-26b-a4b-qat` — too large for this host's CPU/RAM); other LM Studio versions than 0.4.16; the active-memory plugin specifically (the proof drives the same embedded run path via `openclaw agent --local`).\n- Proof limitations or environment constraints: CPU-only host, so a 0.6B model stands in for the reporter's 26B one; both advertise the identical binary `allowed_options` shape that triggers the bug.\n\n## Tests and validation\n\n- `node scripts/run-vitest.mjs src/llm/providers/stream-wrappers/openai.test.ts src/agents/openai-reasoning-effort.test.ts extensions/lmstudio src/plugin-sdk/provider-stream.test.ts src/plugin-sdk/api-baseline.test.ts src/agents/openai-transport-stream.test.ts extensions/groq extensions/mistral` — all green.\n- `pnpm tsgo:all`, `pnpm oxlint`, `pnpm oxfmt --check`, `pnpm plugin-sdk:api:check` — clean.\n- Regression coverage added: wrapper off-branch rewrite/drop/no-add cases for completions payloads (`openai.test.ts`); composition-path tests proving the LM Studio stream hook rewrites `reasoning_effort` for thinking off and leaves enabled levels untouched (`extensions/lmstudio/src/stream.test.ts`); resolver alias-key cases including the falsified-direction guard test that disabled intent does NOT resolve to an advertised `\"off\"` wire value (`openai-reasoning-effort.test.ts`).\n- What failed before this fix: the new composition tests (field passed through untouched) and the wrapper off-branch tests (scalar survived) were written first and failed on the parent commit.\n\n## Risk checklist\n\n- Did user-visible behavior change? Yes — with thinking off, LM Studio requests now carry the model's disabled reasoning value (or omit the field) instead of a defaulted enabled level; binary-thinking models stop thinking when asked not to. The same off-branch also applies to other `openai-completions` models: on thinking off, `reasoning_effort` is rewritten to the model's supported disabled value (or removed when it has none) instead of passing through.\n- Did config, environment, or migration behavior change? No.\n- Did security, auth, secrets, network, or tool execution behavior change? No.\n- Highest-risk area: the thinking-level wrapper now runs for all LM Studio streams. For thinking levels other than \"off\" its completions branch is a no-op, and models without reasoning compat keep prior behavior (field dropped only when the model declares no usable disabled value); non-LM-Studio providers are untouched. Second risk: the `none`/`off` alias-key lookup in the shared resolver — restricted to disabled intent, and the delivered value always comes from the user's own map.\n- How mitigated: composition-path tests on the LM Studio hook, wrapper unit tests for off/enabled/no-level cases, resolver tests including groq/mistral sweeps, plus the live before/after capture above.\n\n## Current review state\n\n- Next action: maintainer decision on the plugin-SDK boundary question below, then merge review. CI is green (133 checks) and the bot graded the proof `sufficient`.\n- Waiting on: maintainer API-direction for the exported wrapper; nothing else from the author side.\n- Bot or reviewer comments addressed: ClawSweeper's P1 flags publishing `createOpenAIThinkingLevelWrapper` while its JSDoc says \"do not use from third-party plugins\". Factual context: that marker combined with a public `openclaw/plugin-sdk/provider-stream` export is the existing convention for every wrapper in that export block on current main — `createOpenAIReasoningCompatibilityWrapper`, `createOpenAIFastModeWrapper`, `createOpenAIServiceTierWrapper`, `createOpenAIResponsesContextManagementWrapper`, and (from provider-stream-shared) `createDeepSeekV4OpenAICompatibleThinkingWrapper` all carry the same marker, are exported, and are listed in `docs/plugins/sdk-provider-plugins.md` as lower-level public helpers for providers that go off the common pattern. This PR followed that existing pattern for one more sibling and added it to the same docs list rather than introducing a new contract shape. The permanent boundary is a maintainer call; I can implement either direction on request: (1) a purpose-built supported seam — noting `src/plugin-sdk/AGENTS.md` discourages alias/compat re-exports, so I would take direction on the shape first; or (2) API promotion — reword the JSDoc restriction (this helper or the block) plus a contract test. The runtime fix itself (hook composition, payload rewrite, resolver alias) keeps the same shape under either option. Separately, the issue-side suggestion to emit native `on`/`off` wire values remains deliberately not implemented — live verification shows the server's API schema rejects those values (evidence above).\n",
-        "branch": "fix/91913-lmstudio-binary-thinking",
-        "head_sha": "73a37f5b963b3b65bca409de6ace70f55346dab5",
-        "author": "nxmxbbd",
-        "labels": [
-          "docs",
-          "gateway",
-          "agents",
-          "size: M",
-          "extensions: lmstudio",
-          "proof: supplied",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/gateway/config-agents.md",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/plugins/sdk-provider-plugins.md",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/lmstudio/src/stream.test.ts",
-            "additions": 84,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/lmstudio/src/stream.ts",
-            "additions": 11,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openai-reasoning-effort.test.ts",
-            "additions": 42,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openai-reasoning-effort.ts",
-            "additions": 23,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/stream-wrappers/openai.test.ts",
-            "additions": 77,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/stream-wrappers/openai.ts",
-            "additions": 32,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/provider-stream.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "generated_issue_branch": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_issue_job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92002",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92002.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "SUCCESS": 133,
-            "SKIPPED": 28,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 6022,
+    "total_ms": 2903,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 515
+        "ms": 808
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2960
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2469
+        "ms": 2082
       },
       {
         "name": "append_ledger",
