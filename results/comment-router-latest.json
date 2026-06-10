@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T22:20:40.083Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-10T22:21:00.182Z",
+  "repo": "steipete/CodexBar",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-10T19:20:37.420Z",
+  "since": "2026-06-10T19:20:58.901Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    92037
+    1406
   ],
   "comment_ids": [
-    4675184690
+    4675188416
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4675188747,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:92037:4675184690:2026-06-10T22:19:50Z:re_review",
-      "comment_id": "4675184690",
-      "comment_version_key": "4675184690:2026-06-10T22:19:50Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/92037#issuecomment-4675184690",
-      "repo": "openclaw/openclaw",
-      "issue_number": 92037,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "idempotency_key": "comment-router:steipete/CodexBar:1406:4675188416:2026-06-10T22:20:21Z:re_review",
+      "comment_id": "4675188416",
+      "comment_version_key": "4675188416:2026-06-10T22:20:21Z",
+      "comment_url": "https://github.com/steipete/CodexBar/pull/1406#issuecomment-4675188416",
+      "repo": "steipete/CodexBar",
+      "issue_number": 1406,
+      "author": "ProspectOre",
+      "author_id": 54486432,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-10T22:19:50Z",
-      "comment_updated_at": "2026-06-10T22:19:50Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-06-10T22:20:21Z",
+      "comment_updated_at": "2026-06-10T22:20:21Z",
+      "status_comment_id": 4675188747,
       "trigger": "mention",
       "command": "re-review result for `1cb61284e12654f7616281662d8ce966bcec253a`:",
       "intent": "re_review",
@@ -61,191 +61,49 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "ignored",
-      "actions": [],
-      "author_repository_permission": "none",
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-10T22:21:00.880Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 1406
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-10T22:21:01.782Z",
+          "response_comment_id": "4675188747",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "feat(cron): on-exit schedule — wake on a watched command's exit",
-        "body": "## Summary\n\nAdds an **`on-exit` cron schedule kind**: a job that fires once when a watched shell command exits, starting a fresh agent turn in the originating conversation. It's \"a #83738 cron wake, triggered by a process exit instead of by the tool call\" — it reuses the merged origin-aware wake as its delivery mechanism and only adds the *trigger*.\n\n- **The gap.** openclaw already wakes the parent when an *openclaw-managed* child finishes — sub-agents, isolated cron runs, and image/video/music generation raise `task_completion` internal events consumed by the embedded-agent runtime. But nothing watches an **arbitrary external command**, and the CLI backends can't participate in that internal system at all: a command a `claude-cli` agent runs via its exec tool lives inside the per-turn process tree that's `signalProcessTree(SIGTERM→SIGKILL)`'d at turn end (#71662), so it dies before it can observe an exit or fire a wake. The only pre-existing workaround is a polling `every:Nm` cron that burns a turn per poll.\n- **What this does.** A new `CronSchedule` kind `{ kind: \"on-exit\", command, cwd? }`, executed by a **gateway-ProcessSupervisor-owned watcher** (`cron-exit-watchers.ts`). The watcher runs the command as a child of the *gateway* supervisor — outside any agent turn's process tree — so it survives turn teardown by construction. On exit it fires #83738's origin-aware wake on the job's captured session, so the woken turn **continues the originating conversation** (native `claude-cli --resume`, see proof), with the exit code folded into the woken turn's text. One-shot per arm.\n- **Surfaces.** `on-exit` is accepted by the protocol schema, the cron tool (`schedule.kind:\"on-exit\"` + `command`/`cwd`), and the CLI (`cron add --on-exit <shell> [--on-exit-cwd <path>]`). Watchers arm on job add/update and on gateway-startup reconcile (so persisted jobs re-arm after a restart) and cancel on remove/disable/shutdown.\n- **AI-assisted:** yes — drafted with Claude.\n\n## Why a *non*-internally-managed wake (and why it works for every backend)\n\nThe internal `task_completion` machinery is embedded-runtime-bound and command-agnostic — it has no \"watch a shell command\" task type, for any backend. A `claude-cli` (or `claude-cli-interactive`/proxy) agent can't register an external command with it, and a command it runs inline dies at turn teardown. So the watcher must live outside the turn and outside the embedded-agent event system — the gateway ProcessSupervisor. Because the wake then rides the gateway **command lane** (busy-detection is `getQueueSize(Main)`, acquired at the dispatch layer *above* the backend), it behaves identically on plain `claude-cli` and the interactive MITM backend: if the watched command exits mid-turn, the wake hits `requests-in-flight`, re-queues, and fires when the lane frees — never concurrently. Proven below on plain `claude-cli`; the interactive path is the same lane mechanism.\n\n## Real behavior proof\n\nReal OpenClaw gateway (built from this branch) + real `claude-cli` (claude-sonnet-4-6) backend with native session resume (`resumeArgs`), in a Linux container. A persisted `on-exit` job (`command: \"sleep 22\"`) is loaded at gateway startup; a binding turn establishes the session; the watched command exits; the watcher fires the origin wake. Gateway logs ([gw-clean.log](https://github.com/anagnorisis2peripeteia/openclaw/blob/proof-assets-onexit/gw-clean.log), [cron-exit-structured.log](https://github.com/anagnorisis2peripeteia/openclaw/blob/proof-assets-onexit/cron-exit-structured.log)):\n\n```\n20:45:02  cron-exit: watcher armed                          jobId=onexit-hl command=\"sleep 22\"   <- armed from the PERSISTED job at startup (survives restart)\n20:45:12  cli exec  trigger=heartbeat  useResume=false      <- binding turn establishes the cli session\n20:45:17  (binding turn finished)\n20:45:27  cron-exit: watched command exited; firing job     exitCode=0 reason=exit                <- watched command exits -> watcher fires the origin wake\n20:45:46  cli exec  trigger=heartbeat  useResume=true  resumeSession=1b22992cb50d  reuse=reusable  historyPrompt=present\n                                                             ^- the woken turn NATIVELY --resumes the originating session (not history-replay)\n```\n\nThe wake turn ran *after* the binding turn finished, so it is unambiguously the on-exit wake — and it natively `--resume`d the binding turn's claude-cli session, continuing the conversation. A separate run also exercised the **mid-turn case**: the watched command exited while a turn was in flight, the wake hit `requests-in-flight`, re-queued, and the woken turn ran after the in-flight turn ended (never concurrently).\n\n- **Behavior or issue addressed:** an agent (any backend, esp. `claude-cli`) cannot reliably arm \"wake me when this external command exits\" — managed `task_completion` doesn't cover external commands and an agent-spawned command dies at turn teardown.\n- **Real environment tested:** real gateway from this branch + real `claude-cli` backend with `resumeArgs`, Linux container; on-exit job persisted to the store and armed at startup.\n- **Exact steps or command run after this patch:** seed a persisted `on-exit` job (`sleep 22`, sessionKey bound), start the gateway, run a binding turn, let the command exit.\n- **Evidence after fix:** redacted gateway logs above ([gw-clean.log](https://github.com/anagnorisis2peripeteia/openclaw/blob/proof-assets-onexit/gw-clean.log), [cron-exit-structured.log](https://github.com/anagnorisis2peripeteia/openclaw/blob/proof-assets-onexit/cron-exit-structured.log)) showing arm → exit → fire → native-resume woken turn.\n- **Observed result after fix:** the watcher armed from the persisted job, the watched command's exit fired the origin wake, and the woken turn natively `--resume`d the originating session.\n- **What was not tested:** the Telegram-thread visual (the session is a local key here; thread delivery is #83738's merged + proven mechanism — the wake routing is identical regardless of channel). The interactive/MITM backend (same command-lane mechanism; not separately captured).\n\n### Bug caught by the live proof\n`getInvalidPersistedCronJobReason` only allowed `at/every/cron`, so on-exit jobs **failed persistence validation** — they couldn't be saved to the store or survive a restart (the watcher arms from the store at startup). Fixed + regression test. This is exactly the class of issue unit tests around the schema/codec missed and the live store-seed proof surfaced.\n\n## Limitations & maintainer notes\n\n- **Command execution policy.** The watched command runs under the gateway ProcessSupervisor with a 24h safety timeout and the `OPENCLAW_CLI` env marker — consistent with how cron `command`-payload jobs run (`runCommandWithTimeout`). It does **not** apply the full `tools.exec` policy (host approvals, sandbox selection, unsafe-command guards, script preflight); neither do cron command-payload jobs. Unifying an approvals/sandbox policy across *both* gateway-level command-execution paths is a cross-cutting product/security decision flagged for maintainer ownership, not narrowed here.\n- **Downgrade.** `on-exit` is a new schedule kind. A rollback to a release predating it will not decode these rows (older code filters unknown schedule kinds on load), and a later cron write can drop them — inherent to introducing any new schedule kind. Treat on-exit jobs as not downgrade-preserved until a versioned-store strategy lands.\n\n## Tests / CI\n\n- New: `cron-exit-watchers.test.ts` (arm/fire-on-exit/skip-timer-and-disabled/idempotent/cancel/no-fire-after-cancel/one-shot), `persisted-shape.onexit.test.ts`, `schedule-options.onexit.test.ts` (CLI), `row-codec.schedule.test.ts` (store round-trip), plus on-exit cases in schedule/normalize.\n- tsgo clean; full cron suite + watcher/CLI suites green; full Linux unit suite run on this head (results in the re-review comment).\n",
-        "branch": "feat/cron-watch-process-exit",
-        "head_sha": "1cb61284e12654f7616281662d8ce966bcec253a",
-        "author": "anagnorisis2peripeteia",
+        "title": "Decode provider status feeds off the main actor",
+        "body": "## Summary\nDecode provider status feeds off the main actor and reuse shared ISO8601 formatters, removing a 150–340ms main-thread stall per Google-status provider per refresh.\n\n## Context\nCredit to @kcharlan's instrumentation in #1399 (finding 4): with status checks on, `UsageStore.parseGoogleWorkspaceStatus` decodes the full `https://www.google.com/appsstatus/dashboard/incidents.json` payload (hundreds of kilobytes live) **on the MainActor**, allocating a fresh `ISO8601DateFormatter` per decoded date field. Their Instruments capture measured 150–340ms of main-thread stall per decode, once per Google-status provider (Gemini *and* Antigravity) per refresh — and refreshes fire during menu interaction. The single flagged microhang across their sessions was exactly this stack. The payload is live data, so the cost grows whenever Google has a busy incident week, on all app versions simultaneously.\n\nThe same shape applies to the statuspage path (`fetchStatus`), which is also MainActor-isolated with per-field formatter allocation; it is included for consistency.\n\n## Change\n- `fetchStatus`, `fetchWorkspaceStatus`, `parseGoogleWorkspaceStatus`, and their pure helpers are now `nonisolated`, so they execute on the concurrent executor instead of the main actor. They touch no store state; the caller (`refreshStatus`) already hops back to the main actor to publish results.\n- Per-date-field `ISO8601DateFormatter()` allocations are replaced with shared lock-guarded formatters (`StatusISO8601FormatterBox`), mirroring the existing `CostUsageISO8601FormatterBox` pattern in CodexBarCore.\n\n## Validation\n- `swift test --filter GoogleWorkspaceStatus` — 4 tests pass, including a new regression guard: `fetchWorkspaceStatus stays off the main thread when called from the main actor` (stub transport asserts `!Thread.isMainThread`).\n- `make check` — 0 violations; `git diff --check` clean.\n\n## Runtime Proof\n\n**Live-feed artifact** (terminal capture; decode of the real `https://www.google.com/appsstatus/dashboard/incidents.json` payload fetched June 10, 2026 — 420,521 bytes, matching the ~418 KB measured in #1399; 5 iterations per strategy, same process, this branch's packaged toolchain):\n\n```text\nLIVE_FEED_PROOF payload_bytes=420521\nLIVE_FEED_PROOF before(per-field formatters) ms=[69.9, 69.1, 69.4, 68.0, 71.1]\nLIVE_FEED_PROOF after(shared formatters, full parse) ms=[25.8, 22.3, 22.1, 21.7, 21.6]\nLIVE_FEED_PROOF gemini_status_indicator=Optional(CodexBar.ProviderStatusIndicator.major)\n```\n\n~3.1× faster on the live payload (which happened to carry a real active Gemini incident that parsed correctly through the new path), and the entire cost now lands on a background executor instead of the main thread — locked in by the committed regression test (`fetchWorkspaceStatus stays off the main thread when called from the main actor`, stub transport asserting `!Thread.isMainThread`):\n\n```text\nTest \"fetchWorkspaceStatus stays off the main thread when called from the main actor\" passed\nTest run with 4 tests in 2 suites passed\n```\n\nSynthetic stress check (699 KB fixture, 300 incidents x 4 dated updates, 10 iterations): 332.6–356.4 ms → 101.2–104.3 ms per decode, same ratio. The #1399 Instruments measurement (150–340 ms live) sits between these two payload sizes, consistent with both.\n\n## Honesty / scope notes\n- This fixes #1399's *secondary* finding only. The primary mechanism reported there — WindowServer event-buffer starvation during long merged-menu tracking sessions — is untouched by this PR and still needs a design that keeps refresh churn out of active tracking sessions.\n- The decode still costs ~100ms of CPU somewhere; it is now off the UI's critical path rather than free.\n\n<details>\n<summary>Timing harness (drop into Tests/CodexBarTests to reproduce)</summary>\n\n```swift\nimport Foundation\nimport Testing\n@testable import CodexBar\n\nstruct StatusDecodeTimingHarness {\n    @Test\n    func `workspace status decode timing harness`() throws {\n        // Synthetic feed shaped like incidents.json: ~300 incidents, each with several\n        // updates and date fields, sized to match the measured live payload (~420 KB).\n        var incidents: [[String: Any]] = []\n        for index in 0..<300 {\n            var updates: [[String: Any]] = []\n            for u in 0..<4 {\n                updates.append([\n                    \"when\": \"2026-05-\\(String(format: \"%02d\", (index % 27) + 1))T0\\(u):15:00+00:00\",\n                    \"status\": \"SERVICE_INFORMATION\",\n                    \"text\": String(repeating: \"status update body text \", count: 12),\n                ])\n            }\n            incidents.append([\n                \"begin\": \"2026-05-\\(String(format: \"%02d\", (index % 27) + 1))T00:00:00+00:00\",\n                \"end\": index % 7 == 0 ? NSNull() : \"2026-05-\\(String(format: \"%02d\", (index % 27) + 2))T00:00:00+00:00\",\n                \"modified\": \"2026-05-\\(String(format: \"%02d\", (index % 27) + 1))T12:00:00.123+00:00\",\n                \"external_desc\": String(repeating: \"incident description \", count: 10),\n                \"severity\": \"medium\",\n                \"status_impact\": \"SERVICE_INFORMATION\",\n                \"affected_products\": [[\"title\": \"Gemini\", \"id\": \"npdyhgECDJ6tB66MxXyo\"]],\n                \"most_recent_update\": updates[0],\n                \"updates\": updates,\n            ])\n        }\n        let data = try JSONSerialization.data(withJSONObject: incidents)\n        struct Incident: Decodable { let begin: Date?; let end: Date?; let modified: Date?\n            let updates: [Update]?\n            struct Update: Decodable { let when: Date? } }\n        func measure(_ strategy: JSONDecoder.DateDecodingStrategy) -> [String] {\n            let clock = ContinuousClock()\n            var ms: [Double] = []\n            for _ in 0..<10 {\n                let d = clock.measure {\n                    let decoder = JSONDecoder()\n                    decoder.keyDecodingStrategy = .convertFromSnakeCase\n                    decoder.dateDecodingStrategy = strategy\n                    _ = try? decoder.decode([Incident].self, from: data)\n                }\n                ms.append(Double(d.components.attoseconds) / 1e15 + Double(d.components.seconds) * 1000)\n            }\n            return ms.map { String(format: \"%.1f\", $0) }\n        }\n        let previousStrategy = JSONDecoder.DateDecodingStrategy.custom { decoder in\n            let container = try decoder.singleValueContainer()\n            let raw = try container.decode(String.self)\n            let formatter = ISO8601DateFormatter()\n            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]\n            if let date = formatter.date(from: raw) { return date }\n            formatter.formatOptions = [.withInternetDateTime]\n            if let date = formatter.date(from: raw) { return date }\n            throw DecodingError.dataCorruptedError(in: container, debugDescription: \"bad date\")\n        }\n        print(\"TIMING_RESULT payload_bytes=\\(data.count)\")\n        print(\"BEFORE per-field formatters: \\(measure(previousStrategy))\")\n        let clock = ContinuousClock()\n        var ms2: [Double] = []\n        for _ in 0..<10 {\n            let d = clock.measure {\n                _ = try? UsageStore.parseGoogleWorkspaceStatus(data: data, productID: \"npdyhgECDJ6tB66MxXyo\")\n            }\n            ms2.append(Double(d.components.attoseconds) / 1e15 + Double(d.components.seconds) * 1000)\n        }\n        print(\"AFTER shared formatters (full parse incl. filtering): \\(ms2.map { String(format: \"%.1f\", $0) })\")\n    }\n}\n```\n\n</details>\n\n",
+        "branch": "perf/google-status-decode-off-main",
+        "head_sha": "4b8cf0aca494936fd6a54d3f52e6864408f2a09a",
+        "author": "prospectore",
         "labels": [
-          "app: web-ui",
-          "gateway",
-          "cli",
-          "agents",
-          "size: XL",
-          "proof: supplied",
-          "P1",
+          "status: 📣 needs proof",
           "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 security-boundary",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
+          "P2"
         ],
         "files": [
           {
-            "path": "DESIGN-cron-on-exit.md",
-            "additions": 29,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/schema/cron.ts",
-            "additions": 11,
-            "deletions": 0,
+            "path": "Sources/CodexBar/UsageStore+Status.swift",
+            "additions": 50,
+            "deletions": 26,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/tools/cron-tool.schema.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/cron-tool.ts",
-            "additions": 10,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/cron-cli/register.cron-add.ts",
-            "additions": 9,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/cron-cli/schedule-options.onexit.test.ts",
-            "additions": 32,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/cli/cron-cli/schedule-options.ts",
-            "additions": 25,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/normalize.test.ts",
-            "additions": 34,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/normalize.ts",
-            "additions": 30,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/persisted-shape.onexit.test.ts",
-            "additions": 37,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/cron/persisted-shape.ts",
-            "additions": 12,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/schedule.test.ts",
-            "additions": 9,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/schedule.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/store/row-codec.schedule.test.ts",
-            "additions": 54,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/cron/store/row-codec.ts",
+            "path": "Tests/CodexBarTests/GoogleWorkspaceStatusNetworkTests.swift",
             "additions": 24,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/types.ts",
-            "additions": 14,
             "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/cron-exit-watchers.test.ts",
-            "additions": 294,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/cron-exit-watchers.ts",
-            "additions": 220,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/server-cron-lazy.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-cron.ts",
-            "additions": 65,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/hook-types.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.discord-group.json",
-            "additions": 18,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.heartbeat-turn.json",
-            "additions": 18,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.telegram-direct.json",
-            "additions": 18,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/discord-group-codex-message-tool.md",
-            "additions": 4,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-direct-codex-message-tool.md",
-            "additions": 4,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-heartbeat-codex-tool.md",
-            "additions": 4,
-            "deletions": 4,
             "changeType": "MODIFIED"
           }
         ],
@@ -254,27 +112,27 @@
         "cluster_id": null,
         "job_path": null,
         "source_issue_job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-92037",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92037.md",
+        "automerge_cluster_id": "automerge-steipete-codexbar-1406",
+        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1406.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 157,
+          "total": 4,
           "counts": {
-            "SUCCESS": 133,
-            "SKIPPED": 21,
-            "FAILURE": 1,
-            "IN_PROGRESS": 1,
-            "NEUTRAL": 1
+            "IN_PROGRESS": 3,
+            "SUCCESS": 1
           },
           "blockers": [
-            "build-artifacts:FAILURE",
-            "checks-node-agentic-agents-core-subagents:IN_PROGRESS"
+            "lint-build-test:IN_PROGRESS",
+            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
+            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
           ],
           "pending": [
-            "checks-node-agentic-agents-core-subagents:IN_PROGRESS"
+            "lint-build-test:IN_PROGRESS",
+            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
+            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
           ],
           "terminalBlockers": [
             "build-artifacts:FAILURE"
@@ -288,15 +146,15 @@
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2906,
+    "total_ms": 3348,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 577
+        "ms": 486
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2069
+        "ms": 778
       },
       {
         "name": "classify_commands",
@@ -304,7 +162,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 244
+        "ms": 2056
       },
       {
         "name": "append_ledger",
