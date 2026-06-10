@@ -2,21 +2,21 @@
 repo: "openclaw/clawhub"
 cluster_id: "automerge-openclaw-clawhub-2571"
 mode: "autonomous"
-run_id: "27197567336"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27197567336"
-head_sha: "205a27a9d70ddd72b0bd1c72229a435b88e9a06e"
+run_id: "27278062423"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27278062423"
+head_sha: "eb2f304346618b374d9319908edbededaf6e759b"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-06-09T10:05:02.024Z"
+published_at: "2026-06-10T13:08:25.739Z"
 canonical: "#2571"
 canonical_issue: null
 canonical_pr: "#2571"
 actions_total: 1
 fix_executed: 0
 fix_failed: 0
-fix_blocked: 0
+fix_blocked: 1
 apply_executed: 0
-apply_blocked: 1
+apply_blocked: 0
 apply_skipped: 0
 needs_human_count: 0
 ---
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/clawhub
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/27197567336](https://github.com/openclaw/clawsweeper/actions/runs/27197567336)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/27278062423](https://github.com/openclaw/clawsweeper/actions/runs/27278062423)
 
 Workflow conclusion: success
 
@@ -44,9 +44,9 @@ Make PR #2571 merge-ready for ClawSweeper automerge. Rebase onto latest main, ad
 | Worker actions | 1 |
 | Fix executed | 0 |
 | Fix failed | 0 |
-| Fix blocked | 0 |
+| Fix blocked | 1 |
 | Applied executions | 0 |
-| Apply blocked | 1 |
+| Apply blocked | 0 |
 | Apply skipped | 0 |
 | Needs human | 0 |
 
@@ -54,13 +54,14 @@ Make PR #2571 merge-ready for ClawSweeper automerge. Rebase onto latest main, ad
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | pushed | https://github.com/openclaw/clawhub/pull/2571 |  |  |
+| execute_fix | blocked |  |  | Codex write preflight did not create the expected file: I can’t create files in this mode. Please switch to execution mode or create `preflight.txt` containing exactly `ok` followed by a newline. |
+| automerge_repair_outcome_comment | updated | #2571 |  |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #2571 | merge_canonical | blocked | fix_pr | job does not allow merge |
+| _None_ |  |  |  |  |
 
 ## Worker Action Matrix
 
