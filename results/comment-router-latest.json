@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T05:30:20.892Z",
+  "generated_at": "2026-06-10T05:31:08.389Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-10T02:30:20.530Z",
+  "since": "2026-06-10T02:31:06.213Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    91848
+    91841
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,116 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91841:4666752138:2026-06-10T05:31:03Z:clawsweeper_needs_human",
+      "comment_id": "4666752138",
+      "comment_version_key": "4666752138:2026-06-10T05:31:03Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91841#issuecomment-4666752138",
+      "repo": "openclaw/openclaw",
+      "issue_number": 91841,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-10T05:07:23Z",
+      "comment_updated_at": "2026-06-10T05:31:03Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- No automated repair is indicated; maintainers should review the stacked base and accept or adjust the session-state freshness tradeoff before merge.; Cleared: No concrete security or supply-chain concern was found; the diff only changes memory-core TypeScript source and colocated tests. (sha=f476d885f71fd5136f0771ce787ff97d37ceae75)",
+      "review_summary": "The PR changes memory-core session-delta syncs to pass dirty session files as targeted `sessionFiles`, adds a 15-minute full-enumeration reconcile window, and adds targeted-delta regression tests.\n\nPR surface: Source +21, Tests +183. Total +204 across 2 files.\n\nReproducibility: yes. for the source-level behavior: current main schedules `session-delta` sync without targets and the untargeted session path lists the whole sessions directory. The reported live NFS wall-clock cost was not independently reproduced here.",
+      "review_followup": "- No automated repair is indicated; maintainers should review the stacked base and accept or adjust the session-state freshness tradeoff before merge.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "f476d885f71fd5136f0771ce787ff97d37ceae75",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "perf(memory): target session delta syncs with the dirty set instead of full directory scans",
+        "body": "## Summary\r\n\r\nEvery 5s-debounced session delta sync calls `sync({ reason: \"session-delta\" })` with no targets, so `syncSessionFiles` performs a **full sessions-directory enumeration** — and then skips every listed file that is not in the dirty set anyway. The enumeration's only unique contribution to a delta sync is stale-row prune reconciliation; the indexing work is fully determined by `sessionsDirtyFiles`, which the engine populated from transcript events before triggering the sync.\r\n\r\nOn networked filesystems this is the dominant recurring READDIR source. An NFSv4.1 profile of a real deployment showed repeated scans of `agents/main/sessions` taking **3.4–3.8s each** (~100 entries; the client requests a broad READDIR attribute set, which the backing server satisfies with per-entry metadata reads), recurring with every active sync window.\r\n\r\nThis PR makes delta syncs use the targeted path that already exists (`runMemoryTargetedSessionSync`):\r\n\r\n- `processSessionDeltaBatch` now passes the accumulated dirty set as explicit `sessionFiles` targets → the sessions-dir enumeration is skipped entirely. The targeted path clears only the synced files from the dirty set (files dirtied mid-sync survive) and retains targets as dirty on failure.\r\n- **Bounded reconciliation:** at most once per `SESSION_PRUNE_RECONCILE_INTERVAL_MS` (15 min), a delta sync falls back to the full enumeration so index rows for files deleted out-of-band (another process/node on shared storage) still get pruned. The timestamp only advances when an authoritative prune actually completed, so a failed scan retries on the next batch.\r\n- Boot catch-up, interval-with-dirty-files, CLI/forced, and full-reindex syncs keep their full enumerations unchanged — those are the intended reconciliation points.\r\n\r\n### Behavior notes\r\n\r\n- **Indexing outcomes are unchanged.** The full path already skipped non-dirty files during delta syncs; only the prune cadence shifts from per-batch (~5s) to the bounded window (≤15 min during activity). Idle agents are unchanged (no delta syncs → no scans, before and after).\r\n- Targeted syncs are sessions-only by existing contract, so a delta sync no longer incidentally flushes dirty memory-source files; those still sync via their own watch debounce and interval triggers.\r\n- Stacked on #91091 deliberately: the now-rarer full enumerations are exactly the scans #91091 makes authoritative (`{ ok, files }`), so a failed reconcile scan cannot prune and dirty state is retained for retry.\r\n\r\nIdentified while decomposing the NFS readdir-load report behind the #91081 discussion (its \"avoid full scans when a targeted dirty-file set exists\" recommendation). With this change the steady-state scans the profile captured disappear; the remaining enumeration cost (boot catch-up, periodic reconcile, qmd export) is the much smaller surface the coalescing/TTL discussion in #91081 addresses separately.\r\n\r\n## Verification\r\n\r\n- `node scripts/run-vitest.mjs extensions/memory-core/src/memory/manager-sync-ops.targeted-delta.test.ts extensions/memory-core/src/memory/manager-sync-ops.prune-guard.test.ts extensions/memory-core/src/memory/manager-targeted-sync.test.ts extensions/memory-core/src/memory/manager-session-sync-state.test.ts` — **19/19** (5 new).\r\n- `node scripts/run-vitest.mjs extensions/memory-core/src/memory/manager-sync-ops.archive-delta-bypass.test.ts` — **4/4**.\r\n- `pnpm tsgo:extensions` and `pnpm tsgo:extensions:test` — clean. `node scripts/run-oxlint.mjs` on touched files — clean.\r\n- New tests cover: targeted params within the reconcile window; accumulated dirty set (leftovers from earlier syncs) included in targets; full-enumeration fallback at window expiry (and at boot, timestamp 0); reconcile timestamp advancing only after an authoritative prune; failed scan leaving the timestamp unset so the next batch retries.\r\n- Not run here: live NFS before/after trace. The report's verification protocol applies directly — count `scandir` events on the sessions dir during steady-state activity; expected: one per 15-min reconcile window instead of one per 5s delta batch.\r\n",
+        "branch": "ak/memory-targeted-session-delta-sync",
+        "head_sha": "f476d885f71fd5136f0771ce787ff97d37ceae75",
+        "author": "amknight",
+        "labels": [
+          "extensions: memory-core",
+          "maintainer",
+          "size: M",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 session-state",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-core/src/memory/manager-sync-ops.targeted-delta.test.ts",
+            "additions": 183,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-sync-ops.ts",
+            "additions": 22,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-91841",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91841.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 156,
+          "counts": {
+            "SUCCESS": 125,
+            "SKIPPED": 31
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 592,
+    "total_ms": 2429,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 350
+        "ms": 305
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1856
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 231
+        "ms": 242
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
