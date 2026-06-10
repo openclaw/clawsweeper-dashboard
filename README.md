@@ -1,5 +1,7 @@
 # 🦞🧹 ClawSweeper
 
+![ClawSweeper banner](docs/assets/readme-banner.jpg)
+
 ClawSweeper is the conservative maintenance bot for OpenClaw repositories. It
 keeps the backlog reviewed, keeps maintainer-visible GitHub comments tidy, and
 turns narrow trusted findings into guarded repair or automerge work.
@@ -24,7 +26,7 @@ At a high level ClawSweeper:
   webhook before the GitHub Actions fallback starts
 - repairs opted-in PRs through a bounded Codex review/fix loop before merge
 - can open guarded implementation PRs for strict, reproducible bug issues
-- reviews code-bearing commits that land on target `main` branches
+- can manually review selected code-bearing commits on target `main` branches
 - publishes dashboard, audit, repair, and activity state to
   `openclaw/clawsweeper-state`
 
@@ -108,10 +110,11 @@ weakening the strict bug gate.
 
 ### Commit Reviews
 
-Push events on target `main` branches can dispatch to
-`.github/workflows/commit-review.yml`. The workflow expands the commit range,
-skips non-code-only commits cheaply, starts one Codex worker per code-bearing
-commit, and writes `records/<repo-slug>/commits/<sha>.md`.
+Automatic push-triggered commit review is disabled. Maintainers can still run
+`.github/workflows/commit-review.yml` manually for selected commits or ranges.
+The workflow expands the selected range, skips non-code-only commits cheaply,
+starts one Codex worker per code-bearing commit, and writes
+`records/<repo-slug>/commits/<sha>.md`.
 
 Commit reports are the source of truth. Optional target commit Check Runs are
 disabled by default and can be enabled per run or repository. Reports with
@@ -147,6 +150,10 @@ Issues with an open PR that references them using GitHub closing syntax such as
 that high-confidence PR candidate earlier in the same apply run.
 Open issue/PR pairs from the same author stay open together unless the paired
 item is already resolved or a maintainer explicitly asks to close one side.
+PR-to-PR duplicate/superseded closes also require a safe canonical target:
+ClawSweeper refuses to close one PR as replaced by another PR that is closed
+unmerged, missing positive real behavior proof, F-rated, already proposed for
+close, not cleanly mergeable, or otherwise not a viable landing path.
 
 Repository profiles can further narrow apply. ClawHub and ClawSweeper self-review
 are intentionally stricter: they review issues and PRs, but apply may close only
@@ -177,6 +184,7 @@ Common commands:
 @clawsweeper approve
 @clawsweeper explain
 @clawsweeper ask is this blocked by flaky CI?
+@clawsweeper visualize state
 @clawsweeper stop
 @clawsweeper why did automerge stop here?
 ```
@@ -194,6 +202,8 @@ Common commands:
   non-durable answer comment and never edits the durable ClawSweeper review
   comment, closes, merges, labels, pushes, repairs, or emits review/apply
   markers.
+- `visualize [lens]` dispatches the read-only visual assist lane and posts or
+  updates a marker-backed visual brief comment for the requested lens.
 - `fix ci`, `address review`, and `rebase` dispatch the repair worker only for
   ClawSweeper PRs or PRs already opted into `clawsweeper:autofix` or
   `clawsweeper:automerge`.
@@ -202,9 +212,9 @@ Common commands:
 - `automerge` labels an open PR, creates or reuses the adopted job, dispatches
   review, and enters the bounded review/fix/merge loop. Draft PRs are fix-only
   until GitHub marks them ready for review.
-- User-facing OpenClaw `fix`, `feat`, and `perf` automerge PRs get a
-  maintainer/ClawSweeper-owned `CHANGELOG.md` entry before merge; contributors
-  are not asked to add it.
+- User-facing OpenClaw `fix`, `feat`, and `perf` automerge PRs preserve
+  release-note context in PR bodies and commit messages before merge;
+  contributors are not asked to edit `CHANGELOG.md`.
 - Security-sensitive findings can be repaired only after explicit
   `autofix`/`automerge` opt-in; ClawSweeper still will not merge until a later
   exact-head review is clean.
@@ -248,6 +258,12 @@ requests that are blocked on real behavior proof labels, including missing
 proof, supplied-but-not-sufficient proof, mock-only proof, and proof label
 mismatches. See
 [`docs/pr-proof-triage-dashboard.md`](docs/pr-proof-triage-dashboard.md).
+
+The optional proof-nudge lane can dry-run or post polite reminder comments for
+open PRs that remain blocked on `triage: needs-real-behavior-proof`. It uses
+comment-body cooldown markers, never closes PRs, and keeps scheduled operation
+behind default-off repository variables. See
+[`docs/proof-nudges.md`](docs/proof-nudges.md).
 
 ## How It Works
 
@@ -363,7 +379,7 @@ appropriate repair job.
   repair artifact.
 - The deterministic executor applies the artifact, pushes only after validation,
   re-dispatches exact-head review, and waits for required checks.
-- `automerge` merges only after review verdict, checks, mergeability, changelog,
+- `automerge` merges only after review verdict, checks, mergeability,
   security, maintainer stop/approve state, and repository policy gates pass.
 - Issue implementation is narrower: strict, reproducible bugs and separately
   gated small `VISION.md`-aligned issues with no linked PR can open a generated
@@ -380,7 +396,8 @@ Commit review is intentionally separate from issue/PR cleanup. It never closes
 items, writes comments, or fixes code.
 
 - Target repositories forward `push` events from `main` with
-  `repository_dispatch`.
+  `repository_dispatch` only when the lane is re-enabled; the production
+  receiver currently accepts manual dispatch only.
 - Manual runs can pass `commit_sha`, optional `before_sha`, optional
   `additional_prompt`, `enabled`, and `create_checks`.
 - The receiver verifies the selected commits are reachable from `origin/main`.
@@ -545,12 +562,16 @@ ClawSweeper has one main capacity knob:
 `config/automation-limits.json` -> `workers.max`. The current value is `57`.
 Lane limits are derived from that number: normal review defaults to 39 shards
 for manual/backstop runs, scheduled normal review gets up to 27 after reserves,
-hot intake up to 19 shards, commit review 2 commits per page, and
-repair/issue implementation 22 live workers. Exact-item review, repair, and
-issue implementation are priority work; normal review, hot intake, and commit
-review are background work and automatically yield when priority work is active.
-Use `workers.max` first when turning total Codex usage up or down; use the
-individual environment overrides only for temporary lane-specific exceptions.
+hot intake up to 19 shards, commit review 2 commits per page, and existing
+repair/issue implementation lanes use 40% of `workers.max`, currently 22 live
+workers. Imported gitcrawl cluster repair stays at 1 live worker by default.
+Exact-item review, repair, and issue implementation are priority work; normal
+review, hot intake, and commit review are background work and automatically
+yield when priority work is active.
+Use `workers.max` first when turning total Codex usage up or down; use
+`lanes.repair.cluster_max_live_runs` to tune the imported legacy cluster-repair
+lane separately, and individual environment overrides only for temporary
+lane-specific exceptions.
 
 Target repositories can opt into event-level latency by installing the
 dispatcher workflow in [docs/target-dispatcher.md](docs/target-dispatcher.md).
@@ -559,10 +580,9 @@ target repo and exact item number; ClawSweeper then runs one event job that
 reviews, comments, and checks immediate safe apply instead of waiting for the
 next hot-intake cron or bulk publish lane.
 
-Target repositories can opt into main-branch commit review with
-[docs/commit-dispatcher.md](docs/commit-dispatcher.md). That dispatcher sends
-push ranges to this repository, where ClawSweeper expands the range and writes
-one commit report per SHA.
+Main-branch commit review is manual-only in production. See
+[docs/commit-dispatcher.md](docs/commit-dispatcher.md) for the historical target
+dispatcher shape if automatic push-range review is re-enabled later.
 
 ## Checks
 
