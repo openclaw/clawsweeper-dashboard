@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T14:23:52.039Z",
+  "generated_at": "2026-06-10T14:28:11.945Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-10T11:23:48.011Z",
+  "since": "2026-06-10T11:28:09.166Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    91957
+    76731
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 8,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91957:4671236303:2026-06-10T14:23:43Z:clawsweeper_needs_human",
-      "comment_id": "4671236303",
-      "comment_version_key": "4671236303:2026-06-10T14:23:43Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/91957#issuecomment-4671236303",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:76731:4366399559:2026-06-10T14:28:05Z:clawsweeper_needs_human",
+      "comment_id": "4366399559",
+      "comment_version_key": "4366399559:2026-06-10T14:28:05Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/76731#issuecomment-4366399559",
       "repo": "openclaw/openclaw",
-      "issue_number": 91957,
+      "issue_number": 76731,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-10T14:21:18Z",
-      "comment_updated_at": "2026-06-10T14:23:43Z",
+      "comment_created_at": "2026-05-03T14:31:03Z",
+      "comment_updated_at": "2026-06-10T14:28:05Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -52,57 +52,76 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- Review did not complete, so no work-lane recommendation was made. (sha=26ff3ebbe361674ce23ec8c721595e54584248c8)",
-      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +20, Tests +104. Total +124 across 5 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
-      "review_followup": "- Review did not complete, so no work-lane recommendation was made.",
+      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=ebab2d80e4e3a67d7c767ff9efb9fe2bdd6d5d70)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +97, Tests +129. Total +226 across 8 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "26ff3ebbe361674ce23ec8c721595e54584248c8",
+      "expected_head_sha": "ebab2d80e4e3a67d7c767ff9efb9fe2bdd6d5d70",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "perf(sessions): share one enumeration across archive retention sweeps",
-        "body": "## Summary\n\nEvery non-warn session-store save runs archived-transcript retention cleanup, and reset-archive retention **defaults on** (`resolveResetArchiveRetentionMs` falls back to `pruneAfterMs` when unset). So `saveSessionStoreUnlocked` invoked `cleanupArchivedSessionTranscripts` twice back-to-back — reason `\"deleted\"`, then reason `\"reset\"` — and each call performed its own full `readdir` of the per-agent sessions directory. Session-store saves happen per agent turn, which means active agents paid **two full directory enumerations per turn** by default.\n\nA production NFSv4.1 profile (Node trace of an active agent) captured exactly this signature: scans of `agents/main/sessions` in back-to-back pairs (inter-scan gaps of +0.00s), 3.4–3.8s per scan (~100 entries, with the NFS server amplifying each READDIR into per-entry metadata reads), each pair immediately preceding the `sessions.json` store write — ~21.7s of directory enumeration inside a 27-second active window. The pairs also serialize against transcript-append lock traffic on the same directory (lock open/unlink stalls of 2.6–3.5s while a scan is in flight).\n\nThe fix makes retention rules share one listing:\n\n- `cleanupArchivedSessionTranscripts` now accepts `rules: Array<{ reason, olderThanMs }>` and applies every rule from a **single `readdir` per directory**. An archive filename carries exactly one `.{reason}.{timestamp}` suffix, so per-entry matching is first-match.\n- Store maintenance passes both reasons in one call (one enumeration per save instead of two). The cron session reaper migrates to the same shape.\n- Invalid rules are dropped up front; a call with no valid rules never lists.\n- Rider in the same hot-path family: the disk-budget sweep's `readSessionsDirFiles` stat'd every session file **serially**; stats now run with bounded concurrency (8), so a budget sweep no longer serializes ~N per-file latency round trips on networked filesystems.\n\nBehavior is otherwise preserved: identical removal semantics per reason/threshold, same `removed`/`scanned` accounting, all callers migrated in this change.\n\nRelated work on the other enumeration sources the same investigation surfaced: #91091 (destructive sweeps must not act on failed enumerations) and #91841 (memory delta syncs stop full-scanning). This PR removes the store-save scan-pair source the trace actually captured.\n\n## Verification\n\n- `node scripts/run-vitest.mjs src/gateway/session-transcript-files.fs.archive-cleanup.test.ts src/gateway/session-transcript-files.fs.archive-events.test.ts src/config/sessions/disk-budget.test.ts src/config/sessions/store.pruning.integration.test.ts src/commands/sessions-cleanup.test.ts` — all 3 Vitest shards passed.\n- `pnpm tsgo:core`, `pnpm tsgo:core:test`, `node scripts/run-oxlint.mjs` on touched files — clean.\n- New tests prove: multiple rules served by a single `readdir` (spy-counted); per-rule age thresholds applied independently; archives whose reason has no rule are preserved; invalid rules dropped with no listing at all.\n- Not run here: a live NFS re-trace. The profile's own verification protocol applies directly — the back-to-back scan pairs preceding each `sessions.json` write should become single scans.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
-        "branch": "ak/session-disk-budget-sweep",
-        "head_sha": "26ff3ebbe361674ce23ec8c721595e54584248c8",
-        "author": "amknight",
+        "title": "Fix mobile Control UI chat layout",
+        "body": "## Summary\n\nRedo of the mobile Control UI chat layout fix on current `main`, with the earlier broad/i18n-heavy patch trimmed down to the smallest surfaces needed.\n\n### What changed\n\n- Reuse the existing sidebar `.nav-collapse-toggle` as the mobile drawer close affordance when the drawer is open.\n- Keep the collapsed mobile nav rail hidden when the drawer is closed so it cannot overlap chat content or disappear on tap.\n- Wrap the composer toolbar on phone/landscape widths so model, settings, and send controls no longer overlap.\n- Make the mobile settings control icon-only with a full `44px x 44px` touch target.\n- Move assistant message copy/open actions below the bubble on touch/mobile layouts instead of overlapping text.\n- Keep generic touch visibility for action containers, including action-bearing tool-style bubbles.\n\n### Visual proof\n\nAll captures are from the local mock Control UI at `320x568`.\n\n**Composer controls stay separated**\n\n<img src=\"https://github.com/Solvely-Colin/openclaw/releases/download/pr-76731-visual-proof-ebab2d80e4/01-mobile-composer-no-overlap.png\" width=\"320\" alt=\"Mobile composer controls do not overlap\">\n\n**Sidebar drawer reuses the existing collapse control**\n\n<img src=\"https://github.com/Solvely-Colin/openclaw/releases/download/pr-76731-visual-proof-ebab2d80e4/02-mobile-sidebar-reused-close.png\" width=\"320\" alt=\"Mobile sidebar drawer with reused close control\">\n\n**Assistant actions move below the message on touch/mobile**\n\n<img src=\"https://github.com/Solvely-Colin/openclaw/releases/download/pr-76731-visual-proof-ebab2d80e4/03-mobile-actions-below-message.png\" width=\"320\" alt=\"Assistant message actions below bubble\">\n\n**Drawer open/close motion**\n\n<img src=\"https://github.com/Solvely-Colin/openclaw/releases/download/pr-76731-visual-proof-ebab2d80e4/04-mobile-sidebar-open-close.gif\" width=\"320\" alt=\"Mobile sidebar drawer opens and closes using the reused collapse control\">\n\n### Tests\n\n- Added responsive browser coverage for composer model/settings/send overlap at `320x568`, `393x852`, and `568x320`.\n- Added navigation coverage that the reused sidebar collapse control closes the mobile drawer.\n- Added grouped-render coverage for the assistant action-space modifier.\n\n### Verification\n\n- `node scripts/run-vitest.mjs ui/src/ui/navigation.browser.test.ts ui/src/ui/chat/chat-responsive.browser.test.ts ui/src/ui/chat/grouped-render.test.ts`\n- `git diff --check`\n- `pnpm ui:build`\n- `.agents/skills/autoreview/scripts/autoreview --mode local`\n\n### Real behavior proof\n\nBehavior addressed: Mobile Control UI chat controls and sidebar drawer affordance no longer overlap or hide key actions.\nReal environment tested: Local mock Control UI at `http://127.0.0.1:5187/chat?session=main` using Playwright/Chromium mobile viewport probes.\nExact steps or command run after this patch: Opened the mock chat at `320x568`, measured composer model/settings/send rects, opened the mobile sidebar drawer, and measured the reused `.nav-collapse-toggle` rect/state.\nEvidence after fix: At `320x568`, settings control measured `44x44`, drawer close button measured `44x44` only while drawer was open, closed-drawer header collapse display was `none`, composer controls had no overlap, and horizontal overflow was `0`.\nObserved result after fix: The mobile drawer exposes the same existing sidebar collapse control as the close affordance, and the composer controls remain separated on phone and landscape phone layouts.\nWhat was not tested: Full CI/Testbox matrix, physical iOS Safari/Android Chrome device proof.\n",
+        "branch": "codex/mobile-control-ui-layout",
+        "head_sha": "ebab2d80e4e3a67d7c767ff9efb9fe2bdd6d5d70",
+        "author": "solvely-colin",
         "labels": [
-          "gateway",
-          "maintainer",
+          "app: web-ui",
           "size: M",
+          "proof: supplied",
+          "P2",
           "rating: 🌊 off-meta tidepool"
         ],
         "files": [
           {
-            "path": "src/config/sessions/disk-budget.ts",
-            "additions": 26,
-            "deletions": 18,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/store.ts",
-            "additions": 10,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/session-reaper.ts",
-            "additions": 1,
+            "path": "ui/src/styles/chat/grouped.css",
+            "additions": 25,
             "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/session-transcript-files.fs.archive-cleanup.test.ts",
-            "additions": 104,
+            "path": "ui/src/styles/chat/layout.css",
+            "additions": 57,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/session-transcript-files.fs.ts",
-            "additions": 30,
-            "deletions": 18,
+            "path": "ui/src/styles/layout.mobile.css",
+            "additions": 12,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/app-render.ts",
+            "additions": 7,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/chat/chat-responsive.browser.test.ts",
+            "additions": 101,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/chat/grouped-render.test.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/chat/grouped-render.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "ui/src/ui/navigation.browser.test.ts",
+            "additions": 16,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
@@ -111,40 +130,77 @@
         "cluster_id": null,
         "job_path": null,
         "source_issue_job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91957",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91957.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-76731",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-76731.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "CLEAN",
         "review_decision": "",
         "checks": {
-          "total": 163,
+          "total": 137,
           "counts": {
-            "SUCCESS": 131,
-            "SKIPPED": 31,
-            "NEUTRAL": 1
+            "CANCELLED": 2,
+            "SKIPPED": 16,
+            "SUCCESS": 119
           },
-          "blockers": [],
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
           "pending": [],
-          "terminalBlockers": []
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
       "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:76731:4671243017:2026-06-10T14:22:03Z:re_review",
+      "comment_id": "4671243017",
+      "comment_version_key": "4671243017:2026-06-10T14:22:03Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/76731#issuecomment-4671243017",
+      "repo": "openclaw/openclaw",
+      "issue_number": 76731,
+      "author": "Solvely-Colin",
+      "author_id": 211764741,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-10T14:22:03Z",
+      "comment_updated_at": "2026-06-10T14:22:03Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4272,
+    "total_ms": 4257,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 628
+        "ms": 437
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 3383
+        "ms": 2325
       },
       {
         "name": "classify_commands",
@@ -152,7 +208,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 232
+        "ms": 1467
       },
       {
         "name": "append_ledger",
