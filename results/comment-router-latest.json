@@ -1,23 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T15:03:10.616Z",
+  "generated_at": "2026-06-10T15:03:26.317Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-10T12:03:09.964Z",
+  "since": "2026-06-10T12:03:23.436Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    80143
+    91958
   ],
-  "comment_ids": [
-    4671613530
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 1,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -33,17 +31,98 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:80143:4414695212:2026-06-10T15:03:02Z:clawsweeper_needs_human",
-      "comment_id": "4414695212",
-      "comment_version_key": "4414695212:2026-06-10T15:03:02Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/80143#issuecomment-4414695212",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91958:4671339779:2026-06-10T15:03:19Z:clawsweeper_auto_repair",
+      "comment_id": "4671339779",
+      "comment_version_key": "4671339779:2026-06-10T15:03:19Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91958#issuecomment-4671339779",
       "repo": "openclaw/openclaw",
-      "issue_number": 80143,
+      "issue_number": 91958,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-10T15:01:33Z",
-      "comment_updated_at": "2026-06-10T15:01:33Z",
+      "comment_created_at": "2026-06-10T14:32:32Z",
+      "comment_updated_at": "2026-06-10T15:03:19Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=096164071c9c79f420c673ba992898c102ce1de8)",
+      "review_summary": "The PR changes the outer `memory_search` deadline from a fixed 15 seconds to the greater of 15 seconds and the configured QMD search timeout plus a 10-second grace period.\n\nPR surface: Source +5. Total +5 across 1 file.\n\nReproducibility: yes. Current `main` visibly wraps the operation in a fixed 15-second deadline, the linked report supplies a 46.7-second QMD query, and source inspection gives deterministic builtin and wiki-only paths for the patch regression.",
+      "review_followup": "- [P1] The routing defect and missing tests have a narrow mechanical repair suitable for automation, while live environment proof remains a separate contributor or maintainer merge gate.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "096164071c9c79f420c673ba992898c102ce1de8",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(memory): align memory_search tool deadline with configured QMD timeout (fixes #91947)",
+        "body": "### Summary\n\n- **Problem**: `memory_search` tool has a hardcoded 15-second deadline that is not configurable. When `memory.qmd.limits.timeoutMs` is set to a higher value (e.g., 60000ms) to accommodate slow QMD `query` mode (hybrid search with auto expansion + reranking taking 50-60s), the tool-level deadline still fires at 15s — the QMD query never gets a chance to complete.\n- **Root Cause**: `runMemorySearchToolWithDeadline` in `extensions/memory-core/src/tools.ts` wraps the entire search in a `Promise.race` with `MEMORY_SEARCH_TOOL_TIMEOUT_MS = 15_000`, introduced in commit `9e2bd8b2f7`. The QMD manager internally reads `memory.qmd.limits.timeoutMs`, but the tool wrapper ignores it.\n- **Fix**: Read `cfg.memory?.qmd?.limits?.timeoutMs` and set the effective tool-level deadline to `Math.max(15_000, configuredQmdTimeout + 10_000)`. The `+10_000` grace accounts for QMD process termination, output parsing, and surrounding tool work after the inner QMD timeout fires. When the user has not overridden the QMD timeout (default: 4000ms), the effective deadline remains 15s — backward compatible.\n- **What changed**:\n  - `extensions/memory-core/src/tools.ts` — added `QMD_TOOL_DEADLINE_GRACE_MS = 10_000` constant; compute effective deadline as `Math.max(15_000, (qmdTimeoutMs ?? 0) + 10_000)`\n- **What did NOT change (scope boundary)**:\n  - QMD manager internal timeout logic (already reads config correctly)\n  - Cooldown mechanism (unchanged)\n  - `memory_get` tool (unaffected — no deadline wrapper)\n  - No new configuration key added\n\n### Reproduction\n\n1. Configure QMD with `searchMode: \"query\"` and a large index (800+ files, 4800+ embedded)\n2. Set `memory.qmd.limits.timeoutMs` to `60000`\n3. Invoke `memory_search` with a query that triggers hybrid search with auto expansion + reranking\n4. **Before this PR**: the tool returns `\"memory_search timed out after 15s\"` — QMD query was at ~46s and never completed\n5. **After this PR**: the tool waits up to 70s (60s configured QMD timeout + 10s grace), allowing the QMD query to complete and return results\n\n### Real behavior proof\n\n**Behavior or issue addressed (91947)**: The `memory_search` tool's deadline wrapper uses a hardcoded 15s timeout that ignores the user-configured `memory.qmd.limits.timeoutMs`. After this patch, the effective deadline is `Math.max(15_000, (cfg.memory?.qmd?.limits?.timeoutMs ?? 0) + 10_000)` — when the configured QMD timeout exceeds 5s the tool-level deadline is raised above the QMD timeout with a grace buffer instead of firing prematurely.\n\n**Real environment tested**: Linux, Node 22 — isolated tool creation harness against `createMemorySearchTool`\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs extensions/memory-core/index.test.ts`\n\n**Evidence after fix**:\n```text\n[shard] starting extension-memory config\n\n RUN  extensions/memory-core\n\n 1 file with all 14 checks passing\n duration 4.27s (setup 295ms, import 3.75s)\n\n[shard] completed successfully in 12.81s\n```\n\n**Observed result after fix**: The `createMemorySearchTool` factory produces a tool whose `execute` closure reads `cfg.memory?.qmd?.limits?.timeoutMs` and uses `Math.max(15_000, (configuredValue ?? 0) + 10_000)` as the deadline passed to `runMemorySearchToolWithDeadline`. With the default QMD timeout of 4000ms the effective deadline stays at 15000ms (unchanged behavior); with a user override of 60000ms the effective deadline becomes 70000ms (60s + 10s grace), allowing the QMD `query`-mode search (auto expansion + reranking, 46-60s) to complete and QMD to terminate before the tool-level deadline fires.\n\n**What was not tested**: A live QMD backend with a large index (800+ files, 4800+ embedded) running `searchMode: \"query\"` that takes 50-60s per query was not driven — the fix is a config-read change verified through the existing tool-creation harness. QMD is not installed in the CI/contributor environment.\n\n**Repro confirmation**: Before this patch, `MEMORY_SEARCH_TOOL_TIMEOUT_MS = 15_000` is the sole argument to `runMemorySearchToolWithDeadline` at line 383 — no config read occurs. After this patch, `effectiveTimeoutMs` is computed from `Math.max(15_000, (cfg.memory?.qmd?.limits?.timeoutMs ?? 0) + QMD_TOOL_DEADLINE_GRACE_MS)` before being passed. On `upstream/main` without the fix, the reporter confirmed `memory_search` timed out at 15s while `qmd query` was still running at 46.7s. The patch aligns the two timeout layers with a grace buffer.\n\n### Risk / Mitigation\n\n- **Risk**: A very large QMD timeout could cause genuinely hung memory searches to block the tool for longer\n  **Mitigation**: The 60s cooldown (`MEMORY_SEARCH_TOOL_COOLDOWN_MS`) remains in place — after one timeout, subsequent searches within 60s return the cached error immediately without re-running the search. This bounds the worst-case user impact to one long wait per minute.\n- **Risk**: Users who rely on the 15s ceiling to bound search latency will see longer waits\n  **Mitigation**: The default QMD timeout is 4000ms, so `Math.max(15000, 4000 + 10000) = 15000` — unchanged for default configurations. Only users who explicitly raised `memory.qmd.limits.timeoutMs` above 5000ms are affected, which is exactly the intent.\n- **Risk**: The equal-deadline race where QMD terminates just as the tool deadline fires\n  **Mitigation**: The 10s grace (`QMD_TOOL_DEADLINE_GRACE_MS`) provides a buffer for QMD process termination, output parsing, and surrounding tool work after the inner QMD timeout fires.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] memory-core extension\n- [x] tool execution\n\n### Regression Test Plan\n\n- `node scripts/run-vitest.mjs extensions/memory-core/index.test.ts`\n\n### Review Findings Addressed\n\n- **[P2] Leave grace beyond the configured QMD timeout** → Fixed: added `QMD_TOOL_DEADLINE_GRACE_MS = 10_000` so the outer deadline is `configuredQmdTimeout + 10_000` (not equal to the inner QMD limit)\n- **[P1] Needs real behavior proof from live QMD setup** → Not addressed: QMD is not installed in the contributor CI environment. The fix is a two-line config-read change verified through the existing tool-creation harness. A maintainer with QMD access can validate the end-to-end path by setting `memory.qmd.limits.timeoutMs=60000` and running a query-mode search against a large index.\n\n### Linked Issue/PR\n\nFixes #91947\n",
+        "branch": "fix/issue-91947-memory-search-timeout-config",
+        "head_sha": "096164071c9c79f420c673ba992898c102ce1de8",
+        "author": "zenglingbiao",
+        "labels": [
+          "extensions: memory-core",
+          "size: XS",
+          "proof: supplied",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-core/src/tools.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "generated_issue_branch": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_issue_job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-91958",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91958.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 149,
+          "counts": {
+            "SUCCESS": 126,
+            "SKIPPED": 23
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:91958:4671533882:2026-06-10T14:53:07Z:re_review",
+      "comment_id": "4671533882",
+      "comment_version_key": "4671533882:2026-06-10T14:53:07Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91958#issuecomment-4671533882",
+      "repo": "openclaw/openclaw",
+      "issue_number": 91958,
+      "author": "zenglingbiao",
+      "author_id": 290951975,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-10T14:53:07Z",
+      "comment_updated_at": "2026-06-10T14:53:07Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -51,44 +130,44 @@
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- The patch has no actionable repair finding and should proceed through normal maintainer review and landing rather than a ClawSweeper fix lane.; Cleared: The diff adds no dependency, permission, secret-access, or code-execution source, and inherited endpoints use current main’s credential-redacted diagnostic and status paths. (sha=6026eb8ad14a51b5023f2c3255cb6fe9b385f31e)",
-      "review_summary": "The PR applies normalized top-level `browser.cdpUrl` to the selected existing-session default profile when it has no profile-local endpoint, adds precedence tests, and updates endpoint help/type descriptions.\n\nPR surface: Source +30, Tests +33. Total +63 across 4 files.\n\nReproducibility: yes. Current-main source provides a high-confidence path: top-level `browser.cdpUrl` is assigned to the managed profile, while the selected built-in `user` existing-session profile remains endpoint-free and therefore uses Chrome MCP auto-connect.",
-      "review_followup": "- The patch has no actionable repair finding and should proceed through normal maintainer review and landing rather than a ClawSweeper fix lane.",
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "6026eb8ad14a51b5023f2c3255cb6fe9b385f31e",
+      "expected_head_sha": null,
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2467,
+    "total_ms": 4615,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 637
+        "ms": 418
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2445
       },
       {
         "name": "classify_commands",
-        "ms": 1
+        "ms": 3
       },
       {
         "name": "execute_commands",
-        "ms": 1816
+        "ms": 1723
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
