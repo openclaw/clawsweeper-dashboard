@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T16:52:36.118Z",
+  "generated_at": "2026-06-10T16:52:38.633Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-10T13:52:35.585Z",
+  "since": "2026-06-10T13:52:35.138Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    71400
+    70990
   ],
   "comment_ids": [
-    4672401565
+    4672401392
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,17 +33,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:71400:4672401565:2026-06-10T16:51:04Z:re_review",
-      "comment_id": "4672401565",
-      "comment_version_key": "4672401565:2026-06-10T16:51:04Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/71400#issuecomment-4672401565",
+      "idempotency_key": "comment-router:openclaw/openclaw:70990:4672401392:2026-06-10T16:51:02Z:re_review",
+      "comment_id": "4672401392",
+      "comment_version_key": "4672401392:2026-06-10T16:51:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/70990#issuecomment-4672401392",
       "repo": "openclaw/openclaw",
-      "issue_number": 71400,
+      "issue_number": 70990,
       "author": "mantisai-bot",
       "author_id": 259690819,
       "author_association": "NONE",
-      "comment_created_at": "2026-06-10T16:51:04Z",
-      "comment_updated_at": "2026-06-10T16:51:04Z",
+      "comment_created_at": "2026-06-10T16:51:02Z",
+      "comment_updated_at": "2026-06-10T16:51:02Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -63,20 +63,219 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(plugins): add model failover and terminal failure hooks",
+        "body": "## Summary\n\nAdds two plugin observability hooks for model failure handling:\n\n- `model_failover`: observes embedded-runner failover decisions, including failed source refs, selected target refs, stage, decision, reason metadata, recoverability, timeout/abort/status flags, and fallback availability.\n- `model_failure_terminal`: observes terminal before-reply model failures after all configured attempts are exhausted.\n\nThis PR does not change fallback policy, provider retry behavior, context re-injection behavior, command/tool execution, network access, or default user-facing failure copy.\n\n## Current implementation\n\n- Emits `model_failover` from the embedded-runner failover decision path.\n- Propagates the selected fallback candidate through direct agent-command runs, Gateway auto-reply runs, and queued follow-up runs before running the embedded agent.\n- Emits `model_failure_terminal` after resolving the actual delivered failure reply, so `finalMessage` matches user-visible failure copy.\n- Registers both hook names and payload types in the Plugin SDK surface and refreshes the SDK API baseline hash.\n- Bounds both failure-path void hooks with default 30s timeout budgets and fail-open behavior.\n\n## Security / compatibility\n\n- New public Plugin SDK hook contract: `model_failover`, `model_failure_terminal`.\n- `model_failure_terminal` is conversation-access gated for non-bundled plugins because it can expose delivered failure copy.\n- Attempt summaries expose provider/model/reason metadata, not raw provider error blobs.\n- Maintainers still need to accept the public hook contract and terminal-failure data boundary before release.\n\n## Real behavior proof\n\n- **Behavior addressed**: A real embedded OpenClaw model run should emit `model_failover` when the primary model fails and the runtime selects the configured fallback target. A separate exhausted-model run should emit `model_failure_terminal` after all configured model attempts fail, with `finalMessage` matching the user-visible failure copy and `attempts` summarizing provider/model/reason metadata.\n- **Environment tested**: Local OpenClaw source checkout on macOS Darwin 25.3.0 arm64, Node `v25.6.0`, pnpm `11.2.2`, PR head `5cd9b674c3b9`.\n- **Exact steps or command run after this patch**: The proof runner created a temporary workspace, temporary state dir, and a real workspace plugin with `openclaw.plugin.json`. OpenClaw loaded that plugin through the real plugin loader; the plugin registered `api.on(\"model_failover\", ...)` and `api.on(\"model_failure_terminal\", ...)` and wrote hook payloads to a redacted JSONL artifact. Model providers were deterministic local OpenAI-compatible Responses endpoints. Scenario 1 returned HTTP 429 from the primary endpoint and a successful SSE canary from fallback. Scenario 2 returned HTTP 429 from both primary and fallback to exhaust all configured model attempts. No external provider token was used.\n\n```bash\nOPENCLAW_MODEL_FAILOVER_PROOF_HEAD=$(git rev-parse --short=12 HEAD) node --import tsx .artifacts/model-failover-real-proof.mjs\n```\n\n- **Evidence after fix**: The proof command produced copied live terminal output and a redacted JSONL artifact from the runtime-loaded plugin. The runtime output confirmed `model_failover` fired after `proof-primary/proof-primary-model` returned HTTP 429, selected `proof-fallback/proof-fallback-model`, and then delivered `PROOF_FALLBACK_CANARY_OK`. The same proof run confirmed the exhausted-model scenario emitted `model_failure_terminal` after both configured attempts failed.\n- **Observed result after fix**:\n  - `model_failover` reported selected target `proof-fallback/proof-fallback-model`, failed source `proof-primary/proof-primary-model`, `decision: fallback_model`, `failoverReason: rate_limit`, `status: 429`, and `sourceRecoverable: true`.\n  - The fallback endpoint was hit and the run delivered `PROOF_FALLBACK_CANARY_OK`.\n  - The terminal run hit both `proof-terminal-primary/proof-terminal-primary-model` and `proof-terminal-fallback/proof-terminal-fallback-model`, exhausted all attempts, and emitted `model_failure_terminal` with `kind: all_models_failed`.\n  - `model_failure_terminal.finalMessage` was exactly the delivered terminal reply: `⚠️ All models are temporarily rate-limited. Please try again in a few minutes.`\n  - Terminal `attempts` contained both failed provider/model summaries with `rate_limit` reasons.\n- **Not tested**: Live third-party provider outages were not tested; provider failures were deterministic local HTTP endpoints. Secret-bearing headers were redacted in proof output.\n\n## Regression coverage for the latest review findings\n\nNew source tests cover the ClawSweeper findings directly:\n\n- `src/auto-reply/reply/agent-runner-execution.test.ts`: `passes the selected next fallback candidate into embedded auto-reply runs`\n- `src/auto-reply/reply/agent-runner-execution.test.ts`: `emits model_failure_terminal with the delivered terminal failure copy`\n- `src/auto-reply/reply/followup-runner.test.ts`: `passes selected next fallback candidates to embedded follow-up runs`\n\nThe unrelated Anthropic config-default change is no longer part of this PR diff.\n\n## Validation\n\nCommands run on head `5cd9b674c3b9`:\n\n```bash\nnode scripts/run-vitest.mjs run src/auto-reply/reply/followup-runner.test.ts src/auto-reply/reply/agent-runner-execution.test.ts src/plugins/hooks.model-failover.test.ts src/agents/model-fallback.test.ts src/agents/embedded-agent-runner/run/failover-observation.model-failover-hook.test.ts\npnpm plugin-sdk:api:check\npnpm config:docs:check\npnpm tsgo:test:src\npnpm check:architecture\ngit diff --check origin/main...HEAD && git diff --check\ngit merge-tree --write-tree HEAD origin/main\nnpx oxfmt --check src/auto-reply/reply/agent-runner-execution.ts src/auto-reply/reply/agent-runner-execution.test.ts src/plugins/hooks.model-failover.test.ts src/agents/model-fallback.test.ts src/agents/embedded-agent-runner/run/failover-observation.model-failover-hook.test.ts\nOPENCLAW_MODEL_FAILOVER_PROOF_HEAD=$(git rev-parse --short=12 HEAD) node --import tsx .artifacts/model-failover-real-proof.mjs\n```\n\nObserved results:\n\n- Focused Vitest passed 3 shards / 363 tests.\n- Plugin SDK API baseline check passed.\n- Config docs baseline check passed.\n- `tsgo:test:src` passed.\n- `pnpm check:architecture` passed.\n- `git diff --check origin/main...HEAD && git diff --check` passed.\n- `git merge-tree --write-tree HEAD origin/main` passed.\n- Focused `oxfmt --check` passed.\n- Exact-head real behavior proof passed on `5cd9b674c3b9`, with the runtime-loaded plugin observing `model_failover`, selected fallback target `proof-fallback/proof-fallback-model`, delivered fallback canary `PROOF_FALLBACK_CANARY_OK`, and terminal `model_failure_terminal.finalMessage` matching the delivered all-models-failed reply.\n\n## Latest rebase/proof refresh (2026-06-10)\n\nCurrent head: `5cd9b674c3b9d6e9f3ad0c49a87628b085b3abe2`\n\nRebased onto current `origin/main` (`2e4bf410a2f05a158cd6b03389b54f04786db876`). Merge conflicts covered generated baseline hashes and the failure-path block where current main emits the lifecycle error event while this PR emits the terminal plugin hook. The resolution keeps both signals and refreshes the generated config baseline.\n\nValidation on the current head:\n\n```bash\nnode scripts/run-vitest.mjs run src/auto-reply/reply/followup-runner.test.ts src/auto-reply/reply/agent-runner-execution.test.ts src/plugins/hooks.model-failover.test.ts src/agents/model-fallback.test.ts src/agents/embedded-agent-runner/run/failover-observation.model-failover-hook.test.ts\npnpm plugin-sdk:api:check\npnpm config:docs:check\npnpm tsgo:test:src\npnpm check:architecture\ngit diff --check origin/main...HEAD && git diff --check\ngit merge-tree --write-tree HEAD origin/main\nnpx oxfmt --check src/auto-reply/reply/agent-runner-execution.ts src/auto-reply/reply/agent-runner-execution.test.ts src/plugins/hooks.model-failover.test.ts src/agents/model-fallback.test.ts src/agents/embedded-agent-runner/run/failover-observation.model-failover-hook.test.ts\nOPENCLAW_MODEL_FAILOVER_PROOF_HEAD=$(git rev-parse --short=12 HEAD) node --import tsx .artifacts/model-failover-real-proof.mjs\n```\n\nObserved results:\n\n- Focused Vitest passed 3 shards / 363 tests.\n- Plugin SDK API baseline check passed.\n- Config docs baseline check passed.\n- `tsgo:test:src` passed.\n- `pnpm check:architecture` passed.\n- `git diff --check origin/main...HEAD && git diff --check` passed.\n- `git merge-tree --write-tree HEAD origin/main` passed against `origin/main` `2e4bf410a2f0`.\n- Focused `oxfmt --check` passed.\n- Exact-head real behavior proof passed on `5cd9b674c3b9`, with the runtime-loaded plugin observing `model_failover`, selected fallback target `proof-fallback/proof-fallback-model`, delivered fallback canary `PROOF_FALLBACK_CANARY_OK`, and terminal `model_failure_terminal.finalMessage` matching the delivered all-models-failed reply.\n\n## Linked issue\n\nCloses #70976\nRelated #65824\n",
+        "branch": "feat/70976-model-failover-hooks",
+        "head_sha": "5cd9b674c3b9d6e9f3ad0c49a87628b085b3abe2",
+        "author": "mantisai-bot",
+        "labels": [
+          "docs",
+          "gateway",
+          "commands",
+          "agents",
+          "size: L",
+          "triage: blank-template",
+          "triage: dirty-candidate",
+          "proof: supplied",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "docs/.generated/config-baseline.sha256",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/plugins.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/gateway/configuration-reference.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/hooks.md",
+            "additions": 20,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/agent-command.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/command/attempt-execution.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run.ts",
+            "additions": 24,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/assistant-failover.ts",
+            "additions": 16,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/failover-observation.model-failover-hook.test.ts",
+            "additions": 181,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/failover-observation.ts",
+            "additions": 72,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/params.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/model-fallback.ts",
+            "additions": 13,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
+            "additions": 84,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.ts",
+            "additions": 39,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/followup-runner.test.ts",
+            "additions": 54,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/followup-runner.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/migrate/skill-selection-prompt.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/schema.help.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/types.plugins.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/hook-types.ts",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/hooks.model-failover.test.ts",
+            "additions": 301,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/plugins/hooks.ts",
+            "additions": 34,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/loader.test.ts",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "generated_issue_branch": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_issue_job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-70990",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-70990.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 163,
+          "counts": {
+            "SUCCESS": 134,
+            "SKIPPED": 27,
+            "QUEUED": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "build-artifacts:QUEUED"
+          ],
+          "pending": [
+            "build-artifacts:QUEUED"
+          ],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 1907,
+    "total_ms": 3699,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 520
+        "ms": 497
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2982
       },
       {
         "name": "classify_commands",
@@ -84,7 +283,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1372
+        "ms": 203
       },
       {
         "name": "append_ledger",
