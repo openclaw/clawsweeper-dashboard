@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T12:41:52.609Z",
+  "generated_at": "2026-06-10T12:41:42.111Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-10T09:41:50.073Z",
+  "since": "2026-06-10T09:41:41.496Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
     91936
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4670278188
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -40,12 +42,12 @@
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-10T12:38:37Z",
-      "comment_updated_at": "2026-06-10T12:41:42Z",
+      "comment_created_at": "2026-06-10T12:40:07Z",
+      "comment_updated_at": "2026-06-10T12:40:07Z",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -61,86 +63,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): report canonical SQLite path in cron status (fixes #91766)",
-        "body": "### Summary\n\n- **Problem**: `openclaw cron status` reports the legacy JSON store path (`~/.openclaw/cron/jobs.json`) instead of the canonical SQLite state database path (`~/.openclaw/state/openclaw.sqlite`) where cron jobs are actually persisted since the SQLite migration.\n- **Root Cause**: The `status()` function in `src/cron/service/ops.ts` returns `state.deps.storePath` which is the logical store key (resolved from the legacy JSON file path). When cron persistence moved to SQLite, the status reporting was never updated to reflect the canonical storage location.\n- **Fix**: Import `resolveOpenClawStateSqlitePath` from `src/state/openclaw-state-db.paths.ts` and use it in the `status()` response instead of the legacy `state.deps.storePath`.\n- **What changed**:\n  - `src/cron/service/ops.ts` — `status()` now returns `resolveOpenClawStateSqlitePath()` as the `storePath` field\n  - `src/cron/service.read-ops-nonblocking.test.ts` — updated `expectCronStatus` helper and call sites to assert the SQLite path\n- **What did NOT change (scope boundary)**:\n  - Internal uses of `state.deps.storePath` (12 call sites in `store.ts`, `locked.ts`) remain untouched — they use it as a SQLite store key, not for user-facing output\n  - `CronStatusSummary` interface shape is unchanged\n  - `CronServiceDeps.storePath` semantics are unchanged\n\n### Reproduction\n\n1. Run `openclaw cron status` on a gateway with cron storage migrated to SQLite\n2. Observe the `storePath` field in the JSON output\n3. **Before this PR**: `storePath` shows the legacy JSON file path (e.g., `/home/node/.openclaw/cron/jobs.json`) — misleading since actual cron data lives in the shared SQLite database\n4. **After this PR**: `storePath` shows the canonical SQLite database path (e.g., `~/.openclaw/state/openclaw.sqlite`) — matches the actual storage location\n\n### Real behavior proof\n\n**Behavior or issue addressed (91766)**: `cron.status()` returned the legacy JSON `storePath` which no longer reflects the canonical cron storage. After the fix, `storePath` reports the shared SQLite state database path that cron actually reads from and writes to.\n\n**Real environment tested**: Linux, Node 22 — the cron service test infrastructure exercising `CronService.status()`, `CronService.list()`, and nonblocking read-op behavior during isolated job runs and startup catchup.\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs src/cron/service.read-ops-nonblocking.test.ts src/cron/cron-protocol-conformance.test.ts src/cron/service/ops.regression.test.ts`\n\n**Evidence after fix**:\n```text\n[test] starting test/vitest/vitest.cron.config.ts\n\n RUN  v4.1.7 /home/0668001395/openclawProject1\n\n\n Test Files  3 passed (3)\n      Tests  14 passed (14)\n   Start at  20:31:34\n   Duration  4.39s (transform 1.76s, setup 314ms, import 3.44s, tests 404ms, environment 0ms)\n\n[test] passed 1 Vitest shard in 13.29s\n```\n\n**Observed result after fix**: The three read-ops-nonblocking test scenarios (isolated job run, manual run via `cron.run`, startup catchup) all confirm `status.storePath` resolves to the canonical SQLite database path via `resolveOpenClawStateSqlitePath()`. The `expectCronStatus` helper now validates the SQLite path directly, and status remains responsive (nonblocking) during all three concurrent-operation scenarios.\n\n**What was not tested**: Live gateway round-trip of `openclaw cron status` CLI command was not driven — the coverage exercises `CronService.status()` directly which is the same code path the CLI calls through the gateway RPC layer.\n\n**Repro confirmation**: The `expectCronStatus` helper previously asserted `storePath` against `store.storePath` (the legacy temp JSON path). After the fix, it asserts against `resolveOpenClawStateSqlitePath()`. The same three scenarios that previously validated the legacy path now confirm the SQLite path — the before and after assertions demonstrate the fix directly within the test infrastructure.\n\n### Risk / Mitigation\n\n- **Risk**: Scripts that parse `cron.status` output and read the `storePath` field as a JSON file path will now find a SQLite database file instead.\n  **Mitigation**: The reported path is now correct — scripts that were reading the legacy JSON path would already have stale data since cron storage moved to SQLite. The corrected path allows scripts to access the actual canonical data store.\n- **Risk**: The `storePath` field name might be considered misleading now that it points to a SQLite file rather than a JSON store.\n  **Mitigation**: The field name is preserved for backward compatibility with API consumers. The value change is semantically correct since this IS the path where cron state is stored.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Cron service (src/cron/)\n- [x] CLI / commands\n\n### Regression Test Plan\n\n- `node scripts/run-vitest.mjs src/cron/service.read-ops-nonblocking.test.ts`\n- `node scripts/run-vitest.mjs src/cron/cron-protocol-conformance.test.ts`\n- `node scripts/run-vitest.mjs src/cron/service/ops.regression.test.ts`\n\n### Review Findings Addressed\n\nN/A (initial submission)\n\n### Linked Issue/PR\n\nFixes #91766\n",
-        "branch": "fix/issue-91766-cron-status-sqlite-path",
-        "head_sha": "786d3034c8475ece20f0e1ec6827a575938631c3",
-        "author": "zenglingbiao",
-        "labels": [
-          "size: XS",
-          "proof: supplied",
-          "rating: 🌊 off-meta tidepool"
-        ],
-        "files": [
-          {
-            "path": "src/cron/service.read-ops-nonblocking.test.ts",
-            "additions": 4,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/ops.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "generated_issue_branch": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_issue_job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91936",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91936.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "SUCCESS": 128,
-            "SKIPPED": 31,
-            "FAILURE": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "build-artifacts:FAILURE",
-            "checks-node-agentic-control-plane-runtime-cron:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "build-artifacts:FAILURE",
-            "checks-node-agentic-control-plane-runtime-cron:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2755,
+    "total_ms": 2487,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 321
+        "ms": 602
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2201
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 206
+        "ms": 1872
       },
       {
         "name": "append_ledger",
