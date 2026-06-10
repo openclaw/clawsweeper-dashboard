@@ -1,20 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T06:25:01.769Z",
+  "generated_at": "2026-06-10T06:25:22.694Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-10T03:24:59.703Z",
+  "since": "2026-06-10T03:25:22.058Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     81467
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4331913763
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
+  "scanned_comments": 1,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -61,91 +63,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(usage): show every calendar day in Daily Token Usage / Daily Cost chart",
-        "body": "## Problem\n\nWayne (downstream developer) selected the **30d** range filter on the `/openclaw/usage` page and only saw ~15 bars on the Daily Token Usage chart instead of the expected 30. Days with no recorded activity were silently dropped from the series, so a multi-week range shows N bars where N = days-with-activity rather than total calendar days. This is confusing — the chart looks shorter than the range filter implies, and you can't visually distinguish quiet days from missing data.\n\n## Root cause\n\n`buildCostUsageSummaryFromCache()` and `loadCostUsageSummary()` in `src/infra/session-cost-usage.ts` both build a `dailyMap` keyed by `formatDayKey(date)` only for timestamps that actually appear in usage records. Days with zero activity are never inserted, so the resulting `daily` series is sparse.\n\nThe UI renderer (`renderDailyChartCompact` in `ui/src/ui/views/usage-render-overview.ts`) already adapts bar width to count (>30 → 12px, >20 → 18px, etc.), so 30 thin bars fit fine. No frontend changes are needed; the backend just needs to emit a dense series.\n\n## Fix\n\nAdd a `fillMissingDays(dailyMap, startMs, endMs)` helper that iterates calendar days in the requested range and inserts a zero-valued `CostUsageTotals` entry for any day key not already present. Call it from both the cached and uncached summary paths immediately before sorting the daily entries.\n\nDay keys are produced via the existing `formatDayKey` (en-CA locale, system timezone), so the zero-fill keys are guaranteed to match the keys used by populated days. The helper iterates by adding 24h in milliseconds and probes a 12h cushion past `endMs` to defensively cover local-clock DST transitions; it also explicitly inserts the end-day key if the loop terminates early. `totals` are unaffected (they're aggregates, not per-day buckets).\n\nThe fill is capped at **`MAX_ZERO_FILL_DAYS = 366`** (full year + leap-day cushion). The usage UI's *All* range filter sends `startDate: 1970-01-01` through the same code path and the gateway also accepts `range=all` with `startMs: 0`; unconditionally zero-filling that span would synthesize ~20,000 empty buckets per call. Bounded picker ranges (7d / 30d / 90d) all sit well under the cap and keep the dense, contiguous shape that fixes Wayne's bug; wider ranges fall back to the prior sparse (activity-only) shape. Addresses clawsweeper P2 review.\n\n## Tests\n\n`src/infra/session-cost-usage.test.ts` (run with `npx vitest run src/infra/session-cost-usage.test.ts`):\n\n- **New:** Range with zero activity → returns one entry per calendar day, all zero-valued, with unique, sorted, contiguous date keys.\n- **New:** 7-day range with activity on day 1 and day 5 → returns 7 entries, two populated with the expected token counts, five zero-filled, totals preserved.\n- **New:** All-time / unbounded range (`startMs: 0`) → falls back to sparse output (≤5 entries with a single populated day), not ~20k zero buckets.\n- **Updated:** The two pre-existing `loadCostUsageSummary({ days: 30 })` tests previously asserted `summary.daily.length === 1` for a single populated day. They now assert `daily.length === days` (full range) and that exactly one entry is populated, which matches the new behavior.\n\nAll 41 tests in the file pass locally; lint (`oxlint`) clean.\n\n## Out of scope\n\n- Frontend chart CSS changes (the renderer already handles 30+ days fine).\n- Wayne's second issue (not filed yet).\n- Tide-side changes (Tide containers will pick this up on next gateway bump).\n\n## Real behavior proof\n\n**Behavior or issue addressed:** Wayne selected the **30d** range filter on the live `/openclaw/usage` page and only saw ~15 bars on the Daily Token Usage chart instead of 30. Days with zero activity were silently dropped from the JSON returned by the real `usage.cost` RPC, so the chart implicitly shrank to N-days-with-activity instead of the calendar range the user asked for. This PR makes the real RPC return a dense, contiguous daily series for bounded ranges so the UI renders one bar per calendar day, while falling back to sparse for unbounded ranges to avoid ~20k empty buckets on the \"All\" filter.\n\n**Real environment tested:** A real on-disk OpenClaw session-transcripts directory layout (`$OPENCLAW_HOME/agents/main/sessions/*.jsonl`) on macOS (`Darwin 25.3.0 arm64`, node `v22.22.0`), exercised directly through the production `loadCostUsageSummary()` entry point in `src/infra/session-cost-usage.ts` — i.e. the same code path the gateway's `usage.cost` RPC and the downstream usage page both call. No mocks of the loader, the filesystem, or the day-key formatter; the only synthetic input is the two test session files (real `.jsonl` written to disk, real `mtime`).\n\n**Exact steps or command run after this patch:** Built the PR branch locally and invoked the production summary loader against a real on-disk `OPENCLAW_HOME` layout. The single shell command captured in `terminal` form: `OPENCLAW_HOME=/tmp/openclaw-proof-home node -e \"loadCostUsageSummary({startMs, endMs}).then(s => console.log(JSON.stringify(s)))\"` plus `npx vitest run src/infra/session-cost-usage.test.ts` for the 41-test suite. Concrete invocation logged to the terminal:\n\n```\n$ cd ~/work/openclaw\n$ git checkout fix/usage-daily-zero-fill\n$ pnpm install --frozen-lockfile\n$ OPENCLAW_HOME=/tmp/openclaw-proof-home node ./scripts/proof-14d.js\n$ npx vitest run src/infra/session-cost-usage.test.ts\n```\n\n**Evidence after fix:** Terminal console output captured from the real `loadCostUsageSummary` call against a real on-disk `OPENCLAW_HOME` layout (two synthetic sessions on day 0 and day 5 of a 14-day window). Stdout before vs. after this PR:\n\nBefore (`origin/main`, current sparse behavior, redacted runtime log):\n\n```\ndays field: 14\ndaily.length: 0\nexpected length: 14\nfirst 3 entries: []\nPASS: no\n```\n\nThe daily series is empty for the 14-day window because no zero-fill exists — exactly Wayne's bug at the extreme end.\n\nAfter (this PR, dense, capped at 366 days, redacted runtime log):\n\n```\ndays field: 14\ndaily.length: 14\nexpected length: 14\nfirst 3 entries: [\n  { date: '2026-04-30', totalTokens: 0, totalCost: 0 },\n  { date: '2026-05-01', totalTokens: 0, totalCost: 0 },\n  { date: '2026-05-02', totalTokens: 0, totalCost: 0 }\n]\nPASS: yes — every calendar day represented\n```\n\n14 entries returned for a 14-day window, contiguous, sorted ascending. Same RPC the UI calls, same code path, same `OPENCLAW_HOME` layout. Console output additionally from the live test run:\n\n```\nRUN  v4.1.6 /Users/ada/work/openclaw\n  infra  src/infra/session-cost-usage.test.ts  (41 tests) 3380ms\n\nTest Files  1 passed (1)\n     Tests  41 passed (41)\n```\n\n**Observed result after fix:** The real `loadCostUsageSummary` terminal capture shows the call on a real on-disk `OPENCLAW_HOME` layout now returns one entry per calendar day for bounded windows (30d / 14d / 7d), contiguous and sorted by date, with zero-valued totals on days with no recorded activity. The redacted runtime log above shows 14 contiguous entries for a 14-day window where before the live output had zero. Wayne's 30d view will render 30 bars instead of ~15. The All filter (`startMs: 0`) keeps its existing sparse shape — the new test confirms the actual output is `daily.length <= 5` instead of ~20,588 empty buckets.\n\n**What was not tested:** I did not exercise the cached `buildCostUsageSummaryFromCache()` path against a real durable cache file in this manual run — the patch touches both paths symmetrically and the existing 38 tests cover the cached path with the same dense-range assertions, but I did not capture a separate before/after stdout from the cache path. I also did not capture a live UI screenshot showing 30 bars (this is a backend payload fix; the renderer is unchanged), and did not run the all-time render against a real production-sized history.\n\n## Notes for reviewers\n\ncc @steipete @vincentkoc — you appear to own the touched files per blame on `src/infra/session-cost-usage.ts`. Happy to adjust the API shape or the 366-day cap if it should be tuned (e.g. a config knob, or a smaller / larger threshold).\n\n",
-        "branch": "fix/usage-daily-zero-fill",
-        "head_sha": "75c0868f579cc4a448a4b2427ba93a4f38848644",
-        "author": "adapepper",
-        "labels": [
-          "size: M",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/infra/session-cost-usage.test.ts",
-            "additions": 208,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/session-cost-usage.ts",
-            "additions": 109,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-81467",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-81467.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "FAILURE": 2,
-            "CANCELLED": 2,
-            "SKIPPED": 31,
-            "SUCCESS": 126,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "dependency-guard-detect:FAILURE",
-            "Real behavior proof:CANCELLED",
-            "dependency-guard:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "dependency-guard-detect:FAILURE",
-            "Real behavior proof:CANCELLED",
-            "dependency-guard:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2284,
+    "total_ms": 1241,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 329
+        "ms": 624
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1719
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 207
+        "ms": 605
       },
       {
         "name": "append_ledger",
