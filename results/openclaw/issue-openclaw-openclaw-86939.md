@@ -2,15 +2,15 @@
 repo: "openclaw/openclaw"
 cluster_id: "issue-openclaw-openclaw-86939"
 mode: "autonomous"
-run_id: "27258681206"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27258681206"
+run_id: "27261797101"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27261797101"
 head_sha: "fc19c926f04cee78383e0bacb7a884725bdaabc5"
 workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-06-10T07:00:47.589Z"
-canonical: null
+published_at: "2026-06-10T08:04:27.463Z"
+canonical: "https://github.com/openclaw/openclaw/pull/87017"
 canonical_issue: "https://github.com/openclaw/openclaw/issues/86939"
-canonical_pr: null
+canonical_pr: "https://github.com/openclaw/openclaw/pull/87017"
 actions_total: 3
 fix_executed: 0
 fix_failed: 0
@@ -25,17 +25,17 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/27258681206](https://github.com/openclaw/clawsweeper/actions/runs/27258681206)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/27261797101](https://github.com/openclaw/clawsweeper/actions/runs/27261797101)
 
 Workflow conclusion: failure
 
 Worker result: planned
 
-Canonical: https://github.com/openclaw/openclaw/issues/86939
+Canonical: https://github.com/openclaw/openclaw/pull/87017
 
 ## Summary
 
-Verified latest main at a3d5e5bc already contains the webchat stale-running fix and regression coverage. No new fix PR is appropriate. The open ClawSweeper PR #86954 is covered by current main, but this job blocks close actions, so it is kept as a non-mutating related item. Security-sensitive linked PR #87017 is quarantined with route_security only.
+Current main already contains the webchat stale-running-row fix for #86939, so no new fix artifact or PR is needed. #86954 is an open, dirty ClawSweeper PR for the same already-fixed issue and should receive a non-closing superseded-status comment only; #87017 is quarantined to central security routing per the preflight artifact.
 
 ## Impact
 
@@ -66,9 +66,9 @@ Verified latest main at a3d5e5bc already contains the webchat stale-running fix 
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #86939 | keep_closed | skipped | fixed_by_candidate | Already closed and fixed on current main; no close or implementation action is valid for this item. |
-| #86954 | keep_related | planned | related | The PR is covered by current main, but this job's close restrictions make a close action unsafe. Keep it related without mutation. |
-| #87017 | route_security | planned | security_sensitive | Security-sensitive hydrated item must be quarantined out of ClawSweeper Repair mutation paths. |
+| #86939 | keep_closed | skipped | fixed_by_candidate | Already closed and fixed on current main; closure is also blocked by job frontmatter. |
+| #86954 | comment | planned | superseded | Open PR is superseded by current main, but close is blocked by the job; comment-only update is allowed. |
+| #87017 | route_security | planned | security_sensitive | Preflight artifact explicitly requires central security routing for #87017. |
 
 ## Needs Human
 
