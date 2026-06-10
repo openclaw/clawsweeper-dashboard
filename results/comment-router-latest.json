@@ -1,15 +1,15 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T06:09:53.018Z",
+  "generated_at": "2026-06-10T06:10:00.247Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-10T03:09:52.761Z",
+  "since": "2026-06-10T03:09:58.183Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    59416
+    56650
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -29,18 +29,142 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:56650:4350008800:2026-06-10T06:09:32Z:clawsweeper_needs_human",
+      "comment_id": "4350008800",
+      "comment_version_key": "4350008800:2026-06-10T06:09:32Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/56650#issuecomment-4350008800",
+      "repo": "openclaw/openclaw",
+      "issue_number": 56650,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-04-30T05:50:40Z",
+      "comment_updated_at": "2026-06-10T06:09:32Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=7da5daa688b5b350c455009cf581248d4aadd2ed)",
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "7da5daa688b5b350c455009cf581248d4aadd2ed",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: non-interactive paste-token and PAT auth for github-copilot provider",
+        "body": "## Problem\r\n\r\nOpenClaw cannot be deployed in fully automated environments (Terraform, CI/CD, Docker, NVIDIA OpenShell sandboxes) because two critical auth paths require an interactive TTY:\r\n\r\n1. **`paste-token` has no `--token` flag** — the command always prompts interactively via `@clack/prompts text()`, with no way to pass the token value non-interactively. The only workaround is manually writing `auth-profiles.json`, but the schema is undocumented and fragile.\r\n\r\n2. **`github-copilot` provider rejects PATs with 403** — the token exchange endpoint (`/copilot_internal/v2/token`) only accepts OAuth tokens (`ghu_`). When a PAT (`github_pat_`, `ghp_`) is passed with `Authorization: Bearer ...`, the endpoint returns HTTP 403. The only working path is the interactive device flow (`login-github-copilot`), which requires a browser.\r\n\r\nCombined, there is **zero non-interactive path** to configure the Copilot provider — blocking fully automated deployments.\r\n\r\n## Context\r\n\r\nThese issues were discovered while building [Terraform IaC for automated OpenClaw deployment](https://github.com/htekdev/openclaw-repo-management) inside NVIDIA OpenShell sandboxes. The entire stack (EC2/Azure VM, Docker, OpenShell, sandbox, OpenClaw, Telegram) can be automated via `terraform apply` — except Copilot auth, which required manually SSH-ing in.\r\n\r\nAfter 20+ hours of debugging (documented in [session-report.md](https://github.com/htekdev/openclaw-repo-management/blob/main/docs/session-report.md)), we found that:\r\n\r\n- PATs **can** call the Copilot API directly — they don't need the `/v2/token` JWT exchange at all\r\n- The [Azure/az-prototype Copilot provider](https://github.com/Azure/az-prototype/blob/main/azext_prototype/ai/copilot_provider.py) confirms this: it sends raw tokens directly to `api.enterprise.githubcopilot.com` with editor-identification headers, no exchange step\r\n- The enterprise endpoint exposes the full model catalogue (Claude, GPT, Gemini) vs the individual endpoint\r\n\r\n## Changes\r\n\r\n### Fix 1: `paste-token --token` flag\r\n\r\n**`src/cli/models-cli.ts`** — Added `--token <value>` option to the CLI command\r\n\r\n**`src/commands/models/auth.ts`** — Three non-interactive token sources (in priority order):\r\n1. `--token <value>` — direct flag\r\n2. `--token -` — read from stdin (pipe-friendly, token not in process args)\r\n3. `OPENCLAW_PASTE_TOKEN` env var (not visible in `ps`)\r\n4. Falls back to interactive prompt when TTY is available\r\n\r\n**`src/commands/models/auth.test.ts`** — 6 new test cases\r\n\r\n### Fix 2: PAT auth for github-copilot\r\n\r\n**`extensions/github-copilot/token.ts`**:\r\n- `isGitHubPAT()` — detect `github_pat_` / `ghp_` prefixes\r\n- `resolveCopilotApiToken()` — when PAT detected, skip `/v2/token` exchange entirely and return the raw token with the enterprise base URL\r\n- Export `COPILOT_EDITOR_HEADERS` (Copilot-Integration-Id, Editor-Version, Editor-Plugin-Version) — required for PAT auth\r\n- Export `ENTERPRISE_COPILOT_API_BASE_URL` (`api.enterprise.githubcopilot.com`)\r\n- OAuth tokens (`ghu_`) are unchanged — still go through `/v2/token` exchange\r\n\r\n**`extensions/github-copilot/index.ts`** — When a PAT is detected, inject `COPILOT_EDITOR_HEADERS` into the provider config so they're sent with every API request\r\n\r\n**`extensions/github-copilot/token.test.ts`** — 4 new test cases\r\n\r\n## Usage\r\n\r\n```bash\r\n# Automated deployment (Terraform user-data, CI/CD, Docker, OpenShell sandbox)\r\nopenclaw models auth paste-token --provider github-copilot --token \"$COPILOT_GITHUB_TOKEN\"\r\n\r\n# Stdin (pipe from secret manager)\r\nvault kv get -field=token secret/copilot | openclaw models auth paste-token --provider github-copilot --token -\r\n\r\n# Env var\r\nexport OPENCLAW_PASTE_TOKEN=\"github_pat_...\"\r\nopenclaw models auth paste-token --provider github-copilot\r\n\r\n# Interactive (unchanged)\r\nopenclaw models auth paste-token --provider github-copilot\r\n```\r\n\r\n## Notes\r\n\r\n- Supersedes #52509 (same changes, cleaner branch history from main)\r\n\r\nFixes #52321\r\nFixes #52322\r\n",
+        "branch": "main",
+        "head_sha": "7da5daa688b5b350c455009cf581248d4aadd2ed",
+        "author": "htekdev",
+        "labels": [
+          "cli",
+          "commands",
+          "agents",
+          "size: M",
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/github-copilot/index.ts",
+            "additions": 28,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/github-copilot-token.test.ts",
+            "additions": 90,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/github-copilot-token.ts",
+            "additions": 27,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/models-cli.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/models/auth.test.ts",
+            "additions": 95,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/models/auth.ts",
+            "additions": 39,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-56650",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-56650.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "",
+        "checks": {
+          "total": 44,
+          "counts": {
+            "FAILURE": 4,
+            "SUCCESS": 26,
+            "SKIPPED": 14
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "checks-fast-extensions:FAILURE",
+            "extension-fast (extension-fast-github-copilot, github-copilot):FAILURE",
+            "checks-windows-node-test-6:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "checks-fast-extensions:FAILURE",
+            "extension-fast (extension-fast-github-copilot, github-copilot):FAILURE",
+            "checks-windows-node-test-6:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "target is not open"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 464,
+    "total_ms": 2291,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 246
+        "ms": 348
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1700
       },
       {
         "name": "classify_commands",
@@ -48,7 +172,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 208
+        "ms": 215
       },
       {
         "name": "append_ledger",
