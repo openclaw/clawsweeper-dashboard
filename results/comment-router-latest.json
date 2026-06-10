@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T05:10:29.841Z",
+  "generated_at": "2026-06-10T05:14:08.774Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-10T02:10:27.840Z",
+  "since": "2026-06-10T02:14:07.378Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    58244
+    81164
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 6,
+  "scanned_comments": 5,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:58244:4357135773:2026-06-10T05:10:04Z:clawsweeper_needs_human",
-      "comment_id": "4357135773",
-      "comment_version_key": "4357135773:2026-06-10T05:10:04Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/58244#issuecomment-4357135773",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:81164:4434821218:2026-06-10T05:12:08Z:clawsweeper_auto_repair",
+      "comment_id": "4434821218",
+      "comment_version_key": "4434821218:2026-06-10T05:12:08Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/81164#issuecomment-4434821218",
       "repo": "openclaw/openclaw",
-      "issue_number": 58244,
+      "issue_number": 81164,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-01T00:43:50Z",
-      "comment_updated_at": "2026-06-10T05:10:04Z",
+      "comment_created_at": "2026-05-12T21:05:51Z",
+      "comment_updated_at": "2026-06-10T05:12:08Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -52,104 +52,183 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=2ce4ef16b59e424748f2f02e16d28e29c9b8f107)",
-      "review_summary": null,
-      "review_followup": null,
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=83a65e7ab105307a81b4a17e432c6214ce5fa33c)",
+      "review_summary": "The PR adds an optional context-engine `interceptCompaction` method, capability flag, Pi/Codex compaction hook wiring, docs, and tests so plugins can replace automatic compaction summaries.\n\nPR surface: Source +389, Tests +852, Docs +123. Total +1364 across 18 files.\n\nReproducibility: not applicable. as a current-main bug report; this is a new plugin API proposal. The blocking availability defect is source-reproducible from the direct `await engine.interceptCompaction(request)` and the current runner's sequential await semantics.",
+      "review_followup": "- [P1] Maintainer API/compatibility review, a current-main port, and contributor-owned live proof are needed before automation should attempt repairs.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "2ce4ef16b59e424748f2f02e16d28e29c9b8f107",
+      "expected_head_sha": "83a65e7ab105307a81b4a17e432c6214ce5fa33c",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(process): prune idle dynamic lanes from command queue Map to prevent memory leak",
-        "body": "## Summary\n\nFix a memory leak in `src/process/command-queue.ts` where the module-level `lanes` Map grows monotonically — every unique dynamic lane name (e.g. `session:<key>`, `auth-probe:<provider>:<profileId>`) creates a `LaneState` entry that is **never removed** after all tasks complete, causing unbounded memory growth over the gateway lifetime.\n\n## Type of Change\n\n- [x] Bug fix (non-breaking change which fixes an issue)\n\n## Scope\n\n- [x] Gateway / orchestration (command queue)\n\n## Problem\n\nThe command queue uses a module-level `Map<string, LaneState>` (stored on `globalThis` via `resolveGlobalSingleton`) to track per-lane execution state. Lanes are created on-demand by `getLaneState()` when work is enqueued or concurrency is configured.\n\n**The bug**: There is no code path that removes a lane entry from the Map after all its tasks complete. The only deletion is in `resetCommandQueueStateForTest()`, which is test-only.\n\n### Dynamic lane sources\n\nTwo call sites create **dynamic, per-session/per-probe lane names**:\n\n1. **Session lanes** (`src/agents/pi-embedded-runner/lanes.ts`):\n   ```typescript\n   export function resolveSessionLane(key: string) {\n     const cleaned = key.trim() || CommandLane.Main;\n     return cleaned.startsWith(\"session:\") ? cleaned : `session:${cleaned}`;\n   }\n   ```\n   Every unique session key creates a `session:<sessionKey>` lane.\n\n2. **Auth probe lanes** (`src/commands/models/list.probe.ts`):\n   ```typescript\n   lane: `auth-probe:${target.provider}:${target.profileId ?? target.source}`,\n   ```\n   Every unique provider/profile combination creates an `auth-probe:…` lane.\n\n### Memory impact per orphaned lane\n\nEach idle `LaneState` object contains:\n- `lane: string` — the lane name (variable length, typically 30-80 chars)\n- `queue: []` — empty array (64 bytes)\n- `activeTaskIds: Set(0)` — empty Set (64 bytes)\n- `maxConcurrent: 1` — number (8 bytes)\n- `draining: false` — boolean (8 bytes)\n- `generation: number` — number (8 bytes)\n- Plus Map entry overhead (~50 bytes)\n\n**Total: ~200-300 bytes per orphaned lane.**\n\n### Growth rate\n\nOn a gateway with active session churn:\n- 100 unique sessions/day × 300 bytes = **30 KB/day**\n- 1,000 unique sessions/day × 300 bytes = **300 KB/day**\n- Over 30 days: **9 MB** (at 1K sessions/day)\n\nWhile each individual entry is small, the **monotonic growth** means the Map never shrinks, and on long-running gateways with high session churn, this accumulates into a significant memory leak.\n\n## Severity\n\n🟡 **Medium** — Unbounded memory growth on long-running gateway instances.\n\n- **Attack vector**: Normal operation — no malicious input required; every session that connects and does work contributes to the leak\n- **Impact**: Monotonically growing Map that never shrinks\n- **Scope**: Any long-running gateway process with session churn\n\n## Scope of Impact\n\n- **File**: `src/process/command-queue.ts` — functions `drainLane` (pump), `clearCommandLane`, `resetAllLanes`\n- **Runtime**: Any long-running gateway process\n- **Risk of regression**: Zero — the pruned entries are fully idle (empty queue, no active tasks) and serve no purpose. Re-enqueueing work to the same lane name will transparently re-create the entry via `getLaneState()`\n- **Functional behavior change**: None — `getQueueSize()` already handles missing lanes by returning 0, and `enqueueCommandInLane()` re-creates lanes on demand\n\n## How I Fixed It\n\nAdded pruning logic in **three** places to cover all consumption paths:\n\n### 1. `drainLane` / `pump()` — after task completion\n\n```typescript\nif (\n  afterTaskCompletion &&\n  state.queue.length === 0 &&\n  state.activeTaskIds.size === 0 &&\n  !PERSISTENT_LANES.has(lane) &&\n  state.maxConcurrent <= 1\n) {\n  getQueueState().lanes.delete(lane);\n}\n```\n\nThe `afterTaskCompletion` guard ensures we only prune after an actual task has completed — not on the initial `drainLane` call from `setCommandLaneConcurrency` or `enqueueCommandInLane`. This prevents discarding concurrency settings that were configured before any work was enqueued.\n\n### 2. `clearCommandLane` — after clearing pending work\n\n```typescript\nif (\n  state.activeTaskIds.size === 0 &&\n  !PERSISTENT_LANES.has(cleaned) &&\n  state.maxConcurrent <= 1\n) {\n  queueState.lanes.delete(cleaned);\n}\n```\n\n### 3. `resetAllLanes` — during SIGUSR1 in-process restart\n\n```typescript\n} else if (!PERSISTENT_LANES.has(state.lane) && state.maxConcurrent <= 1) {\n  lanesToPrune.push(state.lane);\n}\n```\n\n### Concurrency-tuned lanes are preserved\n\nLanes with `maxConcurrent > 1` (set via `setCommandLaneConcurrency`) are excluded from pruning so their concurrency tuning is not silently lost after an idle period. This is a defensive measure — currently no dynamic lanes use custom concurrency in production, but the guard prevents future regressions if that changes.\n\n### Well-known lanes are never pruned\n\nA `PERSISTENT_LANES` set contains the four well-known lanes (`main`, `cron`, `subagent`, `nested`) that are reused across the entire gateway lifetime. These are never pruned to avoid re-allocation churn.\n\n## Testing\n\nAll 25 tests pass (18 existing + 7 new):\n\n```\n✓ src/process/command-queue.test.ts (25 tests) 92ms\n```\n\n### New test cases\n\n| Test | Description |\n|------|-------------|\n| `prunes dynamic lane from Map after its last task completes` | Enqueues a task in a `session:*` lane, awaits completion, asserts lane count returns to baseline |\n| `does not prune well-known lanes after tasks complete` | Enqueues a task in the `main` lane, asserts the lane is preserved after completion |\n| `prunes dynamic lane via clearCommandLane when idle` | Creates a dynamic lane via `setCommandLaneConcurrency`, clears it, asserts it is pruned |\n| `prunes idle dynamic lanes during resetAllLanes` | Creates a dynamic lane via `setCommandLaneConcurrency`, calls `resetAllLanes`, asserts it is pruned |\n| `preserves dynamic lane with custom concurrency after task completion` | Sets `maxConcurrent=3` on a dynamic lane, completes a task, asserts lane is NOT pruned |\n| `preserves dynamic lane with custom concurrency via clearCommandLane` | Sets `maxConcurrent=2` on a dynamic lane, clears it, asserts lane is NOT pruned |\n| `preserves dynamic lane with custom concurrency during resetAllLanes` | Sets `maxConcurrent=4` on a dynamic lane, resets all lanes, asserts lane is NOT pruned |\n\n## Files Changed\n\n| File | Change | Lines |\n|------|--------|-------|\n| `src/process/command-queue.ts` | Add `PERSISTENT_LANES` set | +7 |\n| `src/process/command-queue.ts` | Add pruning in `pump()` after task completion (with `maxConcurrent` guard) | +13 |\n| `src/process/command-queue.ts` | Add pruning in `clearCommandLane` (with `maxConcurrent` guard) | +6 |\n| `src/process/command-queue.ts` | Add pruning in `resetAllLanes` (with `maxConcurrent` guard) | +8 |\n| `src/process/command-queue.ts` | Add `getLaneCountForTest` helper | +6 |\n| `src/process/command-queue.test.ts` | Add 7 regression tests for lane pruning | +49 |\n\n## Checklist\n\n- [x] I have performed a self-review of my code\n- [x] I have added tests that prove my fix is effective\n- [x] New and existing unit tests pass locally with my changes\n- [x] My changes generate no new warnings or lint errors\n- [x] This change is backwards compatible\n- [x] All three pruning paths (task completion, clear, reset) are covered\n- [x] Well-known lanes are preserved to avoid re-allocation churn\n- [x] Concurrency-tuned lanes are preserved to avoid losing custom settings",
-        "branch": "fix/prune-idle-command-queue-lanes",
-        "head_sha": "2ce4ef16b59e424748f2f02e16d28e29c9b8f107",
-        "author": "gavyngong",
+        "title": "feat(context-engine): add interceptCompaction contract for context-engine plugins",
+        "body": "TLDR - lets other context systems turn off/replace codex compaction (when it calls to compact it uses them versus its native).\r\n\r\n## Summary\r\n\r\nAdds an optional `interceptCompaction(request)` method to the `ContextEngine` plugin contract so engines can replace the runtime's default `session_before_compact` GPT-driven summarization with their own assembly — without leaving the runtime's compaction lifecycle.\r\n\r\nMotivating use case: [lossless-claw](https://github.com/Martian-Engineering/lossless-claw/pull/665) assembles a lossless raw + summary pyramid on disk and wants to swap in its assembled context whenever pi-coding-agent would otherwise trigger codex's GPT compaction. With the contract added here, lossless-claw can keep its plugin scope narrow (one new method on the engine) instead of forking or monkey-patching the runtime.\r\n\r\n## Architecture — two compaction lanes, two capability flags\r\n\r\nOpenClaw + pi-coding-agent expose two distinct compaction flows that this PR makes explicit:\r\n\r\n```\r\n┌──────────────────────────────────────────────────────────────────────────┐\r\n│                     OpenClaw queued-compaction lane                       │\r\n│              ┌──────────────┐   afterTurn /        │\r\n│              │ engine plugin│ ◄─/compact / explicit│\r\n│              │.compact(…)   │   queue              │\r\n│              └──────────────┘                      │\r\n│   Gate: info.ownsCompaction === true                                      │\r\n│   Where: src/agents/pi-embedded-runner/compact.queued.ts                  │\r\n│   Engine: full control of timing, target, assembly                        │\r\n└──────────────────────────────────────────────────────────────────────────┘\r\n\r\n┌──────────────────────────────────────────────────────────────────────────┐\r\n│             pi-coding-agent SDK session_before_compact lane               │\r\n│                                                                           │\r\n│  codex hits 90%      ┌─────────────────────┐    ┌──────────────────────┐ │\r\n│  context (auto-      │ session_before_     │ ─► │ compactionInterceptExt│ │\r\n│  compact threshold)  │ compact emit        │    │ (this PR)             │ │\r\n│                      └─────────────────────┘    └──────────┬───────────┘ │\r\n│                                                            ▼               │\r\n│                                              engine.interceptCompaction()  │\r\n│                                                  │                         │\r\n│                                  handled: true  ─┴─►  use {summary}        │\r\n│                                  handled: false ────►  fall through to     │\r\n│                                                       safeguard/codex GPT  │\r\n│                                                                           │\r\n│  Gate: info.interceptsCompaction === true                                 │\r\n│  Where: src/agents/pi-hooks/compaction-intercept.{ts,-runtime.ts}         │\r\n│  Engine: replacement summary only; trigger is owned by the SDK           │\r\n└──────────────────────────────────────────────────────────────────────────┘\r\n```\r\n\r\nEngines may declare BOTH flags (lossless-claw does): codex still fires `session_before_compact` on in-attempt overflow even when the engine owns the openclaw queued lane.\r\n\r\n## What's in this PR\r\n\r\n| # | File | Change |\r\n|---|---|---|\r\n| 1 | `src/context-engine/types.ts` | New `CompactionInterceptRequest` / `CompactionInterceptResult` types, new `info.interceptsCompaction?: boolean` flag, new optional `interceptCompaction?(...)` method on `ContextEngine`. Re-exported via plugin-sdk. |\r\n| 2 | `src/agents/pi-hooks/compaction-intercept-runtime.ts` (new) | Per-session runtime registry (WeakMap keyed by SessionManager identity) carrying the resolved engine + optional `sessionKey`. Modeled on `compaction-safeguard-runtime.ts`. |\r\n| 3 | `src/agents/pi-hooks/compaction-intercept.ts` (new) | The new `ExtensionFactory`. Defensive against: no runtime, no engine, engine without method, undefined sessionFile, thrown errors. Returns `{compaction: {...}}` on `handled:true` or `undefined` on fall-through. |\r\n| 4 | `src/agents/pi-embedded-runner/extensions.ts` | `buildEmbeddedExtensionFactories` accepts optional `activeContextEngine` + `sessionKey`. Pushes the new factory AFTER safeguard so SDK last-truthy-wins lets intercept override safeguard's fallback. Gate is `info.interceptsCompaction === true` only — no exclusion for `ownsCompaction`. |\r\n| 5 | `src/agents/pi-settings.ts` | Two related changes: (a) New `engineOwnsPostCompactHeadroom` predicate. `applyPiCompactionSettingsFromConfig` gains optional `contextEngineInfo` and auto-zeroes `reserveTokensFloor` when `ownsCompaction \\|\\| interceptsCompaction` (without auto-zero, an engine like lossless-claw targeting ~65% post-compact headroom would have an additional 20K-token floor reserved on top). (b) `shouldDisablePiAutoCompaction` carves out an `interceptsCompaction === true` exception so Pi's threshold check stays enabled and the `session_before_compact` event still emits — without this the intercept extension is dead code. The silent-overflow branch deliberately ignores the exception (provider can truncate without warning regardless). |\r\n| 6 | `src/agents/pi-embedded-runner/run/attempt.ts` | Threads `activeContextEngine?.info` + `params.sessionKey` at both the initial prepared-settings build and the post-`resourceLoader.reload()` re-apply. |\r\n| 7 | `src/agents/command/cli-compaction.ts` | Threads `contextEngineInfo` so the `/compact` CLI path matches. The test-injectable `CliCompactionDeps` shape gains the new field. |\r\n| 8 | Inner compaction-LLM session (`pi-embedded-runner/compact.ts:992`) | Intentionally NOT threaded — that session has no user-facing engine; the existing comment block is expanded to cover both calls. |\r\n| 9 | Tests | New `compaction-intercept.test.ts` (~18 cases). Extended `extensions.test.ts` (~10 cases). Extended `pi-settings.test.ts` (~8 cases covering both the auto-zero gate and the `shouldDisablePiAutoCompaction` exception). |\r\n\r\n## Behavior changes\r\n\r\n- **None by default.** The contract is opt-in: engines that don't declare `info.interceptsCompaction = true` see zero behavior change. The new ExtensionFactory is a no-op when no such engine is active.\r\n- **For opt-in engines:** `session_before_compact` routes through `engine.interceptCompaction()`. On `handled:true`, the engine's summary replaces the codex GPT call. On `handled:false` or thrown errors, the runtime falls back to its default. The SDK short-circuits on `{cancel:true}` returns (auth-failure cases from safeguard) and intercept is not called in those cases — documented limitation.\r\n- **Reserve-token floor auto-zero:** for engines declaring `interceptsCompaction` or `ownsCompaction`, Pi's `reserveTokensFloor` is treated as 0 because the engine takes responsibility for post-compaction headroom.\r\n- **Pi auto-compaction stays on for intercepting engines:** when an engine declares `interceptsCompaction === true`, Pi's `_checkCompaction` is NOT force-disabled (it would normally be when `ownsCompaction === true` or `mode === \"safeguard\"`). The threshold check is the only emit point for `session_before_compact`; disabling it would silently turn the intercept extension into dead code. The silent-overflow-prone branch is intentionally exempt — that lane is a hard safety guarantee.\r\n\r\n## Compatibility\r\n\r\n- Plugin SDK is private (`packages/plugin-sdk/package.json` is `\"private\": true`), so no version bump. Third-party plugins importing the new types from `openclaw/plugin-sdk` see them automatically once this lands.\r\n- New `ContextEngine.interceptCompaction?` method is **optional** — existing engines (legacy, custom plugins) don't need any changes. New `info.interceptsCompaction` flag is also optional.\r\n- SDK `{cancel: true}` short-circuit limitation: when the safeguard returns cancel (auth/model failure), intercept is not called. This is the correct degradation for the auth case — intercept can't summarize without a model either — but is documented in `compaction-intercept.ts` so future readers understand the ordering tradeoff.\r\n\r\n## Adversarial review\r\n\r\nFour independent adversarial review waves were performed by separate research agents reading the source code from scratch. Findings addressed in order:\r\n\r\n- **Wave A** (commit `058997508ab`): 1 P0 architecture-killer (gate exclusion blocking the only legitimate consumer), 3 P0 CI compile/lint failures, 3 P1 polish items.\r\n- **Wave B** (commit `b97b9e32e45`): 1 P0 lint cascade (`!== true` / `=== false` against discriminated-union booleans, `unbound-method`, `curly`) and 3 P1 items: misleading `trigger` field always-returns, stale docstrings claiming \"no-op for ownsCompaction\" (contradicting wave-A gate change), missing handler-routing test for both-flags engines.\r\n- **Wave 3** (commit `049d7d640a5`): 2 stale docstrings in `types.ts` and `extensions.ts` left over from the wave-A gate change.\r\n- **Wave 4** (commit `fe7455a9d9e`): runtime smoke-test against lossless-claw discovered that the intercept extension was registered correctly but the underlying `session_before_compact` event never emitted. Root cause: `shouldDisablePiAutoCompaction` in `pi-settings.ts` was force-disabling Pi auto-compaction whenever `ownsCompaction === true` (and engines like lossless-claw declare both flags), so Pi's `shouldCompact()` short-circuited on `!settings.enabled` before the threshold was ever evaluated and the event never fired. Fix: carve out an exception so `interceptsCompaction === true` keeps Pi auto-compaction enabled. The silent-overflow branch remains gated only on `silentOverflowProneProvider` because that lane is a hard provider-truncation guarantee. New test cases cover the carve-out.\r\n\r\nAll findings addressed in dedicated commits with cross-references in commit messages.\r\n\r\n\r\n## Real behavior proof\r\n\r\nBehavior addressed: context-engine plugins that declare both `ownsCompaction: true` and `interceptsCompaction: true` must keep Pi auto-compaction enabled so Pi can emit `session_before_compact`, while still letting the plugin replace the default GPT-driven compaction summary through `engine.interceptCompaction(request)`.\r\n\r\nReal environment tested: local OpenClaw dev install with `/opt/homebrew/lib/node_modules/openclaw` symlinked into the PR-branch source tree, all PR commits applied, Gateway restarted through `launchctl bootout` / `launchctl bootstrap`, and the `lossless-claw` context-engine plugin loaded. `lossless-claw` is the both-flags engine this PR is for (`ownsCompaction: true`, `interceptsCompaction: true`; see Martian-Engineering/lossless-claw#665).\r\n\r\nExact steps or command run after this patch:\r\n\r\n```sh\r\ngrep -A4 '^function shouldDisablePiAutoCompaction' dist/pi-settings-BNY3tGnv.js\r\ncurl -s http://localhost:18789/healthz\r\nps -p \"$(launchctl list | awk '/ai\\\\.openclaw\\\\.gateway$/ {print $1}')\" -o pid,etime,command\r\ntail -F ~/.openclaw/logs/gateway.log | grep -E '(listening|lossless-claw)'\r\ngrep -c '\"type\":\"session_before_compact\"' ~/.openclaw/agents/main/sessions/<uuid>.trajectory.jsonl\r\npnpm exec vitest run src/agents/pi-settings.test.ts --pool=forks\r\n```\r\n\r\nEvidence after fix:\r\n\r\n```text\r\n$ grep -A4 '^function shouldDisablePiAutoCompaction' dist/pi-settings-BNY3tGnv.js\r\nfunction shouldDisablePiAutoCompaction(params) {\r\n        const intercepts = params.contextEngineInfo?.interceptsCompaction === true;\r\n        return params.contextEngineInfo?.ownsCompaction === true && !intercepts\r\n                || params.compactionMode === \"safeguard\" && !intercepts\r\n                || params.silentOverflowProneProvider === true;\r\n}\r\n\r\n$ curl -s http://localhost:18789/healthz\r\n{\"ok\":true,\"status\":\"live\"}\r\n\r\n$ ps -p $(launchctl list | awk '/ai\\.openclaw\\.gateway$/ {print $1}') -o pid,etime,command\r\n75484   04:41 /opt/homebrew/opt/node/bin/node /opt/homebrew/lib/node_modules/openclaw/dist/index.js gateway --port 18789\r\n\r\n$ tail -F ~/.openclaw/logs/gateway.log | grep -E '(listening|lossless-claw)'\r\n2026-05-14T00:01:10.403+07:00 [gateway] http server listening\r\n  (7 plugins: acpx, browser, codex, cortex, gbrain, lossless-claw, telegram; 10.9s)\r\n2026-05-14T00:01:12.770+07:00 [plugins] loading lossless-claw\r\n  from /Volumes/LEXAR/repos/lossless-claw/dist/index.js\r\n\r\n$ grep -c '\"type\":\"session_before_compact\"' ~/.openclaw/agents/main/sessions/<uuid>.trajectory.jsonl\r\n0\r\n\r\n$ pnpm exec vitest run src/agents/pi-settings.test.ts --pool=forks\r\n ✓ |agents-core|    pi-settings.test.ts (43 tests) 40ms\r\n ✓ |agents-support| pi-settings.test.ts (43 tests) 27ms\r\n\r\n  Test Files  2 passed (2)\r\n  Tests       86 passed (86)\r\n```\r\n\r\nObserved result after fix: the compiled Gateway bundle contains the new `interceptsCompaction` exception, Gateway boots successfully with `lossless-claw` loaded, and the table-driven runtime tests pass for the exact both-flags case that previously disabled Pi auto-compaction. Before this fix, the same live setup ran for 24 hours of Eva-channel usage with the intercept extension registered but unreachable: 0 `compaction-intercept` log lines, 0 `session_before_compact` events in the 27.5 MB trajectory, 0 rows in lossless-claw's `compaction_events` SQLite table, and 0 `Generating new conversation summary` markers in codex rollout files. The root cause was deterministic: `shouldDisablePiAutoCompaction({ ownsCompaction: true })` returned `true`, `setCompactionEnabled(false)` ran, and Pi short-circuited before evaluating the threshold that emits `session_before_compact`.\r\n\r\nWhat was not tested: the next live high-context Eva turn has not yet crossed the 90% `openai-codex/gpt-5.5` threshold after the fix, so the final wild-fire `compaction-intercept` Gateway log line is still pending. A monitor is tailing `~/.openclaw/logs/gateway.log`; this PR will be updated when that event emits.\r\n",
+        "branch": "feat/context-engine-intercept-compaction",
+        "head_sha": "83a65e7ab105307a81b4a17e432c6214ce5fa33c",
+        "author": "100yenadmin",
         "labels": [
+          "docs",
+          "agents",
           "stale",
-          "size: S",
-          "triage: needs-real-behavior-proof",
+          "size: XL",
+          "extensions: codex",
+          "proof: supplied",
           "P2",
           "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
           "merge-risk: 🚨 availability",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/process/command-queue.test.ts",
-            "additions": 83,
+            "path": "CHANGELOG.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/concepts/context-engine.md",
+            "additions": 80,
             "deletions": 4,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/process/command-queue.ts",
-            "additions": 58,
-            "deletions": 5,
+            "path": "docs/plugins/architecture-internals.md",
+            "additions": 30,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/reference/session-management-compaction.md",
+            "additions": 17,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/codex/src/app-server/run-attempt.context-engine.test.ts",
+            "additions": 76,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/command/cli-compaction.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/compact.ts",
+            "additions": 6,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/extensions.test.ts",
+            "additions": 147,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/extensions.ts",
+            "additions": 44,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-embedded-runner/run/attempt.ts",
+            "additions": 11,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-hooks/compaction-intercept-runtime.ts",
+            "additions": 28,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/pi-hooks/compaction-intercept.test.ts",
+            "additions": 461,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/pi-hooks/compaction-intercept.ts",
+            "additions": 136,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/pi-project-settings.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-settings.test.ts",
+            "additions": 168,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/pi-settings.ts",
+            "additions": 50,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/context-engine/types.ts",
+            "additions": 106,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/index.ts",
+            "additions": 2,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-58244",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-58244.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-81164",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-81164.md",
         "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
         "review_decision": "",
         "checks": {
-          "total": 107,
+          "total": 15,
           "counts": {
-            "FAILURE": 9,
-            "SUCCESS": 70,
-            "SKIPPED": 27,
+            "SUCCESS": 5,
+            "SKIPPED": 9,
             "NEUTRAL": 1
           },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra:FAILURE",
-            "checks-node-agentic-cli:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-boundaries:FAILURE",
-            "checks-node-core-support-boundary:FAILURE",
-            "check:FAILURE",
-            "check-additional:FAILURE",
-            "checks-node-core:FAILURE"
-          ],
+          "blockers": [],
           "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-core-runtime-infra:FAILURE",
-            "checks-node-agentic-cli:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-boundaries:FAILURE",
-            "checks-node-core-support-boundary:FAILURE",
-            "check:FAILURE",
-            "check-additional:FAILURE",
-            "checks-node-core:FAILURE"
-          ]
+          "terminalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
-      "reason": "target is not open"
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2197,
+    "total_ms": 1617,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 349
+        "ms": 311
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1634
+        "ms": 1069
       },
       {
         "name": "classify_commands",
@@ -157,7 +236,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 183
+        "ms": 208
       },
       {
         "name": "append_ledger",
