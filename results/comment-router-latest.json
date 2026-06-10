@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T18:46:43.042Z",
+  "generated_at": "2026-06-10T18:48:11.553Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-10T15:46:40.403Z",
+  "since": "2026-06-10T15:48:11.034Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4673366748
   ],
-  "status_comment_id": 4673367431,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-10T18:46:00Z",
       "comment_updated_at": "2026-06-10T18:46:00Z",
-      "status_comment_id": 4673367431,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,230 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-10T18:46:43.732Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 91969
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-10T18:46:44.845Z",
-          "response_comment_id": "4673367431",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(diagnostics-otel): native OTel run attribution via opt-in clientContext",
-        "body": "## Summary\n\nMakes the bundled **`diagnostics-otel`** exporter natively attribute a run's OTel spans to a caller-supplied **upstream identity** (e.g. an orchestrator / parent task), end to end, with **no external observability plugin** required.\n\nIt does this in two halves that meet on the trusted diagnostics channel:\n\n1. **Gateway seeds + forwards `clientContext`** (the work in #91762, included here). A gateway `agent` request may attach an opaque, plugin-agnostic `clientContext` bag. It is seeded once onto the run's diagnostic session state and forwarded to **trusted** diagnostic observers on every `session.state` / `message.queued` event — the same shared-state path that already carries `sessionKey`. The bag rides the trusted `privateData` channel, **never** the public event payload, so existing `onDiagnosticEvent` subscribers see the lifecycle events byte-for-byte unchanged.\n2. **The bundled exporter consumes it natively** (new here). `diagnostics-otel` already subscribes to the trusted channel for model/tool content capture (#91256). It now caches `privateData.clientContext` per session from `session.state` / `message.queued`, then stamps those fields as `openclaw.client.*` attributes onto the run's `model.call` spans (`started` / `completed` / `error`). No new SDK surface, no out-of-process bridge.\n\n### Why this supersedes #91762\n\n#91762 shipped only the *seam* — the gateway-side forwarding — and framed the consumer as an **out-of-process** observability plugin. This PR keeps that exact gateway work and adds the **in-tree consumer**, so OpenClaw ships a complete, usable native-OTLP attribution feature on its own. Closing #91762 in favor of this.\n\n## What changed\n\n**Gateway / core (unchanged from #91762):**\n- **`src/infra/diagnostic-events.ts`** — `clientContext?` added to `DiagnosticEventPrivateData`; new internal `emitInternalDiagnosticEventWithPrivateData` (public/untrusted emit that still carries `privateData` to trusted listeners). No field added to any public event payload.\n- **`src/infra/diagnostic-client-context.ts`** — bounded, deep-frozen normalizer: deterministic key ordering, prototype-pollution stripping, whole-bag drop on overflow. Size cap measured in **UTF-8 bytes** (`Buffer.byteLength`).\n- **`src/logging/diagnostic.ts`** + **`diagnostic-session-state.ts`** — seeded runs emit via the private path; an unseeded (or reused-with-invalid) run clears the stale bag so it is never misattributed.\n- **`src/gateway/server-methods/agent.ts`** + **`packages/gateway-protocol`** + Swift `GatewayModels` — permissive `clientContext` wire field on the agent request (additive; schema stays `additionalProperties: false`, no protocol version bump).\n- **`packages/sdk`** — `clientContext?` on `AgentRunParams`, forwarded verbatim by `runs.create`.\n- **`src/plugin-sdk/diagnostic-runtime.ts`** baseline — only delta is the `clientContext?` field on the already-exported `DiagnosticEventPrivateData`.\n\n**Exporter (new in this PR):**\n- **`extensions/diagnostics-otel/src/client-context-attributes.ts`** (+test) — pure mapper + bounded per-session LRU cache. Flattens the bag to `openclaw.client.*` attributes with deterministic encoding of nested values.\n- **`extensions/diagnostics-otel/src/service.ts`** — remembers `privateData.clientContext` on `session.state` / `message.queued`; resolves and stamps it onto `model.call.*` spans at start and re-resolves on completion/error so attribution lands even if `model.call.started` races ahead of the seed.\n- **`extensions/diagnostics-otel/api.ts`** + **`service.test.ts`** — export + tests asserting clientContext flows onto model.call spans.\n\n## Verification\n\nLocal, rebased onto current `main` (Node 22.22.1):\n\n- `tsgo -p tsconfig.core.json` and `-p tsconfig.extensions.json` — both clean.\n- `extensions/diagnostics-otel` `client-context-attributes.test.ts` + `service.test.ts` — **102 pass**.\n- `src/infra/diagnostic-client-context.test.ts`, `diagnostic-events.test.ts`, `src/logging/diagnostic-client-context-events.test.ts`, `packages/gateway-protocol/.../agent.test.ts`, `packages/sdk` `index.test.ts` — pass.\n- `oxlint` + `oxfmt --check` on touched files — clean.\n- `plugin-sdk:api:gen --check` — baseline regenerated against current `main`, check `OK`.\n\n## Real behavior proof\n\nTwo complementary captures against the **same** trusted `privateData.clientContext` channel: (A) the bundled exporter's own consumption path running its real code against live Tempo, and (B) the gateway seed side proven live end to end.\n\n### A — bundled `diagnostics-otel` exporter → live Tempo\n\n**Behavior addressed:** the bundled exporter caches `privateData.clientContext` and stamps `openclaw.client.*` onto `model.call` spans.\n\n**Real environment tested:** the exporter's real `service.ts` (per-session clientContext cache + `assignClientContextAttributes` + `OTLPTraceExporter`, recovered via the plugin's `register(api)` hook from the built `dist/extensions/diagnostics-otel/index.js`) run in an **isolated process** wired to a real Tempo OTLP collector. Isolated because this host already runs a co-resident OTel exporter that owns the process-global `TracerProvider`; OpenTelemetry permits exactly one global provider per process, so a second `start()` in the same process is a silently-ignored duplicate and two `service.name` span sets are impossible co-resident. The harness fed a trusted `session.state` carrying `privateData.clientContext`, then a `model.call.completed`, then flushed via `service.stop()` → `sdk.shutdown()`.\n\n**Exact steps or command run after this patch:** seeded `clientContext = { schemaVersion: \"agentweave.context.v1\", source: \"otel-harness\", sessionId, agentId: \"HarnessProbe-<id>\", agentType: \"main\", taskLabel: \"native-attribution-harness\", paperclip: { runId } }`, dispatched the two trusted events, then queried Tempo `{ resource.service.name = \"openclaw\" && span.openclaw.client.agentId =~ \"HarnessProbe.*\" }`.\n\n**Evidence after fix (Tempo, 2026-06-10):** traceID `2641fc00…cb3fef`\n\n```\nspan.name              = openclaw.model.call\nresource.service.name  = openclaw\n  openclaw.provider                          = anthropic\n  openclaw.model                             = claude-opus-4-6\n  openclaw.api                               = messages\n  openclaw.transport                         = https\n  openclaw.model_call.request_bytes          = 4096\n  openclaw.model_call.response_bytes         = 256\n  openclaw.model_call.time_to_first_byte_ms  = 320\n  # --- clientContext stamped by this PR's code path ---\n  openclaw.client.schemaVersion              = agentweave.context.v1\n  openclaw.client.source                     = otel-harness\n  openclaw.client.sessionId                  = <redacted>\n  openclaw.client.agentId                    = HarnessProbe-<redacted>\n  openclaw.client.agentType                  = main\n  openclaw.client.taskLabel                  = native-attribution-harness\n  openclaw.client.paperclip                  = {\"runId\":\"<redacted>\"}   # nested → JSON-encoded\n```\n\n**Observed result after fix:** scalars set directly; the nested `paperclip` object JSON-encoded — matching the `assignClientContextAttributes` contract and the deterministic unit tests.\n\n### B — gateway seed side, live end to end\n\n**Behavior addressed:** a seeded `clientContext` rides the trusted private channel from a gateway `agent` request to a trusted diagnostics subscriber, with the public lifecycle-event payload unchanged.\n\n**Real environment tested:** live OpenClaw gateway driving a real `agent` run on the **native Anthropic transport** (`thinker` → `anthropic/claude-opus-4-6`); a trusted-channel diagnostics subscriber stamped `prov.agent.id`; OTel spans exported to Tempo.\n\n**Exact steps or command run after this patch:** drove a seeded run (`sessionKey agent:thinker:probe-0848151`) whose request carried `clientContext = { schemaVersion: \"agentweave.context.v1\", source: \"conductor-probe\", agentId: \"ConductorProbe-0848151\", agentType: \"main\", taskLabel: \"native-attribution-probe\", paperclip: { runId } }`, then queried Tempo `{ .prov.agent.id =~ \"ConductorProbe.*\" }`.\n\n**Evidence after fix (Tempo, 2026-06-10):**\n\n| trace | rootService | span | `prov.agent.id` |\n|-------|-------------|------|-----------------|\n| `fa187aa716eab5b3…` | `agentweave-proxy` | `llm.claude-opus-4-6` | `ConductorProbe-0848151` |\n| `a97a3b84daa94928…` | `agentweave-proxy` | `openclaw.turn` | (same run, root) |\n\nGateway journal for the run: `started root span … agent: ConductorProbe-0848151` → `model.call.started` → `model.call.completed`. Public `session.state` / `message.queued` payloads carried no `clientContext`.\n\n**What was not tested:** (1) the two captures were not produced in a *single* process — by OTel's single-global-provider rule they cannot be, so the bundled exporter (A) and the live gateway seed side (B) are proven against the identical trusted channel but in separate processes. (2) The codex/OAuth transport path is out of scope (deferred to Mux). (3) CI has not yet run this exact rebased branch end to end against live Tempo.\n\n> Out of scope / intentionally excluded: this PR does **not** include two fork-local carries it was developed alongside — the `onModelDiagnosticEvent` plugin-SDK export (separate, #80497) and an env-gated `x-agentweave-session-key` outbound-request header (vendor-specific header name, not upstreamable). Neither is required for the behavior in this PR.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
-        "branch": "feat/diagnostics-otel-native-clientContext",
-        "head_sha": "9d5aa4a9b129a5c1f00fd12c646ec782a8ec3fc8",
-        "author": "arniesaha",
-        "labels": [
-          "docs",
-          "app: web-ui",
-          "gateway",
-          "extensions: diagnostics-otel",
-          "size: L",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 security-boundary",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/plugins/reference/diagnostics-otel.md",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/diagnostics-otel/api.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/diagnostics-otel/src/client-context-attributes.test.ts",
-            "additions": 119,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/diagnostics-otel/src/client-context-attributes.ts",
-            "additions": 120,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/diagnostics-otel/src/service.test.ts",
-            "additions": 65,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/diagnostics-otel/src/service.ts",
-            "additions": 25,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/schema/agent.test.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/schema/agent.ts",
-            "additions": 13,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/sdk/src/client.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/sdk/src/index.test.ts",
-            "additions": 18,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/sdk/src/types.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-methods/agent.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/diagnostic-client-context.test.ts",
-            "additions": 101,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/diagnostic-client-context.ts",
-            "additions": 130,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/diagnostic-events.test.ts",
-            "additions": 43,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/diagnostic-events.ts",
-            "additions": 23,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/logging/diagnostic-client-context-events.test.ts",
-            "additions": 162,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/logging/diagnostic-session-state.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/logging/diagnostic.ts",
-            "additions": 56,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "generated_issue_branch": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_issue_job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91969",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91969.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 156,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 133,
-            "SKIPPED": 21,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4953,
+    "total_ms": 2600,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 531
+        "ms": 507
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2090
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 2303
+        "ms": 2081
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
