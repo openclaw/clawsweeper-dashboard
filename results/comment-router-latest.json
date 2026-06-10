@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T21:16:58.510Z",
+  "generated_at": "2026-06-10T21:16:59.862Z",
   "repo": "steipete/CodexBar",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-10T18:16:55.079Z",
+  "since": "2026-06-10T18:16:58.140Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    1402
+    1404
   ],
   "comment_ids": [
-    4674601750
+    4674601880
   ],
-  "status_comment_id": 4674602421,
+  "status_comment_id": 4674602328,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:steipete/CodexBar:1402:4674601750:2026-06-10T21:16:12Z:re_review",
-      "comment_id": "4674601750",
-      "comment_version_key": "4674601750:2026-06-10T21:16:12Z",
-      "comment_url": "https://github.com/steipete/CodexBar/pull/1402#issuecomment-4674601750",
+      "idempotency_key": "comment-router:steipete/CodexBar:1404:4674601880:2026-06-10T21:16:13Z:re_review",
+      "comment_id": "4674601880",
+      "comment_version_key": "4674601880:2026-06-10T21:16:13Z",
+      "comment_url": "https://github.com/steipete/CodexBar/pull/1404#issuecomment-4674601880",
       "repo": "steipete/CodexBar",
-      "issue_number": 1402,
+      "issue_number": 1404,
       "author": "ProspectOre",
       "author_id": 54486432,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-10T21:16:12Z",
-      "comment_updated_at": "2026-06-10T21:16:12Z",
-      "status_comment_id": 4674602421,
+      "comment_created_at": "2026-06-10T21:16:13Z",
+      "comment_updated_at": "2026-06-10T21:16:13Z",
+      "status_comment_id": 4674602328,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -67,26 +67,26 @@
           "action": "dispatch_clawsweeper",
           "workflow": "sweep.yml",
           "status": "executed",
-          "dispatched_at": "2026-06-10T21:16:59.521Z",
+          "dispatched_at": "2026-06-10T21:17:01.070Z",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 1402
+          "item_number": 1404
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-06-10T21:17:00.460Z",
-          "response_comment_id": "4674602421",
+          "commented_at": "2026-06-10T21:17:02.306Z",
+          "response_comment_id": "4674602328",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "Run cost-usage corpus scans off the Swift cooperative thread pool",
-        "body": "## Summary\nRun cost-usage corpus scans and persisted-cache decoding on a dedicated serial utility queue (`CostUsageScanExecutor`) instead of inline on Swift's cooperative thread pool, with task cancellation bridged into the scanner-level cancellation checks.\n\n## Context\nThis targets the systemic freeze mechanism behind the #1387 reports (and the environment of #1392). `CostUsageScanner` / `PiSessionCostScanner` scans are synchronous and can run for minutes on large session archives. `CostUsageFetcher.loadTokenSnapshot` executed them inline inside cooperative-pool tasks, which violates the pool's forward-progress contract: while a scan runs, it owns a pool thread for minutes, and overlapping provider scans (startup force-refresh racing the hourly token timer) own several. Every other async continuation in the process — menu rebuild tasks, refresh completions — queues behind them, so the UI freezes while the main thread itself samples idle.\n\nTwo amplifiers make this a release-day event for heavy users:\n- Cache schema bumps (e.g. the claude artifact moving v2 → v4 in 0.32.6-dev) invalidate the whole per-file scan cache, so the first launch after such a release rescans the full corpus.\n- The reporter machine for this PR holds a 2.5 GB corpus (903 MB `~/.claude/projects`, 1.6 GB / 316 files `~/.codex/sessions`); the post-bump rescan ran 7+ minutes at full tilt.\n\nField sample of that storm (v0.32.6-dev pre-fix, 1 ms interval, 5 s window, redacted to frame counts): 2,437 samples in the claude scan and 1,807 in the codex scan **concurrently on two cooperative-pool threads**, sustained across every capture window for ~3 minutes, while menu opens visibly froze — with the main thread parked in `mach_msg` the whole time.\n\n## Change\n- New `CostUsageScanExecutor`: one serial `DispatchQueue` (`com.steipete.codexbar.cost-usage-scan`, utility QoS). `run` bridges Swift task cancellation into a `@Sendable` check handed to the scanners, and work cancelled while still queued resumes immediately with `CancellationError` instead of waiting behind an in-flight scan.\n- `CostUsageFetcher.loadTokenSnapshot` moves the scan + vertex-fallback + pi-merge block onto the executor; `loadCachedCodexTokenSnapshot` moves its multi-megabyte cache JSON decode there too (it previously ran on the pool via `Task.detached`).\n- Serialization also removes concurrent provider scans hammering the same disk.\n\n## Validation\n- `swift test --filter CostUsageScanExecutorTests` — 5 new tests: labeled-queue execution, error propagation, overlap serialization, in-flight cancellation through the bridged check, queued-work cancellation.\n- `swift test --filter CostUsage` — 181 tests in 17 suites pass.\n- `make check` — 0 violations; `git diff --check` clean.\n\n## Runtime Proof\nA/B on the same machine, same protocol per phase: quit app → delete `~/Library/Caches/CodexBar/cost-usage` → relaunch → `sample CodexBar 5 1` at T+30s during the full-corpus rescan. Thread placement of the scan frames:\n\n```text\n# BEFORE (current main scan code)\n3515 Thread_1092763   DispatchQueue_12: com.apple.root.utility-qos.cooperative  (concurrent)\n     ... CostUsageScanner.loadClaudeDaily / CostUsageJsonl.scan ...\n\n# AFTER (this branch)\n3191 Thread_1094843   DispatchQueue_267: com.steipete.codexbar.cost-usage-scan  (serial)\n     ... CostUsageScanner.loadClaudeDaily / CostUsageJsonl.scan ...\n# zero scan frames on cooperative-pool threads\n```\n\nThe scan can no longer occupy cooperative-pool threads at all, so async-runtime starvation by scans is structurally impossible rather than merely less likely. The post-fix full rescan completed and rewrote the per-provider caches normally (cost data intact).\n\n## Honesty / scope notes\n- This makes the app responsive *during* scans; it does not make scans cheaper. Steady-state ticks stay incremental via the existing per-file mtime/size cache; the full-rescan-after-schema-bump cost itself is #1392's refresh-policy territory.\n- Serializing providers can lengthen total storm wall-time on multi-provider setups (scans no longer overlap), and the 10-minute per-provider timeout now includes time queued behind another provider's scan. On very large corpora that could surface as a timeout that previously squeaked through; the next tick resumes against the warm per-file cache.\n- The 1.6s AX click-roundtrip measured in both phases is automation overhead, not app latency; the responsiveness claim rests on the structural thread-placement proof plus the documented forward-progress contract of the cooperative pool.\n",
-        "branch": "perf/cost-scan-off-cooperative-pool",
-        "head_sha": "136b226469b9343a80cb78cb9aa43f1bdbf23a26",
+        "title": "Resolve codex priority turns incrementally per refresh",
+        "body": "## Summary\nResolve codex priority-turn metadata incrementally per refresh: accumulate the trace-database query result in process memory and only examine rows appended since the last call, instead of re-running the full-table double-`LIKE` scan on every refresh past the scan interval.\n\n## Context\nThis is the dominant residual warm-refresh cost identified in #1392's follow-up measurements. `makeCodexRefreshPlan → codexPriorityTurns` runs\n\n```sql\nselect ts, feedback_log_body from logs\nwhere ts >= ? and ts < ?\n  and (feedback_log_body like '%websocket request:%' or feedback_log_body like '%response.completed%')\n```\n\nagainst the codex CLI's `logs_2.sqlite` on every refresh once `refreshMinIntervalSeconds` has elapsed. The leading-`%` `LIKE`s force examining every row body in the window, so the cost grows with the database forever. On this machine the database is 762 MB / 322k rows and the query costs tens of seconds per tick; #1392's reporter measured 26–51 s per CLI refresh on a larger archive — `sample` puts essentially all of that time inside `codexPriorityTurns → sqlite3_step`.\n\n## Change\n- The `logs` table is append-only with `INTEGER PRIMARY KEY AUTOINCREMENT`, so rowids are monotonic and never reused. A per-database in-process memo keeps the accumulated turns plus a rowid cursor; each refresh runs the same filters with `rowid > ?` (satisfied by the integer PK, so it touches only new rows).\n- Full rescan triggers: database file identity change (inode), `max(rowid)` shrinking (prune/replace), or the requested window expanding earlier than the accumulated coverage.\n- Windows that end before today keep the original bounded one-shot query, so historical lookups never pay an open-ended scan and never populate the memo.\n- The memo is process-local only — no cache schema change. The scanner source hash regeneration is included (one-time cache rebuild on update, which runs serialized off the cooperative pool after #1402).\n\n## Validation\n- `swift test --filter CostUsageScannerCodexPriorityTests` — 11 tests (3 new: incremental append pickup incl. late completed-model upgrade, window-expansion rescan, database-replacement rescan).\n- `swift test --filter CostUsage` — 184 tests in 17 suites pass, suite wall time unchanged (the bounded historical path exists precisely because an open-ended first scan regressed a real-database test path 150× during development; that regression is fixed and the suite runs in ~4 s).\n- `make check` — 0 violations; `git diff --check` clean.\n\n## Runtime Proof\nTiming harness (3 consecutive calls for the live 30-day window against the real 762 MB / 322k-row `logs_2.sqlite`, debug build, warm page cache; harness below, not committed). Result counts were identical in every run on both branches:\n\n```text\n# current main (cde92cfb): every call pays the full scan\nTIMING_RESULT runs=[34.83 s, 22.38 s, 24.60 s] counts=[5, 5, 5]\n\n# this branch: one full scan per process, then the rowid cursor\nTIMING_RESULT runs=[8.51 s, 0.0015 s, 0.0006 s] counts=[5, 5, 5]\n```\n\nSteady-state per-tick cost drops from tens of seconds to ~1 ms, with byte-identical query filters and equal results. (Absolute first-call times vary with page cache state; a cold-cache first call measured 79 s, equally one-time.)\n\n<details>\n<summary>Timing harness (drop into Tests/CodexBarTests to reproduce)</summary>\n\n```swift\nimport Foundation\nimport Testing\n@testable import CodexBarCore\n\nstruct PriorityTurnsTimingHarness {\n    @Test\n    func `priority turns timing harness real db`() throws {\n        let db = FileManager.default.homeDirectoryForCurrentUser\n            .appendingPathComponent(\".codex/logs_2.sqlite\")\n        try #require(FileManager.default.fileExists(atPath: db.path))\n        let now = Date()\n        let today = CostUsageScanner.CostUsageDayRange.dayKey(from: now)\n        let since = CostUsageScanner.CostUsageDayRange.dayKey(\n            from: Calendar.current.date(byAdding: .day, value: -29, to: now)!)\n        let clock = ContinuousClock()\n        var counts: [Int] = []\n        var durations: [Duration] = []\n        for _ in 0..<3 {\n            let duration = clock.measure {\n                counts.append(CostUsageScanner.codexPriorityTurns(\n                    databaseURL: db,\n                    sinceDayKey: since,\n                    untilDayKey: today).count)\n            }\n            durations.append(duration)\n        }\n        print(\"TIMING_RESULT runs=\\(durations) counts=\\(counts)\")\n        #expect(counts[0] == counts[1])\n        #expect(counts[1] == counts[2])\n    }\n}\n```\n\n</details>\n\n## Honesty / scope notes\n- The memo accumulates rows from the coverage start without an upper `ts` bound, so completed-model upgrades arriving after a turn's request row are applied even across ticks — marginally more complete attribution than the per-call query, identical for the standard advancing window.\n- The first scan per process (app launch / each CLI invocation) still pays the full query; the CLI therefore does not benefit. Persisting the memo would need a cache schema change and is left out deliberately.\n- The memo grows with the number of priority turns in the coverage window (small in practice; entries are turn-metadata only, no log bodies).\n",
+        "branch": "perf/codex-priority-turns-memo",
+        "head_sha": "1b5f33fe90e4e592c2dc434cf5ebc9cd1225580e",
         "author": "prospectore",
         "labels": [],
         "files": [
@@ -97,22 +97,22 @@
             "changeType": "MODIFIED"
           },
           {
-            "path": "Sources/CodexBarCore/CostUsageFetcher.swift",
-            "additions": 49,
-            "deletions": 39,
+            "path": "Sources/CodexBarCore/Generated/CodexParserHash.generated.swift",
+            "additions": 1,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "Sources/CodexBarCore/CostUsageScanExecutor.swift",
-            "additions": 43,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "Sources/CodexBarCore/Vendored/CostUsage/CostUsageScanner+CodexPriority.swift",
+            "additions": 154,
+            "deletions": 25,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "Tests/CodexBarTests/CostUsageScanExecutorTests.swift",
-            "additions": 96,
+            "path": "Tests/CodexBarTests/CostUsageScannerCodexPriorityTests.swift",
+            "additions": 97,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
@@ -120,8 +120,8 @@
         "cluster_id": null,
         "job_path": null,
         "source_issue_job_path": null,
-        "automerge_cluster_id": "automerge-steipete-codexbar-1402",
-        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1402.md",
+        "automerge_cluster_id": "automerge-steipete-codexbar-1404",
+        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1404.md",
         "mode": "autonomous",
         "mergeable": "CONFLICTING",
         "merge_state_status": "DIRTY",
@@ -142,15 +142,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5859,
+    "total_ms": 4962,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2665
+        "ms": 692
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 750
+        "ms": 1015
       },
       {
         "name": "classify_commands",
@@ -158,7 +158,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2415
+        "ms": 3228
       },
       {
         "name": "append_ledger",
