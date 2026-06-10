@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T22:08:02.281Z",
+  "generated_at": "2026-06-10T22:11:45.375Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-10T19:08:01.757Z",
+  "since": "2026-06-10T19:11:41.866Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    1406
+    92040
   ],
   "comment_ids": [
-    4675082024
+    4675112677
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,109 +33,21 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:steipete/CodexBar:1406:4675071499:2026-06-10T22:07:45Z:clawsweeper_needs_human",
-      "comment_id": "4675071499",
-      "comment_version_key": "4675071499:2026-06-10T22:07:45Z",
-      "comment_url": "https://github.com/steipete/CodexBar/pull/1406#issuecomment-4675071499",
-      "repo": "steipete/CodexBar",
-      "issue_number": 1406,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-10T22:05:24Z",
-      "comment_updated_at": "2026-06-10T22:07:45Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] The contributor needs to refresh the conflicting head and add real behavior proof; there is no narrow code defect for an automated repair lane to fix.; Cleared: The diff introduces no new dependency, downloaded code, secret access, permission change, publishing path, or other concrete security or supply-chain concern. (sha=3ade9f47fd8ebb3845962c7163305d030c20ca71)",
-      "review_summary": "The PR moves provider-status fetching and JSON decoding off the main actor, replaces per-date ISO8601 formatter allocation with shared lock-guarded formatters, and adds an off-main regression test.\n\nReproducibility: yes. for the underlying isolation path: current main visibly performs status-feed parsing through main-actor-isolated UsageStore helpers, and the linked issue identifies that exact stack in Instruments. The precise latency varies with the live payload and was not independently rerun during this read-only review.",
-      "review_followup": "- [P1] The contributor needs to refresh the conflicting head and add real behavior proof; there is no narrow code defect for an automated repair lane to fix.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "3ade9f47fd8ebb3845962c7163305d030c20ca71",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "Decode provider status feeds off the main actor",
-        "body": "## Summary\nDecode provider status feeds off the main actor and reuse shared ISO8601 formatters, removing a 150–340ms main-thread stall per Google-status provider per refresh.\n\n## Context\nCredit to @kcharlan's instrumentation in #1399 (finding 4): with status checks on, `UsageStore.parseGoogleWorkspaceStatus` decodes the full `https://www.google.com/appsstatus/dashboard/incidents.json` payload (hundreds of kilobytes live) **on the MainActor**, allocating a fresh `ISO8601DateFormatter` per decoded date field. Their Instruments capture measured 150–340ms of main-thread stall per decode, once per Google-status provider (Gemini *and* Antigravity) per refresh — and refreshes fire during menu interaction. The single flagged microhang across their sessions was exactly this stack. The payload is live data, so the cost grows whenever Google has a busy incident week, on all app versions simultaneously.\n\nThe same shape applies to the statuspage path (`fetchStatus`), which is also MainActor-isolated with per-field formatter allocation; it is included for consistency.\n\n## Change\n- `fetchStatus`, `fetchWorkspaceStatus`, `parseGoogleWorkspaceStatus`, and their pure helpers are now `nonisolated`, so they execute on the concurrent executor instead of the main actor. They touch no store state; the caller (`refreshStatus`) already hops back to the main actor to publish results.\n- Per-date-field `ISO8601DateFormatter()` allocations are replaced with shared lock-guarded formatters (`StatusISO8601FormatterBox`), mirroring the existing `CostUsageISO8601FormatterBox` pattern in CodexBarCore.\n\n## Validation\n- `swift test --filter GoogleWorkspaceStatus` — 4 tests pass, including a new regression guard: `fetchWorkspaceStatus stays off the main thread when called from the main actor` (stub transport asserts `!Thread.isMainThread`).\n- `make check` — 0 violations; `git diff --check` clean.\n\n## Runtime Proof\nSide-by-side decode timing on a synthetic incidents feed shaped like the live payload (300 incidents × 4 dated updates, 699 KB; harness below, not committed), 10 iterations each, same process:\n\n```text\nTIMING_RESULT payload_bytes=699212\nBEFORE per-field formatters: 332.6 – 356.4 ms per decode\nAFTER  shared formatters:    101.2 – 104.3 ms per decode (full parse incl. relevance filtering)\n```\n\n~3.4× faster — and the entire cost now lands on a background executor instead of the main thread, which the committed thread-assertion test locks in. The before-range matches the 150–340ms live measurements in #1399 (live payloads are smaller than this fixture on quiet weeks).\n\n## Honesty / scope notes\n- This fixes #1399's *secondary* finding only. The primary mechanism reported there — WindowServer event-buffer starvation during long merged-menu tracking sessions — is untouched by this PR and still needs a design that keeps refresh churn out of active tracking sessions.\n- The decode still costs ~100ms of CPU somewhere; it is now off the UI's critical path rather than free.\n\n<details>\n<summary>Timing harness (drop into Tests/CodexBarTests to reproduce)</summary>\n\n```swift\nimport Foundation\nimport Testing\n@testable import CodexBar\n\nstruct StatusDecodeTimingHarness {\n    @Test\n    func `workspace status decode timing harness`() throws {\n        // Synthetic feed shaped like incidents.json: ~300 incidents, each with several\n        // updates and date fields, sized to match the measured live payload (~420 KB).\n        var incidents: [[String: Any]] = []\n        for index in 0..<300 {\n            var updates: [[String: Any]] = []\n            for u in 0..<4 {\n                updates.append([\n                    \"when\": \"2026-05-\\(String(format: \"%02d\", (index % 27) + 1))T0\\(u):15:00+00:00\",\n                    \"status\": \"SERVICE_INFORMATION\",\n                    \"text\": String(repeating: \"status update body text \", count: 12),\n                ])\n            }\n            incidents.append([\n                \"begin\": \"2026-05-\\(String(format: \"%02d\", (index % 27) + 1))T00:00:00+00:00\",\n                \"end\": index % 7 == 0 ? NSNull() : \"2026-05-\\(String(format: \"%02d\", (index % 27) + 2))T00:00:00+00:00\",\n                \"modified\": \"2026-05-\\(String(format: \"%02d\", (index % 27) + 1))T12:00:00.123+00:00\",\n                \"external_desc\": String(repeating: \"incident description \", count: 10),\n                \"severity\": \"medium\",\n                \"status_impact\": \"SERVICE_INFORMATION\",\n                \"affected_products\": [[\"title\": \"Gemini\", \"id\": \"npdyhgECDJ6tB66MxXyo\"]],\n                \"most_recent_update\": updates[0],\n                \"updates\": updates,\n            ])\n        }\n        let data = try JSONSerialization.data(withJSONObject: incidents)\n        struct Incident: Decodable { let begin: Date?; let end: Date?; let modified: Date?\n            let updates: [Update]?\n            struct Update: Decodable { let when: Date? } }\n        func measure(_ strategy: JSONDecoder.DateDecodingStrategy) -> [String] {\n            let clock = ContinuousClock()\n            var ms: [Double] = []\n            for _ in 0..<10 {\n                let d = clock.measure {\n                    let decoder = JSONDecoder()\n                    decoder.keyDecodingStrategy = .convertFromSnakeCase\n                    decoder.dateDecodingStrategy = strategy\n                    _ = try? decoder.decode([Incident].self, from: data)\n                }\n                ms.append(Double(d.components.attoseconds) / 1e15 + Double(d.components.seconds) * 1000)\n            }\n            return ms.map { String(format: \"%.1f\", $0) }\n        }\n        let previousStrategy = JSONDecoder.DateDecodingStrategy.custom { decoder in\n            let container = try decoder.singleValueContainer()\n            let raw = try container.decode(String.self)\n            let formatter = ISO8601DateFormatter()\n            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]\n            if let date = formatter.date(from: raw) { return date }\n            formatter.formatOptions = [.withInternetDateTime]\n            if let date = formatter.date(from: raw) { return date }\n            throw DecodingError.dataCorruptedError(in: container, debugDescription: \"bad date\")\n        }\n        print(\"TIMING_RESULT payload_bytes=\\(data.count)\")\n        print(\"BEFORE per-field formatters: \\(measure(previousStrategy))\")\n        let clock = ContinuousClock()\n        var ms2: [Double] = []\n        for _ in 0..<10 {\n            let d = clock.measure {\n                _ = try? UsageStore.parseGoogleWorkspaceStatus(data: data, productID: \"npdyhgECDJ6tB66MxXyo\")\n            }\n            ms2.append(Double(d.components.attoseconds) / 1e15 + Double(d.components.seconds) * 1000)\n        }\n        print(\"AFTER shared formatters (full parse incl. filtering): \\(ms2.map { String(format: \"%.1f\", $0) })\")\n    }\n}\n```\n\n</details>\n",
-        "branch": "perf/google-status-decode-off-main",
-        "head_sha": "3ade9f47fd8ebb3845962c7163305d030c20ca71",
-        "author": "prospectore",
-        "labels": [
-          "status: 📣 needs proof",
-          "rating: 🦪 silver shellfish",
-          "P2"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Sources/CodexBar/UsageStore+Status.swift",
-            "additions": 50,
-            "deletions": 26,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Tests/CodexBarTests/GoogleWorkspaceStatusNetworkTests.swift",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "generated_issue_branch": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_issue_job_path": null,
-        "automerge_cluster_id": "automerge-steipete-codexbar-1406",
-        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1406.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 1,
-          "counts": {
-            "SUCCESS": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:steipete/CodexBar:1406:4675046943:2026-06-10T22:02:27Z:re_review",
-      "comment_id": "4675046943",
-      "comment_version_key": "4675046943:2026-06-10T22:02:27Z",
-      "comment_url": "https://github.com/steipete/CodexBar/pull/1406#issuecomment-4675046943",
-      "repo": "steipete/CodexBar",
-      "issue_number": 1406,
-      "author": "ProspectOre",
-      "author_id": 54486432,
+      "idempotency_key": "comment-router:openclaw/openclaw:92040:4675112677:2026-06-10T22:10:26Z:freeform_assist",
+      "comment_id": "4675112677",
+      "comment_version_key": "4675112677:2026-06-10T22:10:26Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92040#issuecomment-4675112677",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92040,
+      "author": "849261680",
+      "author_id": 53250620,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-10T22:06:40Z",
-      "comment_updated_at": "2026-06-10T22:06:40Z",
+      "comment_created_at": "2026-06-10T22:10:26Z",
+      "comment_updated_at": "2026-06-10T22:10:26Z",
       "status_comment_id": null,
       "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "command": "can you review the code despite the current unrelated main ci failure in build-artifacts? the real behavior proof gate is now passing with proof: supplied; build-artifacts is failing on current main with the same upgrade-survivor-assertions sessions.json error.",
+      "intent": "freeform_assist",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -145,34 +57,139 @@
       "repair_reason": null,
       "review_summary": null,
       "review_followup": null,
-      "freeform_prompt": null,
+      "freeform_prompt": "can you review the code despite the current unrelated main CI failure in build-artifacts? The Real behavior proof gate is now passing with proof: supplied; build-artifacts is failing on current main with the same upgrade-survivor-assertions sessions.json error.",
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "skipped",
+      "status": "ignored",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(provider): route thinking profiles by model API",
+        "body": "## Summary\n\n- Fixes custom Anthropic-compatible providers whose selected model API is `anthropic-messages` but whose provider id is not literally `anthropic`.\n- Carries the selected catalog/config model API into thinking policy resolution so Anthropic Messages routes can expose `adaptive`/`max` levels instead of falling back to generic/off behavior.\n- Keeps owner precedence intact: direct bundled provider policy still wins, exact runtime provider hooks can override API-family fallback, and API-family bundled policy only runs after provider-owned hooks decline.\n- Out of scope: changing provider auth, model catalog contents, config shape, migrations, or transport behavior.\n\n## Linked context\n\nCloses #91975\n\nRelated: the issue's ClawSweeper review identified the missing API fact in thinking-policy dispatch and recommended reusing API-owner routing without provider-id substring matching.\n\n## Real behavior proof (required for external PRs)\n\nBehavior addressed: Custom providers with `api: \"anthropic-messages\"` now route thinking profile lookup through the Anthropic policy fallback after exact provider hooks decline, so Claude models expose Anthropic thinking levels instead of silently losing extended thinking controls.\nReal environment tested: Local OpenClaw CLI/source checkout on Node 24, using the PR branch at commit `3b413143dbc6f4a64149e00106403aa651e6933a` with dependencies installed via `pnpm install --frozen-lockfile`.\nExact steps or command run after this patch: `pnpm openclaw --version`; then `node --import tsx --input-type=module` with OpenClaw's `resolveProviderThinkingProfile` runtime resolver for provider `jdcloud-anthropic`, model `claude-sonnet-4-6`, and API `anthropic-messages`.\nEvidence after fix: Copied console output from the local OpenClaw source checkout:\n\n```text\n$ pnpm openclaw --version\nOpenClaw 2026.6.2 (3b41314)\n\n$ node --import tsx --input-type=module <<'END_PROOF_SCRIPT'\nimport { resolveProviderThinkingProfile } from './src/plugins/provider-thinking.ts';\n\nconst provider = 'jdcloud-anthropic';\nconst modelId = 'claude-sonnet-4-6';\nconst api = 'anthropic-messages';\nconst profile = resolveProviderThinkingProfile({\n  provider,\n  context: {\n    provider,\n    api,\n    modelId,\n    params: {},\n    reasoning: undefined,\n    compat: undefined,\n  },\n});\n\nconsole.log(`openclaw_source_commit=${process.env.OPENCLAW_PROOF_COMMIT ?? '3b413143dbc6f4a64149e00106403aa651e6933a'}`);\nconsole.log(`provider=${provider}`);\nconsole.log(`model=${modelId}`);\nconsole.log(`api=${api}`);\nconsole.log(`thinkingProfile=${profile ? 'resolved' : 'missing'}`);\nconsole.log(`thinkingLevels=${profile?.levels.map((level) => level.id).join(',') ?? 'none'}`);\nconsole.log(`thinkingDefault=${profile?.defaultLevel ?? 'none'}`);\nEND_PROOF_SCRIPT\nopenclaw_source_commit=3b413143dbc6f4a64149e00106403aa651e6933a\nprovider=jdcloud-anthropic\nmodel=claude-sonnet-4-6\napi=anthropic-messages\nthinkingProfile=resolved\nthinkingLevels=off,minimal,low,medium,high,adaptive,max\nthinkingDefault=adaptive\n```\n\nObserved result after fix: The real OpenClaw resolver returns a resolved Anthropic thinking profile for the custom `jdcloud-anthropic` provider because the selected model API is `anthropic-messages`; the exposed levels include `adaptive` and `max`, and the default is `adaptive`.\nWhat was not tested: No live external Anthropic/JDCloud API request was made; this change is local provider thinking-policy/profile resolution, not network transport or auth.\nProof limitations or environment constraints: The proof uses the local OpenClaw source runtime resolver and CLI version output rather than a remote provider account; focused tests, lint, build, and autoreview are listed below as supplemental validation.\nBefore evidence (optional but encouraged): The regression tests added in this PR encode the prior failure mode where the selected model API was available in catalog/config but was not passed into provider thinking-policy dispatch.\n\n## Tests and validation\n\n- `node scripts/run-vitest.mjs src/auto-reply/thinking.test.ts src/plugins/provider-runtime.test.ts src/plugins/provider-public-artifacts.test.ts extensions/anthropic/provider-policy-api.test.ts`\n- `pnpm format:check -- extensions/anthropic/provider-policy-api.test.ts extensions/anthropic/provider-policy-api.ts src/auto-reply/thinking.test.ts src/auto-reply/thinking.ts src/plugins/provider-public-artifacts.test.ts src/plugins/provider-public-artifacts.ts src/plugins/provider-runtime.test.ts src/plugins/provider-runtime.ts src/plugins/provider-thinking.ts src/plugins/provider-thinking.types.ts`\n- `node scripts/run-oxlint.mjs extensions/anthropic/provider-policy-api.test.ts extensions/anthropic/provider-policy-api.ts src/auto-reply/thinking.test.ts src/auto-reply/thinking.ts src/plugins/provider-public-artifacts.test.ts src/plugins/provider-public-artifacts.ts src/plugins/provider-runtime.test.ts src/plugins/provider-runtime.ts src/plugins/provider-thinking.ts src/plugins/provider-thinking.types.ts`\n- `git diff --check`\n- `pnpm build`\n- `.agents/skills/autoreview/scripts/autoreview --mode local`\n\nRegression coverage added for API propagation, bundled policy lookup by manifest model-catalog API refs, Anthropic Messages custom-provider profiles, model-level API override precedence, runtime hook precedence over API fallback, and runtime fallback when an unrelated API-ref bundled surface declines.\n\n## Risk checklist\n\nDid user-visible behavior change? Yes\n\nDid config, environment, or migration behavior change? No\n\nDid security, auth, secrets, network, or tool execution behavior change? No\n\nHighest-risk area: Provider thinking-policy ownership and fallback ordering.\n\nRisk mitigation: Direct bundled policy remains first for literal bundled providers, runtime provider hooks win before API-family fallback, and common/non-unique API refs that decline no longer block runtime provider hooks.\n\n## Current review state\n\nNext action: Waiting for the refreshed Real behavior proof check, CI, and ClawSweeper review.\n\nStill waiting on: Maintainer review and any broader CI/Testbox signal maintainers want beyond the focused local proof above.\n\nBot/reviewer comments addressed: Local autoreview initially found three actionable issues around config-derived API context, model-level API overrides, and API fallback precedence; all were fixed and the final autoreview run was clean.\n",
+        "branch": "fix/91975-anthropic-thinking-api",
+        "head_sha": "3b413143dbc6f4a64149e00106403aa651e6933a",
+        "author": "849261680",
+        "labels": [
+          "size: M",
+          "extensions: anthropic",
+          "proof: supplied"
+        ],
+        "files": [
+          {
+            "path": "extensions/anthropic/provider-policy-api.test.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/anthropic/provider-policy-api.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/thinking.test.ts",
+            "additions": 34,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/thinking.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/provider-public-artifacts.test.ts",
+            "additions": 61,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/provider-public-artifacts.ts",
+            "additions": 55,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/provider-runtime.test.ts",
+            "additions": 167,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/provider-runtime.ts",
+            "additions": 37,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/provider-thinking.ts",
+            "additions": 4,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/provider-thinking.types.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "generated_issue_branch": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_issue_job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92040",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92040.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 162,
+          "counts": {
+            "SUCCESS": 131,
+            "SKIPPED": 29,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "build-artifacts:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "build-artifacts:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "author association CONTRIBUTOR and repository permission read are not allowed"
     }
   ],
   "ledger_changed": false,
   "timings": {
-    "total_ms": 1896,
+    "total_ms": 3840,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 506
+        "ms": 682
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 2813
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 1372
+        "ms": 332
       },
       {
         "name": "append_ledger",
