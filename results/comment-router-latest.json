@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T22:03:06.304Z",
-  "repo": "steipete/CodexBar",
+  "generated_at": "2026-06-10T22:03:29.965Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-10T19:03:05.081Z",
+  "since": "2026-06-10T19:03:29.453Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4675046943
   ],
-  "status_comment_id": 4675047319,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -42,9 +42,9 @@
       "author": "ProspectOre",
       "author_id": 54486432,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-10T22:02:27Z",
-      "comment_updated_at": "2026-06-10T22:02:27Z",
-      "status_comment_id": 4675047319,
+      "comment_created_at": "2026-06-10T22:01:54Z",
+      "comment_updated_at": "2026-06-10T22:01:54Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,106 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-10T22:03:06.933Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 1406
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-10T22:03:07.767Z",
-          "response_comment_id": "4675047319",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "Decode provider status feeds off the main actor",
-        "body": "## Summary\nDecode provider status feeds off the main actor and reuse shared ISO8601 formatters, removing a 150–340ms main-thread stall per Google-status provider per refresh.\n\n## Context\nCredit to @kcharlan's instrumentation in #1399 (finding 4): with status checks on, `UsageStore.parseGoogleWorkspaceStatus` decodes the full `https://www.google.com/appsstatus/dashboard/incidents.json` payload (hundreds of kilobytes live) **on the MainActor**, allocating a fresh `ISO8601DateFormatter` per decoded date field. Their Instruments capture measured 150–340ms of main-thread stall per decode, once per Google-status provider (Gemini *and* Antigravity) per refresh — and refreshes fire during menu interaction. The single flagged microhang across their sessions was exactly this stack. The payload is live data, so the cost grows whenever Google has a busy incident week, on all app versions simultaneously.\n\nThe same shape applies to the statuspage path (`fetchStatus`), which is also MainActor-isolated with per-field formatter allocation; it is included for consistency.\n\n## Change\n- `fetchStatus`, `fetchWorkspaceStatus`, `parseGoogleWorkspaceStatus`, and their pure helpers are now `nonisolated`, so they execute on the concurrent executor instead of the main actor. They touch no store state; the caller (`refreshStatus`) already hops back to the main actor to publish results.\n- Per-date-field `ISO8601DateFormatter()` allocations are replaced with shared lock-guarded formatters (`StatusISO8601FormatterBox`), mirroring the existing `CostUsageISO8601FormatterBox` pattern in CodexBarCore.\n\n## Validation\n- `swift test --filter GoogleWorkspaceStatus` — 4 tests pass, including a new regression guard: `fetchWorkspaceStatus stays off the main thread when called from the main actor` (stub transport asserts `!Thread.isMainThread`).\n- `make check` — 0 violations; `git diff --check` clean.\n\n## Runtime Proof\nSide-by-side decode timing on a synthetic incidents feed shaped like the live payload (300 incidents × 4 dated updates, 699 KB; harness below, not committed), 10 iterations each, same process:\n\n```text\nTIMING_RESULT payload_bytes=699212\nBEFORE per-field formatters: 332.6 – 356.4 ms per decode\nAFTER  shared formatters:    101.2 – 104.3 ms per decode (full parse incl. relevance filtering)\n```\n\n~3.4× faster — and the entire cost now lands on a background executor instead of the main thread, which the committed thread-assertion test locks in. The before-range matches the 150–340ms live measurements in #1399 (live payloads are smaller than this fixture on quiet weeks).\n\n## Honesty / scope notes\n- This fixes #1399's *secondary* finding only. The primary mechanism reported there — WindowServer event-buffer starvation during long merged-menu tracking sessions — is untouched by this PR and still needs a design that keeps refresh churn out of active tracking sessions.\n- The decode still costs ~100ms of CPU somewhere; it is now off the UI's critical path rather than free.\n\n<details>\n<summary>Timing harness (drop into Tests/CodexBarTests to reproduce)</summary>\n\n```swift\nimport Foundation\nimport Testing\n@testable import CodexBar\n\nstruct StatusDecodeTimingHarness {\n    @Test\n    func `workspace status decode timing harness`() throws {\n        // Synthetic feed shaped like incidents.json: ~300 incidents, each with several\n        // updates and date fields, sized to match the measured live payload (~420 KB).\n        var incidents: [[String: Any]] = []\n        for index in 0..<300 {\n            var updates: [[String: Any]] = []\n            for u in 0..<4 {\n                updates.append([\n                    \"when\": \"2026-05-\\(String(format: \"%02d\", (index % 27) + 1))T0\\(u):15:00+00:00\",\n                    \"status\": \"SERVICE_INFORMATION\",\n                    \"text\": String(repeating: \"status update body text \", count: 12),\n                ])\n            }\n            incidents.append([\n                \"begin\": \"2026-05-\\(String(format: \"%02d\", (index % 27) + 1))T00:00:00+00:00\",\n                \"end\": index % 7 == 0 ? NSNull() : \"2026-05-\\(String(format: \"%02d\", (index % 27) + 2))T00:00:00+00:00\",\n                \"modified\": \"2026-05-\\(String(format: \"%02d\", (index % 27) + 1))T12:00:00.123+00:00\",\n                \"external_desc\": String(repeating: \"incident description \", count: 10),\n                \"severity\": \"medium\",\n                \"status_impact\": \"SERVICE_INFORMATION\",\n                \"affected_products\": [[\"title\": \"Gemini\", \"id\": \"npdyhgECDJ6tB66MxXyo\"]],\n                \"most_recent_update\": updates[0],\n                \"updates\": updates,\n            ])\n        }\n        let data = try JSONSerialization.data(withJSONObject: incidents)\n        struct Incident: Decodable { let begin: Date?; let end: Date?; let modified: Date?\n            let updates: [Update]?\n            struct Update: Decodable { let when: Date? } }\n        func measure(_ strategy: JSONDecoder.DateDecodingStrategy) -> [String] {\n            let clock = ContinuousClock()\n            var ms: [Double] = []\n            for _ in 0..<10 {\n                let d = clock.measure {\n                    let decoder = JSONDecoder()\n                    decoder.keyDecodingStrategy = .convertFromSnakeCase\n                    decoder.dateDecodingStrategy = strategy\n                    _ = try? decoder.decode([Incident].self, from: data)\n                }\n                ms.append(Double(d.components.attoseconds) / 1e15 + Double(d.components.seconds) * 1000)\n            }\n            return ms.map { String(format: \"%.1f\", $0) }\n        }\n        let previousStrategy = JSONDecoder.DateDecodingStrategy.custom { decoder in\n            let container = try decoder.singleValueContainer()\n            let raw = try container.decode(String.self)\n            let formatter = ISO8601DateFormatter()\n            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]\n            if let date = formatter.date(from: raw) { return date }\n            formatter.formatOptions = [.withInternetDateTime]\n            if let date = formatter.date(from: raw) { return date }\n            throw DecodingError.dataCorruptedError(in: container, debugDescription: \"bad date\")\n        }\n        print(\"TIMING_RESULT payload_bytes=\\(data.count)\")\n        print(\"BEFORE per-field formatters: \\(measure(previousStrategy))\")\n        let clock = ContinuousClock()\n        var ms2: [Double] = []\n        for _ in 0..<10 {\n            let d = clock.measure {\n                _ = try? UsageStore.parseGoogleWorkspaceStatus(data: data, productID: \"npdyhgECDJ6tB66MxXyo\")\n            }\n            ms2.append(Double(d.components.attoseconds) / 1e15 + Double(d.components.seconds) * 1000)\n        }\n        print(\"AFTER shared formatters (full parse incl. filtering): \\(ms2.map { String(format: \"%.1f\", $0) })\")\n    }\n}\n```\n\n</details>\n",
-        "branch": "perf/google-status-decode-off-main",
-        "head_sha": "3ade9f47fd8ebb3845962c7163305d030c20ca71",
-        "author": "prospectore",
-        "labels": [],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Sources/CodexBar/UsageStore+Status.swift",
-            "additions": 50,
-            "deletions": 26,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Tests/CodexBarTests/GoogleWorkspaceStatusNetworkTests.swift",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "generated_issue_branch": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_issue_job_path": null,
-        "automerge_cluster_id": "automerge-steipete-codexbar-1406",
-        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1406.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 1,
-          "counts": {
-            "SUCCESS": 1
-          },
-          "blockers": [
-            "build-artifacts:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "build-artifacts:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3144,
+    "total_ms": 1894,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 493
+        "ms": 499
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 710
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 1910
+        "ms": 1382
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
