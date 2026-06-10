@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T06:15:32.709Z",
+  "generated_at": "2026-06-10T06:12:48.733Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-10T03:15:31.143Z",
+  "since": "2026-06-10T03:12:46.966Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    60661
+    60229
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 4,
+  "scanned_comments": 5,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -31,17 +31,17 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:60661:4357712662:2026-06-10T06:15:25Z:clawsweeper_needs_human",
-      "comment_id": "4357712662",
-      "comment_version_key": "4357712662:2026-06-10T06:15:25Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/60661#issuecomment-4357712662",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:60229:4357420389:2026-06-10T06:12:39Z:clawsweeper_needs_human",
+      "comment_id": "4357420389",
+      "comment_version_key": "4357420389:2026-06-10T06:12:39Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/60229#issuecomment-4357420389",
       "repo": "openclaw/openclaw",
-      "issue_number": 60661,
+      "issue_number": 60229,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-01T03:53:48Z",
-      "comment_updated_at": "2026-06-10T06:15:25Z",
+      "comment_created_at": "2026-05-01T02:14:18Z",
+      "comment_updated_at": "2026-06-10T06:12:39Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -52,114 +52,97 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: needs-human (sha=8c49c88fa4be6771a4118458e6b37b775b6a5f61)",
-      "review_summary": null,
-      "review_followup": null,
+      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=c214857df230d45bf2cdf9f1f61578ddb33e7b77)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +34. Total +34 across 3 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "8c49c88fa4be6771a4118458e6b37b775b6a5f61",
+      "expected_head_sha": "c214857df230d45bf2cdf9f1f61578ddb33e7b77",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "Keep gateway CLI timeout client-side after accepted runs",
-        "body": "## Executive Summary\r\n\r\nThis PR fixes the accepted-timeout regression on the live operational CLI path by keeping `openclaw agent --timeout ...` as a client-side wait budget instead of forwarding it into the gateway-owned accepted run.\r\n\r\n## What Was Changed\r\n- Removed forwarded inner timeout from the gateway CLI request in `src/commands/agent-via-gateway.ts`\r\n- Added focused regression coverage in `src/commands/agent-via-gateway.test.ts` asserting the timeout remains client-side and is not forwarded into the accepted run\r\n\r\n## What Was Tested\r\n- Targeted test pass for the command path\r\n- Real operational proof via `/opt/homebrew/bin/openclaw agent --session-id ... --timeout 1 --json`\r\n- Follow-up completion proof via `agent.wait`\r\n\r\n## What Was Verified\r\n- CLI returned `status: accepted` immediately\r\n- Accepted run later completed `status: ok`\r\n- No timeout-continuation prompt was appended to the transcript\r\n- No fallback-model retry / embedded fallback evidence in the proof transcripts\r\n- No session file locked, EPERM, or SQLITE_BUSY tied to the proof sessions\r\n\r\n## What Was Not Verified\r\n- Exhaustive behavior across every caller path\r\n- Broader gateway/agent integration beyond the focused test and live operational proofs\r\n\r\n## Notes\r\n\r\nThis PR intentionally excludes unrelated dirty local regression work already present in the repo.",
-        "branch": "jordan/accepted-timeout-client-side",
-        "head_sha": "8c49c88fa4be6771a4118458e6b37b775b6a5f61",
-        "author": "judicialcoder",
+        "title": "feat(telegram): coalesce inbound messages while agent is busy",
+        "body": "## Problem\n\nWhen an agent run is active, subsequent inbound Telegram messages from the same chat are serialized at two layers before reaching the queue-level collect logic:\n\n1. **grammY `sequentialize` middleware** — uses a per-chat key (`telegram:{chatId}`), blocking all messages from the same chat until the current handler completes.\n2. **Inbound debouncer `enqueueKeyTask`** — chains same-key flushes serially, so each message waits for the previous `onFlush` (which includes the entire agent run) to finish.\n\nAs a result, each follow-up message sees `isActive = false` when it finally reaches `resolveActiveRunQueueAction`, and the documented `collect` queue mode never triggers. Messages are always processed one-at-a-time, even when the user sends a rapid burst while the agent is busy.\n\n## Solution\n\nThree minimal changes:\n\n### 1. `coalesceWhileBusy` option on `createInboundDebouncer`\n\nNew opt-in parameter. When enabled and a previous flush for the same key is still running (`keyChains.has(key)`), incoming items are buffered in a `busyBuffers` map instead of being queued as separate serial tasks. Once the active flush completes, all buffered items are flushed together in a single `onFlush` call.\n\n### 2. Enable `coalesceWhileBusy: true` in Telegram handler\n\nOne-line addition to the Telegram inbound debouncer creation.\n\n### 3. Per-message `sequentialize` key\n\nAppend `message_id` to the sequential key for regular messages so grammY no longer serializes same-chat messages. The session lane queue downstream still guarantees one agent run per session at a time, so there is no risk of concurrent session writes.\n\n## Testing\n\nVerified on a live Telegram DM session:\n- Sent a task that triggers multiple tool calls (web browsing)\n- Rapidly sent 4 follow-up messages during the agent run\n- All 4 messages arrived as a single `[Queued messages while agent was busy]` turn with Queued #1–#4\n\nBefore the fix, each message was processed individually in serial.",
+        "branch": "fix/telegram-coalesce-while-busy",
+        "head_sha": "c214857df230d45bf2cdf9f1f61578ddb33e7b77",
+        "author": "fangli",
         "labels": [
-          "commands",
+          "channel: telegram",
           "stale",
-          "size: S",
+          "size: XS",
           "triage: needs-real-behavior-proof",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
+          "P1",
+          "rating: 🌊 off-meta tidepool",
+          "merge-risk: 🚨 message-delivery"
         ],
         "files": [
           {
-            "path": "src/commands/agent-via-gateway.test.ts",
-            "additions": 78,
-            "deletions": 9,
+            "path": "extensions/telegram/src/bot-handlers.runtime.ts",
+            "additions": 1,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/commands/agent-via-gateway.ts",
-            "additions": 20,
-            "deletions": 2,
+            "path": "extensions/telegram/src/sequential-key.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/inbound-debounce.ts",
+            "additions": 28,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-60661",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-60661.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-60229",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-60229.md",
         "mode": "autonomous",
         "mergeable": "CONFLICTING",
         "merge_state_status": "DIRTY",
         "review_decision": "",
         "checks": {
-          "total": 38,
+          "total": 51,
           "counts": {
-            "FAILURE": 14,
-            "SUCCESS": 9,
-            "SKIPPED": 15
+            "FAILURE": 3,
+            "CANCELLED": 1,
+            "SKIPPED": 14,
+            "SUCCESS": 33
           },
           "blockers": [
             "Real behavior proof:FAILURE",
-            "build-artifacts:FAILURE",
-            "checks-fast-bundled:FAILURE",
-            "checks-fast-contracts-protocol:FAILURE",
-            "checks-fast-extensions-shard-1:FAILURE",
-            "checks-fast-extensions-shard-2:FAILURE",
-            "checks-fast-extensions-shard-3:FAILURE",
-            "checks-fast-extensions-shard-4:FAILURE",
-            "checks-fast-extensions-shard-5:FAILURE",
-            "checks-fast-extensions-shard-6:FAILURE",
-            "check:FAILURE",
-            "check-additional:FAILURE",
-            "build-smoke:FAILURE",
-            "checks-fast-extensions:FAILURE"
+            "extension-fast (extension-fast-telegram, telegram):FAILURE",
+            "checks-node-channels-3:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
             "Real behavior proof:FAILURE",
-            "build-artifacts:FAILURE",
-            "checks-fast-bundled:FAILURE",
-            "checks-fast-contracts-protocol:FAILURE",
-            "checks-fast-extensions-shard-1:FAILURE",
-            "checks-fast-extensions-shard-2:FAILURE",
-            "checks-fast-extensions-shard-3:FAILURE",
-            "checks-fast-extensions-shard-4:FAILURE",
-            "checks-fast-extensions-shard-5:FAILURE",
-            "checks-fast-extensions-shard-6:FAILURE",
-            "check:FAILURE",
-            "check-additional:FAILURE",
-            "build-smoke:FAILURE",
-            "checks-fast-extensions:FAILURE"
+            "extension-fast (extension-fast-telegram, telegram):FAILURE",
+            "checks-node-channels-3:FAILURE"
           ]
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 1787,
+    "total_ms": 2035,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 325
+        "ms": 360
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1225
+        "ms": 1390
       },
       {
         "name": "classify_commands",
@@ -167,11 +150,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 209
+        "ms": 254
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
