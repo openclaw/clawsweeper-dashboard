@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T10:33:10.752Z",
+  "generated_at": "2026-06-10T10:34:01.154Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-10T07:33:10.499Z",
+  "since": "2026-06-10T07:33:58.586Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    91916
+    91885
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,155 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91885:4667879031:2026-06-10T10:33:55Z:clawsweeper_needs_human",
+      "comment_id": "4667879031",
+      "comment_version_key": "4667879031:2026-06-10T10:33:55Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91885#issuecomment-4667879031",
+      "repo": "openclaw/openclaw",
+      "issue_number": 91885,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-10T07:54:17Z",
+      "comment_updated_at": "2026-06-10T10:33:55Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] The remaining blocker is contributor or maintainer real-behavior proof, not an automation-repairable code defect.; Cleared: The diff only reads existing in-memory config and adds tests; it does not add dependencies, scripts, credential handling, or supply-chain surface. (sha=d744e312fcc15f45668e5629dd5c32e873bc47df)",
+      "review_summary": "The PR resolves `maxLinesPerMessage` from channel/account config for direct message sends and passes it into delivery formatting, with focused outbound-message regression tests.\n\nPR surface: Source +50, Tests +82. Total +132 across 2 files.\n\nReproducibility: yes. from source: current main omits `maxLinesPerMessage` from direct-send formatting, while Discord falls back to 17 lines when that formatting field is absent.",
+      "review_followup": "- [P1] The remaining blocker is contributor or maintainer real-behavior proof, not an automation-repairable code defect.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "d744e312fcc15f45668e5629dd5c32e873bc47df",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(message): plumb maxLinesPerMessage from channel config into CLI send formatting",
+        "body": "## Summary\n\nFixes #91860\n\nThe `sendMessage` entrypoint (used by `openclaw message send` CLI) only forwarded `parseMode` into the formatting options passed to `sendDurableMessageBatch`. The channel-level `maxLinesPerMessage` config value was never included, so CLI sends always fell back to the Discord extension default of 17 lines per chunk — even when the config explicitly set a higher value.\n\n## Changes\n\n**`src/infra/outbound/message.ts`**\n- Added `resolveMaxLinesPerMessage()` — resolves the `maxLinesPerMessage` setting from channel config with account-level override support, honoring the channel `defaultAccount` config when `accountId` is omitted. Follows the same generic channel config access pattern used by `resolveChunkMode()` and `resolveTextChunkLimit()` in `auto-reply/chunk.ts`.\n- Added `buildSendFormatting()` helper — constructs the formatting options object, returning `undefined` when both `parseMode` and `maxLinesPerMessage` are absent (preserving existing behavior for channels without this config).\n- Changed the `formatting:` parameter in the `sendDurableMessageBatch` call to include the resolved `maxLinesPerMessage` alongside `parseMode`.\n\n### Account resolution fix (commit 84929c6)\n\nAddressed ClawSweeper P2 finding: when `accountId` is omitted, the resolver now reads `channelSection.defaultAccount` before normalizing, so `channels.discord.defaultAccount: \"work\"` with `accounts.work.maxLinesPerMessage: 50` correctly resolves to 50 — instead of falling back to `accounts.default.maxLinesPerMessage`.\n\nResolution order:\n1. `accountId` explicitly provided → normalize and use it\n2. `accountId` omitted → check `channelSection.defaultAccount` → use that\n3. Normalized account has `maxLinesPerMessage` in accounts map → return it\n4. Fall back to root `channelSection.maxLinesPerMessage`\n5. No config → return `undefined` (adapter default applies)\n\n## How it works\n\n1. The Discord outbound adapter chunker already reads `ctx?.formatting?.maxLinesPerMessage` (in `extensions/discord/src/outbound-adapter.ts`)\n2. The agent reply path works correctly because the Discord monitor explicitly calls `resolveDiscordMaxLinesPerMessage()` and passes it through formatting options\n3. The CLI send path was missing this plumbing — `formatting` was only populated with `parseMode`\n4. This fix adds generic channel config resolution (not Discord-specific) so any channel with `maxLinesPerMessage` config benefits\n\n## Real behavior proof\n\n**Issue**: CLI `openclaw message send --channel discord` ignores `channels.discord.maxLinesPerMessage` config and always splits at 17 lines (DEFAULT_MAX_LINES)\n\n**Environment**: OpenClaw 2026.6.1 (bf89552e678), Linux x64\n\n**Code path verification (before fix)**:\n```\nsendMessage(params)\n  → formatting: params.parseMode ? { parseMode } : undefined  // ← maxLinesPerMessage NEVER included\n  → sendDurableMessageBatch(formatting: undefined)\n  → deliverOutboundPayloads(formatting: undefined)\n  → chunker(text, limit, { formatting: undefined })\n  → chunkDiscordTextWithMode(text, { maxLines: undefined })  // falls back to DEFAULT_MAX_LINES = 17\n```\n\n**Code path verification (after fix)**:\n```\nsendMessage(params)\n  → resolveMaxLinesPerMessage(cfg, channel, accountId)\n    → reads channels.discord.maxLinesPerMessage (with defaultAccount + account override)\n    → returns configured value (e.g. 40)\n  → buildSendFormatting(parseMode, 40)\n    → { maxLinesPerMessage: 40 }\n  → sendDurableMessageBatch(formatting: { maxLinesPerMessage: 40 })\n  → deliverOutboundPayloads(formatting: { maxLinesPerMessage: 40 })\n  → chunker(text, limit, { formatting: { maxLinesPerMessage: 40 } })\n  → chunkDiscordTextWithMode(text, { maxLines: 40 })  // uses config value ✓\n```\n\n**Account resolution verification**:\n```typescript\n// Config: channels.discord.defaultAccount: \"work\", accounts.work.maxLinesPerMessage: 50\nresolveMaxLinesPerMessage(cfg, \"discord\", undefined)\n  → effectiveAccountId = undefined ?? \"work\"  // reads defaultAccount\n  → normalizedAccountId = \"work\"\n  → accounts[\"work\"].maxLinesPerMessage = 50  // ✓ correct\n\n// Before fix (commit c606e1a): \nresolveMaxLinesPerMessage(cfg, \"discord\", undefined)\n  → normalizedAccountId = normalizeAccountId(undefined) = \"default\"\n  → accounts[\"default\"] = undefined  // ✗ wrong, ignores configured defaultAccount\n```\n\n**Cross-reference**: The Discord plugin resolves default accounts via `resolveDefaultDiscordAccountId` → `createAccountListHelpers(\"discord\", ...)` which reads `channels.discord.defaultAccount`. Our generic resolver now follows the same contract.",
+        "branch": "fix/91860-cli-send-maxlines-per-message",
+        "head_sha": "d744e312fcc15f45668e5629dd5c32e873bc47df",
+        "author": "kagura-agent",
+        "labels": [
+          "size: S",
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/infra/outbound/message.test.ts",
+            "additions": 82,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/message.ts",
+            "additions": 51,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-91885",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91885.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 158,
+          "counts": {
+            "FAILURE": 2,
+            "SUCCESS": 133,
+            "SKIPPED": 22,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "build-artifacts:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "build-artifacts:FAILURE"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:91885:4669078765:2026-06-10T10:21:38Z:re_review",
+      "comment_id": "4669078765",
+      "comment_version_key": "4669078765:2026-06-10T10:21:38Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91885#issuecomment-4669078765",
+      "repo": "openclaw/openclaw",
+      "issue_number": 91885,
+      "author": "kagura-agent",
+      "author_id": 268167063,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-10T10:21:38Z",
+      "comment_updated_at": "2026-06-10T10:21:38Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 387,
+    "total_ms": 4213,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 241
+        "ms": 381
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 2175
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 134
+        "ms": 1638
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
