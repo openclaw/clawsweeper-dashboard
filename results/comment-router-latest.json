@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T21:06:57.642Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-06-10T21:09:48.850Z",
+  "repo": "openclaw/crabbox",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-10T18:06:57.140Z",
+  "since": "2026-06-10T18:09:45.807Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    92036
+    212
   ],
   "comment_ids": [
-    4674516844
+    4674542804
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4674543187,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
-  "actionable": 0,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -31,26 +31,191 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/crabbox:212:4674542804:2026-06-10T21:09:02Z:re_review",
+      "comment_id": "4674542804",
+      "comment_version_key": "4674542804:2026-06-10T21:09:02Z",
+      "comment_url": "https://github.com/openclaw/crabbox/pull/212#issuecomment-4674542804",
+      "repo": "openclaw/crabbox",
+      "issue_number": 212,
+      "author": "anagnorisis2peripeteia",
+      "author_id": 129746152,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-10T21:09:02Z",
+      "comment_updated_at": "2026-06-10T21:09:02Z",
+      "status_comment_id": 4674543187,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-10T21:09:49.522Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 212
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-10T21:09:50.593Z",
+          "response_comment_id": "4674319189",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat: add Hyper-V provider for local Windows VMs",
+        "body": "## Summary\n\nA `hyperv` provider for running Crabbox leases on local Windows VMs via Microsoft Hyper-V and PowerShell Direct — the Windows-native counterpart to `tart` (macOS), with no external CLI or cloud account. The design goal is \"bring a plain Windows VHDX with a known administrator password, and it just works\": the provider supplies everything else. With `--hyperv-init-password` even that requirement drops away for auto-logon images: a **stock, password-less** Microsoft dev-environment VHDX works completely unmodified.\n\n## How it works\n\n`crabbox warmup --provider hyperv --hyperv-image <vhdx>`:\n\n1. **Thin clone, not a copy.** Each lease is backed by a *differencing disk* over the template (`New-VHD -Differencing -ParentPath`) — near-instant and space-thin (a few MB up front), so the template stays read-only and shared instead of copying tens of GB per lease.\n2. **(Opt-in) first-boot password for password-less templates.** Microsoft's downloadable dev-environment VHDXs auto-log-on with **no password**, and PowerShell Direct refuses empty credentials — so stock images used to be unusable. With `--hyperv-init-password` the provider mounts the *lease's own differencing disk* offline, loads its registry hive, and writes a `RunOnce` command that sets the guest password to `CRABBOX_HYPERV_GUEST_PASSWORD` at the template's auto-logon. The template VHDX is never modified. Guard rails: requires an explicit `CRABBOX_HYPERV_GUEST_PASSWORD` (refuses to stamp the default password onto a guest), rejects `\"`/`%` in the password and the user name (both pass through cmd.exe), and the password reaches the host-side script via env, never argv.\n3. **Create + place off the system drive.** `New-VM -Generation 2 -Path <vmDir>` puts the VM config and the multi-GB `.VMRS` runtime files on the same (data) drive as the VHD rather than defaulting to `C:\\ProgramData`, and automatic checkpoints are disabled (`Set-VM -AutomaticCheckpointsEnabled $false`) so a lease never spawns a `.avhdx` that would strand a disk on release.\n4. **Make the guest reachable.** Over PowerShell Direct (authenticating with the guest admin password, passed via env — never argv) the provider installs the OpenSSH server if absent (`Add-WindowsCapability`, `Start-Service sshd`, firewall) and installs git if absent (portable MinGit, pinned to an immutable release asset and SHA-256-verified before extraction) — mirroring how the Linux cloud-init path provisions a guest. Both are no-ops when already present, so a template that pre-bakes them just skips the download. MinGit is extracted to `C:\\Program Files\\MinGit`, **not** `C:\\Program Files\\Git`: MinGit's `etc\\gitconfig` deliberately includes `C:/Program Files/Git/etc/gitconfig`, so extracting it there makes the include self-referential and every guest git command dies with \"exceeded maximum include depth\" (caught live by the second proof below; fixed in this PR).\n5. **Inject the lease key.** The SSH public key is written to the user's `authorized_keys` and, for admin accounts, `administrators_authorized_keys` with the SYSTEM+Administrators-only ACL that Windows OpenSSH requires (otherwise sshd silently ignores it).\n6. **Wait for readiness**, then run/sync/release normally. On release the VM is removed and only the lease's own differencing disk + per-VM config dir are deleted; the template is untouched. Cleanup is scoped to the `crabbox-` name prefix.\n\nNet template requirement: **a Generation-2 Windows VHDX** — either with an administrator password known to Crabbox (`--hyperv-user` / `CRABBOX_HYPERV_GUEST_PASSWORD`), or, for auto-logon images, none at all with `--hyperv-init-password`. Non-Windows targets are rejected (from CLI, YAML, or env), and ISO images are rejected.\n\n## Live proof 1 — passworded template (existing path), Windows 11 Pro host, Go 1.26.4\n\nCaptured on the latest head. Plain Windows 11 VHDX with only an admin password set; C: deliberately full so storage is redirected to D: (which also exercises the off-system-drive placement):\n\n```\n$ crabbox doctor --provider hyperv\nok  provider  provider=hyperv hyperv=Enabled inventory=ready api=powershell leases=0 image=… ssh_probe=unchecked\n\n$ crabbox warmup --provider hyperv --hyperv-image D:\\hyperv-templates\\win11-ssh-ready.vhdx --hyperv-cpu 2 --hyperv-memory 3072\nprovisioned lease=cbx_e70a9aac5441 instance=crabbox-hvproofa-240c4232 state=ready\nready ssh=Administrator@172.22.155.0:22 network=public workroot=C:\\crabbox\n\n$ crabbox run --provider hyperv --id cbx_e70a9aac5441 -- cmd /c ver\nsync candidate: 1 files, 27 B\nsync complete in 12.056s\nMicrosoft Windows [Version 10.0.22621.3880]\nrun summary sync=12.056s command=6.513s total=21.454s sync_skipped=false exit=0\n\n$ crabbox list --provider hyperv\ncrabbox-hvproofa-240c4232 ready hyperv 172.22.155.0 lease=cbx_e70a9aac5441 slug=hvproofa keep=true target=windows\n\n$ crabbox stop --provider hyperv --id cbx_e70a9aac5441\nreleased lease=cbx_e70a9aac5441 instance=crabbox-hvproofa-240c4232\n# verify: crabbox- VMs remaining: 0   (VM, differencing disk, and config dir all removed)\n```\n\n## Live proof 2 — broader template coverage: STOCK password-less Microsoft image + `--hyperv-init-password`\n\nThe template here is Microsoft's downloadable `WinDev2407Eval.vhdx` **exactly as downloaded** (file mtime 2024-07-25 before and after the run — never written): auto-logon `User`, no password, no OpenSSH, no git. One flag makes it a working lease:\n\n```\n$ crabbox warmup --provider hyperv --hyperv-image C:\\Users\\…\\WinDev2407Eval.vhdx ^\n    --hyperv-user User --hyperv-init-password --hyperv-cpu 2 --hyperv-memory 3072\nprovisioned lease=cbx_48ec029c0094 instance=crabbox-hvproofb-5412dc36 state=ready\nready ssh=User@172.22.145.28:22 network=public workroot=C:\\crabbox\nwarmup complete total=9m31.274s\n\n$ crabbox run --provider hyperv --id cbx_48ec029c0094 -- git --version\nsync complete in 14.581s\ngit version 2.54.0.windows.1\nrun summary sync=14.581s command=9.902s total=27.016s sync_skipped=false exit=0\n\n$ crabbox stop --provider hyperv --id cbx_48ec029c0094\nreleased lease=cbx_48ec029c0094 instance=crabbox-hvproofb-5412dc36\n# verify: crabbox- VMs remaining: 0; template mtime unchanged (2024-07-25)\n```\n\nReaching `state=ready` here exercises the full chain on a guest that started with **nothing** — first-boot password injection, OpenSSH install, pinned + checksum-verified MinGit install (to the corrected path; `git --version` exiting 0 in-guest is the regression proof for the MinGit fix), ACL-correct key injection, and the Windows readiness check over SSH.\n\n## Configuration\n\nCLI: `--hyperv-image` (required), `--hyperv-cpu`, `--hyperv-memory`, `--hyperv-switch`, `--hyperv-user`, `--hyperv-work-root`, `--hyperv-init-password`. YAML `hyperv:` and `CRABBOX_HYPERV_*` env equivalents, incl. `CRABBOX_HYPERV_GUEST_PASSWORD` and `CRABBOX_HYPERV_INIT_PASSWORD`.\n\n## Not included (follow-up)\n\n- A configurable storage root (today storage follows `%USERPROFILE%`).\n- ISO install / autounattend (templates are pre-installed VHDX).\n- WSL2 mode (native Windows only).\n",
+        "branch": "feat/local-hyperv-provider",
+        "head_sha": "d511543c3a05dcb3e9550c0c95b6fcf2f33a5d85",
+        "author": "anagnorisis2peripeteia",
+        "labels": [
+          "P2",
+          "merge-risk: 🚨 security-boundary",
+          "proof: sufficient",
+          "rating: 🦐 gold shrimp",
+          "status: ⏳ waiting on author",
+          "feature: ✨ showcase",
+          "merge-risk: 🚨 availability",
+          "merge-risk: 🚨 session-state"
+        ],
+        "files": [
+          {
+            "path": "docs/providers/README.md",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/hyperv.md",
+            "additions": 186,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "docs/source-map.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cli/config.go",
+            "additions": 67,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cli/config_hyperv_test.go",
+            "additions": 95,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "internal/cli/providers_builtin_test.go",
+            "additions": 54,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/providers/all/all.go",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/providers/hyperv/backend.go",
+            "additions": 1122,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "internal/providers/hyperv/core.go",
+            "additions": 115,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "internal/providers/hyperv/flags.go",
+            "additions": 81,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "internal/providers/hyperv/provider.go",
+            "additions": 61,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "internal/providers/hyperv/provider_test.go",
+            "additions": 1279,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "generated_issue_branch": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_issue_job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-crabbox-212",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-crabbox-212.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 5,
+          "counts": {
+            "SUCCESS": 5
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 720,
+    "total_ms": 5322,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 490
+        "ms": 1863
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 1164
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 218
+        "ms": 2267
       },
       {
         "name": "append_ledger",
