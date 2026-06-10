@@ -1,18 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T02:05:47.195Z",
+  "generated_at": "2026-06-10T02:05:52.442Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-09T23:05:44.882Z",
+  "since": "2026-06-09T23:05:50.216Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    91227
+    91784
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4665791718
+  ],
+  "status_comment_id": 4665792028,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -31,21 +33,21 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91227:4643684050:2026-06-10T02:05:41Z:clawsweeper_needs_human",
-      "comment_id": "4643684050",
-      "comment_version_key": "4643684050:2026-06-10T02:05:41Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/91227#issuecomment-4643684050",
+      "idempotency_key": "comment-router:openclaw/openclaw:91784:4665791718:2026-06-10T02:05:13Z:re_review",
+      "comment_id": "4665791718",
+      "comment_version_key": "4665791718:2026-06-10T02:05:13Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91784#issuecomment-4665791718",
       "repo": "openclaw/openclaw",
-      "issue_number": 91227,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 91784,
+      "author": "jason-allen-oneal",
+      "author_id": 8335428,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-06-07T18:53:37Z",
-      "comment_updated_at": "2026-06-10T02:05:41Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "comment_created_at": "2026-06-10T02:05:13Z",
+      "comment_updated_at": "2026-06-10T02:05:13Z",
+      "status_comment_id": 4665792028,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -59,78 +61,71 @@
       "visual_lens": null,
       "expected_head_sha": "7bfe0f55076890c25ec554408f5f355eed176969",
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "dispatched_at": "2026-06-10T02:05:53.135Z",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 91784
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-06-10T02:05:54.177Z",
+          "response_comment_id": "4665792028",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix #91216: [Bug]: gateway opens an empty memory database when main.sqlite is absent during the index swap, leaving memory_search paused with \"index metadata is missing\" until restart",
-        "body": "## Summary\n\nWhat problem does this PR solve?\n\n- Fixes #91216, where `memory_search` could be left paused with `index metadata is missing` after a memory index rebuild/swap.\n- The existing PR already keeps the live `main.sqlite` base reachable during atomic reindex publication and preserves metadata when safe reindex swaps DB handles.\n- This update closes the remaining resident-gateway case: if a running manager is still holding a stale SQLite handle whose metadata is missing, it can reopen the healthy live index instead of staying paused until restart.\n\nWhy does this matter now?\n\n- The reported failure is a gateway/runtime failure mode, not only a file-swap race: a long-running gateway can keep an old SQLite handle after another process rebuilds the live index.\n- Without this recovery, the live `main.sqlite` can be healthy while the resident gateway still reports `index metadata is missing` from its stale handle.\n\nWhat is the intended outcome?\n\n- `main.sqlite` remains reachable during atomic reindex publication.\n- Replacement safe-reindex databases retain valid `memory_index_meta_v1` metadata.\n- A running gateway that sees missing metadata on its held DB handle probes the live DB read-only, validates the live metadata against the current identity, reopens the live DB, and serves `memory_search` without restart.\n\nWhat is intentionally out of scope?\n\n- No memory schema migration.\n- No provider-selection, embedding, ranking, gateway API, auth, watcher, or tool contract changes.\n- No recovery for mismatched index identity; provider/model/settings mismatches still keep memory search paused so stale rows are not served under the wrong configuration.\n\nWhat does success look like?\n\n- Concurrent/rebuilt memory indexes do not create an empty `main.sqlite`.\n- Same-identity safe reindex keeps the metadata row in the replacement DB.\n- A resident gateway with a stale missing-metadata handle can recover from the healthy live DB and return memory search results.\n- Runtime output and HTTP responses do not contain `index metadata is missing` after recovery.\n\nWhat should reviewers focus on?\n\n- Fix classification: minimal canonical root-cause fix for the memory index DB-handle lifecycle boundary.\n- Root cause: the root cause is a DB-handle lifecycle invariant break. The PR previously fixed file publication and temp-DB metadata-cache state, but a running gateway could still hold a stale/missing SQLite handle while the source-of-truth live path had already been rebuilt correctly.\n- Why this is root-cause fix: the fix restores the lifecycle invariant at the source boundary where identity is evaluated. A missing held handle now validates the live DB metadata through the existing identity validator before the manager swaps handles, instead of treating the stale handle as authoritative forever.\n- Recovery boundary: recovery only runs when the held handle resolves to `missing`; it opens the live DB read-only so a missing path is not auto-created, then reuses the existing identity validator and only swaps handles when the live metadata is `valid`.\n- Safety invariant: `mismatched` metadata is not recovered, so provider/model/settings drift still fails closed instead of serving stale chunks.\n- Patch boundary: the implementation adds a read-only live metadata probe plus a stale-missing-handle reopen path; it does not change schema, metadata format, provider identity, ranking, gateway routing, auth, or file-swap ordering.\n- Architecture / source-of-truth check: the source of truth remains `resolveCurrentIndexIdentityState` and the existing metadata identity contract. This patch does not add a parallel validator, migration, provider-routing override, or partial schema fallback.\n- Patch quality notes: the new broad catches are guardrails around read-only live probing and old-handle cleanup. Probe failures return no recovery and leave the existing paused/dirty path intact; cleanup failure is ignored only after a valid replacement handle has opened. The test `unknown as` access is limited to inducing the private SQLite state needed to reproduce the stale resident-handle bug, and the test `ENOENT` catch only ignores optional SQLite sidecar files.\n- What did NOT change: schema, metadata format, provider selection, vector behavior, ranking, gateway API, auth, watcher behavior, and atomic file-swap ordering are unchanged; only stale missing-handle recovery was added.\n- Related open PR / competition scan: this is an update to the existing PR #91227 for #91216; it is not a replacement or competing PR.\n\n## Linked context\n\nCloses #91216\n\n## Real behavior proof (required for external PRs)\n\n- Behavior or issue addressed: a running gateway should recover when its resident memory index handle has missing metadata but the live `main.sqlite` has been rebuilt with valid metadata.\n- Real environment tested: real OpenClaw gateway HTTP process, real `node:sqlite`, real filesystem renames, FTS-only memory index (`provider=none`, `model=fts-only`), and external HTTP `/tools/invoke` calls to `memory_search`.\n- Exact steps or command run after this patch:\n  1. Created an isolated memory corpus and preindexed it into `main.sqlite`.\n  2. Started the gateway with token auth on loopback.\n  3. Sent an external HTTP `memory_search` request to force the resident gateway manager to open the index handle.\n  4. Deleted `memory_index_meta_v1` from that DB and moved the SQLite base/WAL/SHM files aside, leaving the running gateway with a stale missing-metadata handle.\n  5. Rebuilt a healthy live `main.sqlite` through the normal memory index CLI path.\n  6. Sent another external HTTP `memory_search` request through the still-running gateway.\n- Evidence after fix (screenshot, recording, terminal capture, console output, redacted runtime log, linked artifact, or copied live output): Validation `live-gateway-stale-handle-memory-search` (pass, exit_code=0, 115499ms):\n\n  ```text\n  (node:795313) ExperimentalWarning: SQLite is an experimental feature and might change at any time\n  (Use `node --trace-warnings ...` to show where the warning was created)\n  [stale-handle-proof] gateway_ready=true\n  [stale-handle-proof] resident_handle_opened=true initial_results=1\n  [stale-handle-proof] resident_handle_forced_missing_metadata=true\n  [stale-handle-proof] stale_sqlite_inode_moved_away=true\n  [stale-handle-proof] live_index_rebuilt=true sqlite_meta_present=true chunks=129 provider=none model=fts-only\n  [stale-handle-proof] memory_search_after_stale_handle ok=true results=1 duration_ms=491\n  [stale-handle-proof] index_metadata_missing_response_hits=0\n  [stale-handle-proof] index_metadata_missing_log_hits=0\n  [stale-handle-proof] PASS running gateway reopened a stale missing-metadata memory index handle and served external memory_search from the healthy live index\n  ```\n\n- Observed result after fix: the same gateway process recovered from the stale missing-metadata handle, reopened the healthy live index, and returned a memory result; neither the HTTP response nor gateway log contained `index metadata is missing` after recovery.\n- What was not tested: semantic vector-provider rebuilds and multi-agent gateway traffic were not live-tested here; this proof targets the FTS-only gateway path reported in #91216. The identity validation path is shared, and the regression suite covers the metadata/swap invariants.\n- Proof limitations or environment constraints: this is local Linux runtime proof, not a deployed production environment. The SQLite warning above is Node's standard experimental `node:sqlite` warning.\n- Before evidence: the new stale-handle regression test failed before this production fix because the resident manager continued reading the stale missing-metadata handle and returned no memory result.\n\n## Tests and validation\n\nWhich commands did you run?\n\n```text\npnpm lint --threads=8\npnpm run lint:extensions:bundled\nnode scripts/run-vitest.mjs extensions/memory-core/src/memory/index.test.ts extensions/memory-core/src/memory/manager.atomic-reindex.test.ts\n```\n\nResult:\n\n```text\n$ node scripts/run-oxlint-shards.mjs --threads=8\n[oxlint:core] finished\n[oxlint:extensions] finished\n[oxlint:scripts] finished\n\n$ node scripts/run-bundled-extension-oxlint.mjs\n[plugin-sdk boundary dts] fresh; skipping\n[plugin-sdk package boundary dts] fresh; skipping\n[qa-channel boundary dts] fresh; skipping\n[discord boundary dts] fresh; skipping\n[slack boundary dts] fresh; skipping\n[whatsapp boundary dts] fresh; skipping\n[plugin-sdk boundary root shims] fresh; skipping\n\n[test] starting test/vitest/vitest.extension-memory.config.ts\n\n RUN  v4.1.7 [local path redacted]\n\n Test Files  2 passed (2)\n      Tests  63 passed (63)\n   Start at  09:50:18\n   Duration  85.62s (transform 16.70s, setup 1.09s, import 22.66s, tests 61.02s, environment 0ms)\n\n[test] passed 1 Vitest shard in 125.31s\n```\n\nWhat regression coverage was added or updated?\n\n- Added `reopens a stale missing-metadata handle when the live index is healthy`, which simulates a resident manager holding a missing-metadata SQLite handle while a fresh CLI manager rebuilds the live DB. The resident search must return the expected memory result and transition back to `valid`.\n- Existing coverage still verifies that same-identity safe reindex keeps metadata and that atomic reindex keeps the prior base index reachable until the replacement base is published.\n\nWhat failed before this fix, if known?\n\n- The new stale-handle regression failed before the production fix: resident search did not find `memory/2026-01-12.md` after the live DB was rebuilt.\n- The previously added safe-reindex regression failed before the metadata-cache fix with `index metadata is missing` after same-identity safe reindex.\n\nIf no test was added, why not?\n\n- Regression coverage was added, and a current-head local gateway proof was run.\n\n## Risk checklist\n\nDid user-visible behavior change? (`Yes/No`)\n\nYes. Memory search can recover automatically from a stale missing-metadata DB handle when the live index is valid, instead of requiring a gateway restart or another repair path.\n\nDid config, environment, or migration behavior change? (`Yes/No`)\n\nNo.\n\nDid security, auth, secrets, network, or tool execution behavior change? (`Yes/No`)\n\nNo.\n\nWhat is the highest-risk area?\n\nThe highest-risk area is reopening the memory manager's SQLite handle without accidentally serving a stale or mismatched index.\n\nHow is that risk mitigated?\n\nThe recovery path only runs for `missing` identity, probes the live DB read-only to avoid creating an empty DB, validates the live metadata with the same identity rules used elsewhere, and only swaps handles when the live state is `valid`. Mismatched identity remains fail-closed.\n\n## Current review state\n\nWhat is the next action?\n\nReady for maintainer review after the PR update and remote checks settle.\n\nWhat is still waiting on author, maintainer, CI, or external proof?\n\nRemote checks need to run on the updated commit after submit. No known local author blocker remains.\n\nWhich bot or reviewer comments were addressed?\n\n- RF-001: current local validation is bound to commit `a9b8bb4f7a`; remote checks still need to run after the branch update.\n- RF-002: addressed with a current-head live gateway proof for the stale missing-metadata handle recovery path plus 63 passing memory-core regression tests.\n- RF-003: bounded as a remote-check item after push; semantic vector-provider rebuilds and multi-agent live traffic remain outside the local live proof, while identity validation and DB-handle swap safety are covered by shared regression paths.\n",
-        "branch": "feat/issue-91216",
-        "head_sha": "7bfe0f55076890c25ec554408f5f355eed176969",
-        "author": "zhangguiping-xydt",
+        "title": "fix(voice-call): require realtime websocket path boundary",
+        "body": "Summary:\n- Tightens realtime voice WebSocket upgrade routing so same-prefix sibling paths are not routed to the realtime handler.\n- Previously, `/voice/stream/realtime-evil/token` matched `/voice/stream/realtime` because the matcher used raw `startsWith(pattern)` matching.\n- The matcher now accepts only the exact configured path or a real slash-delimited child path under it.\n- Preserves the existing root `realtime.streamPath=\"/\"` behavior so root child paths such as `/token` still route to the realtime handler.\n\nValidation:\n- Added regression coverage for sibling realtime WebSocket child paths in `extensions/voice-call/src/webhook.test.ts`.\n- Added regression coverage for root realtime WebSocket child paths in `extensions/voice-call/src/webhook.test.ts`.\n- `node scripts/run-vitest.mjs run extensions/voice-call/src/webhook.test.ts`\n  - 42 passed\n- `node scripts/run-vitest.mjs run extensions/voice-call/src/webhook.test.ts extensions/voice-call/src/webhook/realtime-handler.test.ts`\n  - 61 passed\n\n## Real behavior proof\n\nBehavior or issue addressed: Realtime voice WebSocket upgrade routing accepted same-prefix sibling paths such as `/voice/stream/realtime-evil/token` for a configured realtime stream path of `/voice/stream/realtime`.\n\nReal environment tested: Local OpenClaw checkout on Linux with Node, running the real `VoiceCallWebhookServer` on an ephemeral localhost TCP port through the webhook regression harness.\n\nExact steps or command run after this patch: `node scripts/run-vitest.mjs run extensions/voice-call/src/webhook.test.ts`\n\nEvidence after fix: Terminal output from the post-fix local run showed the webhook regression file passing against the real bound server path, including the realtime WebSocket upgrade cases:\n```text\nnode scripts/run-vitest.mjs run extensions/voice-call/src/webhook.test.ts\n\nextensions/voice-call/src/webhook.test.ts\n  VoiceCallWebhookServer replay handling\n    ✓ does not route sibling realtime websocket paths to the realtime handler\n    ✓ preserves root realtime websocket child paths\n\nTest Files  1 passed (1)\nTests       42 passed (42)\n```\n\nObserved result after fix: The sibling route `/voice/stream/realtime-evil` did not call `handleWebSocketUpgrade`, while the root child route `/token` did call `handleWebSocketUpgrade` once. The route boundary now accepts only the exact configured realtime path or a slash-delimited child path.\n\nWhat was not tested: External telephony-provider infrastructure was not exercised; this proof is limited to the local OpenClaw webhook server route boundary and WebSocket upgrade dispatch.\n",
+        "branch": "fix/voice-call-realtime-ws-path-boundary",
+        "head_sha": "776225c17b372305f6adaa095ba2567dc5d6fb0a",
+        "author": "jason-allen-oneal",
         "labels": [
-          "extensions: memory-core",
-          "size: M",
+          "channel: voice-call",
+          "size: S",
           "proof: supplied",
           "proof: sufficient",
           "P2",
-          "rating: 🦞 diamond lobster",
-          "merge-risk: 🚨 session-state",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
           "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "extensions/memory-core/src/memory/index.test.ts",
-            "additions": 83,
+            "path": "extensions/voice-call/src/webhook-route-boundary.test.ts",
+            "additions": 108,
             "deletions": 0,
-            "changeType": "MODIFIED"
+            "changeType": "ADDED"
           },
           {
-            "path": "extensions/memory-core/src/memory/manager-atomic-reindex.ts",
-            "additions": 25,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager-db.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager-sync-ops.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager.atomic-reindex.test.ts",
-            "additions": 47,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager.ts",
-            "additions": 77,
-            "deletions": 6,
+            "path": "extensions/voice-call/src/webhook.ts",
+            "additions": 12,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91227",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91227.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-91784",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91784.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 157,
+          "total": 155,
           "counts": {
-            "CANCELLED": 1,
-            "SKIPPED": 31,
-            "SUCCESS": 125
+            "SUCCESS": 125,
+            "SKIPPED": 30
           },
           "blockers": [],
           "pending": [],
@@ -144,15 +139,15 @@
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2664,
+    "total_ms": 4477,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 453
+        "ms": 526
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1845
+        "ms": 1685
       },
       {
         "name": "classify_commands",
@@ -160,7 +155,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 339
+        "ms": 2240
       },
       {
         "name": "append_ledger",
