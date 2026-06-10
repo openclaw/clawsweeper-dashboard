@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T08:44:40.266Z",
-  "repo": "steipete/CodexBar",
+  "generated_at": "2026-06-10T08:44:54.606Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-10T05:44:39.849Z",
+  "since": "2026-06-10T05:44:52.392Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    1379
+    91897
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,30 +29,120 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:91897:4668211754:2026-06-10T08:44:48Z:clawsweeper_auto_repair",
+      "comment_id": "4668211754",
+      "comment_version_key": "4668211754:2026-06-10T08:44:48Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/91897#issuecomment-4668211754",
+      "repo": "openclaw/openclaw",
+      "issue_number": 91897,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-10T08:36:59Z",
+      "comment_updated_at": "2026-06-10T08:44:48Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=ac0757532ef957f7333931b59cf7028bbf22807a)",
+      "review_summary": "The PR changes memory-core sync logic to re-initialize the embedding provider when index identity is missing and adds a regression test for missing metadata with existing chunks.\n\nPR surface: Source +38, Tests +152. Total +190 across 2 files.\n\nReproducibility: yes. for the PR review defect: source inspection shows public sync already initializes the provider before runSync(), and the added test exercises a forced full reindex rather than the claimed non-forced self-heal path. I did not run a live repro because this was a read-only review.",
+      "review_followup": "- [P1] Contributor or maintainer revision is needed because the current code direction is wrong and the external real-behavior proof remains insufficient.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "ac0757532ef957f7333931b59cf7028bbf22807a",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(memory): self-heal missing index identity by initializing provider during sync",
+        "body": "## Summary\r\n\r\nWhen a gateway's memory index identity becomes `\"missing\"` with chunks already indexed, the gateway never self-heals on its own. The `canRebuildMissingIdentity` check stays `false` because `this.provider` is `null` (async provider init hasn't completed yet when the sync loop runs), so `needsMissingIdentityReindex` is `false`, and the sync loop bails out with `dirty=true` forever.\r\n\r\nNow, when `indexIdentity.status === \"missing\"` and a provider is configured but `this.provider` is `null`, `runSync()` calls `ensureProviderInitialized()` first, then re-evaluates the identity state. If the provider becomes available, `canRebuildMissingIdentity` flips to `true`, unlocking the self-heal reindex path.\r\n\r\nThis addresses the provider-init deadlock portion of #91167. The broader stale-DB-handle problem (CLI atomic swap not reaching the running gateway) remains outside this diff and is tracked as a follow-up.\r\n\r\n## Change Type\r\n\r\n- [x] Bug fix\r\n\r\n## Scope\r\n\r\n- [x] Memory / storage\r\n\r\n## Linked Issue\r\n\r\n- Refs #91167 (provider-init deadlock only; stale DB handle after CLI atomic swap remains outside this diff)\r\n\r\n## Motivation\r\n\r\nIssue #91167 reports that a long-running gateway whose memory index-identity becomes invalid **with chunks already indexed** never recovers on its own — `memory_search` returns `{ disabled: true, unavailable: true, error: \"index metadata is missing\" }` indefinitely. The only repair is an out-of-process `openclaw memory index --force`, which performs an atomic file swap that leaves the running gateway reading a deleted inode.\r\n\r\nThe root cause has two parts:\r\n\r\n1. **Provider-init deadlock (this PR fixes)**: When the gateway's periodic sync runs and `this.provider` is still `null` (async init not yet complete), `canRebuildMissingIdentity` is `false`, `needsMissingIdentityReindex` is `false`, and the sync returns early with `dirty=true`. Even after the provider initializes, subsequent syncs still see `provider === null` because the stale DB handle returns `readMeta() = null` → identity stays `\"missing\"` → same early-return path.\r\n\r\n2. **Stale DB handle (follow-up)**: The CLI's `openclaw memory index --force` atomically swaps the DB file, but the running gateway's `DatabaseSync` handle still reads from the old deleted inode. This is a separate fix that requires a hot-reload mechanism.\r\n\r\nThis PR fixes the provider-init deadlock by ensuring the provider is initialized before the `canRebuildMissingIdentity` check, so the gateway can self-heal once the provider becomes available.\r\n\r\n## Changes\r\n\r\n**File**: `extensions/memory-core/src/memory/manager-sync-ops.ts`\r\n\r\nIn `runSync()`, after computing `indexIdentity` via `resolveMemoryIndexIdentityState()` (line 2053), when `indexIdentity.status === \"missing\"` and `this.provider === null` and `this.settings.provider` is configured (not `\"none\"`):\r\n\r\n- Call `await this.ensureProviderInitialized()` to make the provider available\r\n- Re-read `this.readMeta()` and re-evaluate `resolveMemoryIndexIdentityState()` with the now-available provider\r\n- If provider init fails (unregistered, auth, network), catch silently and keep the original `\"missing\"` identity so the FTS-only early-return still applies — we don't silently downgrade indexed semantic chunks\r\n\r\nThis is a narrow additive change: `const indexIdentity` → `let indexIdentity` + a guarded `if` block that only activates when identity is `\"missing\"` and provider is not yet initialized. No config, default, or DB handle changes.\r\n\r\n**File**: `extensions/memory-core/src/memory/manager.self-heal-missing-identity.test.ts` (new)\r\n\r\n1 test covering the self-heal path: seeds chunks without meta, creates a manager with provider configured but not yet initialized, syncs with `force: true`, verifies that `providerInitCallCount ≥ 1` and `indexIdentity.status` transitions from `\"missing\"` to `\"valid\"`.\r\n\r\n## Real Behavior Proof\r\n\r\n- Behavior addressed: A gateway whose memory index identity is `\"missing\"` with chunks already indexed never self-heals because `canRebuildMissingIdentity` stays `false` (provider not yet initialized), so `needsMissingIdentityReindex` is `false`, and the sync loop bails out with `dirty=true` forever.\r\n- Real environment tested: Linux (RHEL), Node.js 22.22, local checkout on branch `fix/memory-self-heal-missing-identity-91167` at commit `ac0757532`, dev build via `node scripts/run-node.mjs`.\r\n- Exact steps or command run after this patch: Seed 1 chunk + 1 file row into `~/.openclaw/memory/main.sqlite` with no `memory_index_meta_v1` row (simulating #91167's \"chunks exist but meta missing\" state), then run `node scripts/run-node.mjs memory status --index`\r\n- Evidence after fix: Terminal output from the current PR head (`ac0757532`) showing the self-heal path activates: `Embeddings: ready` confirms `ensureProviderInitialized()` ran successfully, and `Indexed: 1/50 files · 1 chunks` confirms the manager sees the seeded chunks. The full reindex was attempted but failed due to API rate limiting (429 on the ZTE MaaS endpoint), not a code defect. Copied live output from `node scripts/run-node.mjs memory status --index` with seeded chunks-without-meta:\r\n\r\n```\r\nMemory Search (main)\r\nProvider: openai (requested: openai)\r\nSources: memory\r\nIndexed: 1/50 files · 1 chunks\r\nEmbeddings: ready\r\nIndex identity: index metadata is missing\r\nVector search: paused until memory is rebuilt\r\nFix: Run: openclaw memory status --index --agent main\r\nSemantic vectors: unavailable\r\nFTS: ready\r\nIndex error: openai embeddings failed: 429 Too many requests\r\n```\r\n\r\nBefore-fix comparison (without this patch, the same scenario):\r\n\r\n```\r\nMemory Search (main)\r\nProvider: openai (requested: openai)\r\nIndexed: 1/50 files · 1 chunks\r\nEmbeddings: unavailable\r\nEmbeddings error: Unknown memory embedding provider: openai\r\nIndex identity: index metadata is missing\r\nVector search: paused until memory is rebuilt\r\n→ provider stays null, canRebuildMissingIdentity stays false,\r\n→ needsMissingIdentityReindex stays false,\r\n→ dirty=true early return, gateway stuck forever\r\n```\r\n\r\nAfter-fix: `Embeddings: ready` proves `ensureProviderInitialized()` ran successfully inside `runSync()`, and `canRebuildMissingIdentity` flipped to `true`. The full reindex was attempted but hit 429 rate limiting on the embedding API; this is an environment limitation, not a code defect. The unit test verifies the complete self-heal chain (identity transitions from `\"missing\"` to `\"valid\"`).\r\n\r\n- Observed result after fix: When the gateway's periodic sync runs and finds `indexIdentity.status === \"missing\"` with `this.provider === null`, `runSync()` now calls `ensureProviderInitialized()`. If the provider becomes available, `canRebuildMissingIdentity` flips from `false` to `true`, `needsMissingIdentityReindex` becomes `true`, and the self-heal reindex path unlocks. If provider init fails (unregistered, auth, network), the catch block preserves the original `\"missing\"` identity, and the FTS-only early-return still applies — indexed semantic chunks are never silently downgraded.\r\n- What was not tested: Full end-to-end vector indexing with a working embedding provider after the self-heal trigger (429 rate limit on the ZTE MaaS endpoint prevented live indexing). The stale DB handle problem (CLI atomic swap not reaching the running gateway) is not addressed and remains a follow-up.\r\n\r\n## Risks\r\n\r\n- **Low risk**: The fix is narrow — it only activates when `indexIdentity.status === \"missing\"` AND `this.provider === null` AND a provider is configured. No other sync paths are affected.\r\n- **Additive**: Provider init failure is caught silently; the original `\"missing\"` identity is preserved, so the existing FTS-only early-return behavior still applies.\r\n- **No silent downgrade**: When provider init fails, `canRebuildMissingIdentity` stays `false`, and indexed semantic chunks are never silently replaced with a rebuilt FTS-only index.\r\n- **Scope limitation**: This PR only addresses the provider-init deadlock. The broader stale-DB-handle problem (CLI atomic swap not reaching the running gateway) remains outside this diff and is tracked as a follow-up.\r\n\r\n## AI Assistance 🤖\r\n\r\n- AI-assisted: Yes\r\n- Human confirmed understanding: Yes\r\n- AI tools: iCodemate (analysis, code implementation, test writing)",
+        "branch": "fix/memory-self-heal-missing-identity-91167",
+        "head_sha": "ac0757532ef957f7333931b59cf7028bbf22807a",
+        "author": "xydt-tanshanshan",
+        "labels": [
+          "extensions: memory-core",
+          "size: S",
+          "proof: supplied",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-core/src/memory/manager-sync-ops.ts",
+            "additions": 39,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager.self-heal-missing-identity.test.ts",
+            "additions": 152,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-91897",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91897.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 15,
+          "counts": {
+            "CANCELLED": 2,
+            "SKIPPED": 10,
+            "SUCCESS": 3
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ]
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 712,
+    "total_ms": 2554,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 403
+        "ms": 468
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 1732
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 296
+        "ms": 329
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
