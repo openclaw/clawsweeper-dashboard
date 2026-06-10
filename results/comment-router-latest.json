@@ -1,17 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T13:59:39.096Z",
+  "generated_at": "2026-06-10T14:00:22.988Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-10T10:59:35.788Z",
+  "since": "2026-06-10T11:00:22.399Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     91950
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4671001199
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
@@ -61,90 +63,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(web_fetch): sanitize URL whitespace from LLM tool call arguments (fixes #91651)",
-        "body": "### Summary\n\n- **Problem**: LLM models occasionally generate tool call arguments with accidental whitespace in the URL (e.g. `https:// docs.openclaw.ai`), causing `web_fetch` to fail with \"Invalid URL: must be http or https\" displayed in user-facing channels.\n- **Root Cause**: `createWebFetchTool.execute` reads the `url` parameter at `src/agents/tools/web-fetch.ts:706` via `readStringParam` and passes it directly to `new URL()` without sanitization. `new URL()` throws on any whitespace in the URL string.\n- **Fix**: Sanitize the URL immediately after reading it from params by trimming leading/trailing whitespace and removing all internal whitespace characters via `.trim().replace(/\\s+/g, \"\")`. This handles the exact reported case (`https:// docs.openclaw.ai`) and also catches newlines, tabs, and spaces in path segments.\n- **What changed**:\n  - `src/agents/tools/web-fetch.ts` — one-line change: append `.trim().replace(/\\s+/g, \"\")` to the URL read at line 706\n- **What did NOT change (scope boundary)**:\n  - Other tool URL parsers (`web_search`, `gateway`, `pdf-tool`) were audited but left unchanged — each has different validation semantics and is out of scope for this fix\n  - The `validateUrl` helper at line 295 was not modified — it is a validation function that returns `undefined` for invalid input, not an execution path\n  - No changes to SSRF guards, provider routing, or fetch execution\n\n### Reproduction\n\n1. Bind a model (e.g. Qwen 3.6 27b) that occasionally formats tool arguments with whitespace\n2. Ask the agent a question that triggers `web_fetch` (e.g. \"fetch the docs\")\n3. LLM generates `{\"url\": \"https:// docs.openclaw.ai\"}` with a space after `://`\n4. **Before this PR**: `web_fetch` throws `Invalid URL: must be http or https`, displayed as an error in user-facing channels\n5. **After this PR**: `web_fetch` normalizes the URL to `https://docs.openclaw.ai/`, fetches successfully\n\n### Real behavior proof\n\n**Behavior or issue addressed (91651)**: `web_fetch` tool now sanitizes whitespace from the `url` parameter before parsing, so LLM-generated URLs with accidental spaces, newlines, or tabs proceed to fetch instead of failing with a cryptic error\n\n**Real environment tested**: Linux, Node 22 — Vitest with fake timers against the `web_fetch` runtime module and plugin provider resolution\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs src/web-fetch/runtime.test.ts src/plugins/web-fetch-providers.runtime.test.ts src/agents/tools-effective-inventory.test.ts`\n\n**Evidence after fix**:\n```text\n$ node -e \"\nconst urlWithSpace = 'https:// docs.openclaw.ai';\ntry { new URL(urlWithSpace); } catch (e) { console.log('BEFORE: ' + e.message); }\nconst sanitized = urlWithSpace.trim().replace(/\\s+/g, '');\ntry { const p = new URL(sanitized); console.log('AFTER:  ' + p.href); } catch (e) { console.log('AFTER:  ' + e.message); }\n\"\nBEFORE: Invalid URL\nAFTER:  https://docs.openclaw.ai/\n\nAdditional sanitization cases verified:\n  \"  https://example.com  \"  -> https://example.com/\n  \"https:// example.com/path\" -> https://example.com/path\n  \"https://docs.openclaw.ai\\n\" -> https://docs.openclaw.ai/\n  \"https://docs.openclaw.ai/a b\" -> https://docs.openclaw.ai/ab\n```\n\n**Observed result after fix**: The sanitization transform resolves every whitespace pattern in the issue report — leading/trailing spaces, space after `://`, trailing newlines, and spaces in path segments — into valid URLs that `new URL()` accepts without throwing. The existing runtime module continues to fetch, extract, and cache content correctly for all valid URLs.\n\n**What was not tested**: Live LLM-integration round-trip with Qwen or other models that produce the exact formatting error was not performed; the sanitization is verified at the string-transform level against each variant reported in the issue\n\n**Repro confirmation**: The `new URL(\"https:// docs.openclaw.ai\")` call on origin/main throws `Invalid URL`; after the patch the same input normalizes to `https://docs.openclaw.ai/` and parses successfully — the before and after behaviors are shown in the terminal block above\n\n### Risk / Mitigation\n\n- **Risk**: URL sanitization with `\\s+` replacement could theoretically merge legitimate-separated components in a pathological URL\n  **Mitigation**: Valid HTTP(S) URLs never contain unencoded whitespace (RFC 3986 §2.3). Any whitespace in a URL parameter from an LLM is a formatting error, not intentional content. The `trim` + `replace` normalization is consistent with the existing `validateUrl` helper (line 305-323) and `redactUrlForDebugLog` (line 200-207), both of which already handle non-conforming URLs gracefully.\n- **Risk**: Sanitizing early (at tool-arg read time) means the sanitized URL flows into cache keys\n  **Mitigation**: This is desirable — `https:// docs.openclaw.ai` and `https://docs.openclaw.ai` should share the same cache entry since they refer to the same resource\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] Tools: web_fetch\n\n### Regression Test Plan\n\nThe web_fetch runtime module, plugin provider resolution, and agent tool inventory are verified via:\n- `node scripts/run-vitest.mjs src/web-fetch/runtime.test.ts`\n- `node scripts/run-vitest.mjs src/plugins/web-fetch-providers.runtime.test.ts`\n- `node scripts/run-vitest.mjs src/agents/tools-effective-inventory.test.ts`\n\nAll existing behaviors are preserved — the sanitization is a pure no-op for valid URLs and only activates when whitespace is present.\n\n### Review Findings Addressed\n\nN/A (initial submission)\n\n### Linked Issue/PR\n\nFixes #91651\n",
-        "branch": "fix/issue-91651-url-sanitize",
-        "head_sha": "41fc6b4fe90848926a888f1c5d5b1f8514c09afd",
-        "author": "zenglingbiao",
-        "labels": [
-          "agents",
-          "size: XS",
-          "proof: supplied",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 security-boundary",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/tools/web-fetch.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "generated_issue_branch": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_issue_job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91950",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91950.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "CANCELLED": 2,
-            "SKIPPED": 30,
-            "SUCCESS": 128,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "build-artifacts:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "build-artifacts:FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3570,
+    "total_ms": 1149,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 332
+        "ms": 572
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2961
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 250
+        "ms": 561
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
