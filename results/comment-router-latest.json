@@ -1,20 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T15:18:13.812Z",
+  "generated_at": "2026-06-10T15:19:00.383Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-10T12:18:10.649Z",
+  "since": "2026-06-10T12:18:59.802Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     79910
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4413213994
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 12,
+  "scanned_comments": 1,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -61,106 +63,28 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(sessions): recover store from backup and tmp artifacts",
-        "body": "## Summary\n\n- **Problem**: When the gateway crashes mid-write, `sessions.json` can be left zero-byte or syntactically malformed. On the next startup, `loadSessionStore` previously returned an empty store even when a recoverable `.bak` or session-store temp artifact was still present on disk.\n- **Why it matters**: This failure mode looks like silent session metadata loss rather than a loud startup error.\n- **What changed**: `loadSessionStore` now best-effort recovers from `sessions.json.bak` first, then from the newest stale session-store temp artifact (`<store>.<pid>.<uuid>.tmp` or legacy `<store>.<uuid>.tmp`), and writes the recovered state back through an atomic self-heal at `0o600`.\n- **Current hardening**: Recovery only runs after the primary store was readable but unusable (zero-byte after retries or malformed JSON after retries). If the primary store cannot be read at all, recovery is skipped so `.bak` or `.tmp` cannot overwrite a valid but temporarily inaccessible primary store.\n- **Temp policy**: Recovery and cleanup share `SESSION_STORE_TEMP_STALE_MS = 5 * 60 * 1000`. Temp artifacts younger than the cleanup stale window are treated as in-flight and are not promoted.\n- **What did NOT change**: The save hot path, session state machine, and load semantics for valid stores are unchanged. A valid `{}` or `[]` primary store still short-circuits recovery.\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor required for the fix\n- [ ] Docs\n- [x] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [ ] Skills / execution\n- [ ] Auth / tokens\n- [x] Memory / storage\n- [ ] Integrations\n- [ ] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- Closes #77783\n- [x] This PR fixes a bug or regression\n\n## Real behavior proof (required for external PRs)\n\n- **Behavior or issue addressed**: Session metadata recovery after a crashed or interrupted session-store write. The after-fix behavior should recover from a valid `.bak` or stale session-store temp artifact when the primary store is zero-byte or malformed, while refusing recovery when the primary store cannot be read.\n- **Real environment tested**: Windows local checkout, Node.js v24.15.0, exact PR head `85e9e898482076ef32921e88b4b20c36c57d8e8f`, using real temp files and the actual `loadSessionStore`, session-store artifact matcher, and disk-budget stale-temp constant.\n- **Exact steps or command run after this patch**:\n  1. Created a real temporary session-store directory with zero-byte `sessions.json` and valid `sessions.json.bak`, then called `loadSessionStore`.\n  2. Created a second real temporary session-store directory with malformed primary JSON and a valid stale `sessions.json.<pid>.<uuid>.tmp`, then called `loadSessionStore`.\n  3. Created a third real temporary session-store path where `sessions.json` was a directory to force a primary read error, plus valid `.bak` and stale `.tmp` siblings, then called `loadSessionStore`.\n  4. Added a regression test for a failed self-heal rename, then verified a later unchanged-store save rewrites the recovered data instead of trusting an unpersisted recovered serialization.\n  5. Ran focused recovery and disk-budget tests, touched-file lint, core typecheck, and diff whitespace checks.\n- **Evidence after fix**:\n\n```text\n[sessions/store] self-healed session store from backup\n[sessions/store] self-healed session store from backup/tmp\n[sessions/store] self-healed session store from backup\nhead=85e9e898482076ef32921e88b4b20c36c57d8e8f\nenvironment=win32 x64, Node v24.15.0\nbak-zero-byte recovered=bak-a,bak-b healed=bak-a,bak-b\nstale-current-tmp-malformed recovered=tmp-a,tmp-b healed=tmp-a,tmp-b\nprimary-read-error recovered=0 primaryStillDirectory=true\nfailed-self-heal recovered=retry-heal-session stillMalformedAfterFailedHeal=true laterSaveHealed=retry-heal-session\ntempStaleWindowMs=300000\n```\n\n```text\nnode scripts/run-vitest.mjs run --config test/vitest/vitest.runtime-config.config.ts src/config/sessions/disk-budget.test.ts src/config/sessions/store-load.recovery.test.ts --reporter=dot --pool=forks --maxWorkers=1\n\nTest Files  2 passed (2)\nTests       33 passed (33)\n```\n\n\nSupplemental rebased-head validation:\n\n```text\nnode scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts test/scripts/lint-suppressions.test.ts --reporter=dot --pool=forks --maxWorkers=1\n\nTest Files  1 passed (1)\nTests       3 passed (3)\n```\n\n```text\nnode scripts/run-oxlint.mjs src/config/sessions/artifacts.ts src/config/sessions/disk-budget.ts src/config/sessions/store-load.ts src/config/sessions/store-load.recovery.test.ts -> passed\nnode scripts/run-tsgo.mjs -p tsconfig.core.json -> passed\ngit diff --check -> passed\n```\n\n- **Observed result after fix**: `.bak` recovery restored and wrote back `bak-a,bak-b`; stale current temp recovery restored and wrote back `tmp-a,tmp-b`; a primary read error returned an empty store and left the primary path as a directory, proving `.bak` and stale `.tmp` were not promoted over an unreadable primary. The regression test also confirmed that a failed self-heal does not mark recovered JSON as already persisted: a later unchanged-store save rewrote the primary with `retry-heal-session`. The stale-temp window used by recovery was `300000` ms, matching cleanup.\n- **What was not tested**: Concurrent write contention on network-attached storage (NFS/SMB).\n\n## Security Impact (required)\n\n- New permissions/capabilities? `No`\n- Secrets/tokens handling changed? `No`\n- New/changed network calls? `No`\n- Command execution surface changed? `No`\n- Data access scope changed? `Yes` - recovery now reads sibling files in the same store directory (`.bak` and session-store `.tmp` artifacts that the writer itself produced).\n- **Risk + mitigation**: A planted symlink or hardlink must not become a recovery source. Every candidate is validated with `lstatSync` before it is read and is rejected unless it is a regular file, not a symlink, and has `nlink === 1`. Content-shape validation then requires at least one entry with a non-empty `sessionId`.\n- **Race mitigation**: Temp recovery uses the same 5-minute stale window as disk cleanup, so recovery cannot promote a temp artifact that cleanup still treats as in-flight.\n- **Primary-read mitigation**: Permission or transient I/O read failures skip recovery instead of promoting a sibling artifact over the primary store.\n\n## Repro + Verification\n\n### Environment\n\n- OS: Windows\n- Runtime: Node.js v24.15.0\n- PR head: `85e9e898482076ef32921e88b4b20c36c57d8e8f`\n\n### Steps\n\n1. Start with a populated `sessions.json`.\n2. Simulate an interrupted write by making the primary store zero-byte or malformed.\n3. Leave a valid `sessions.json.bak` or matching session-store `.tmp` sibling older than the shared 5-minute stale window.\n4. Call `loadSessionStore`.\n\n### Expected\n\n- The store recovers from `.bak` first, or from the newest stale matching `.tmp` when `.bak` is absent or unusable.\n- The recovered store is written back atomically.\n- Valid primary stores, including `{}` and `[]`, do not trigger recovery.\n- A primary store read error does not trigger recovery from `.bak` or `.tmp`.\n\n### Actual\n\n- The real-file proof and focused tests passed for the covered scenarios.\n\n## Evidence\n\n- [x] Trace/log snippets\n- [x] Real-file recovery driver\n- [x] Focused tests\n- [x] Lint\n- [x] Typecheck\n\n## Human Verification (required)\n\n- **Verified scenarios**: Recovery from `.bak`; recovery from legacy and current session-store temp artifacts; newest stale temp selection; rejection of young temp artifacts; rejection of empty and unrelated JSON candidates; preservation of valid empty stores; self-heal writeback; failed self-heal does not mark recovered JSON as persisted; no recovery when the primary store cannot be read.\n- **Edge cases checked**: Multiple competing temp candidates; invalid `.bak` with valid stale temp fallback.\n- **What I did NOT verify**: NFS/SMB-level concurrent write races.\n\n## Review Conversations\n\n- [x] I replied to or resolved every review conversation I addressed in this PR.\n- [ ] I left unresolved only the conversations that still need reviewer or maintainer judgment.\n\n## Compatibility / Migration\n\n- Backward compatible? `Yes` - valid stores load exactly as before.\n- Config/env changes? `No`\n- Migration needed? `No`\n\n## Risks and Mitigations\n\n- **Risk**: Resurrecting stale or in-flight data from a temp file that an active writer has not yet renamed.\n  - **Mitigation**: Skip any temp artifact younger than `SESSION_STORE_TEMP_STALE_MS` (5 minutes), matching the existing cleanup policy.\n- **Risk**: Reading an attacker-planted symlink/hardlink during recovery.\n  - **Mitigation**: `lstatSync` + regular-file + non-symlink + `nlink === 1` gate on every candidate, applied to both `.bak` and `.tmp`.\n- **Risk**: Recovering from unrelated JSON.\n  - **Mitigation**: Filename pattern match plus content-shape validation requiring at least one entry with a non-empty `sessionId`.\n- **Risk**: Recovery firing when the primary file is a valid reset (`{}` or `[]`).\n  - **Mitigation**: Successful primary parsing short-circuits before any sibling artifact is touched.\n- **Risk**: Promoting recovery artifacts when the primary store cannot be read.\n  - **Mitigation**: Final read errors break out without setting the recovery flag, so `.bak` and `.tmp` recovery are skipped.\n",
-        "branch": "new-pr-session-recovery",
-        "head_sha": "56874031ba23c4a33f3b73d660fa2434978aa5d8",
-        "author": "wangbyg",
-        "labels": [
-          "size: M",
-          "triage: blank-template",
-          "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/config/sessions/artifacts.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/disk-budget.ts",
-            "additions": 1,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/store-load.recovery.test.ts",
-            "additions": 244,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/config/sessions/store-load.ts",
-            "additions": 204,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "generated_issue_branch": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_issue_job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-79910",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-79910.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "CANCELLED": 2,
-            "FAILURE": 3,
-            "SKIPPED": 30,
-            "SUCCESS": 126,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "Security High (network-ssrf-boundary):FAILURE",
-            "Security High (actions):FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED",
-            "Security High (network-ssrf-boundary):FAILURE",
-            "Security High (actions):FAILURE"
-          ]
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3544,
+    "total_ms": 1278,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 515
+        "ms": 567
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 2629
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 369
+        "ms": 697
       },
       {
         "name": "append_ledger",
