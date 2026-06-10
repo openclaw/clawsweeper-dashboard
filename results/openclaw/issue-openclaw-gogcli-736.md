@@ -2,12 +2,12 @@
 repo: "openclaw/gogcli"
 cluster_id: "issue-openclaw-gogcli-736"
 mode: "autonomous"
-run_id: "27274859265"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27274859265"
+run_id: "27276513267"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27276513267"
 head_sha: "eb2f304346618b374d9319908edbededaf6e759b"
 workflow_conclusion: "failure"
-result_status: "planned"
-published_at: "2026-06-10T12:21:18.013Z"
+result_status: "blocked"
+published_at: "2026-06-10T12:45:57.840Z"
 canonical: "https://github.com/openclaw/gogcli/issues/736"
 canonical_issue: "https://github.com/openclaw/gogcli/issues/736"
 canonical_pr: null
@@ -25,17 +25,17 @@ needs_human_count: 0
 
 Repo: openclaw/gogcli
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/27274859265](https://github.com/openclaw/clawsweeper/actions/runs/27274859265)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/27276513267](https://github.com/openclaw/clawsweeper/actions/runs/27276513267)
 
 Workflow conclusion: failure
 
-Worker result: planned
+Worker result: blocked
 
 Canonical: https://github.com/openclaw/gogcli/issues/736
 
 ## Summary
 
-Source inspection confirms the synthetic newline comes from `MarkdownToDocsRequests` rendering every `MDParagraph` as a terminated paragraph. The safe fix belongs only in range replacement: detect a single inline paragraph, remove its final delimiter, and clamp formatting ranges to the shortened insertion while preserving structural and multiline markdown.
+Issue #736 is coherent, non-security-sensitive, and still reproducible at source level on current main SHA 344703bd2791ca37e16bfa0172f6447d8b1a8049. The narrow fix is to suppress MarkdownToDocsRequests' synthetic terminal newline only when a single MDParagraph replaces an inline range that excludes the existing paragraph terminator. Structural and explicit multiline markdown must retain delimiters. Implementation is blocked because the supplied checkout is read-only; focused tests also could not start because Go could not create its module cache.
 
 ## Impact
 
@@ -66,9 +66,9 @@ Source inspection confirms the synthetic newline comes from `MarkdownToDocsReque
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #736 | keep_canonical | planned | canonical | This is the sole canonical report and remains applicable on the preflight main SHA. |
-| cluster:issue-openclaw-gogcli-736 | fix_needed | planned |  | A new focused implementation PR is needed; no viable candidate PR exists. |
-| cluster:issue-openclaw-gogcli-736 | build_fix_artifact | planned |  | The executor can implement this as one small PR from the configured target branch. |
+| #736 | keep_canonical | planned | canonical | This issue is the canonical product report and should remain open until its implementation PR merges. |
+| cluster:issue-openclaw-gogcli-736 | fix_needed | blocked |  | The supplied target checkout and Go cache location are read-only, so this worker cannot patch or locally validate the required PR branch. |
+| cluster:issue-openclaw-gogcli-736 | build_fix_artifact | planned |  | A narrow, executable new-fix-PR plan is available despite the read-only implementation blocker. |
 
 ## Needs Human
 
