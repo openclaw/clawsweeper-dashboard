@@ -1,21 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-10T11:24:48.595Z",
-  "repo": "steipete/CodexBar",
+  "generated_at": "2026-06-10T11:25:24.742Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-10T08:24:47.044Z",
+  "since": "2026-06-10T08:25:22.551Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    1389
+    63634
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4669617755
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,133 +31,30 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "clawsweeper-repair:steipete/CodexBar:1389:4669602952:2026-06-10T11:24:44Z:clawsweeper_auto_repair",
-      "comment_id": "4669602952",
-      "comment_version_key": "4669602952:2026-06-10T11:24:44Z",
-      "comment_url": "https://github.com/steipete/CodexBar/pull/1389#issuecomment-4669602952",
-      "repo": "steipete/CodexBar",
-      "issue_number": 1389,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "NONE",
-      "comment_created_at": "2026-06-10T11:22:14Z",
-      "comment_updated_at": "2026-06-10T11:24:44Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=bc5a600f9afd5f57b0fbf76f3c0713cfe05a06e2)",
-      "review_summary": "The PR defers pasteboard writes and copy-feedback state changes from two hosted menu click handlers, avoids redundant overlay updates, and adds AppKit overlay tests.\n\nReproducibility: yes. at source level: current main contains the synchronous animation and pasteboard operations identified by the concrete macOS 26.4.1 steps in the linked report. This read-only review did not independently execute the macOS reproduction.",
-      "review_followup": "- [P1] Require contributor-supplied built-app proof and removal of the release-owned changelog edit before normal maintainer merge review; automation cannot supply proof from the contributor's affected setup.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "bc5a600f9afd5f57b0fbf76f3c0713cfe05a06e2",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(menu): defer copy-icon click work off the NSMenu tracking loop (macOS 26 beachball)",
-        "body": "## Problem\n\nOn macOS 26.4.1 clicking the `doc.on.doc` \"Copy error\" icon next to an error in a hosted menu card freezes the cursor for several seconds. Reproduces deterministically with any provider whose card surfaces an error (e.g. Claude web `Unauthorized`).\n\nTwo SwiftUI / NSView handlers run work synchronously inside the live `NSMenu` tracking event loop:\n\n1. **`CopyIconButton.body`** ([MenuCardView.swift:316](https://github.com/steipete/CodexBar/blob/main/Sources/CodexBar/MenuCardView.swift#L316-L351)) — `Button` action calls `withAnimation { didCopy = true }` immediately and queues a second `withAnimation { didCopy = false }` 0.9s later. Each `withAnimation` inside a tracking-mode hosted view forces a synchronous SwiftUI hosting layout pass that the menu engine cannot service mid-tracking.\n2. **`ClickToCopyView.mouseDown`** ([ClickToCopyOverlay.swift](https://github.com/steipete/CodexBar/blob/main/Sources/CodexBar/ClickToCopyOverlay.swift)) — `NSPasteboard.general.setString` runs synchronously. Pasteboard writes emit distributed notifications whose synchronous watchers can re-enter the menu engine.\n\nThis is the same class of bug Peter has been chasing in 0.32.5/0.32.6 menu perf work (#1352 throwaway hosting, #1291 closed-menu rebuilds, #1297 icon observation churn, #1303 quota indicator constraint churn) — the copy-icon hotspots weren't in radar.\n\nFixes #1388.\n\n## Solution\n\nBoth handlers now defer their post-click work off the current menu-tracking tick:\n\n1. `CopyIconButton.handleCopy()` (new helper) — `DispatchQueue.main.async`s the pasteboard write, `didCopy = true`, and the 0.9s reset task. Drops `withAnimation` for plain state mutation (the icon swap is fine without animation; on a fast menu click the user only sees the new icon).\n2. `ClickToCopyView.mouseDown` — same pattern, captures `copyText` locally and `DispatchQueue.main.async`s the `NSPasteboard.setString` call. `updateNSView` gains a no-op guard so a stable parent card re-render doesn't churn the `NSView`.\n\nStrictly in-place patches. No `MenuDescriptor` plumbing change, no API change, no new public types. UX preserved — clicking the icon next to the error still copies; the checkmark flips on the next tick and reverts after 0.9s.\n\n## Testing\n\n`Tests/CodexBarTests/ClickToCopyOverlayTests.swift` (new):\n\n- `view stores the latest copyText`\n- `mouseDown writes copyText to general pasteboard asynchronously` (synthesizes an `NSEvent` from `CGEvent`, asserts a sentinel string appears on the general pasteboard after a 50ms yield)\n- `accepts first mouse so error text overlay is clickable on first focus`\n\n```\nswift test --filter ClickToCopyOverlayTests   # 3/3 pass\n./Scripts/lint.sh lint                         # 0 violations / 1025 files\nswift build                                    # clean\n```\n\nVerified locally on macOS 26.4.1 — the Copy-error icon click is now instantaneous, no beachball, no system freeze.\n\n## Out of scope / follow-ups\n\n- The deeper \"promote copy to a dedicated `NSMenuItem` via the existing `MenuDescriptor.MenuAction.copyError` case + `@objc copyError(_:)` handler\" rewrite (cc-claude Option C) would *remove* the SwiftUI in-menu click path entirely. That's the cleaner long-term answer if more in-menu copy affordances appear, but it changes UX (a separate menu item replaces the inline icon) — left for a follow-up if these handlers prove fragile again on future macOS releases.\n- The pattern likely applies anywhere else SwiftUI buttons hosted inside `NSMenu` tracking call `withAnimation` or write to `NSPasteboard` synchronously. Worth a sweep when bandwidth permits.\n",
-        "branch": "fix/macos26-menu-tracking-copy-beachball",
-        "head_sha": "bc5a600f9afd5f57b0fbf76f3c0713cfe05a06e2",
-        "author": "leolin990405",
-        "labels": [
-          "status: 📣 needs proof",
-          "rating: 🦪 silver shellfish"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Sources/CodexBar/ClickToCopyOverlay.swift",
-            "additions": 18,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Sources/CodexBar/MenuCardView.swift",
-            "additions": 22,
-            "deletions": 15,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "Tests/CodexBarTests/ClickToCopyOverlayTests.swift",
-            "additions": 46,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "generated_issue_branch": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_issue_job_path": null,
-        "automerge_cluster_id": "automerge-steipete-codexbar-1389",
-        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-1389.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 4,
-          "counts": {
-            "IN_PROGRESS": 3,
-            "SUCCESS": 1
-          },
-          "blockers": [
-            "lint-build-test:IN_PROGRESS",
-            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
-            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
-          ],
-          "pending": [
-            "lint-build-test:IN_PROGRESS",
-            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
-            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS"
-          ],
-          "terminalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    }
-  ],
-  "ledger_changed": true,
+  "commands": [],
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1876,
+    "total_ms": 2418,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 361
+        "ms": 2179
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1176
+        "ms": 1
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 312
+        "ms": 227
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
