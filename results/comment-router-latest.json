@@ -1,26 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-11T12:36:10.221Z",
+  "generated_at": "2026-06-11T12:38:38.700Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-11T09:36:09.588Z",
+  "since": "2026-06-11T09:38:34.246Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    89456
+    92164
   ],
-  "comment_ids": [
-    4680588475
-  ],
-  "comment_ids": [
-    4676950271
-  ],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 46,
-  "commands_seen": 23,
+  "scanned_comments": 2,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -36,62 +31,137 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:89456:4680588475:2026-06-11T12:34:09Z:automerge",
-      "comment_id": "4680588475",
-      "comment_version_key": "4680588475:2026-06-11T12:34:09Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89456#issuecomment-4680588475",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92164:4680490535:2026-06-11T12:38:30Z:clawsweeper_needs_human",
+      "comment_id": "4680490535",
+      "comment_version_key": "4680490535:2026-06-11T12:38:30Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92164#issuecomment-4680490535",
       "repo": "openclaw/openclaw",
-      "issue_number": 89456,
-      "author": "hxy91819",
-      "author_id": 8814856,
-      "author_association": "MEMBER",
-      "comment_created_at": "2026-06-11T12:34:09Z",
-      "comment_updated_at": "2026-06-11T12:34:09Z",
+      "issue_number": 92164,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-11T12:23:55Z",
+      "comment_updated_at": "2026-06-11T12:38:30Z",
       "status_comment_id": null,
-      "trigger": "mention",
-      "command": "automerge",
-      "intent": "automerge",
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] The remaining blocker is maintainer judgment on proof override and acceptable large-index latency risk, not a narrow automated repair.; Cleared: No concrete security or supply-chain regression was found; the SQL additions continue to parameterize user terms and do not touch dependencies, secrets, CI, or package metadata. (sha=2511c76abf1a3db7e8045ea97c9820d4eaa70bbb)",
+      "review_summary": "The branch changes memory-core keyword planning/search and regression tests so trigram CJK tokens use LIKE terms and empty MATCH results retry the LIKE fallback.\n\nPR surface: Source +50, Tests +97. Total +147 across 2 files.\n\nReproducibility: yes. at source level: current main sends multi-character CJK trigram tokens through quoted MATCH and only falls back on exceptions, while SQLite FTS5 documents trigram substring and short-token limitations. I did not run the full OpenClaw memory_search flow in this read-only review.",
+      "review_followup": "- [P1] The remaining blocker is maintainer judgment on proof override and acceptable large-index latency risk, not a narrow automated repair.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": null,
+      "expected_head_sha": "2511c76abf1a3db7e8045ea97c9820d4eaa70bbb",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(memory-core): score CJK keyword search instead of textScore=0 with trigram FTS5",
+        "body": "## Summary\n\nHybrid memory search scored **every** Chinese/Japanese/Korean (CJK) query at `textScore: 0` when the FTS5 store uses the `trigram` tokenizer. Vector search still returned correct matches, but the BM25/full-text component contributed nothing, dragging down the final hybrid score for all CJK queries. English queries were unaffected.\n\nThis fixes the two root causes pinpointed in #92061, both in `extensions/memory-core` (`planKeywordSearch` / `searchKeyword`).\n\nFixes #92061\n\n## Root cause\n\n`planKeywordSearch` tokenizes the query with `/[\\p{L}\\p{N}_]+/gu`, which collapses a run of CJK characters into a **single** token (e.g. `飞书插件配置` → one 6-char token). The previous code only diverted CJK to the LIKE path when the token was shorter than 3 characters:\n\n```js\nif (SHORT_CJK_TRIGRAM_RE.test(token) && Array.from(token).length < 3) {\n  substringTerms.push(token);   // LIKE path\n  continue;\n}\nmatchTerms.push(token);          // MATCH path\n```\n\nSo any CJK token of 3+ characters became a **quoted trigram phrase**, e.g. `MATCH \"飞书插件配置\"`. A quoted phrase only matches the exact *contiguous* substring, which rarely exists verbatim in documents — so MATCH returned **0 rows**.\n\nThe LIKE fallback that could have rescued this only fired inside the `catch` block, i.e. when MATCH **threw**. An empty-but-successful MATCH skipped it entirely, leaving the keyword result set empty → `textScore = 0` for the whole hybrid result.\n\nI verified the mechanism directly against the real `node:sqlite` FTS5 trigram engine (no mocks):\n\n```\nphrase 飞书插件配置 (not contiguous in doc): OK rows=0   ← silent empty, no throw\nphrase feishu (>=3 latin):                  OK rows=1\n```\n\n## Fix\n\n1. **Bug 1 — split CJK tokens for substring matching.** Any token containing CJK is decomposed into per-character LIKE terms (`splitCjkToken`). Contiguous non-CJK runs are kept whole, so `API配置` → `[\"API\", \"配\", \"置\"]` rather than letter-by-letter, preserving precision for embedded ASCII.\n2. **Bug 2 — fall back to LIKE on an empty MATCH.** When MATCH succeeds but returns 0 rows and the plan has substring terms, retry with the per-term LIKE search instead of returning empty. The exception-path fallback is refactored into a shared `runLikeFallback` helper so both paths use the same correctly-decomposed term set (this also drops the old over-strict whole-CJK-token LIKE term from the exception path).\n\nCJK keyword hits now surface through the LIKE path with `textScore = 1` (no BM25 rank available), exactly like the pre-existing short-CJK and MATCH-exception fallbacks.\n\n## Before / After\n\n| Query (`trigram` tokenizer) | Doc | Before | After |\n| --- | --- | --- | --- |\n| `飞书插件配置` | `如何配置飞书插件` | ∅ → `textScore 0` | hit → `textScore 1` |\n| `東京駅周辺` | `東京の駅の周辺を歩く` | ∅ → `textScore 0` | hit → `textScore 1` |\n| `id 配置` (sub-trigram latin + CJK) | `id配置文档说明` | ∅ (empty MATCH, no fallback) | hit → `textScore 1` |\n| `API飞书` | `查看API文档和飞书设置` | ∅ → `textScore 0` | hit → `textScore 1` |\n| `feishu 配置` (latin ≥3 + CJK) | `feishu 配置文档说明` | BM25 hit | BM25 hit (unchanged) |\n\n## Minimal reproduction\n\n```\nagents.defaults.memorySearch.store.fts.tokenizer: \"trigram\"\n```\n1. Index a memory file containing `如何配置飞书插件`.\n2. `memory_search` with query `飞书插件配置`.\n3. Before: all results `textScore: 0`. After: keyword component contributes `textScore: 1`.\n\n## Tests\n\nAdded a `CJK FTS textScore regression coverage (issue #92061)` block to `manager-search.test.ts` (runs under the existing `itWithTrigramFts` guard, skipped where trigram FTS5 is unavailable):\n\n- multi-character CJK query scores `textScore = 1` instead of `0` (core repro)\n- every CJK character of the query must be present (per-character AND semantics)\n- Japanese kanji query that is not a contiguous substring\n- empty-MATCH → LIKE fallback (sub-trigram latin `id` + CJK), isolating Bug 2\n- non-CJK runs kept whole when splitting a mixed token (`API飞书`)\n- mixed latin+CJK still BM25-scored through MATCH (no regression)\n\nThe first five **fail against `main`** (empty result set / `textScore 0`) and pass with the fix; I confirmed both directions by replaying the exact regex/SQL logic against `node:sqlite` FTS5 trigram.\n\n## Architecture note\n\n`memory-core` runs lexical (FTS5) and vector (sqlite-vec) search independently and blends them in the hybrid scorer. The trigram tokenizer is the recommended option for CJK precisely because `unicode61` word-segmentation does not apply to scriptio-continua languages — but trigram needs ≥3 characters to form a token and a quoted phrase demands contiguity. The robust lexical primitive for CJK is therefore **per-character substring (LIKE) matching**, which this change makes the consistent path for all CJK tokens while keeping BM25-ranked MATCH for trigram-eligible Latin/numeric terms. The empty-MATCH fallback closes the remaining gap for mixed queries so the keyword channel never silently collapses to zero.\n\n## Real behavior proof\n\nThis change is in a path that requires a live OpenClaw instance with an embedding provider (the issue used Ollama `qwen3-embedding:4b`) plus a populated CJK memory index to exercise end-to-end. That hardware/provider setup is **not available in my environment**, so I proved the actual failing mechanism at the layer where the bug lives — the real SQLite FTS5 trigram engine that `memory-core` drives:\n\n```\n$ node (real node:sqlite, FTS5 trigram)\ndoc indexed: \"如何配置飞书插件\"\nMATCH \"飞书插件配置\"  → rows=0   (silent empty: reproduces textScore=0)\nper-char LIKE %飞%..%置% → rows=1 (the fix's path)\n```\n\nI also replayed `planKeywordSearch` + `searchKeyword`'s exact SQL/regex against `node:sqlite` for all six test scenarios: the five regression cases return **empty** under `main` and the **correct hit** under the patch.\n\nSince a full hybrid `memory_search` live run with an embedding provider is not reproducible here, I'm requesting maintainers apply **`proof: override`** for the live-instance portion of the proof gate. Happy to run any additional maintainer-specified validation. The branch is pushed to a maintainer-pushable branch with edits enabled.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+        "branch": "fix/memory-core-cjk-fts-textscore",
+        "head_sha": "2511c76abf1a3db7e8045ea97c9820d4eaa70bbb",
+        "author": "draix",
+        "labels": [
+          "extensions: memory-core",
+          "size: S",
+          "triage: needs-real-behavior-proof",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/memory-core/src/memory/manager-search.test.ts",
+            "additions": 97,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/manager-search.ts",
+            "additions": 71,
+            "deletions": 21,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92164",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92164.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 157,
+          "counts": {
+            "FAILURE": 9,
+            "CANCELLED": 1,
+            "SKIPPED": 31,
+            "SUCCESS": 116
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "build-artifacts:FAILURE",
+            "check-guards:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "build-artifacts:FAILURE",
+            "check-guards:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-extension-channels:FAILURE",
+            "check-additional-extension-bundled:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
     }
   ],
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1215,
+    "total_ms": 4781,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 620
+        "ms": 430
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1
+        "ms": 4014
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 583
+        "ms": 320
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
