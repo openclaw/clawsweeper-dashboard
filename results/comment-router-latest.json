@@ -1,23 +1,23 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-11T08:06:25.057Z",
+  "generated_at": "2026-06-11T08:07:10.842Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-11T05:06:22.501Z",
+  "since": "2026-06-11T05:07:10.224Z",
   "execute": true,
   "force_reprocess": false,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
     91625
   ],
   "comment_ids": [
     4678476780
   ],
-  "status_comment_id": 4678477344,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 7,
-  "commands_seen": 4,
+  "scanned_comments": 1,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-11T08:05:40Z",
       "comment_updated_at": "2026-06-11T08:05:40Z",
-      "status_comment_id": 4678477344,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review — the previous review run reported \"review did not complete\" and reverted the rating to off-meta. re-requesting a clean pass. no behavior changed since the diamond-lobster proof run: commit 5a394e72f4 only reworded the `--clear-model` help string and cron docs for model-precedence accuracy. the live before/after gateway proof in the pr body still holds (payload `model` removed by `cron edit --clear-model`)",
       "intent": "re_review",
@@ -61,123 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-11T08:06:25.789Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 91625
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-11T08:06:27.064Z",
-          "response_comment_id": "4670087417",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): add cron edit --clear-model to clear a job's model override",
-        "body": "## Summary\n\n- The Gateway RPC `cron.update` already supports **clearing** a cron job's `payload.model` override by sending `model: null` (landed via #91298 — the patch schema, `normalizeCronJobPatch`, and `mergeCronPayload` all honor `null` as \"delete this key\").\n- But the CLI `openclaw cron edit` has **no way to send it**: `--model` only *sets* a value (an empty string is silently ignored), and there is no `--clear-model` flag — unlike the sibling field `toolsAllow`, which has `--clear-tools`. So #91298's fix is unreachable from the CLI, the most common install/edit path, and a model override stuck on a cron job cannot be removed without hand-editing gateway state.\n- This adds `--clear-model` to `cron edit`, mirroring the existing `--clear-tools` flag.\n\n## Root cause\n\n`src/cli/cron-cli/register.cron-edit.ts` only ever assigns `model` when it is truthy:\n\n```ts\nassignIf(payload, \"model\", model, Boolean(model)); // empty/absent -> not sent\n```\n\nThere was no clear flag, so the CLI could never produce the `model: null` patch that `mergeCronPayload` (`src/cron/service/jobs.ts`) already honors:\n\n```ts\nif (typeof patch.model === \"string\") next.model = patch.model;\nelse if (patch.model === null) delete next.model; // <- reachable from RPC, not CLI\n```\n\n`--clear-tools` already demonstrates the intended pattern for the sibling `toolsAllow` field (`payload.toolsAllow = null`).\n\n## What changed (`src/cli/cron-cli/register.cron-edit.ts`)\n\n- Add the `--clear-model` option.\n- Reject `--model` + `--clear-model` together (matches the existing `--agent`/`--clear-agent` and `--session-key`/`--clear-session-key` guards).\n- Include `--clear-model` in the agentTurn-payload trigger so a clear-only edit still builds the patch.\n- Emit `payload.model = null` when `--clear-model` is set (mirrors `--clear-tools` → `toolsAllow: null`).\n\nNet `+10 / -1` in prod, `+28` test.\n\n## Scope boundary\n\nOnly `model` is addressed: its RPC null-clear already shipped (#91298), so the CLI flag is the **sole** missing piece. Sibling agentTurn override fields (`thinking`, `fallbacks`) are not yet clearable at the RPC layer either — open PR #67429 adds that — so their CLI clear flags are the natural follow-up once #67429 lands. This change is orthogonal to #67429 (no shared files, no overlap).\n\n## Change Type\n\n- [x] Bug fix\n\n## Linked Issue\n\nSource-discovered while reading the cron clear-override paths. Completes the CLI half of #91298 (model-clear); related: #67429 (RPC null-clear for `fallbacks`/`thinking`).\n\n## Evidence\n\n- [x] **Failing before / passing after.** New test `clears the model override with --clear-model` asserts `cron edit <id> --clear-model` sends `{ payload: { kind: \"agentTurn\", model: null } }`. Before this change the flag does not exist, so the parse errors with `unknown option '--clear-model'`. New help-doc test asserts `--clear-model` is documented alongside `--clear-tools`. Full file: **6/6 tests pass** (Node 22.22.1).\n\n## Real behavior proof\n\nBehavior addressed: `openclaw cron edit <id> --clear-model` now removes a cron job's `payload.model` override (reverting the job to the agent/default model); previously there was no CLI way to clear it.\n\nReal environment tested: local OpenClaw dev gateway (`gateway run --dev --auth none`) on Node 22.22.1 (macOS), isolated `OPENCLAW_STATE_DIR`/`OPENCLAW_HOME`, CLI driven via `scripts/run-node.mjs` against the live gateway RPC.\n\nExact steps or command run after this patch:\n\n```\n$ openclaw cron add --every 1h --session isolated --message hi --model anthropic/claude-sonnet-4-6 --name clearmodel-proof\n$ openclaw cron edit <id> --clear-model\n$ openclaw cron edit <id> --model anthropic/claude-sonnet-4-6 --clear-model\n```\n\nEvidence after fix (live gateway output, payload read back via `cron list --json`):\n\n```\nBEFORE clear:\n  payload = {\"kind\": \"agentTurn\", \"message\": \"hi\", \"model\": \"anthropic/claude-sonnet-4-6\"}\n\n$ openclaw cron edit 4ee52523-084a-4fd9-9fe2-6864dfe2ba1a --clear-model\n  (ok)\nAFTER  clear:\n  payload = {\"kind\": \"agentTurn\", \"message\": \"hi\"}          <- model override removed\n\n$ openclaw cron edit 4ee52523-084a-4fd9-9fe2-6864dfe2ba1a --model X --clear-model\n  Error: Use --model or --clear-model, not both             <- conflict guard\n```\n\nObserved result after fix: the `model` key is deleted from the stored cron payload (job now runs on the agent/default model); passing both `--model` and `--clear-model` is rejected.\n\nWhat was not tested: a live agent run of the cleared cron job (the clearing behavior is fully observable in the persisted payload via the gateway; running the job would require a real model/provider).\n\n## Compatibility / Migration\n\nBackward compatible — purely additive CLI flag. No config/schema/migration changes (the Gateway already accepts `model: null` on `cron.update`).\n\n## AI assistance\n\nAI-assisted (Claude Code). Verified locally: 6/6 unit tests, oxlint clean, oxfmt clean, and the live before/after gateway proof above. Author understands the change.\n",
-        "branch": "fix/cron-cli-clear-model",
-        "head_sha": "5a394e72f4113cb1d6630d72cf76d082ba366579",
-        "author": "ly-wang19",
-        "labels": [
-          "docs",
-          "cli",
-          "size: XS",
-          "proof: supplied",
-          "P2",
-          "rating: 🌊 off-meta tidepool"
-        ],
-        "files": [
-          {
-            "path": "docs/automation/cron-jobs.md",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/cli/cron.md",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/cron-cli/register.cron-edit.test.ts",
-            "additions": 28,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/cron-cli/register.cron-edit.ts",
-            "additions": 14,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91625",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91625.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "SUCCESS": 129,
-            "SKIPPED": 30,
-            "FAILURE": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "build-artifacts:FAILURE",
-            "checks-node-auto-reply-reply-state-routing:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "build-artifacts:FAILURE",
-            "checks-node-auto-reply-reply-state-routing:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5145,
+    "total_ms": 2062,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 543
+        "ms": 605
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1997
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 3
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 2575
+        "ms": 1444
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
