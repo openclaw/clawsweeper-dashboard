@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-11T23:49:55.831Z",
+  "generated_at": "2026-06-11T23:50:37.569Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-11T20:49:53.674Z",
+  "since": "2026-06-11T20:50:37.079Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4686072495
   ],
-  "status_comment_id": 4686072655,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -44,7 +44,7 @@
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-06-11T23:49:15Z",
       "comment_updated_at": "2026-06-11T23:49:15Z",
-      "status_comment_id": 4686072655,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -61,102 +61,34 @@
       "visual_lens": null,
       "expected_head_sha": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "dispatched_at": "2026-06-11T23:49:56.468Z",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 91985
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-06-11T23:49:58.404Z",
-          "response_comment_id": "4676820609",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(heartbeat): skip marking commitments as sent when delivery is suppressed (fixes #91948)",
-        "body": "### Summary\n\n- **Problem**: Inferred commitments are marked `sent` in the commitments DB even when the durable delivery returns `suppressed` (no visible result), causing commitments to silently disappear without ever reaching the user.\n- **Root Cause**: `runHeartbeatOnce` only guards against `failed` and `partial_failed` statuses from `sendDurableMessageBatch`; the `suppressed` status (no visible outbound result) falls through to `markCommitmentsStatus(…, \"sent\")`, incorrectly marking the commitment as delivered.\n- **Fix**: Gate `markCommitmentsStatus` on `send.status === \"sent\"` so suppressed deliveries stay pending for the next heartbeat cycle to retry. The existing model-dismissal path (`shouldSkipMain`) is preserved.\n- **What changed**:\n  - `src/infra/heartbeat-runner.ts` — add `send.status === \"sent\"` guard before calling `markCommitmentsStatus`\n- **What did NOT change (scope boundary)**:\n  - Active-session idle polling for commitment delivery (separate product enhancement)\n  - Delivery-health metrics (separate product enhancement)\n  - The `shouldSkipMain` dismissal path (unchanged)\n  - Other `sendDurableMessageBatch` call sites (line 1758 exec-completion path not modified)\n\n### Reproduction\n\n1. Configure an agent with inferred commitment support (`commitments.enabled: true`)\n2. Arrange a scenario where `sendDurableMessageBatch` returns `status: \"suppressed\"` with an empty results array\n3. Observe that on current main, the commitment is marked `status: \"sent\"` with `sentAtMs` set despite no outbound message being delivered\n4. **Before this PR**: commitment incorrectly transitions to `sent` and disappears from the user's view\n5. **After this PR**: commitment stays `pending`, eligible for retry on the next heartbeat cycle\n\n### Real behavior proof\n\n**Behavior or issue addressed**: When `sendDurableMessageBatch` returns a `suppressed` status (no visible outbound result), heartbeat commitments are no longer erroneously marked as `sent`. They remain pending so the next heartbeat cycle can attempt redelivery.\n\n**Real environment tested**: Linux, Node 22 — fake timers exercising the `runHeartbeatOnce` commitment delivery path through nine existing scenarios covering sent, dismissed, duplicate-deduped, malicious-text-gated, and target-none paths\n\n**Exact steps or command run after this patch**: `node scripts/run-vitest.mjs src/infra/heartbeat-runner.commitments.test.ts`\n\n**Evidence after fix**:\n```text\n$ node scripts/run-vitest.mjs src/infra/heartbeat-runner.commitments.test.ts\n[test] starting test/vitest/vitest.infra.config.ts\n\n RUN  v4.1.7 /home/0668001395/openclawProject1\n\n Test Files  1 passed (1)\n      Tests  9 passed (9)\n   Start at  00:03:03\n   Duration  4.96s (transform 2.06s, setup 323ms, import 3.75s, tests 674ms, environment 0ms)\n\n[test] passed 1 shard in 13.24s\n```\n\n**Observed result after fix**: All nine existing commitment delivery scenarios continue to pass. The shouldSkipMain dismissal path (model declines to send a check-in) still correctly dismisses commitments. The target-none path still correctly skips delivery. The suppressed result path now correctly leaves commitments pending instead of marking them sent.\n\n**What was not tested**: A live Telegram end-to-end test with a real suppressed durable-send outcome was not run (this is a read-only Linux environment without live channel credentials). A unit-level test that mocks `sendDurableMessageBatch` to return `status: \"suppressed\"` and verifies the commitment stays `pending` would provide additional coverage but requires deeper test-infrastructure changes to the durable-send mock layer.\n\n**Repro confirmation**: The sibling audit confirms that `route-reply.ts:265` and `durable-delivery.ts:231` already handle `suppressed` correctly — they check `send.status === \"suppressed\"` and return without treating it as a successful delivery. The heartbeat commitment path at `heartbeat-runner.ts:2057` was the only remaining call site that treated `suppressed` identically to `sent`.\n\n### Risk / Mitigation\n\n- **Risk**: A permanently suppressed commitment could retry indefinitely across heartbeat cycles.\n  **Mitigation**: The commitment `attempts` field is incremented on each attempt; the existing expiry logic and `markCommitmentsAttempted` counter provide a bounded retry window. This is the same bounded-retry contract ClawSweeper recommended.\n- **Risk**: The fix changes the status-transition semantics for commitments whose delivery returns `suppressed` (they stay `pending` instead of becoming `sent`).\n  **Mitigation**: A commitment marked `sent` but never delivered is a silent data-loss bug. Leaving it `pending` is the correct behavior — it matches the durable-delivery contract (`suppressed` = no visible result) and the existing pattern in `route-reply.ts`.\n\n### Change Type (select all)\n\n- [x] Bug fix\n\n### Scope (select all touched areas)\n\n- [x] heartbeat\n- [x] commitments\n- [x] agent runtime (infra)\n\n### Regression Test Plan\n\n- `node scripts/run-vitest.mjs src/infra/heartbeat-runner.commitments.test.ts`\n\n### Review Findings Addressed\n\nN/A (initial submission)\n\n### Linked Issue/PR\n\nFixes #91948\n",
-        "branch": "fix/issue-91948-suppressed-commitments",
-        "head_sha": "0e5320b8fe8b0f894740b112e6e9a8ac9c3b9d86",
-        "author": "zenglingbiao",
-        "labels": [
-          "size: XS"
-        ],
-        "files": [
-          {
-            "path": "src/infra/heartbeat-runner.ts",
-            "additions": 10,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-91985",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-91985.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 162,
-          "counts": {
-            "FAILURE": 3,
-            "SUCCESS": 127,
-            "SKIPPED": 31,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Security High (core-auth-secrets):FAILURE",
-            "Security High (channel-runtime-boundary):FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Security High (core-auth-secrets):FAILURE",
-            "Security High (channel-runtime-boundary):FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5166,
+    "total_ms": 1817,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 547
+        "ms": 477
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1595
+        "ms": 0
       },
       {
         "name": "classify_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 2997
+        "ms": 1328
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
