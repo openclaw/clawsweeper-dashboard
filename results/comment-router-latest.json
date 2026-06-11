@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-11T07:59:11.327Z",
+  "generated_at": "2026-06-11T07:59:15.386Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-11T04:59:10.879Z",
+  "since": "2026-06-11T04:59:13.463Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    92116
+    92092
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 8,
+  "commands_seen": 4,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,18 +29,408 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92092:4677400161:2026-06-11T07:59:08Z:clawsweeper_needs_human",
+      "comment_id": "4677400161",
+      "comment_version_key": "4677400161:2026-06-11T07:59:08Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92092#issuecomment-4677400161",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92092,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-11T05:14:52Z",
+      "comment_updated_at": "2026-06-11T07:59:08Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=df90fede726fcdbe0a93f418b889331abc370f7a)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source -11, Tests +16. Total +5 across 10 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "df90fede726fcdbe0a93f418b889331abc370f7a",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(auto-reply): stop dropping claude-cli narration when commentary lane is off",
+        "body": "## Problem\n\nAfter #91976, claude-cli (CLI backend) users lose assistant text whenever the verbose commentary lane is configured but **off**:\n\n1. No interleaved narration between tool calls (with or without `/verbose on`)\n2. The regular-text reasoning preamble that used to appear before the final answer is gone\n\nRepro: claude-cli backend + a channel that defines `commentaryProgressEnabled` (e.g. Discord) + verbose off.\n\n## Root cause\n\n#91976 added commentary classification to the claude-cli JSONL parser. When classification is active, assistant text deltas are buffered, and text preceding a `tool_use` block is flushed via `flushPendingClaudeCommentaryText()`, which calls the **optional** `onCommentaryText` callback. With no consumer wired, the text is silently discarded.\n\nThe two gates disagree (`src/auto-reply/reply/agent-runner-execution.ts`, same pattern in `followup-runner.ts`):\n\n- classification on: `classifyCommentaryText: params.opts?.commentaryProgressEnabled !== undefined`\n- delivery wired: `commentaryProgressEnabled === true && opts.onItemEvent`\n\nSo `commentaryProgressEnabled: false` (defined, verbose off — exactly what `dispatch-from-config.ts` produces via `deliverStandaloneCommentaryProgress || params.replyOptions?.commentaryProgressEnabled`) engages classification with no consumer. In Claude's stream the narration text block usually shares an assistant message with the following `tool_use`, so nearly all inter-tool narration and the pre-final preamble text is reclassified as commentary and dropped.\n\nStandalone repro against `origin/main` (classification on, no consumer, text→tool→text→tool stream):\n\n```\nassistant deltas received: []\nRESULT: narration DROPPED (bug)\n```\n\nSame script on this branch:\n\n```\nassistant deltas received: [\"Let me check the config first.\",\" Now I'll grep for the handler.\"]\nRESULT: narration preserved (fixed)\n```\n\nBoth runs are captured against the real built parser from the exact merge-base (`8e81bf774e`) and PR head (`d1c1a41`) — see [`.proof/before-after-repro.txt`](https://github.com/ragesaq/openclaw/blob/proof/91976-evidence/.proof/before-after-repro.txt) and the harness [`.proof/repro-parser-shape.mjs`](https://github.com/ragesaq/openclaw/blob/proof/91976-evidence/.proof/repro-parser-shape.mjs).\n\n## Fix (two layers)\n\n1. **Align the gates** — both CLI dispatch sites now only enable `classifyCommentaryText` when the delivery condition holds (`commentaryProgressEnabled === true` and `onItemEvent` wired).\n2. **Defense in depth** — `flushPendingClaudeCommentaryText()` falls back to the assistant text lane when no `onCommentaryText` consumer exists, so any future gate mismatch degrades to the pre-#91976 behavior (text in the normal stream) instead of silently eating model output.\n\nNo change to the verbose-on path: when commentary delivery is wired, behavior is identical to current main.\n\n## Tests\n\n- `src/agents/cli-output.test.ts`: the \"drops Claude commentary text when classification is enabled without delivery\" test now asserts the fallback (text emitted as assistant delta) instead of locking in the drop. 32/32 pass.\n- `src/auto-reply/reply/agent-runner-execution.test.ts`: new regression test \"does not classify CLI commentary when commentary progress is explicitly disabled\" covering the exact reported shape (`commentaryProgressEnabled: false`). 189/189 pass.\n- `src/auto-reply/reply/followup-runner.test.ts`: 73/73 pass.\n- `src/auto-reply/reply/dispatch-from-config.test.ts`: 200/200 pass.\n- `src/auto-reply/reply/agent-runner-cli-dispatch.test.ts`: 7/7 pass.\n- `pnpm tsgo:core` and `pnpm tsgo:test:src` clean; oxlint clean on touched files.\n\n## Not in scope\n\nThe reporter also mentioned `message.content.thinking` never displaying. Thinking-block bridging to the reasoning stream is a separate path (untouched by #91976 and by this PR); if it persists after this fix it should be filed separately.\n\n\n\n## Real behavior proof\n\n**Behavior or issue addressed:** claude-cli backend silently drops inter-tool narration and pre-final preamble text when verbose/commentary delivery is off (regression from #91976, reported on Discord).\n\n**Real environment tested:** real OpenClaw gateway built from this branch (`pnpm build`, OpenClaw 2026.6.2 d1c1a41), fresh isolated state dir, `claude-cli/claude-sonnet-4-6` backend running Claude Code CLI 2.1.170, turns driven through the Control UI chat in a Chromium browser as a normal user. Linux x64, Node 22.\n\n**Before evidence (bug reproduced on the unpatched merge-base):**\n\nThe exact `src/agents/cli-output.ts` from the PR merge-base (`8e81bf774e`) and from the PR head (`d1c1a41`) were each bundled with their real dependency closure (esbuild, not a hand-mock) and driven with the precise Discord-reported shape: verbose **off** → `classifyCommentaryText` engaged, no `onCommentaryText` consumer wired, narration emitted before a `tool_use` block.\n\n```text\n--- BEFORE (unpatched merge-base 8e81bf774e) ---\n$ node repro.mjs cli-before.mjs\nassistant deltas received: []\nRESULT: narration DROPPED (bug)\n\n--- AFTER (PR head d1c1a41) ---\n$ node repro.mjs cli-after.mjs\nassistant deltas received: [\"Let me check the config first.\",\" Now I'll grep for the handler.\"]\nRESULT: narration preserved (fixed)\n```\n\nOn the unpatched fork point the model's interleaved narration is silently discarded; with the fix the same real parser routes it back to the assistant lane and it survives. This is the failing-state half captured against real built code, paired one-to-one with the after-fix runs below.\n\n**Repro confirmation:** the BEFORE result above is the bug reproducing on the exact merge-base the PR forks from (drop), and the AFTER result is the same input on the PR head (preserved). Same harness, same input shape, only the patched source differs.\n\n**Exact steps or command run after this patch:**\n\n1. `pnpm build` on this branch, then `node openclaw.mjs gateway --port 19099 --allow-unconfigured` with `OPENCLAW_STATE_DIR=/tmp/hi-proof-91976/state` and a minimal config pinning `model.primary: claude-cli/claude-sonnet-4-6`.\n2. Opened the Control UI chat, sent (verbose off, the reported drop case): \"First say exactly: Let me check the date. Then run the date command with your bash tool. Then say exactly: The command finished. Then give the final answer with the date.\"\n3. Sent `/verbose on`, repeated the same task twice (duplication check on the commentary lane).\n4. Sent `/verbose off`, repeated the same task once more (regression re-check).\n5. Wrapped the `claude` command in a `tee` shim during all runs to capture the raw CLI stream for cross-checking what the model actually emitted.\n\n**Evidence after fix:**\n\nVerbose off: pre-tool narration \"Let me check the date.\" renders as a real assistant message before the tool card, post-tool \"The command finished.\" after it (on the unpatched merge-base the first segment is dropped, per the Before evidence above).\n\n![verbose off — narration preserved](https://raw.githubusercontent.com/ragesaq/openclaw/proof/91976-evidence/.proof/verbose-off-narration-preserved.png)\n\nSecond independent verbose-off run, same result (session `agent:main:main`, Jun 11 2026, 06:21–06:27 UTC):\n\n![first run — narration visible](https://raw.githubusercontent.com/ragesaq/openclaw/proof/91976-evidence/.proof/first-run-narration-visible.png)\n\nVerbose on: narration routes to the standalone commentary lane (transient progress UI) and the durable transcript contains each segment exactly once — no duplication, identical to current main:\n\n![verbose on — standalone lane, no duplication](https://raw.githubusercontent.com/ragesaq/openclaw/proof/91976-evidence/.proof/verbose-on-standalone-lane.png)\n\nRaw CLI stream captured via the `tee` shim during the gateway runs confirms claude emitted narration in every run, so the verbose-off fix is in OpenClaw's lane routing, not model behavior:\n\n```text\nRAW ASSISTANT TEXT: 'Let me check the date.'\nRAW TOOL USE: Bash\nRAW ASSISTANT TEXT: 'The command finished.\\n\\nThe current date is **Thursday, June 11, 2026**.'\n```\n\n**Observed result after fix:** with verbose off, both narration segments are visible in the live UI and survive a full page reload from the stored transcript; with verbose on, narration is delivered through the standalone commentary lane with no duplicate text in the final reply. Reload cross-check of the stored session:\n\n```text\n[role=log] after reload (session agent:main:main):\n  \"First say exactly: Let me check the date. ...\"   <- user, verbose off\n  \"Let me check the date.\"                          <- narration PRESERVED\n  \"The command finished.\"\n  \"The current date is Thursday, June 11, 2026.\"\n  \"Same task again: ...\"                            <- user, /verbose on\n  \"Once more: ...\"                                  <- user, /verbose on\n  \"Final check: ...\"                                <- user, /verbose off again\n  \"Let me check the date.\"                          <- narration PRESERVED\n  \"The command finished.\"\n  \"The current date is Thursday, June 11, 2026.\"\n```\n\nScreenshots are committed on fork branch [`proof/91976-evidence`](https://github.com/ragesaq/openclaw/tree/proof/91976-evidence/.proof).\n\n**Proof limitations / environment constraints:** the live UI runs were driven against a single-node local gateway with one claude-cli backend on an isolated state dir, not a multi-channel production deployment. The before/after parser repro isolates `cli-output.ts` with its real dependency closure but does not exercise the full gateway dispatch stack (that path is covered by the after-fix live runs).\n\n**What was not tested:** Discord channel delivery specifically (the reporter's surface) — the affected code path is channel-agnostic (CLI dispatch → reply lane routing happens before channel delivery); tested via Control UI chat instead. The reporter's separate `message.content.thinking` display issue is the reasoning-bridge path, out of scope here and filed separately.\n\n## Risk checklist\n\n- **Behavior change scope:** narration that was silently dropped (verbose off) is now delivered to the assistant lane. No change to the verbose-on path. — low risk\n- **Regression surface:** 3 source files, all in CLI output / reply lane routing; no channel, auth, or persistence code touched. — low risk\n- **Data/persistence:** none; routing-only change, no schema or stored-state impact. — none\n- **Backward compatibility:** verbose-on commentary behavior is byte-identical to current main (confirmed: no duplication). — preserved\n- **Tests:** added `agent-runner-execution.test.ts` coverage for the consumer-gating condition; `cli-output.test.ts` updated for the fallback flush. — covered\n\n## Current review state\n\n- **Mechanical proof gate:** Real behavior proof CI = green on head `d1c1a41` (validated locally against `evaluateRealBehaviorProof` before push).\n- **Relevant CI:** auto-reply / cli-output checks passing.\n- **Known-unrelated red:** `agents-core-models` (`xhigh→high` effort mapping) and `agents-core-runtime` (async provider model discovery) fail on a clean merge-base checkout with this PR's files absent, and on the last several upstream-main pushes. Neither test file is in this 5-file diff. Will rebase once main is green.\n- **Awaiting:** ClawSweeper re-review verdict refresh (earlier verdict was a crashed-run artifact, not a proof rejection).\n",
+        "branch": "fix/cli-commentary-text-drop",
+        "head_sha": "df90fede726fcdbe0a93f418b889331abc370f7a",
+        "author": "ragesaq",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "P1",
+          "rating: 🌊 off-meta tidepool"
+        ],
+        "files": [
+          {
+            "path": "src/agents/cli-output.test.ts",
+            "additions": 4,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-output.ts",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-runner/claude-live-session.ts",
+            "additions": 0,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-runner/execute.ts",
+            "additions": 0,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-runner/types.ts",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-cli-dispatch.ts",
+            "additions": 0,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
+            "additions": 49,
+            "deletions": 24,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.ts",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/followup-runner.test.ts",
+            "additions": 1,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/followup-runner.ts",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92092",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92092.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 30,
+          "counts": {
+            "CANCELLED": 2,
+            "QUEUED": 10,
+            "SKIPPED": 13,
+            "SUCCESS": 5
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92092:4678298398:2026-06-11T07:42:13Z:re_review",
+      "comment_id": "4678298398",
+      "comment_version_key": "4678298398:2026-06-11T07:42:13Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92092#issuecomment-4678298398",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92092,
+      "author": "ragesaq",
+      "author_id": 11304287,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-11T07:42:13Z",
+      "comment_updated_at": "2026-06-11T07:42:13Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92092:4677922239:2026-06-11T06:46:47Z:re_review",
+      "comment_id": "4677922239",
+      "comment_version_key": "4677922239:2026-06-11T06:46:47Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92092#issuecomment-4677922239",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92092,
+      "author": "ragesaq",
+      "author_id": 11304287,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-11T06:46:47Z",
+      "comment_updated_at": "2026-06-11T06:46:47Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92092:4677854441:2026-06-11T06:36:14Z:re_review",
+      "comment_id": "4677854441",
+      "comment_version_key": "4677854441:2026-06-11T06:36:14Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92092#issuecomment-4677854441",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92092,
+      "author": "ragesaq",
+      "author_id": 11304287,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-11T06:36:14Z",
+      "comment_updated_at": "2026-06-11T06:36:14Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(auto-reply): stop dropping claude-cli narration when commentary lane is off",
+        "body": "## Problem\n\nAfter #91976, claude-cli (CLI backend) users lose assistant text whenever the verbose commentary lane is configured but **off**:\n\n1. No interleaved narration between tool calls (with or without `/verbose on`)\n2. The regular-text reasoning preamble that used to appear before the final answer is gone\n\nRepro: claude-cli backend + a channel that defines `commentaryProgressEnabled` (e.g. Discord) + verbose off.\n\n## Root cause\n\n#91976 added commentary classification to the claude-cli JSONL parser. When classification is active, assistant text deltas are buffered, and text preceding a `tool_use` block is flushed via `flushPendingClaudeCommentaryText()`, which calls the **optional** `onCommentaryText` callback. With no consumer wired, the text is silently discarded.\n\nThe two gates disagree (`src/auto-reply/reply/agent-runner-execution.ts`, same pattern in `followup-runner.ts`):\n\n- classification on: `classifyCommentaryText: params.opts?.commentaryProgressEnabled !== undefined`\n- delivery wired: `commentaryProgressEnabled === true && opts.onItemEvent`\n\nSo `commentaryProgressEnabled: false` (defined, verbose off — exactly what `dispatch-from-config.ts` produces via `deliverStandaloneCommentaryProgress || params.replyOptions?.commentaryProgressEnabled`) engages classification with no consumer. In Claude's stream the narration text block usually shares an assistant message with the following `tool_use`, so nearly all inter-tool narration and the pre-final preamble text is reclassified as commentary and dropped.\n\nStandalone repro against `origin/main` (classification on, no consumer, text→tool→text→tool stream):\n\n```\nassistant deltas received: []\nRESULT: narration DROPPED (bug)\n```\n\nSame script on this branch:\n\n```\nassistant deltas received: [\"Let me check the config first.\",\" Now I'll grep for the handler.\"]\nRESULT: narration preserved (fixed)\n```\n\nBoth runs are captured against the real built parser from the exact merge-base (`8e81bf774e`) and PR head (`d1c1a41`) — see [`.proof/before-after-repro.txt`](https://github.com/ragesaq/openclaw/blob/proof/91976-evidence/.proof/before-after-repro.txt) and the harness [`.proof/repro-parser-shape.mjs`](https://github.com/ragesaq/openclaw/blob/proof/91976-evidence/.proof/repro-parser-shape.mjs).\n\n## Fix (two layers)\n\n1. **Align the gates** — both CLI dispatch sites now only enable `classifyCommentaryText` when the delivery condition holds (`commentaryProgressEnabled === true` and `onItemEvent` wired).\n2. **Defense in depth** — `flushPendingClaudeCommentaryText()` falls back to the assistant text lane when no `onCommentaryText` consumer exists, so any future gate mismatch degrades to the pre-#91976 behavior (text in the normal stream) instead of silently eating model output.\n\nNo change to the verbose-on path: when commentary delivery is wired, behavior is identical to current main.\n\n## Tests\n\n- `src/agents/cli-output.test.ts`: the \"drops Claude commentary text when classification is enabled without delivery\" test now asserts the fallback (text emitted as assistant delta) instead of locking in the drop. 32/32 pass.\n- `src/auto-reply/reply/agent-runner-execution.test.ts`: new regression test \"does not classify CLI commentary when commentary progress is explicitly disabled\" covering the exact reported shape (`commentaryProgressEnabled: false`). 189/189 pass.\n- `src/auto-reply/reply/followup-runner.test.ts`: 73/73 pass.\n- `src/auto-reply/reply/dispatch-from-config.test.ts`: 200/200 pass.\n- `src/auto-reply/reply/agent-runner-cli-dispatch.test.ts`: 7/7 pass.\n- `pnpm tsgo:core` and `pnpm tsgo:test:src` clean; oxlint clean on touched files.\n\n## Not in scope\n\nThe reporter also mentioned `message.content.thinking` never displaying. Thinking-block bridging to the reasoning stream is a separate path (untouched by #91976 and by this PR); if it persists after this fix it should be filed separately.\n\n\n\n## Real behavior proof\n\n**Behavior or issue addressed:** claude-cli backend silently drops inter-tool narration and pre-final preamble text when verbose/commentary delivery is off (regression from #91976, reported on Discord).\n\n**Real environment tested:** real OpenClaw gateway built from this branch (`pnpm build`, OpenClaw 2026.6.2 d1c1a41), fresh isolated state dir, `claude-cli/claude-sonnet-4-6` backend running Claude Code CLI 2.1.170, turns driven through the Control UI chat in a Chromium browser as a normal user. Linux x64, Node 22.\n\n**Before evidence (bug reproduced on the unpatched merge-base):**\n\nThe exact `src/agents/cli-output.ts` from the PR merge-base (`8e81bf774e`) and from the PR head (`d1c1a41`) were each bundled with their real dependency closure (esbuild, not a hand-mock) and driven with the precise Discord-reported shape: verbose **off** → `classifyCommentaryText` engaged, no `onCommentaryText` consumer wired, narration emitted before a `tool_use` block.\n\n```text\n--- BEFORE (unpatched merge-base 8e81bf774e) ---\n$ node repro.mjs cli-before.mjs\nassistant deltas received: []\nRESULT: narration DROPPED (bug)\n\n--- AFTER (PR head d1c1a41) ---\n$ node repro.mjs cli-after.mjs\nassistant deltas received: [\"Let me check the config first.\",\" Now I'll grep for the handler.\"]\nRESULT: narration preserved (fixed)\n```\n\nOn the unpatched fork point the model's interleaved narration is silently discarded; with the fix the same real parser routes it back to the assistant lane and it survives. This is the failing-state half captured against real built code, paired one-to-one with the after-fix runs below.\n\n**Repro confirmation:** the BEFORE result above is the bug reproducing on the exact merge-base the PR forks from (drop), and the AFTER result is the same input on the PR head (preserved). Same harness, same input shape, only the patched source differs.\n\n**Exact steps or command run after this patch:**\n\n1. `pnpm build` on this branch, then `node openclaw.mjs gateway --port 19099 --allow-unconfigured` with `OPENCLAW_STATE_DIR=/tmp/hi-proof-91976/state` and a minimal config pinning `model.primary: claude-cli/claude-sonnet-4-6`.\n2. Opened the Control UI chat, sent (verbose off, the reported drop case): \"First say exactly: Let me check the date. Then run the date command with your bash tool. Then say exactly: The command finished. Then give the final answer with the date.\"\n3. Sent `/verbose on`, repeated the same task twice (duplication check on the commentary lane).\n4. Sent `/verbose off`, repeated the same task once more (regression re-check).\n5. Wrapped the `claude` command in a `tee` shim during all runs to capture the raw CLI stream for cross-checking what the model actually emitted.\n\n**Evidence after fix:**\n\nVerbose off: pre-tool narration \"Let me check the date.\" renders as a real assistant message before the tool card, post-tool \"The command finished.\" after it (on the unpatched merge-base the first segment is dropped, per the Before evidence above).\n\n![verbose off — narration preserved](https://raw.githubusercontent.com/ragesaq/openclaw/proof/91976-evidence/.proof/verbose-off-narration-preserved.png)\n\nSecond independent verbose-off run, same result (session `agent:main:main`, Jun 11 2026, 06:21–06:27 UTC):\n\n![first run — narration visible](https://raw.githubusercontent.com/ragesaq/openclaw/proof/91976-evidence/.proof/first-run-narration-visible.png)\n\nVerbose on: narration routes to the standalone commentary lane (transient progress UI) and the durable transcript contains each segment exactly once — no duplication, identical to current main:\n\n![verbose on — standalone lane, no duplication](https://raw.githubusercontent.com/ragesaq/openclaw/proof/91976-evidence/.proof/verbose-on-standalone-lane.png)\n\nRaw CLI stream captured via the `tee` shim during the gateway runs confirms claude emitted narration in every run, so the verbose-off fix is in OpenClaw's lane routing, not model behavior:\n\n```text\nRAW ASSISTANT TEXT: 'Let me check the date.'\nRAW TOOL USE: Bash\nRAW ASSISTANT TEXT: 'The command finished.\\n\\nThe current date is **Thursday, June 11, 2026**.'\n```\n\n**Observed result after fix:** with verbose off, both narration segments are visible in the live UI and survive a full page reload from the stored transcript; with verbose on, narration is delivered through the standalone commentary lane with no duplicate text in the final reply. Reload cross-check of the stored session:\n\n```text\n[role=log] after reload (session agent:main:main):\n  \"First say exactly: Let me check the date. ...\"   <- user, verbose off\n  \"Let me check the date.\"                          <- narration PRESERVED\n  \"The command finished.\"\n  \"The current date is Thursday, June 11, 2026.\"\n  \"Same task again: ...\"                            <- user, /verbose on\n  \"Once more: ...\"                                  <- user, /verbose on\n  \"Final check: ...\"                                <- user, /verbose off again\n  \"Let me check the date.\"                          <- narration PRESERVED\n  \"The command finished.\"\n  \"The current date is Thursday, June 11, 2026.\"\n```\n\nScreenshots are committed on fork branch [`proof/91976-evidence`](https://github.com/ragesaq/openclaw/tree/proof/91976-evidence/.proof).\n\n**Proof limitations / environment constraints:** the live UI runs were driven against a single-node local gateway with one claude-cli backend on an isolated state dir, not a multi-channel production deployment. The before/after parser repro isolates `cli-output.ts` with its real dependency closure but does not exercise the full gateway dispatch stack (that path is covered by the after-fix live runs).\n\n**What was not tested:** Discord channel delivery specifically (the reporter's surface) — the affected code path is channel-agnostic (CLI dispatch → reply lane routing happens before channel delivery); tested via Control UI chat instead. The reporter's separate `message.content.thinking` display issue is the reasoning-bridge path, out of scope here and filed separately.\n\n## Risk checklist\n\n- **Behavior change scope:** narration that was silently dropped (verbose off) is now delivered to the assistant lane. No change to the verbose-on path. — low risk\n- **Regression surface:** 3 source files, all in CLI output / reply lane routing; no channel, auth, or persistence code touched. — low risk\n- **Data/persistence:** none; routing-only change, no schema or stored-state impact. — none\n- **Backward compatibility:** verbose-on commentary behavior is byte-identical to current main (confirmed: no duplication). — preserved\n- **Tests:** added `agent-runner-execution.test.ts` coverage for the consumer-gating condition; `cli-output.test.ts` updated for the fallback flush. — covered\n\n## Current review state\n\n- **Mechanical proof gate:** Real behavior proof CI = green on head `d1c1a41` (validated locally against `evaluateRealBehaviorProof` before push).\n- **Relevant CI:** auto-reply / cli-output checks passing.\n- **Known-unrelated red:** `agents-core-models` (`xhigh→high` effort mapping) and `agents-core-runtime` (async provider model discovery) fail on a clean merge-base checkout with this PR's files absent, and on the last several upstream-main pushes. Neither test file is in this 5-file diff. Will rebase once main is green.\n- **Awaiting:** ClawSweeper re-review verdict refresh (earlier verdict was a crashed-run artifact, not a proof rejection).\n",
+        "branch": "fix/cli-commentary-text-drop",
+        "head_sha": "df90fede726fcdbe0a93f418b889331abc370f7a",
+        "author": "ragesaq",
+        "labels": [
+          "agents",
+          "size: S",
+          "proof: supplied",
+          "P1",
+          "rating: 🌊 off-meta tidepool"
+        ],
+        "files": [
+          {
+            "path": "src/agents/cli-output.test.ts",
+            "additions": 4,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-output.ts",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-runner/claude-live-session.ts",
+            "additions": 0,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-runner/execute.ts",
+            "additions": 0,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-runner/types.ts",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-cli-dispatch.ts",
+            "additions": 0,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
+            "additions": 49,
+            "deletions": 24,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/agent-runner-execution.ts",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/followup-runner.test.ts",
+            "additions": 1,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/followup-runner.ts",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92092",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92092.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 30,
+          "counts": {
+            "CANCELLED": 2,
+            "QUEUED": 10,
+            "SKIPPED": 13,
+            "SUCCESS": 5
+          },
+          "blockers": [
+            "Real behavior proof:CANCELLED",
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "pending": [
+            "preflight:QUEUED",
+            "Security High (core-auth-secrets):QUEUED",
+            "Select Critical Quality shards:QUEUED",
+            "Scan changed paths (precise):QUEUED",
+            "Security High (channel-runtime-boundary):QUEUED",
+            "Security High (network-ssrf-boundary):QUEUED",
+            "Security High (mcp-process-tool-boundary):QUEUED",
+            "Security High (plugin-trust-boundary):QUEUED",
+            "Security High (actions):QUEUED",
+            "security-fast:QUEUED"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:CANCELLED"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 759,
+    "total_ms": 4791,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 435
+        "ms": 433
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1474
+      },
+      {
+        "name": "classify_commands",
+        "ms": 2
       },
       {
         "name": "classify_commands",
@@ -48,7 +438,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 311
+        "ms": 2855
       },
       {
         "name": "append_ledger",
