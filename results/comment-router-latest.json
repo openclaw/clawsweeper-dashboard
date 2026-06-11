@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-11T16:14:09.343Z",
+  "generated_at": "2026-06-11T16:14:08.820Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-11T13:14:07.476Z",
+  "since": "2026-06-11T13:14:05.776Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    46303
+    92180
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 10,
-  "commands_seen": 1,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -31,21 +31,109 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:46303:4322676718:2026-06-11T16:13:59Z:clawsweeper_needs_human",
-      "comment_id": "4322676718",
-      "comment_version_key": "4322676718:2026-06-11T16:13:59Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/46303#issuecomment-4322676718",
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92180:4681082092:2026-06-11T16:14:00Z:clawsweeper_needs_human",
+      "comment_id": "4681082092",
+      "comment_version_key": "4681082092:2026-06-11T16:14:00Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92180#issuecomment-4681082092",
       "repo": "openclaw/openclaw",
-      "issue_number": 46303,
+      "issue_number": 92180,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-04-26T18:14:41Z",
-      "comment_updated_at": "2026-06-11T16:13:59Z",
+      "comment_created_at": "2026-06-11T13:29:52Z",
+      "comment_updated_at": "2026-06-11T16:14:00Z",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
       "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=e222f2f480bf2f4038904e57fb3487777619c5e7)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +12, Tests -1. Total +11 across 2 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "e222f2f480bf2f4038904e57fb3487777619c5e7",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "#92169: Embedded runtime: don't terminate turn after interstitial message sends",
+        "body": "## Summary\n\nRemove `terminate: true` from the message-tool-only afterToolCall hook so that the embedded agent runtime does not erroneously end the turn after every successful interstitial/progress message send. The model can now continue planned tool work after sending a visible progress update (e.g. \"checking the codebase, one moment\") instead of terminating the turn prematurely.\n\n## Root Cause\n\nIn `message_tool_only` delivery mode, `installMessageToolOnlyTerminalHook` in `src/agents/embedded-agent-runner/run/message-tool-terminal.ts` returned `terminate: true` after every successful implicit-route `message.send`. This caused `shouldTerminateToolBatch` to stop the agent loop immediately, preventing the model from re-engaging after the tool result to perform the promised work.\n\nThe agent's `stopReason` was `toolUse` (the model expected tool results and planned to continue), but the hook's `terminate: true` skipped the re-invoke step entirely. A 45-day audit across 3 agents showed the follow-through-failure rate doubled on 2026.6.1: 73.3% of promised turns failed to deliver vs 36.2% pre-6.1.\n\n## Real behavior proof\n\n**Behavior addressed:** Remove `terminate: true` from the message-tool-only afterToolCall hook return value while keeping the `onDeliveredSourceReply` delivery tracking callback intact.\n\n**Real environment tested:** Debian GNU/Linux 12 (bookworm), kernel 6.12 x86_64. Standalone Node.js script that simulates the agent loop to demonstrate the before/after behavior difference.\n\n**Exact steps or command run after this patch:**\n```console\nnode /tmp/repro-92169.mjs\n```\n\n**Evidence:**\n```\n======================================================================\nIssue #92169 — Before vs After Fix Comparison\n======================================================================\n\n【BEFORE FIX】: terminate: true after message.send\n\n  Turns executed: 1\n  Tools executed: 1\n  Tool #1: terminate=true | text=\"Message sent successfully\"\n\n  ✗ BUG: After message.send(\"checking the codebase...\"), turn ended.\n  ✗ Model never got to call \"read\" or deliver the actual answer.\n\n\n【AFTER FIX】: no terminate after message.send (model continues naturally)\n\n  Turns executed: 4\n  Tools executed: 3\n  Tool #1: terminate=false | text=\"Message sent successfully\"\n  Tool #2: terminate=undefined | text=\"read result data\"\n  Tool #3: terminate=false | text=\"Message sent successfully\"\n\n  ✓ Model sent progress message → continue working → delivered final answer\n  ✓ All 3 tools executed in sequence as intended\n```\n\n**Observed result after fix:** The agent loop continues after a message.send in `message_tool_only` mode. With the fix, the model sees \"Message sent successfully\" and continues to subsequent tool calls (read, search) for actual work. The model's natural `stopReason` (end_turn/stop) determines when the turn ends, so progress-update messages do not erroneously terminate the agent loop. In the simulation, 3 tools now execute in sequence (message send → read → message send) across 4 turns, with the model naturally stopping at end_turn.\n\n```diff\ndiff --git a/src/agents/embedded-agent-runner/run/message-tool-terminal.ts b/src/agents/embedded-agent-runner/run/message-tool-terminal.ts\nindex 2deaf33d3b..1384f99b89 100644\n--- a/src/agents/embedded-agent-runner/run/message-tool-terminal.ts\n+++ b/src/agents/embedded-agent-runner/run/message-tool-terminal.ts\n@@ -191,7 +191,16 @@ export function shouldTerminateAfterMessageToolOnlySend(params: {\n   return true;\n }\n \n-/** Installs an after-tool hook that terminates the turn after a qualifying message send. */\n+/** Installs an after-tool hook that records delivery but does not terminate the turn.\n+ *\n+ * Previously the hook returned `terminate: true` after a qualifying message send,\n+ * which caused the agent loop to end immediately. This prevented the model from\n+ * continuing planned work after sending an interstitial/progress update message\n+ * (e.g. \"checking the codebase, one moment\"). The model's natural stopReason\n+ * (end_turn/stop) determines when the turn ends — re-invoking the model after\n+ * the tool result lets it continue if it was a progress message, or naturally\n+ * end with stopReason: stop if it was the final answer. (#92169)\n+ */\n export function installMessageToolOnlyTerminalHook(params: {\n   agent: Agent;\n   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;\n@@ -211,7 +220,6 @@ export function installMessageToolOnlyTerminalHook(params: {\n       })\n     ) {\n       params.onDeliveredSourceReply?.();\n-      return { ...hookResult, terminate: true };\n     }\n     return hookResult;\n   };\n```\n\n**What was not tested:** Full integration test with actual Anthropic API / Slack channel agent. The change is purely a logic fix in the agent runtime hook — no external dependency changes.\n\n## Regression Test Plan\n\n- [x] `pnpm test -- --run src/agents/embedded-agent-runner/run/message-tool-terminal.test.ts` passes (updated test expectations)\n- [ ] Change is minimal and targeted — only the `installMessageToolOnlyTerminalHook` function is modified; the `shouldTerminateAfterMessageToolOnlySend` predicate is kept for delivery detection but no longer used for termination.\n\n---\n\n*AI-assisted: built with Claude Code*",
+        "branch": "fix/issue-92169--bug---embedded-runtime--agent-ends-turn-",
+        "head_sha": "e222f2f480bf2f4038904e57fb3487777619c5e7",
+        "author": "mmyzwl",
+        "labels": [
+          "agents",
+          "size: XS",
+          "proof: supplied",
+          "P1",
+          "rating: 🌊 off-meta tidepool",
+          "merge-risk: 🚨 message-delivery"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner/run/message-tool-terminal.test.ts",
+            "additions": 1,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/message-tool-terminal.ts",
+            "additions": 15,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92180",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92180.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 164,
+          "counts": {
+            "SUCCESS": 133,
+            "SKIPPED": 30,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:92180:4682548524:2026-06-11T16:08:21Z:re_review",
+      "comment_id": "4682548524",
+      "comment_version_key": "4682548524:2026-06-11T16:08:21Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92180#issuecomment-4682548524",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92180,
+      "author": "mmyzwl",
+      "author_id": 30864295,
+      "author_association": "NONE",
+      "comment_created_at": "2026-06-11T16:08:21Z",
+      "comment_updated_at": "2026-06-11T16:08:21Z",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -61,277 +149,20 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: drain inbound debounce buffer and followup queues before SIGUSR1 reload",
-        "body": "## Problem\n\nWhen `config.patch` triggers a SIGUSR1 restart, two in-memory message buffers are silently wiped, causing inbound messages to be permanently lost:\n\n1. **Inbound debounce buffers** — per-channel debounce timers (`createInboundDebouncer` closure-local `Map` + `setTimeout`) that batch messages over a ~2500ms window. On restart, the `setTimeout` callbacks never fire and buffered messages are garbage collected.\n\n2. **Followup queues** — the `FOLLOWUP_QUEUES` global `Map` that collects messages for sessions with active agent turns. Items enqueued but not yet drained are lost when the server reinitializes.\n\n### Reproduction\nSend a message on Signal → within 2.5s, trigger a config change (e.g. `config.patch`) → the message is silently dropped.\n\n## Fix\n\n### 1. Global debouncer registry (`src/auto-reply/inbound-debounce.ts`)\n- Each `createInboundDebouncer()` now auto-registers in a shared `Symbol.for('openclaw.inboundDebouncers')` global map\n- New `flushAll()` method on each debouncer instance that immediately processes all buffered items (clears timeouts, calls `onFlush` callbacks)\n- New exported `flushAllInboundDebouncers()` that iterates the registry, flushes all debouncers, and deregisters them\n\n### 2. Followup queue drain waiter (`src/auto-reply/reply/queue/drain-all.ts`)\n- New `waitForFollowupQueueDrain(timeoutMs)` that polls `FOLLOWUP_QUEUES` until all queues finish processing (or timeout)\n- Counts `draining: true` queues as having pending work even if `items.length` is momentarily 0\n\n### 3. SIGUSR1 restart integration (`src/cli/gateway-cli/run-loop.ts`)\nBefore `markGatewayDraining()`, the restart flow now:\n1. `await flushAllInboundDebouncers()` — pushes buffered messages into followup queues\n2. `await waitForFollowupQueueDrain(5000)` — gives the drain loops 5s to process newly flushed items\n3. Then proceeds with the existing `markGatewayDraining()` → task drain → server close flow\n\nThe ordering is critical: flush debouncers first (triggers `onFlush` callbacks that enqueue into followup queues), then wait for followup drain, then mark draining.\n\n## Tests\n\n- **`src/auto-reply/inbound.test.ts`**: `flushAllInboundDebouncers` flushes multiple registered debouncers, returns count, deregisters after flush; `createInboundDebouncer.flushAll` flushes all buffered keys\n- **`src/auto-reply/reply/queue/drain-all.test.ts`**: immediate return when empty, waits for drain completion, returns not-drained on timeout, counts actively draining queues as pending\n- **`src/cli/gateway-cli/run-loop.test.ts`**: SIGUSR1 restart calls flush before `markGatewayDraining`, skips followup wait when no debouncers had buffered messages, logs warning on followup drain timeout\n\nAll 118 tests pass across the 4 affected test files. No type errors introduced.\n\n## Files Changed\n- `src/auto-reply/inbound-debounce.ts` — global registry + `flushAll` + `flushAllInboundDebouncers()`\n- `src/auto-reply/reply/queue/drain-all.ts` — new `waitForFollowupQueueDrain()`\n- `src/auto-reply/reply/queue.ts` — barrel export\n- `src/cli/gateway-cli/run-loop.ts` — hook into restart flow\n- Test files for all of the above\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: When a SIGUSR1 restart fires within the inbound debounce window (~2.5s) or while a followup queue is mid-drain, buffered messages are silently dropped because the in-process `setTimeout` callbacks never fire and the closure-local `Map` is garbage collected. After this fix, `flushAllInboundDebouncers()` immediately flushes every registered debouncer into followup queues and `waitForFollowupQueueDrain()` blocks the SIGUSR1 path until those queues drain or a 5s ceiling is hit.\n- **Real environment tested**: Local OpenClaw checkout at HEAD `5d1e6592d02782361b871581c10a6b3c0329105f` of branch `fix/drain-queue-before-sigusr1`. Linux 6.12.67, Node v24.15.0, pnpm-driven monorepo. Patched modules loaded directly with `tsx` from the working tree (no rebuild step), and the built CLI (`pnpm openclaw --version`) reports `OpenClaw 2026.5.4 (5d1e659)` confirming the binary is built from the patched commit.\n- **Exact steps or command run after this patch**:\n  1. `pnpm openclaw --version` to confirm the live CLI is built from the patched HEAD.\n  2. `node_modules/.bin/tsx proof-pr46303.mts` — small driver that registers two `createInboundDebouncer` instances with a 2500ms debounce, enqueues five items across three keys, then calls `flushAllInboundDebouncers({ timeoutMs: 5000 })` and prints the timing and what each `onFlush` actually received.\n  3. `node_modules/.bin/tsx proof-pr46303-drain.mts` — driver that exercises `waitForFollowupQueueDrain` directly against the live `FOLLOWUP_QUEUES` `Map` for three cases: empty registry, busy queue that drains at ~120ms, and a queue that stays busy past the timeout.\n  4. `pnpm test src/auto-reply/inbound.test.ts src/auto-reply/reply/queue/drain-all.test.ts src/cli/gateway-cli/run-loop.test.ts` — full targeted suites for all three changed files.\n- **Evidence after fix**: Terminal capture from running the patched modules in this worktree.\n\n  Live CLI build proves the binary contains the patched code:\n\n  ```\n  $ pnpm openclaw --version\n  OpenClaw 2026.5.4 (5d1e659)\n  ```\n\n  `flushAllInboundDebouncers` console output — 5 enqueued items across 2 debouncers and 3 keys, flushed in 1ms instead of waiting 2500ms:\n\n  ```\n  [before flush] A delivered=0, B delivered=0 (still buffered)\n  [flushAllInboundDebouncers] flushedCount=3 elapsed=1ms (vs 2500ms debounce)\n  [after flush] A delivered groups=[[\"alice:hello\",\"alice:there\"],[\"bob:howdy\"]]\n  [after flush] B delivered groups=[[\"ping-1\",\"ping-2\"]]\n  ```\n\n  `waitForFollowupQueueDrain` console output — three live cases against the real `FOLLOWUP_QUEUES` map, including the timeout path that returns `drained:false` with the right `remaining` count:\n\n  ```\n  [empty]         {\"drained\":true,\"remaining\":0} elapsed=0ms\n  [busy->drained] {\"drained\":true,\"remaining\":0} elapsed=151ms\n  [timeout]       {\"drained\":false,\"remaining\":2} elapsed=200ms\n  ```\n\n  Real test runner output for the changed files (vitest reports the actual function counts; pnpm `test-projects.mjs` shards by project):\n\n  ```\n  [test] starting test/vitest/vitest.cli.config.ts\n   Test Files  1 passed (1)\n        Tests  24 passed (24)\n     Duration  2.21s\n  [test] starting test/vitest/vitest.auto-reply.config.ts\n   Test Files  2 passed (2)\n        Tests  71 passed (71)\n     Duration  4.05s\n  [test] passed 2 Vitest shards in 11.96s\n  ```\n\n- **Observed result after fix**: `flushAllInboundDebouncers` deterministically drains buffered Signal-style messages in 1 ms while the natural debounce window is 2500 ms, and reports the right buffer count (`flushedCount=3` for two keys in one debouncer plus one in another). `waitForFollowupQueueDrain` returns immediately when the registry is empty, observes the queue clearing in real time during the busy case (151 ms — one poll interval past the 120 ms cleanup), and correctly returns `drained:false` with `remaining=2` when the timeout fires before drain. The CLI banner reports `(5d1e659)` confirming the built binary contains the patched commit. With the SIGUSR1 hook in `src/cli/gateway-cli/run-loop.ts` calling these helpers in the right order before `markGatewayDraining()`, late inbound messages are pushed into followup queues and given up to 5 s to drain instead of being silently dropped.\n- **What was not tested**: An end-to-end real-Signal SIGUSR1 reproduction was not executed on this machine (no signal-cli account paired here); the production restart path is exercised through `src/cli/gateway-cli/run-loop.test.ts`, but a live Signal → `config.patch` → restart roundtrip on real `signal-cli` was not run. Behavior under simultaneous restart-while-flushing on a hung `onFlush` (the registered handle is intentionally retained on flush failure for a future sweep) was not exercised live; that path is covered only by the unit tests in `src/auto-reply/inbound.test.ts`.\n",
-        "branch": "fix/drain-queue-before-sigusr1",
-        "head_sha": "1f3e8011967a34008db148af1034b22274c454ee",
-        "author": "joeykrug",
-        "labels": [
-          "channel: bluebubbles",
-          "channel: discord",
-          "channel: msteams",
-          "channel: slack",
-          "cli",
-          "agents",
-          "channel: feishu",
-          "size: XL",
-          "triage: dirty-candidate",
-          "proof: supplied",
-          "P1",
-          "rating: 🌊 off-meta tidepool",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery"
-        ],
-        "files": [
-          {
-            "path": "extensions/discord/src/monitor/message-handler.ts",
-            "additions": 17,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/monitor/message-run-queue.ts",
-            "additions": 23,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/monitor.reaction.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/test-support/lifecycle-test-support.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/msteams/src/monitor-handler.feedback-authz.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/msteams/src/monitor-handler.file-consent.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/monitor/message-handler.app-mention-race.test.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.ts",
-            "additions": 9,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/params.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/sandbox-skills.ts",
-            "additions": 1,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sandbox/workspace-mounts.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/inbound-debounce.ts",
-            "additions": 202,
-            "deletions": 14,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/inbound.test.ts",
-            "additions": 473,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/abort.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/followup-runner.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue.ts",
-            "additions": 3,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue/drain-all.test.ts",
-            "additions": 96,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue/drain-all.ts",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue/drain.ts",
-            "additions": 46,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue/enqueue.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/queue/types.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/lifecycle.runtime.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/run-loop.test.ts",
-            "additions": 136,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/run-loop.ts",
-            "additions": 44,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/channel-lifecycle.core.ts",
-            "additions": 100,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/channel-lifecycle.queue.test.ts",
-            "additions": 39,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/command-queue.test.ts",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/command-queue.ts",
-            "additions": 26,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/command-queue.types.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/exec.ts",
-            "additions": 1,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-46303",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-46303.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 29,
-          "counts": {
-            "CANCELLED": 1,
-            "SUCCESS": 6,
-            "QUEUED": 10,
-            "SKIPPED": 12
-          },
-          "blockers": [
-            "Real behavior proof:CANCELLED",
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "pending": [
-            "preflight:QUEUED",
-            "Security High (core-auth-secrets):QUEUED",
-            "Select Critical Quality shards:QUEUED",
-            "Scan changed paths (precise):QUEUED",
-            "Security High (channel-runtime-boundary):QUEUED",
-            "Security High (network-ssrf-boundary):QUEUED",
-            "Security High (mcp-process-tool-boundary):QUEUED",
-            "Security High (plugin-trust-boundary):QUEUED",
-            "Security High (actions):QUEUED",
-            "security-fast:QUEUED"
-          ],
-          "terminalBlockers": [
-            "Real behavior proof:CANCELLED"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2152,
+    "total_ms": 4151,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 327
+        "ms": 350
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 1522
+        "ms": 2679
       },
       {
         "name": "classify_commands",
@@ -339,7 +170,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 272
+        "ms": 1094
       },
       {
         "name": "append_ledger",
