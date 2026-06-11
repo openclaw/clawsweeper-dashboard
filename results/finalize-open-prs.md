@@ -1,6 +1,6 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-06-11T12:57:41.627Z
+Generated: 2026-06-11T13:47:07.014Z
 
 ## Summary
 
@@ -30,4 +30,4 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#92175](https://github.com/openclaw/openclaw/pull/92175) | fix(channel): harden local setup trust | automerge-openclaw-openclaw-89456 | MERGEABLE | UNSTABLE | CANCELLED:11 SKIPPED:74 SUCCESS:64 IN_PROGRESS:72 NEUTRAL:1; blockers:77 | needs_merge_state:UNSTABLE, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
+| [#92175](https://github.com/openclaw/openclaw/pull/92175) | fix(channel): harden local setup trust | automerge-openclaw-openclaw-89456 | MERGEABLE | UNSTABLE | SUCCESS:133 SKIPPED:25 IN_PROGRESS:1 NEUTRAL:1; blockers:1 | needs_merge_state:UNSTABLE, needs_checks:CodeQL Critical Quality / Critical Quality (channel-runtime-boundary):IN_PROGRESS, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
