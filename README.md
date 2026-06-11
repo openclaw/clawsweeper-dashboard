@@ -25,8 +25,8 @@ At a high level ClawSweeper:
 - can acknowledge maintainer comment commands through an optional GitHub App
   webhook before the GitHub Actions fallback starts
 - repairs opted-in PRs through a bounded Codex review/fix loop before merge
-- can open guarded implementation PRs for viable issues and run generated PRs
-  through bounded review, repair, and automerge
+- automatically opens guarded implementation PRs for viable reviewed issues in
+  configured projects outside `openclaw/openclaw` and `openclaw/clawhub`
 - can manually review selected code-bearing commits on target `main` branches
 - publishes dashboard, audit, repair, and activity state to
   `openclaw/clawsweeper-state`
@@ -108,11 +108,6 @@ When the separate vision-fit lane is enabled, reviewed issues that clearly fit
 the target repository `VISION.md`, are small enough for one focused PR, and have
 clear repair shape can use the same PR-only implementation path without
 weakening the strict bug gate.
-For repositories other than `openclaw/openclaw` and `openclaw/clawhub`, any
-high-confidence, small, coherent `queue_fix_pr` issue with clear files and
-validation can open a generated PR. ClawSweeper labels that PR for automerge,
-then repeats exact-head review and repair until it merges or reaches a guarded
-human stop.
 
 ### Commit Reviews
 
@@ -203,8 +198,7 @@ Common commands:
   current state: `👀` for acknowledgement, `🧹` for review, `🔧` for repair, and
   `✅` for completed/paused work.
 - Freeform `@clawsweeper ...` mentions and explicit `ask ...` questions dispatch
-  the maintainer-only assist lane. Assist uses the secret-selected internal
-  model with low reasoning, a
+  the maintainer-only assist lane. Assist runs the internal model with low reasoning, a
   120-second per-item timeout, and its own five-job cap. It posts a separate
   non-durable answer comment and never edits the durable ClawSweeper review
   comment, closes, merges, labels, pushes, repairs, or emits review/apply
@@ -313,8 +307,8 @@ Review is proposal-only. It never closes items.
 - Manual runs can pass `item_number` or comma-separated `item_numbers` to review
   exact Audit Health findings without scanning for a normal batch.
 - Each shard checks out the selected target repository at `main`.
-- Codex reviews with the secret-selected internal model, high reasoning, the
-  default service tier, and a 10-minute per-item timeout.
+- Codex reviews with the internal model, high reasoning, the default service tier, and a
+  10-minute per-item timeout.
 - Each item becomes a flat report under
   `records/<repo-slug>/items/<number>.md` with the decision, evidence,
   Codex `/review`-style PR findings, suggested comment, runtime metadata, and
@@ -388,10 +382,12 @@ appropriate repair job.
   re-dispatches exact-head review, and waits for required checks.
 - `automerge` merges only after review verdict, checks, mergeability,
   security, maintainer stop/approve state, and repository policy gates pass.
-- Issue implementation keeps strict bug and `VISION.md`-aligned gates for
-  `openclaw/openclaw`; other eligible repositories can autonomously implement
-  any high-confidence small viable issue with no linked PR, then enter the
-  bounded automerge loop.
+- Issue implementation remains guarded. In configured projects outside
+  `openclaw/openclaw` and `openclaw/clawhub`, a complete high-confidence
+  `queue_fix_pr` review with no linked PR, security signal, or product decision
+  automatically dispatches the existing implementation worker. The generated
+  PR enters the normal review, autofix, and automerge loop. Core OpenClaw and
+  ClawHub issues retain their stricter manual/explicit lanes.
 
 Repair internals are documented in
 [`docs/repair/README.md`](docs/repair/README.md), and the automerge state
@@ -487,15 +483,7 @@ available for a target.
 
 ## Local Run
 
-Requires Node 24. GitHub Actions reads `CLAWSWEEPER_MODEL` only inside
-`setup-codex`, then resolves the public `internal` alias through a localhost
-proxy. Codex subprocess argv, environment, config, reports, and target commands
-never receive the secret model name. Set the opaque
-`CLAWSWEEPER_MODEL_POLICY_VERSION` whenever that secret changes so existing
-reports are immediately re-reviewed without exposing model identity. The setup
-action installs the latest Codex CLI on every run.
-Local review commands below assume `CODEX_HOME` already has an equivalent
-`internal` alias provider configured.
+Requires Node 24.
 
 Issue/PR sweeper:
 
@@ -504,7 +492,7 @@ source ~/.profile
 corepack enable
 pnpm install
 pnpm run build
-pnpm run plan -- --target-repo openclaw/openclaw --batch-size 5 --shard-count 7 --max-pages 250 --codex-model internal --codex-reasoning-effort high
+pnpm run plan -- --target-repo openclaw/openclaw --batch-size 5 --shard-count 39 --max-pages 250 --codex-model internal --codex-reasoning-effort high
 pnpm run review -- --target-repo openclaw/openclaw --target-dir ../openclaw --batch-size 5 --max-pages 250 --artifact-dir artifacts/reviews --codex-model internal --codex-reasoning-effort high --codex-timeout-ms 600000
 pnpm run apply-artifacts -- --target-repo openclaw/openclaw --artifact-dir artifacts/reviews --skip-dashboard
 pnpm run audit -- --target-repo openclaw/openclaw --max-pages 250 --sample-limit 25 --update-dashboard
@@ -561,26 +549,25 @@ default, subject to the selected repository profile; pass `target_repo`,
 `apply_kind=issue`, or `apply_kind=pull_request` to narrow a manual run.
 
 Scheduled runs cover the configured product profiles. `openclaw/openclaw` runs
-normal backfill every 5 minutes with up to 6 review shards when the system is
+normal backfill every 5 minutes with up to 27 review shards when the system is
 quiet; `openclaw/clawhub` runs on offset review/apply/audit crons so its reports
 live under `records/openclaw-clawhub/` without colliding with default repo
 records. `openclaw/clawsweeper` has a scheduled read-only audit row and is
 available for manual and event self-review smoke tests. Broad hot-intake sweeps
-cap scheduled fan-out at 3 one-item shards per run when quiet; exact event
-reviews still use one globally serialized job. Normal review, hot intake, and
-commit review are background lanes, so they shrink automatically while repair
-or exact-item work is active. Throughput defaults live in
+cap scheduled fan-out at 19 one-item shards per run when quiet; exact event
+reviews still use one shard. Normal review, hot intake, and commit review are
+background lanes, so they shrink automatically while repair or exact-item work
+is active. Throughput defaults live in
 [docs/limits.md](docs/limits.md) and `config/automation-limits.json`.
 
 ### Worker Budget
 
 ClawSweeper has one main capacity knob:
-`config/automation-limits.json` -> `workers.max`. The temporary rate-limit
-value is `10`.
-Lane limits are derived from that number: normal review defaults to 7 shards
-for manual/backstop runs, scheduled normal review gets up to 6 after reserves,
-hot intake up to 3 shards, commit review 1 commit per page, and existing
-repair/issue implementation lanes use 40% of `workers.max`, currently 4 live
+`config/automation-limits.json` -> `workers.max`. The current value is `57`.
+Lane limits are derived from that number: normal review defaults to 39 shards
+for manual/backstop runs, scheduled normal review gets up to 27 after reserves,
+hot intake up to 19 shards, commit review 2 commits per page, and existing
+repair/issue implementation lanes use 40% of `workers.max`, currently 22 live
 workers. Imported gitcrawl cluster repair stays at 1 live worker by default.
 Exact-item review, repair, and issue implementation are priority work; normal
 review, hot intake, and commit review are background work and automatically
@@ -593,8 +580,8 @@ lane-specific exceptions.
 Target repositories can opt into event-level latency by installing the
 dispatcher workflow in [docs/target-dispatcher.md](docs/target-dispatcher.md).
 The dispatcher sends `repository_dispatch` events to this repository with the
-target repo and exact item number; ClawSweeper then queues one globally
-serialized event job that reviews, comments, and checks immediate safe apply instead of waiting for the
+target repo and exact item number; ClawSweeper then runs one event job that
+reviews, comments, and checks immediate safe apply instead of waiting for the
 next hot-intake cron or bulk publish lane.
 
 Main-branch commit review is manual-only in production. See
