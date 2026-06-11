@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-06-11T19:44:22.250Z",
+  "generated_at": "2026-06-11T19:44:30.965Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-06-11T16:44:21.946Z",
+  "since": "2026-06-11T16:44:28.927Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    92255
+    92035
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 4,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,26 +29,141 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
-  "ledger_changed": false,
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:92035:4674845928:2026-06-11T19:44:21Z:clawsweeper_needs_human",
+      "comment_id": "4674845928",
+      "comment_version_key": "4674845928:2026-06-11T19:44:21Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/92035#issuecomment-4674845928",
+      "repo": "openclaw/openclaw",
+      "issue_number": 92035,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-06-10T21:43:17Z",
+      "comment_updated_at": "2026-06-11T19:44:21Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Review did not complete, so no work-lane recommendation was made. (sha=dc24e31d4d73966115d4759b7cdd260d9e2a251c)",
+      "review_summary": "Review failed before ClawSweeper could summarize the requested change.\n\nPR surface: Source +109, Tests +135, Docs +20. Total +264 across 5 files.\n\nReproducibility: unclear. The review failed before ClawSweeper could establish a reproduction path.",
+      "review_followup": "- [P1] Review did not complete, so no work-lane recommendation was made.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "dc24e31d4d73966115d4759b7cdd260d9e2a251c",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(memory): apply temporal decay to QMD search results",
+        "body": "## Problem\n\n`memorySearch.query.hybrid.temporalDecay` currently only applies in the builtin hybrid engine merge path (`mergeHybridResults` in `hybrid.ts`). When `memory.backend = \"qmd\"` — the backend the docs recommend for advanced recall — search results skip recency weighting entirely.\n\nReal-world failure mode that motivated this: after a session compaction, searching for a keyword mentioned earlier the same day returned a months-old small file ranked above today's large daily memory file. The term appeared once in a ~44KB daily file, so its BM25 contribution was diluted (≈0.13) while a stale low-content file scored ≈0.42. With no recency weighting on the QMD path, the stale hit wins — exactly the situation temporal decay was added to fix for the builtin engine.\n\n## Change\n\n- Wire the existing `temporal-decay` module into `QmdMemoryManager.search()`: after doc resolution and source filtering, decay the combined ranking score by document age and re-rank before source diversification.\n- Resolve the decay config through `resolveMemorySearchConfig(cfg, agentId)` so QMD honors the exact same `memorySearch.query.hybrid.temporalDecay` knob as the builtin engine (no new config surface).\n- Include the resolved decay config in the QMD manager cache identity key so config changes rebuild the manager.\n- Docs: note in `reference/memory-config.md` that temporal decay now applies to both backends.\n\n## Behavior\n\n- **Default off** — `temporalDecay.enabled` still defaults to `false`; no behavior change unless opted in.\n- Evergreen semantics match the builtin engine: `MEMORY.md` and non-dated `memory/` files never decay; dated files parse from filename, other files fall back to mtime.\n- When disabled, the QMD result pipeline is untouched (no extra fs calls).\n\n## Tests\n\n- New test in `qmd-manager.test.ts`: with decay enabled (30-day half-life), a 60-day-old dated memory file with raw score 0.9 ranks below a same-day file with raw score 0.6 (decayed ≈0.225 vs ≈0.6).\n- Full runs of `qmd-manager.test.ts`, `search-manager.test.ts`, `temporal-decay.test.ts`, `hybrid.test.ts`: 172 passed.\n- `pnpm tsgo` clean; oxlint clean on touched files.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n\n---\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** With `memorySearch.query.hybrid.temporalDecay` enabled, QMD search results re-rank by document age so a fresh dated memory file outranks a stale, keyword-dense file that wins on raw BM25/rerank score; with decay disabled, ranking is byte-identical to current behavior.\n- **Real environment tested:** macOS (arm64), Node v25.6.1, real `qmd` binary on PATH with an isolated QMD home (`XDG_CONFIG_HOME`/`XDG_CACHE_HOME`/`QMD_CONFIG_DIR` pointed at a scratch dir), real workspace with two dated memory files: `memory/2026-04-11.md` (60 days old, query term 4x) and `memory/2026-06-10.md` (today, single mention). This branch's `temporal-decay.ts` executed via tsx against the live qmd scores.\n- **Exact steps or command run after this patch:** `qmd collection add \"$WS\" --name demo --mask \"**/*.md\"` && `qmd update` (Indexed: 2 new) && `qmd query \"tachyon relay calibration\" --json -n 10 -c demo`, then fed the captured results through this branch's `applyTemporalDecayToHybridResults({enabled: true, halfLifeDays: 3, workspaceDir: $WS})` and re-sorted — the exact transform `QmdMemoryManager.search()` applies in this PR.\n- **Evidence after fix:** copied live terminal output below.\n\n```\n=== qmd query ranking — decay DISABLED (current QMD behavior) ===\n  0.9300  memory/2026-04-11.md   # 60 days old, keyword-dense\n  0.5600  memory/2026-06-10.md   # today, single mention\n\n=== same query — decay ENABLED (this PR, halfLifeDays=3) ===\n  0.4465  memory/2026-06-10.md   # today -> now ranked #1\n  0.0000  memory/2026-04-11.md   # 60d old -> decayed below\n\nRanking flipped so today's note wins: YES\n```\n\n- **Observed result after fix:** Without decay the stale file wins 0.93 vs 0.56 (the dilution problem this PR fixes). With decay enabled, today's note keeps ~0.79 of its score (age < 1 day) while the 60-day file decays by `2^(-60/3) ≈ 1e-6` to ~0.0000 — the ranking flips, matching the builtin hybrid engine's decay semantics on the same inputs.\n- **What was not tested:** mcporter transport path and multi-collection-group searches in a live gateway session (the same decay transform applies after result assembly; both covered by unit tests), Windows hosts, and the `halfLifeDays: 30` default in a live run (covered by the 60-day-fixture unit test).\n\nSupplemental: `pnpm tsgo` clean; oxlint clean; `qmd-manager` / `search-manager` / `temporal-decay` / `hybrid` suites pass, including new tests for decay re-rank, post-decay `minScore` floor, and the x4/cap-50 candidate pool.\n",
+        "branch": "feat/qmd-temporal-decay",
+        "head_sha": "dc24e31d4d73966115d4759b7cdd260d9e2a251c",
+        "author": "fall4knight",
+        "labels": [
+          "docs",
+          "extensions: memory-core",
+          "size: M",
+          "proof: supplied",
+          "P2",
+          "rating: 🌊 off-meta tidepool"
+        ],
+        "files": [
+          {
+            "path": "docs/reference/memory-config.md",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/qmd-manager.test.ts",
+            "additions": 135,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/qmd-manager.ts",
+            "additions": 65,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/search-manager.ts",
+            "additions": 9,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-core/src/memory/temporal-decay.ts",
+            "additions": 37,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-92035",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-92035.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 150,
+          "counts": {
+            "SUCCESS": 125,
+            "SKIPPED": 23,
+            "IN_PROGRESS": 1,
+            "FAILURE": 1
+          },
+          "blockers": [
+            "check-lint:IN_PROGRESS",
+            "check-docs:FAILURE"
+          ],
+          "pending": [
+            "check-lint:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "check-docs:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    }
+  ],
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 500,
+    "total_ms": 2289,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 294
+        "ms": 382
       },
       {
         "name": "prehydrate_command_lookups",
-        "ms": 0
+        "ms": 1642
       },
       {
         "name": "classify_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 196
+        "ms": 239
       },
       {
         "name": "append_ledger",
