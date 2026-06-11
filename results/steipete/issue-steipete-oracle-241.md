@@ -2,12 +2,12 @@
 repo: "steipete/oracle"
 cluster_id: "issue-steipete-oracle-241"
 mode: "autonomous"
-run_id: "27325429334"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27325429334"
-head_sha: "8a9ba353151c2596bdb1497b81c95ab6d1cbc04f"
+run_id: "27327353996"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/27327353996"
+head_sha: "7d62fff82fb140502414977eda36ab960df00754"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-06-11T05:28:51.021Z"
+published_at: "2026-06-11T06:19:31.778Z"
 canonical: "https://github.com/steipete/oracle/issues/241"
 canonical_issue: "https://github.com/steipete/oracle/issues/241"
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: steipete/oracle
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/27325429334](https://github.com/openclaw/clawsweeper/actions/runs/27325429334)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/27327353996](https://github.com/openclaw/clawsweeper/actions/runs/27327353996)
 
 Workflow conclusion: success
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/steipete/oracle/issues/241
 
 ## Summary
 
-Current main still rejects authenticated browser sessions when `/backend-api/me` returns a plain 401/403. Plan a narrow fix that uses the cookie-authenticated `/api/auth/session` response as the primary network signal, retains strict login-page/CTA guards and authenticated-DOM fallback behavior, and updates focused tests, browser documentation, and the unreleased changelog.
+Issue #241 remains valid on main at 1c4d26cc31818dc568c09abacf39e7a3f052e3a2. The login probe retries plain 401/403 responses but ultimately rejects them even when the existing strong authenticated-DOM gate detects a visible composer plus profile or history signal. A narrow new fix PR should extend that gated fallback to plain 401/403, retain all logged-out safeguards, add focused regressions, and update browser-mode documentation and release notes. The checkout is read-only in this worker, so implementation and validation are planned for the executor.
 
 ## Impact
 
@@ -54,7 +54,7 @@ Current main still rejects authenticated browser sessions when `/backend-api/me`
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| execute_fix | blocked |  |  | fix artifact is too broad for autonomous execution; split into narrower jobs or explicitly set CLAWSWEEPER_ALLOW_BROAD_FIX_ARTIFACTS=1 |
+| execute_fix | blocked |  |  | validation_script_missing: required pnpm test:serial is unavailable in target checkout |
 | issue_implementation_status_comment | skipped | #241 |  | no existing ClawSweeper issue implementation status comment |
 
 ## Apply Actions
@@ -67,10 +67,10 @@ Current main still rejects authenticated browser sessions when `/backend-api/me`
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #182 | keep_closed | skipped | related | Related browser context only; no action is permitted or needed. |
-| #216 | keep_closed | skipped | related | The merged PR established nearby behavior but does not fix the remaining plain 401/403 false negative. |
-| #241 | fix_needed | planned | canonical | The issue is source-reproducible on current main, narrowly scoped, non-security-sensitive, and has no viable open implementation PR. |
-| cluster:issue-steipete-oracle-241 | build_fix_artifact | planned |  | A focused implementation and validation plan is available without maintainer product-direction judgment. |
+| #182 | keep_closed | skipped | independent | Closed historical issue with a different root cause. |
+| #216 | keep_closed | skipped | related | Merged related foundation that does not cover the remaining plain 401/403 false-negative. |
+| #241 | fix_needed | planned | canonical | No viable open canonical PR exists, and current main retains the source-reproducible false-negative. A live browser contract for `/api/auth/session` was not available in this worker, so the safe issue-approved path is to extend the existing strong DOM fallback rather than introduce an unverified primary endpoint. |
+| cluster:issue-steipete-oracle-241 | build_fix_artifact | planned |  | Executor-ready narrow implementation plan for the canonical issue. |
 
 ## Needs Human
 
